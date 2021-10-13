@@ -116,7 +116,7 @@ module.exports = {
   //   `@company/project`
   //   `project#1.0.1`
     plugins: [
-        'hyper-solarized-light',
+        'hyper-papercolor',
         "hyper-search",
         "hypercwd",
         "hyper-pane",
