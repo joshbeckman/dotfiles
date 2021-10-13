@@ -25,7 +25,7 @@
     cm = commit -am
     co = checkout
     fc = log --all --grep
-    fix = "!f() { vim -p `git diff --name-only`; }; f" # via https://gist.github.com/jacobvosmaer/3187346
+    fix = "!f() { vim -p `git diff --name-only | uniq`; }; f" # via https://gist.github.com/jacobvosmaer/3187346
     fup = push --set-upstream origin HEAD
     get = fetch --all
     lg = log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
