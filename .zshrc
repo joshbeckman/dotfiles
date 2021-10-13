@@ -1,16 +1,162 @@
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:/usr/local/bin:$PATH
 
+# Print a message in color.
+# https://bytefreaks.net/gnulinux/bash/cecho-a-function-to-print-using-different-colors-in-bash
+cecho () {
+  declare message=${1:-""}
+  declare   color=${2:-"default"}
+
+  declare -A colors
+  colors=(
+          [default]="\e[39m"
+            [black]="\e[30m"
+              [red]="\e[31m"
+            [green]="\e[32m"
+           [yellow]="\e[33m"
+             [blue]="\e[34m"
+          [magenta]="\e[35m"
+             [cyan]="\e[36m"
+             [gray]="\e[37m"
+        [light-red]="\e[91m"
+      [light-green]="\e[92m"
+     [light-yellow]="\e[93m"
+       [light-blue]="\e[94m"
+    [light-magenta]="\e[95m"
+       [light-cyan]="\e[96m"
+       [light-gray]="\e[97m"
+  )
+
+  color=${colors[$color]}
+
+  echo -e "\x01${color}\x02${message}\x01\e[m\x02"
+}
+
+# Show colorful chevrons according to what month it is.
+seasonal_chevrons () {
+  local date=$(date)
+  local chevrons="❯❯❯"
+
+  case $date in
+    # spring
+    *Mar*|*Apr*|*May*)
+      chevrons="$(cecho ❯ cyan)$(cecho ❯ green)$(cecho ❯ yellow)"
+      ;;
+    # summer
+    *Jun*|*Jul*|*Aug*)
+      chevrons="$(cecho ❯ green)$(cecho ❯ yellow)$(cecho ❯ light-red)"
+      ;;
+    # fall
+    *Sep*|*Oct*|*Nov*)
+      chevrons="$(cecho ❯ light-yellow)$(cecho ❯ light-red)$(cecho ❯ light-magenta)"
+      ;;
+    # winter
+    *Dec*|*Jan*|*Feb*)
+      chevrons="$(cecho ❯ light-magenta)$(cecho ❯ cyan)$(cecho ❯ light-green)"
+      ;;
+    *)
+      ;;
+  esac
+
+  echo -en $chevrons
+}
+
+# Return the branch name if we're in a git repo, or nothing otherwise.
+git_check () {
+  local gitBranch=$(git branch 2> /dev/null | sed -e "/^[^*]/d" -e "s/* \(.*\)/\1/")
+  if [[ $gitBranch ]]; then
+    echo -en $gitBranch
+    return
+  fi
+}
+
+# Return the status of the current git repo.
+git_status () {
+  local gitBranch="$(git_check)"
+  if [[ $gitBranch ]]; then
+    local statusCheck=$(git status 2> /dev/null)
+    if [[ $statusCheck =~ 'Your branch is ahead' ]]; then
+      echo -en 'ahead'
+    elif [[ $statusCheck =~ 'Changes to be committed' ]]; then
+      echo -en 'staged'
+    elif [[ $statusCheck =~ 'no changes added' ]]; then
+      echo -en 'modified'
+    elif [[ $statusCheck =~ 'Untracked files' ]]; then
+      echo -en 'modified'
+    elif [[ $statusCheck =~ 'working tree clean' ]]; then
+      echo -en 'clean'
+    fi
+  fi
+}
+
+# Return a color based on the current git status.
+git_status_color () {
+  local gitStatus="$(git_status)"
+  local statusText=''
+  case $gitStatus in
+    clean*)
+      statusText="green"
+      ;;
+    modified*)
+      statusText="magenta"
+      ;;
+    staged*)
+      statusText="yellow"
+      ;;
+    ahead*)
+      statusText="cyan"
+      ;;
+    *)
+      statusText="white"
+      ;;
+  esac
+  echo -en $statusText
+}
+
+# Print a label for the current git branch if it isn't master.
+git_branch () {
+  local gitBranch="$(git_check)"
+  if [[ $gitBranch && $COLUMNS -gt 79 ]]; then
+    echo -en "%F{#616161}⌥%f %F{"$(git_status_color)"}$gitBranch%f"
+  fi
+}
+
+# Print a dot indicating the current git status.
+git_dot () {
+  local gitCheck="$(git_check)"
+  if [[ $gitCheck ]]; then
+    local gitStatus="$(git_status)"
+    local gitStatusDot='●'
+    if [[ $gitStatus == 'staged' ]]; then
+      local gitStatusDot='◍'
+    elif [[ $gitStatus == 'modified' ]]; then
+      local gitStatusDot='○'
+    fi
+    echo -en "%F{"$(git_status_color)"}$gitStatusDot%f "
+  fi
+}
+
+# Get the current directory, truncate it, and make it blue
+fancy_dir () {
+  echo -en "%F{cyan}%-55<…<%~%<<%f"
+  return
+}
+
+setopt prompt_subst
+
+# export PS1='$(fancy_dir) $(git_branch) $(git_dot)$(seasonal_chevrons) '
+export PS1='$(fancy_dir) $(seasonal_chevrons) '
+
 # Path to your oh-my-zsh installation.
-export ZSH="$HOME/.oh-my-zsh"
+# export ZSH="$HOME/.oh-my-zsh"
 
 # Set name of the theme to load --- if set to "random", it will
 # load a random theme each time oh-my-zsh is loaded, in which case,
 # to know which specific one was loaded, run: echo $RANDOM_THEME
 # See https://github.com/robbyrussell/oh-my-zsh/wiki/Themes
 # SOLARIZED_THEME="light"
-ZSH_THEME="spaceship"
-SPACESHIP_TIME_SHOW=true
+# ZSH_THEME="spaceship"
+# SPACESHIP_TIME_SHOW=true
 
 # solarized light colors
 # SPACESHIP_TIME_COLOR=136
@@ -55,6 +201,8 @@ SPACESHIP_PROMPT_ORDER=(
   exit_code     # Exit code section
   char          # Prompt character
 )
+SPACESHIP_GIT_SYMBOL="⌥ "
+SPACESHIP_CHAR_SYMBOL="❯❯❯ "
 
 # Set list of themes to pick from when loading at random
 # Setting this variable when ZSH_THEME=random will cause zsh to load
@@ -115,18 +263,17 @@ SPACESHIP_PROMPT_ORDER=(
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
 plugins=(
-    docker
-    docker-compose
-    docker-machine
-    git-extras
-    jsontools
+    # docker
+    # docker-compose
+    # docker-machine
+    # git-extras
 )
 
-source $ZSH/oh-my-zsh.sh
+# source $ZSH/oh-my-zsh.sh
 
 # User configuration
 
-export BROWSER=w3m
+# export BROWSER=w3m
 
 # export MANPATH="/usr/local/man:$MANPATH"
 
@@ -152,20 +299,21 @@ export BROWSER=w3m
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias buildctags="~/dotfiles/.git-templates/hooks/ctags"
+alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
 
 # kitty terminal emulator control commands
-function kt () {
-  kitty @ focus-tab --match title:$1
-}
-function ktt () {
-  kitty @ set-tab-title $@
-}
-function kw () {
-  kitty @ focus-window --match title:$1
-}
-function kwt () {
-  kitty @ set-window-title $@
-}
+# function kt () {
+#   kitty @ focus-tab --match title:$1
+# }
+# function ktt () {
+#   kitty @ set-tab-title $@
+# }
+# function kw () {
+#   kitty @ focus-window --match title:$1
+# }
+# function kwt () {
+#   kitty @ set-window-title $@
+# }
 
 # search files and open in vim as quickfix
 function rgv () {

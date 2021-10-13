@@ -1,14 +1,14 @@
 # install oh-my-zsh
-echo '  ======  installing oh-my-zsh'
-sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-echo '  ======  installed oh-my-zsh'
+# echo '  ======  installing oh-my-zsh'
+# sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+# echo '  ======  installed oh-my-zsh'
 
 # install spaceship zsh prompt
-echo '  ======  installing spaceship zsh prompt'
-mkdir -p ~/.oh-my-zsh/custom/themes
-git clone https://github.com/denysdovhan/spaceship-prompt.git ~/.oh-my-zsh/custom/themes/spaceship-prompt --depth=1
-ln -s ~/.oh-my-zsh/custom/themes/spaceship-prompt/spaceship.zsh-theme ~/.oh-my-zsh/custom/themes/spaceship.zsh-theme
-echo '  ======  installed spaceship zsh prompt'
+# echo '  ======  installing spaceship zsh prompt'
+# mkdir -p ~/.oh-my-zsh/custom/themes
+# git clone https://github.com/denysdovhan/spaceship-prompt.git ~/.oh-my-zsh/custom/themes/spaceship-prompt --depth=1
+# ln -s ~/.oh-my-zsh/custom/themes/spaceship-prompt/spaceship.zsh-theme ~/.oh-my-zsh/custom/themes/spaceship.zsh-theme
+# echo '  ======  installed spaceship zsh prompt'
 
 # install tmux helpers
 echo '  ======  installing tmux plugin manager'
@@ -46,9 +46,11 @@ echo '  ======  installed vim plugins'
 # spin-specific things
 if [ $SPIN ]; then
 echo '  ======  installing spin-specific things'
+
   sudo apt-get install -y ripgrep fzf exuberant-ctags
-# configure debian fzf location to vim, add this to .vimrc
+  # configure debian fzf location to vim, add this to .vimrc
   echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
   git config --global user.email "josh.beckman@shopify.com"
+
 echo '  ======  installed spin-specific things'
 fi
