@@ -246,6 +246,8 @@ function! EslintAutocorrect()
 endfunction
 map <silent> <Leader>cop :call RubocopAutocorrect()<cr>
 map <silent> <Leader>eslint :call EslintAutocorrect()<cr>
+map <silent> <leader>aj :ALENext<cr>
+map <silent> <leader>ak :ALEPrevious<cr>
 
 set tags=.git/tags,tags;$HOME
 
