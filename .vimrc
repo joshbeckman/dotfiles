@@ -66,6 +66,7 @@ nnoremap <S-Tab> :tabp<CR>
 nnoremap <Leader>b :vnew <C-r>=escape(expand("%:p:h"), ' ') . '/'<cr>
 nnoremap <Leader>cn :cnext<CR>
 nnoremap <Leader>cp :cprevious<CR>
+nnoremap <Leader>dt :pu=strftime('%Y-%m-%dT%H:%M:%S')<CR>
 nnoremap <Leader>e :find 
 nnoremap <Leader>f :FZF<CR>
 nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
