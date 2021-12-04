@@ -7,29 +7,30 @@ cecho () {
   declare message=${1:-""}
   declare   color=${2:-"default"}
 
-  declare -A colors
-  colors=(
-          [default]="\e[39m"
-            [black]="\e[30m"
-              [red]="\e[31m"
-            [green]="\e[32m"
-           [yellow]="\e[33m"
-             [blue]="\e[34m"
-          [magenta]="\e[35m"
-             [cyan]="\e[36m"
-             [gray]="\e[37m"
-        [light-red]="\e[91m"
-      [light-green]="\e[92m"
-     [light-yellow]="\e[93m"
-       [light-blue]="\e[94m"
-    [light-magenta]="\e[95m"
-       [light-cyan]="\e[96m"
-       [light-gray]="\e[97m"
-  )
+  # declare -A colors
+  # colors=(
+  #         [default]="\e[39m"
+  #           [black]="\e[30m"
+  #             [red]="\e[31m"
+  #           [green]="\e[32m"
+  #          [yellow]="\e[33m"
+  #            [blue]="\e[34m"
+  #         [magenta]="\e[35m"
+  #            [cyan]="\e[36m"
+  #            [gray]="\e[37m"
+  #       [light-red]="\e[91m"
+  #     [light-green]="\e[92m"
+  #    [light-yellow]="\e[93m"
+  #      [light-blue]="\e[94m"
+  #   [light-magenta]="\e[95m"
+  #      [light-cyan]="\e[96m"
+  #      [light-gray]="\e[97m"
+  # )
 
-  color=${colors[$color]}
+  # color=${colors[$color]}
 
-  echo -e "\x01${color}\x02${message}\x01\e[m\x02"
+  # ZSH understands the colors black, red, green, yellow, blue, magenta, cyan and white
+  echo -en "%F{${color}}${message}%f"
 }
 
 # Show colorful chevrons according to what month it is.
@@ -44,15 +45,15 @@ seasonal_chevrons () {
       ;;
     # summer
     *Jun*|*Jul*|*Aug*)
-      chevrons="$(cecho ❯ green)$(cecho ❯ yellow)$(cecho ❯ light-red)"
+      chevrons="$(cecho ❯ green)$(cecho ❯ yellow)$(cecho ❯ magenta)"
       ;;
     # fall
     *Sep*|*Oct*|*Nov*)
-      chevrons="$(cecho ❯ light-yellow)$(cecho ❯ light-red)$(cecho ❯ light-magenta)"
+      chevrons="$(cecho ❯ yellow)$(cecho ❯ magenta)$(cecho ❯ red)"
       ;;
     # winter
     *Dec*|*Jan*|*Feb*)
-      chevrons="$(cecho ❯ light-magenta)$(cecho ❯ cyan)$(cecho ❯ light-green)"
+      chevrons="$(cecho ❯ blue)$(cecho ❯ cyan)$(cecho ❯ yellow)"
       ;;
     *)
       ;;
