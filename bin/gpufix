@@ -1,0 +1,5 @@
+#!/bin/bash
+for i in fuck you dude; do
+  ps aux | grep "Helper (GPU)" | grep $1 | awk '{print $2}' | head -1 | xargs kill
+  sleep 1
+done
