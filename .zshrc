@@ -147,6 +147,8 @@ setopt prompt_subst
 
 # export PS1='$(fancy_dir) $(git_branch) $(git_dot)$(seasonal_chevrons) '
 export PS1='$(fancy_dir) $(seasonal_chevrons) '
+. ~/.zsh/git-prompt.sh
+export RPROMPT=$'$(__git_ps1 "%s")'
 
 # Path to your oh-my-zsh installation.
 # export ZSH="$HOME/.oh-my-zsh"
@@ -320,6 +322,12 @@ alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
 function rgv () {
     vim -q <(rg --vimgrep $@) -c :cwindow
 }
+
+# Load Git completion
+zstyle ':completion:*:*:git:*' script ~/.zsh/git-completion.bash
+fpath=(~/.zsh $fpath)
+
+autoload -Uz compinit && compinit
 
 # compinit
 # bash completion and gh
