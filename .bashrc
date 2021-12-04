@@ -78,3 +78,9 @@ source ~/src/github.com/jdxcode/gh/completions/gl.bash
 
 # heroku autocomplete setup
 HEROKU_AC_BASH_SETUP_PATH=/Users/josh/Library/Caches/heroku/autocomplete/bash_setup && test -f $HEROKU_AC_BASH_SETUP_PATH && source $HEROKU_AC_BASH_SETUP_PATH;
+
+[ -f ~/.fzf.bash ] && source ~/.fzf.bash
+
+[[ -f /opt/dev/sh/chruby/chruby.sh ]] && type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; }
+
+[[ -x /usr/local/bin/brew ]] && eval $(/usr/local/bin/brew shellenv)

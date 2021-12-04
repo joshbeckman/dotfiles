@@ -99,3 +99,4 @@ RESET="\033[m"
 
 [[ -r ~/.bashrc ]] && . ~/.bashrc
 [[ -r ~/.profile ]] && . ~/.profile
+if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh; fi # added by Nix installer

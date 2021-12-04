@@ -1,6 +1,7 @@
 [user]
 	name = Josh Beckman
-	email = email@andjosh.com
+	email = josh.beckman@shopify.com
+	signingkey = 5828287F574E1529C36DA5DF7BFB1F123A8F3BD0
 [core]
 	editor = vim
 	commitGraph = true
@@ -61,8 +62,22 @@
 	tool = vimdiff
 [commit]
         template = ~/.git-templates/.gitmessage
+	gpgSign = true
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
 	required = true
+[diff]
+	algorithm = patience
+[gc]
+	writeCommitGraph = true
+[protocol]
+	version = 2
+[url "https://github.com/Shopify/"]
+	insteadOf = git@github.com:Shopify/
+	insteadOf = git@github.com:shopify/
+	insteadOf = ssh://git@github.com/Shopify/
+	insteadOf = ssh://git@github.com/shopify/
+[gpg]
+	program = /nix/var/nix/gcroots/dev-profiles/dev-support-dev-profile/bin/gpg-auto-pin

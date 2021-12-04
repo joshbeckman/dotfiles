@@ -340,4 +340,12 @@ autoload -Uz compinit && compinit
 
 . $HOME/.shellrc.load
 
+[ -f /opt/dev/dev.sh ] && source /opt/dev/dev.sh
+if [ -e ~/.nix-profile/etc/profile.d/nix.sh ]; then . ~/.nix-profile/etc/profile.d/nix.sh; fi # added by Nix installer
+
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+[[ -f /opt/dev/sh/chruby/chruby.sh ]] && type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; }
+if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh; fi # added by Nix installer
+
+[[ -x /usr/local/bin/brew ]] && eval $(/usr/local/bin/brew shellenv)
