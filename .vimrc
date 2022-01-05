@@ -63,21 +63,23 @@ nnoremap <Tab> :tabn<CR>
 nnoremap <S-Tab> :tabp<CR>
 
 " Special leader-based conveniences
-nnoremap <Leader>b :vnew <C-r>=escape(expand("%:p:h"), ' ') . '/'<cr>
 nnoremap <Leader>cn :cnext<CR>
 nnoremap <Leader>cp :cprevious<CR>
 nnoremap <Leader>dt :pu=strftime('%Y-%m-%dT%H:%M:%S')<CR>
+nnoremap <Leader>b :vnew <C-r>=escape(expand("%:p:h"), ' ') . '/'<cr>
 nnoremap <Leader>e :find 
-nnoremap <Leader>f :FZF<CR>
-nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
+nnoremap <Leader>o :tabf 
+nnoremap <Leader>v :vert sf 
 nnoremap <Leader>h :sf 
+nnoremap <Leader>f :tabnew<CR>:FZF<CR>
+nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
+" search for visually-selected text with '//'
+vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
+nnoremap <Leader>t <C-w><C-]><C-w>T
 nnoremap <Leader>ld :LspDefinition<CR>
 nnoremap <Leader>nn :set nonumber norelativenumber<CR>
-nnoremap <Leader>o :tabf 
 nnoremap <Leader>p :set paste<CR><esc>"*]p:set nopaste<cr>"
 nnoremap <Leader>q :q<CR>
-nnoremap <Leader>t <C-w><C-]><C-w>T
-nnoremap <Leader>v :vert sf 
 nnoremap <Leader>w :w<CR>
 " Move around splits with <c-hjkl>
 nnoremap <c-j> <c-w>j
