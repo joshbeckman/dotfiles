@@ -1,7 +1,7 @@
 [user]
 	name = Josh Beckman
 	email = josh.beckman@shopify.com
-	signingkey = 5828287F574E1529C36DA5DF7BFB1F123A8F3BD0
+	signingkey = D62FDA3ECA5C645E7224D389E6D3533153BE85DD
 [core]
 	editor = vim
 	commitGraph = true
