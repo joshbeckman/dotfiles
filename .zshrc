@@ -303,6 +303,8 @@ plugins=(
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias buildctags="~/dotfiles/.git-templates/hooks/ctags"
 alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
+alias vimf='vim "$(fzf)"'
+alias l='ls -FGA'
 
 # kitty terminal emulator control commands
 # function kt () {
