@@ -36,9 +36,7 @@ MEDIA_EJECT="0xC000000B8"
 
 # Leopold FC660C
 hidutil property --matching '{"ProductID":0x134, "VendorID":0x853}' --set "{\"UserKeyMapping\":[
-{$FROM: $INSERT,       $TO: $BACKTICK},
-{$FROM: $DELETE,       $TO: $MEDIA_PLAY},
-{$FROM: $SCROLL_LOCK,  $TO: $MEDIA_PREV},
-{$FROM: $PAUSE,        $TO: $MEDIA_NEXT},
+{$FROM: $ESCAPE,       $TO: $BACKTICK},
+{$FROM: $INSERT,       $TO: $ESCAPE},
 {$FROM: $RIGHT_ALT,        $TO: $RIGHT_GUI},
 ]}"
