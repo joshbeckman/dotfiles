@@ -353,3 +353,7 @@ if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/jo
 [[ -x /usr/local/bin/brew ]] && eval $(/usr/local/bin/brew shellenv)
 
 [[ -x /opt/homebrew/bin/brew ]] && eval $(/opt/homebrew/bin/brew shellenv)
+
+# attach to an existing tmux session if any exists
+# (useful for remote shell logins with this setup)
+if [ "$TMUX" = ""  ]; then tmux new -As0; fi
