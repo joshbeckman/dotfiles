@@ -4,6 +4,7 @@
 	signingkey = D62FDA3ECA5C645E7224D389E6D3533153BE85DD
 [core]
 	editor = vim
+	commitGraph = true
 [alias]
     ada = add -A
     add = add -v
