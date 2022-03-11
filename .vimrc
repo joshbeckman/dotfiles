@@ -22,17 +22,22 @@ let mapleader = "\<Space>"
 set background=light
 colorscheme PaperColor
 
-set number
-set relativenumber
 set backspace=indent,eol,start  " more powerful backspacing
 set autowrite
 set autoindent
 set incsearch
 set hlsearch
 set ignorecase smartcase
+set list
+set listchars=tab:$\ ,trail:·
+set noshowmode
+set scrolloff=8
+set sidescrolloff=8
+set signcolumn=yes
+set splitbelow
+set splitright
 hi Search ctermbg=LightYellow
 " hi Search ctermfg=Red
-set complete-=i
 set clipboard=unnamed
 " set textwidth=80
 " set colorcolumn=+1
@@ -58,6 +63,31 @@ set rtp+=/usr/local/opt/fzf
 set grepprg=rg\ --vimgrep
 set grepformat^=%f:%l:%c:%m
 
+" include tags files in completion list
+set complete+=t
+" change the 'completeopt' option so that Vim's popup menu doesn't select the
+" first completion item, but rather just inserts the longest common text of
+" all matches; and the menu will come up even if there's only one match.
+set completeopt=longest,menuone,preview
+
+" autocompletion
+set omnifunc=syntaxcomplete#Complete
+
+" let :tabfind (:tabf) search in pwd, current file directory, recursive
+set path=.,,**
+
+" Display all matching files when we tab complete
+set wildmenu
+set wildmode=longest,list
+
+set foldmethod=manual
+set nofoldenable        " disable folding
+
+set tags=.git/tags,tags;$HOME
+
+" allow gf to open new files
+map gf :edit <cfile><CR>
+
 " Use tab and shift-tab to cycle through tabs
 nnoremap <Tab> :tabn<CR>
 nnoremap <S-Tab> :tabp<CR>
@@ -65,6 +95,8 @@ nnoremap <S-Tab> :tabp<CR>
 " Special leader-based conveniences
 nnoremap <Leader>cn :cnext<CR>
 nnoremap <Leader>cp :cprevious<CR>
+" copy current file name (including path)
+nnoremap <Leader>cf :let @*=expand("%:p")<CR>
 nnoremap <Leader>dt :pu=strftime('%Y-%m-%dT%H:%M:%S')<CR>
 nnoremap <Leader>b :vnew <C-r>=escape(expand("%:p:h"), ' ') . '/'<cr>
 nnoremap <Leader>e :find 
@@ -102,7 +134,7 @@ let g:limelight_conceal_ctermfg = 240
 " git clone https://github.com/vim-airline/vim-airline-themes ~/.vim/bundle/vim-airline-themes
 let g:airline_theme='papercolor'
 
-" for custom statusline
+" for old, pre-airline, custom statusline
 " https://github.com/airblade/dotvim/blob/dd5d7737e39aad5e24c1a4a8c0d115ff2ae7b488/vimrc#L49-L91
 " hi clear StatusLine
 " hi clear StatusLineNC
@@ -139,7 +171,7 @@ let g:airline_theme='papercolor'
 autocmd BufRead,BufNewFile *.md setlocal spell
 autocmd BufRead,BufNewFile *.txt setlocal spell
 autocmd FileType gitcommit setlocal spell
-set complete+=kspell
+
 " linewrap in prose
 " autocmd BufRead,BufNewFile *.md setlocal textwidth=80
 
@@ -172,32 +204,6 @@ if executable('flow')
         \ })
 endif
 
-" :help syntastic
-" set statusline+=%#warningmsg#
-" set statusline+=%{SyntasticStatuslineFlag()}
-" set statusline+=%*
-" let g:syntastic_always_populate_loc_list = 1
-" let g:syntastic_auto_loc_list = 1
-" let g:syntastic_check_on_open = 1
-" let g:syntastic_check_on_wq = 0
-" let g:syntastic_php_checkers = ["php"]
-" let g:syntastic_css_checkers = ["csslint"]
-" let g:syntastic_javascript_checkers = ["eslint"]
-" let g:syntastic_ruby_checkers = ["rubocop"]
-" let g:syntastic_aggregate_errors = 1
-" JSX/React syntax
-" let g:jsx_ext_required = 0
-
-" autocompletion
-set omnifunc=syntaxcomplete#Complete
-
-" let :tabfind (:tabf) search in pwd, current file directory, recursive
-set path=.,,**
-
-" Display all matching files when we tab complete
-set wildmenu
-set wildmode=longest,list
-
 " FILE BROWSING:
 " Tweaks for browsing:
 let g:netrw_banner=0        " disable annoying banner
@@ -205,9 +211,6 @@ let g:netrw_altv=1          " open splits to the right
 let g:netrw_liststyle=3     " tree view
 let g:netrw_winsize=75      " sets the width to 75% of the page.
 " let g:netrw_browse_split=2  " open files in a new vertical split
-
-set foldmethod=manual
-set nofoldenable        " disable folding
 
 " Language specifics
 autocmd FileType css set tabstop=8 shiftwidth=2
@@ -251,8 +254,6 @@ map <silent> <Leader>cop :call RubocopAutocorrect()<cr>
 map <silent> <Leader>eslint :call EslintAutocorrect()<cr>
 map <silent> <leader>aj :ALENext<cr>
 map <silent> <leader>ak :ALEPrevious<cr>
-
-set tags=.git/tags,tags;$HOME
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 " MULTIPURPOSE TAB KEY
