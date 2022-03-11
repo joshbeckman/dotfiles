@@ -28,12 +28,17 @@ set autoindent
 set incsearch
 set hlsearch
 set ignorecase smartcase
+" show trailing characters for e.g. spaces
 set list
 set listchars=tab:$\ ,trail:·
+" don't need to show INSERT/etc. status line
 set noshowmode
+" start scrolling before I get to the edge
 set scrolloff=8
 set sidescrolloff=8
+" Always show the gutter to avoid jumping
 set signcolumn=yes
+" Split things into the side
 set splitbelow
 set splitright
 hi Search ctermbg=LightYellow
@@ -80,8 +85,9 @@ set path=.,,**
 set wildmenu
 set wildmode=longest,list
 
+" disable folding
 set foldmethod=manual
-set nofoldenable        " disable folding
+set nofoldenable
 
 set tags=.git/tags,tags;$HOME
 
