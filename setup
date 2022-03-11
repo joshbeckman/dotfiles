@@ -48,7 +48,15 @@ echo '  ======  installed vim plugins'
 if [ $SPIN ]; then
 echo '  ======  installing spin-specific things'
 
-  sudo apt-get install -y neovim ripgrep fzf exuberant-ctags xsel
+echo '  ======  installing apt-get packages'
+  sudo apt-get install -y neovim ripgrep fzf xsel
+
+echo '  ======  installing universal-ctags'
+  git clone https://github.com/universal-ctags/ctags.git
+  cd ctags && ./autogen.sh && ./configure && make && sudo make install
+  cd -
+
+echo '  ======  installing universal-ctags'
   # configure debian fzf location to vim, add this to .vimrc
   echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
   git config --global user.email "josh.beckman@shopify.com"
