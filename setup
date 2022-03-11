@@ -48,7 +48,7 @@ echo '  ======  installed vim plugins'
 if [ $SPIN ]; then
 echo '  ======  installing spin-specific things'
 
-  sudo apt-get install -y ripgrep fzf exuberant-ctags
+  sudo apt-get install -y neovim ripgrep fzf exuberant-ctags xsel
   # configure debian fzf location to vim, add this to .vimrc
   echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
   git config --global user.email "josh.beckman@shopify.com"
