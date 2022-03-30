@@ -1,6 +1,7 @@
 [user]
 	name = Josh Beckman
 	email = email@andjosh.com
+	signingkey = D62FDA3ECA5C645E7224D389E6D3533153BE85DD
 [core]
 	editor = vim
 	commitGraph = true
