@@ -1,1 +1,3 @@
 README.md skip
+.config skip
+.config/nvim recurse
