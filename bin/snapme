@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Capture a screenshot and an imagesnap via webcam and save to iCloud directory
+# Capture a screenshot and an imagesnap via webcam and save to snapme directory
 # Best combined with a cron job
 #       Requires: imagesnap (brew installable)
 #       Requires: convert (via imagemagick)
@@ -10,9 +10,14 @@
 #
 cd /tmp
 /usr/sbin/screencapture -x screensnap.png
-/usr/local/bin/imagesnap -w 2 -q camerasnap.png
+haslg=$(/opt/homebrew/bin/imagesnap -l | grep "LG UltraFine")
+if [[ $haslg ]]; then
+    /opt/homebrew/bin/imagesnap -w 2 -q camerasnap.png -d "LG UltraFine Display Camera"
+else
+    /opt/homebrew/bin/imagesnap -w 2 -q camerasnap.png
+fi
 filename=$(date +%Y-%m-%d___%H.%M.%S.png)
-/usr/local/bin/convert screensnap.png -resize $(/usr/local/bin/convert camerasnap.png  -format "%wx%h" info:) screensnap.png
-/usr/local/bin/convert -append camerasnap.png screensnap.png $filename
+/opt/homebrew/bin/convert screensnap.png -resize $(/opt/homebrew/bin/convert camerasnap.png  -format "%wx%h" info:) screensnap.png
+/opt/homebrew/bin/convert -append camerasnap.png screensnap.png $filename
 mv $filename ~/Documents/snapme/$filename
 rm screensnap.png && rm camerasnap.png
