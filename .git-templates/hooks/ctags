@@ -5,6 +5,11 @@ set -e
 PATH="/usr/local/bin:$PATH"
 dir="$(git rev-parse --git-dir)"
 trap 'rm -f "$dir/$$.tags"' EXIT
-git ls-files | \
-  /opt/homebrew/bin/ctags --tag-relative=yes -L - -f"$dir/$$.tags"
+if [ -e /opt/homebrew/bin/ctags ]; then
+    git ls-files | \
+      /opt/homebrew/bin/ctags --tag-relative=yes -L - -f"$dir/$$.tags"
+else
+    git ls-files | \
+      "${CTAGS:-ctags}" --tag-relative=yes -L - -f"$dir/$$.tags"
+fi
 mv "$dir/$$.tags" "$dir/tags"
