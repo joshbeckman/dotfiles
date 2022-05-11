@@ -303,7 +303,7 @@ plugins=(
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias buildctags="~/dotfiles/.git-templates/hooks/ctags"
 alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
-alias vimf='vim "$(fzf)"'
+alias ef='nvim "$(fzf)"'
 alias l='ls -FGA'
 
 # kitty terminal emulator control commands
@@ -322,7 +322,7 @@ alias l='ls -FGA'
 
 # search files and open in vim as quickfix
 function rgv () {
-    vim -q <(rg --vimgrep $@) -c :cwindow
+    nvim -q <(rg --vimgrep $@) -c :cwindow
 }
 
 # Load Git completion
