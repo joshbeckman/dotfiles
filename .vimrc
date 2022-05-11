@@ -62,7 +62,7 @@ set autoread
 " :set termguicolors
 
 " configure fuzzy-finder
-set rtp+=/usr/local/opt/fzf
+set rtp+=/opt/homebrew/opt/fzf
 
 " configure ripgrep for faster grepping
 set grepprg=rg\ --vimgrep
