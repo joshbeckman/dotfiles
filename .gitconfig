@@ -1,7 +1,6 @@
 [user]
 	name = Josh Beckman
 	email = email@andjosh.com
-	signingkey = D62FDA3ECA5C645E7224D389E6D3533153BE85DD
 [core]
 	editor = vim
 [alias]
@@ -59,13 +58,8 @@
 	tool = vimdiff
 [commit]
         template = ~/.git-templates/.gitmessage
-	gpgSign = true
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
 	required = true
-[gpg]
-	program = /nix/var/nix/gcroots/dev-profiles/dev-support-dev-profile/bin/gpg-auto-pin
-[include]
-	path = /Users/joshbeckman/.config/dev/gitconfig
