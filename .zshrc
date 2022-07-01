@@ -150,6 +150,9 @@ export PS1='$(fancy_dir) $(seasonal_chevrons) '
 . ~/.zsh/git-prompt.sh
 export RPROMPT=$'$(__git_ps1 "%s")'
 
+# Enable history search, ctrl-e, ctrl-a, etc.
+bindkey -e
+
 # Path to your oh-my-zsh installation.
 # export ZSH="$HOME/.oh-my-zsh"
 
