@@ -14,6 +14,7 @@ mkdir -p ~/.local/share/nvim/site/pack/git-plugins/start
 # install neovim plugins
 git clone --depth 1 https://github.com/dense-analysis/ale.git ~/.local/share/nvim/site/pack/git-plugins/start/ale
 git clone https://github.com/tpope/vim-fugitive.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-fugitive
+git clone https://github.com/tpope/vim-surround.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-surround
 git clone https://github.com/airblade/vim-gitgutter.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gitgutter
 git clone https://github.com/ruanyl/vim-gh-line.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gh-line
 git clone https://github.com/kana/vim-textobj-user.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-user
@@ -27,19 +28,13 @@ echo '  ======  installed neovim plugins'
 # echo '  ======  installed vim pathogen'
 # # install vim plugins
 # echo '  ======  installing vim plugins'
-# git clone https://github.com/dense-analysis/ale.git ~/.vim/bundle/ale
 # git clone https://github.com/jiangmiao/auto-pairs.git ~/.vim/bundle/auto-pairs
 # git clone https://github.com/kien/rainbow_parentheses.vim.git ~/.vim/bundle/rainbow_parentheses.vim
 # git clone https://github.com/NLKNguyen/papercolor-theme.git ~/.vim/bundle/papercolor-theme
 # git clone https://github.com/vim-airline/vim-airline.git ~/.vim/bundle/vim-airline
 # git clone https://github.com/vim-airline/vim-airline-themes.git ~/.vim/bundle/vim-airline-themes
 # git clone https://github.com/junegunn/vim-easy-align.git ~/.vim/bundle/vim-easy-align
-# git clone https://github.com/tpope/vim-fugitive.git ~/.vim/bundle/vim-fugitive
-# git clone https://github.com/ruanyl/vim-gh-line.git ~/.vim/bundle/vim-gh-line
-# git clone https://github.com/airblade/vim-gitgutter.git ~/.vim/bundle/vim-gitgutter
 # git clone https://github.com/fatih/vim-go.git ~/.vim/bundle/vim-go
 # git clone https://github.com/plasticboy/vim-markdown.git ~/.vim/bundle/vim-markdown
-# git clone https://github.com/kana/vim-textobj-user.git ~/.vim/bundle/vim-textobj-user
-# git clone https://github.com/tek/vim-textobj-ruby.git ~/.vim/bundle/vim-textobj-ruby
 # git clone https://github.com/junegunn/goyo.vim.git ~/.vim/bundle/goyo.vim
 # echo '  ======  installed vim plugins'
