@@ -146,7 +146,7 @@ fancy_dir () {
 setopt prompt_subst
 
 # export PS1='$(fancy_dir) $(git_branch) $(git_dot)$(seasonal_chevrons) '
-export PS1='$(fancy_dir) $(seasonal_chevrons) '
+export PS1='%n $(fancy_dir) $(seasonal_chevrons) '
 . ~/.zsh/git-prompt.sh
 export RPROMPT=$'$(__git_ps1 "%s")'
 
