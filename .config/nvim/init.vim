@@ -73,8 +73,17 @@ set sidescrolloff=8
 " Split things into the side
 set splitbelow
 set splitright
-hi Search ctermbg=LightYellow
-hi SignColumn ctermbg=7
+
+" Make highlighting consistent across color schemes
+hi Search ctermbg=Yellow
+hi Search ctermfg=Black
+
+" Colors for the gutter / sign column
+hi clear SignColumn
+highlight GitGutterAdd    guifg=#009900 ctermfg=2
+highlight GitGutterChange guifg=#bbbb00 ctermfg=3
+highlight GitGutterDelete guifg=#ff2222 ctermfg=1
+
 hi Visual cterm=reverse
 set clipboard=unnamed
 highlight OverLength ctermbg=blue ctermfg=white
