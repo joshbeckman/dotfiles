@@ -289,6 +289,9 @@ plugins=(
 # Preferred editor for local and remote sessions
 export EDITOR='nvim'
 
+# ripgrep config path
+export RIPGREP_CONFIG_PATH=~/.ripgreprc
+
 # Compilation flags
 # export ARCHFLAGS="-arch x86_64"
 
