@@ -43,9 +43,9 @@
 [init]
 	templatedir = ~/.git-templates
 [github]
-	user = andjosh
+	user = joshbeckman
 [ghi]
-	token = !security find-internet-password -a andjosh -s github.com -l 'ghi token' -w
+	token = !security find-internet-password -a joshbeckman -s github.com -l 'ghi token' -w
 [push]
 	default = simple
 [pull]
