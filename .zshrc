@@ -363,3 +363,4 @@ if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/jo
 # attach to an existing tmux session if any exists
 # (useful for remote shell logins with this setup)
 if [ "$TMUX" = ""  ]; then tmux new -As0; fi
+proverb
