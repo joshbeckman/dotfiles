@@ -327,6 +327,10 @@ function rgv () {
     nvim -q <(rg --vimgrep $@) -c :cwindow
 }
 
+function proverb () {
+    curl https://notes.joshbeckman.org/humans.txt --silent | head -n 1
+}
+
 # Load Git completion
 zstyle ':completion:*:*:git:*' script ~/.zsh/git-completion.bash
 fpath=(~/.zsh $fpath)
