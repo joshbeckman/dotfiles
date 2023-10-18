@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+
+require 'net/http'
+require 'json'
+require 'securerandom'
+
+base_url = 'https://notes.joshbeckman.org'
+data_url = "#{base_url}/assets/js/proverbs.json"
+uri = URI.parse(data_url)
+req = Net::HTTP::Get.new(uri)
+res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+raise StandardError, 'Proverbs data request failed' unless res.is_a?(Net::HTTPSuccess)
+
+items = JSON.parse(res.body)
+puts items[SecureRandom.rand(items.count)]

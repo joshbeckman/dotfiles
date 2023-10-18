@@ -327,7 +327,7 @@ function rgv () {
     nvim -q <(rg --vimgrep $@) -c :cwindow
 }
 
-function proverb () {
+function daily_proverb () {
     curl https://notes.joshbeckman.org/humans.txt --silent | head -n 1
 }
 
