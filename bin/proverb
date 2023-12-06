@@ -12,4 +12,6 @@ res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.reque
 raise StandardError, 'Proverbs data request failed' unless res.is_a?(Net::HTTPSuccess)
 
 items = JSON.parse(res.body)
-puts items[SecureRandom.rand(items.count)]
+puts ''
+puts "  #{items[SecureRandom.rand(items.count)]}"
+puts ''
