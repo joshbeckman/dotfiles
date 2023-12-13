@@ -21,8 +21,8 @@ git clone https://github.com/ruanyl/vim-gh-line.git ~/.local/share/nvim/site/pac
 git clone https://github.com/kana/vim-textobj-user.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-user
 git clone https://github.com/tek/vim-textobj-ruby.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-ruby
 git clone https://github.com/thiagoalessio/rainbow_levels.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/rainbow_levels.vim
-git clone git://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/pack/git-plugins/start/auto-pairs
-git clone https://github.com/junegunn/goyo.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/gouyo.vim
+git clone https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/pack/git-plugins/start/auto-pairs
+git clone https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
 echo '  ======  installed neovim plugins'
 
 # vim-specific things
@@ -40,5 +40,4 @@ echo '  ======  installed neovim plugins'
 # git clone https://github.com/junegunn/vim-easy-align.git ~/.vim/bundle/vim-easy-align
 # git clone https://github.com/fatih/vim-go.git ~/.vim/bundle/vim-go
 # git clone https://github.com/plasticboy/vim-markdown.git ~/.vim/bundle/vim-markdown
-# git clone https://github.com/junegunn/goyo.vim.git ~/.vim/bundle/goyo.vim
 # echo '  ======  installed vim plugins'
