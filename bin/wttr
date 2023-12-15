@@ -1,7 +1,0 @@
-#!/bin/sh
-#
-# Display weather from https://wttr.in/:help
-
-request="wttr.in/${1-Chicago}"
-[ "$(tput cols)" -lt 125  ] && request+='?n&T&m'
-curl -H "Accept-Language: ${LANG%_*}" --compressed "$request"

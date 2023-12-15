@@ -1,9 +1,0 @@
-#!/bin/sh
-#
-# Open social apps Mail, Twitter, Slack
-# Open social sites HN
-
-open https://news.ycombinator.com;
-open /Applications/Mail.app;
-open /Applications/Slack.app;
-open /Applications/Twitter.app;
