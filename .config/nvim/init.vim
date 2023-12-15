@@ -122,8 +122,8 @@ set grepformat^=%f:%l:%c:%m
 set complete+=t
 " change the 'completeopt' option so that Vim's popup menu doesn't select the
 " first completion item, but rather just inserts the longest common text of
-" all matches; and the menu will come up even if there's only one match.
-set completeopt=longest,menuone,preview
+" all matches; and the menu will come up if there's more than one match.
+set completeopt=longest,menu
 
 " autocompletion
 set omnifunc=syntaxcomplete#Complete
