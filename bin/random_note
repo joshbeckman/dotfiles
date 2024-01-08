@@ -11,7 +11,7 @@ def print(str)
   end.each { |line| puts line.join(' ') }
 end
 
-base_url = 'https://notes.joshbeckman.org'
+base_url = 'https://www.joshbeckman.org'
 data_url = "#{base_url}/assets/js/SearchData.json"
 uri = URI.parse(data_url)
 req = Net::HTTP::Get.new(uri)
