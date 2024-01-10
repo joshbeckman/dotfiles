@@ -23,6 +23,7 @@ git clone https://github.com/tek/vim-textobj-ruby.git ~/.local/share/nvim/site/p
 git clone https://github.com/thiagoalessio/rainbow_levels.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/rainbow_levels.vim
 git clone https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/pack/git-plugins/start/auto-pairs
 git clone https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
+git clone https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
 echo '  ======  installed neovim plugins'
 
 # vim-specific things
