@@ -214,3 +214,8 @@ au BufRead,BufNewFile *.handler set filetype=javascript
 autocmd BufRead,BufNewFile *.md setlocal spell
 autocmd BufRead,BufNewFile *.txt setlocal spell
 autocmd FileType gitcommit setlocal spell
+" markdown helpers
+nnoremap <Leader>3 "xciw[<C-r>x]()<Esc>
+vnoremap <Leader>3 "xc[<C-r>x]()<Esc>
+nnoremap <Leader>4 "xciw[<C-r>"x(<Esc>"*pli)<Esc>
+vnoremap <Leader>4 "xc[<C-r>x](<Esc>"*pli)<Esc>
