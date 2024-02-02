@@ -268,12 +268,12 @@ SPACESHIP_CHAR_SYMBOL="❯❯❯ "
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(
-    # docker
-    # docker-compose
-    # docker-machine
-    # git-extras
-)
+# plugins=(
+#     # docker
+#     # docker-compose
+#     # docker-machine
+#     # git-extras
+# )
 
 # source $ZSH/oh-my-zsh.sh
 

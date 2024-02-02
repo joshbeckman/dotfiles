@@ -1,12 +1,21 @@
-# install tmux helpers
-echo '  ======  installing tmux plugin manager'
-sudo git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
-echo '  ======  installed tmux plugin manager'
-
 # symlink up dotfiles
 echo '  ======  installing dotfiles via dfm'
 ~/dotfiles/bin/dfm install
 echo '  ======  installed dotfiles via dfm'
+
+# zsh-specific things
+echo '  ======  installing zsh plugins'
+mkdir -p ~/.config/zsh
+# install zsh plugins
+git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.config/zsh/zsh-syntax-highlighting
+echo "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> ${ZDOTDIR:-$HOME}/.zshrc
+echo '  ======  installed zsh plugins'
+
+# install tmux helpers
+echo '  ======  installing tmux plugins'
+mkdir -p ~/.tmux/plugins
+echo "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" >> ~/.tmux.conf
+echo '  ======  installed tmux plugins'
 
 # neovim-specific things
 echo '  ======  installing neovim plugins'
@@ -25,20 +34,3 @@ git clone https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/p
 git clone https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
 git clone https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
 echo '  ======  installed neovim plugins'
-
-# vim-specific things
-# install pathogen
-# echo '  ======  installing vim pathogen'
-# mkdir -p ~/.vim/autoload ~/.vim/bundle && curl -LSso ~/.vim/autoload/pathogen.vim https://tpo.pe/pathogen.vim
-# echo '  ======  installed vim pathogen'
-# # install vim plugins
-# echo '  ======  installing vim plugins'
-# git clone https://github.com/jiangmiao/auto-pairs.git ~/.vim/bundle/auto-pairs
-# git clone https://github.com/kien/rainbow_parentheses.vim.git ~/.vim/bundle/rainbow_parentheses.vim
-# git clone https://github.com/NLKNguyen/papercolor-theme.git ~/.vim/bundle/papercolor-theme
-# git clone https://github.com/vim-airline/vim-airline.git ~/.vim/bundle/vim-airline
-# git clone https://github.com/vim-airline/vim-airline-themes.git ~/.vim/bundle/vim-airline-themes
-# git clone https://github.com/junegunn/vim-easy-align.git ~/.vim/bundle/vim-easy-align
-# git clone https://github.com/fatih/vim-go.git ~/.vim/bundle/vim-go
-# git clone https://github.com/plasticboy/vim-markdown.git ~/.vim/bundle/vim-markdown
-# echo '  ======  installed vim plugins'
