@@ -14,6 +14,7 @@ echo '  ======  installed zsh plugins'
 # install tmux helpers
 echo '  ======  installing tmux plugins'
 mkdir -p ~/.tmux/plugins
+git clone https://github.com/laktak/extrakto ~/.tmux/plugins/extrakto
 echo "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" >> ~/.tmux.conf
 echo '  ======  installed tmux plugins'
 
