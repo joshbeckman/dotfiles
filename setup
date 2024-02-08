@@ -8,14 +8,18 @@ echo '  ======  installing zsh plugins'
 mkdir -p ~/.config/zsh
 # install zsh plugins
 git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.config/zsh/zsh-syntax-highlighting
-echo "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> ${ZDOTDIR:-$HOME}/.zshrc
+if ! grep -q "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ${ZDOTDIR:-$HOME}/.zshrc; then
+        echo "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> ${ZDOTDIR:-$HOME}/.zshrc
+fi
 echo '  ======  installed zsh plugins'
 
 # install tmux helpers
 echo '  ======  installing tmux plugins'
 mkdir -p ~/.tmux/plugins
 git clone https://github.com/laktak/extrakto ~/.tmux/plugins/extrakto
-echo "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" >> ~/.tmux.conf
+if ! grep -q "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" ~/.tmux.conf; then
+        echo "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" >> ~/.tmux.conf
+fi
 echo '  ======  installed tmux plugins'
 
 # neovim-specific things
@@ -36,25 +40,16 @@ git clone https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pa
 git clone https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
 echo '  ======  installed neovim plugins'
 
-__setup_arch(){
-        echo "Arch Linux detected!"
-
-        if command -v pacman &> /dev/null
-        then
-                echo "pacman found"
-        else
-                echo "pacman not found"
-        fi
-
-}
-
 __setup_ubuntu(){
         if [ "$(dpkg --print-architecture)" = "amd64" ]; then
                 echo "Ubuntu detected"
                 sudo apt-get install -y ripgrep fzf exuberant-ctags xsel
-                # configure debian fzf location to vim, add this to .vimrc
-                echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
-                echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.config/nvim/init.vim
+                if ! grep -q "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc; then
+                        echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
+                fi
+                if ! grep -q "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim; then
+                        echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.config/nvim/init.vim
+                fi
         else
                 echo "Ubuntu detected, but not amd64"
                 __setup_unsupported
@@ -73,8 +68,6 @@ __setup_linux(){
     OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
   fi
         case "$OS" in
-                "arch" | "manjarolinux" | "endeavouros")
-                        __setup_arch;;
                 "ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
                         __setup_ubuntu;;
                 *)
