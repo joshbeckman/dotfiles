@@ -1,3 +1,20 @@
+# utility functions
+function git_clone_or_update() {
+        if [ -d "$2" ]; then
+                echo "  ======  updating $2"
+                cd $2 && git pull
+        else
+                echo "  ======  cloning $1 into $2"
+                git clone --depth 1 $1 $2
+        fi
+}
+
+function append_to_file_if_not_present() {
+        if ! grep -q "$1" $2; then
+                echo "$1" >> $2
+        fi
+}
+
 # symlink up dotfiles
 echo '  ======  installing dotfiles via dfm'
 ~/dotfiles/bin/dfm install
@@ -7,49 +24,41 @@ echo '  ======  installed dotfiles via dfm'
 echo '  ======  installing zsh plugins'
 mkdir -p ~/.config/zsh
 # install zsh plugins
-git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.config/zsh/zsh-syntax-highlighting
-if ! grep -q "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ${ZDOTDIR:-$HOME}/.zshrc; then
-        echo "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> ${ZDOTDIR:-$HOME}/.zshrc
-fi
+git_clone_or_update https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.config/zsh/zsh-syntax-highlighting
+append_to_file_if_not_present "source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ${ZDOTDIR:-$HOME}/.zshrc
 echo '  ======  installed zsh plugins'
 
 # install tmux helpers
 echo '  ======  installing tmux plugins'
-mkdir -p ~/.tmux/plugins
-git clone https://github.com/laktak/extrakto ~/.tmux/plugins/extrakto
-if ! grep -q "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" ~/.tmux.conf; then
-        echo "run-shell ~/.tmux/plugins/extrakto/extrakto.tmux" >> ~/.tmux.conf
-fi
+mkdir -p ~/.config/tmux
+git_clone_or_update https://github.com/laktak/extrakto ~/.config/tmux/extrakto
+append_to_file_if_not_present "run-shell ~/.config/tmux/extrakto/extrakto.tmux" ~/.tmux.conf
 echo '  ======  installed tmux plugins'
 
 # neovim-specific things
 echo '  ======  installing neovim plugins'
 mkdir -p ~/.local/share/nvim/site/pack/git-plugins/start
 # install neovim plugins
-git clone --depth 1 https://github.com/dense-analysis/ale.git ~/.local/share/nvim/site/pack/git-plugins/start/ale
-git clone https://github.com/tpope/vim-fugitive.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-fugitive
-git clone https://github.com/tpope/vim-surround.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-surround
-git clone https://github.com/tpope/vim-repeat.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-repeat
-git clone https://github.com/airblade/vim-gitgutter.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gitgutter
-git clone https://github.com/ruanyl/vim-gh-line.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gh-line
-git clone https://github.com/kana/vim-textobj-user.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-user
-git clone https://github.com/tek/vim-textobj-ruby.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-ruby
-git clone https://github.com/thiagoalessio/rainbow_levels.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/rainbow_levels.vim
-git clone https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/pack/git-plugins/start/auto-pairs
-git clone https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
-git clone https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
+git_clone_or_update https://github.com/dense-analysis/ale.git ~/.local/share/nvim/site/pack/git-plugins/start/ale
+git_clone_or_update https://github.com/tpope/vim-fugitive.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-fugitive
+git_clone_or_update https://github.com/tpope/vim-surround.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-surround
+git_clone_or_update https://github.com/tpope/vim-repeat.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-repeat
+git_clone_or_update https://github.com/airblade/vim-gitgutter.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gitgutter
+git_clone_or_update https://github.com/ruanyl/vim-gh-line.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gh-line
+git_clone_or_update https://github.com/kana/vim-textobj-user.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-user
+git_clone_or_update https://github.com/tek/vim-textobj-ruby.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-textobj-ruby
+git_clone_or_update https://github.com/thiagoalessio/rainbow_levels.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/rainbow_levels.vim
+git_clone_or_update https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/pack/git-plugins/start/auto-pairs
+git_clone_or_update https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
+git_clone_or_update https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
 echo '  ======  installed neovim plugins'
 
 __setup_ubuntu(){
         if [ "$(dpkg --print-architecture)" = "amd64" ]; then
                 echo "Ubuntu detected"
                 sudo apt-get install -y ripgrep fzf exuberant-ctags xsel
-                if ! grep -q "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc; then
-                        echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
-                fi
-                if ! grep -q "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim; then
-                        echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.config/nvim/init.vim
-                fi
+                append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
+                append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
         else
                 echo "Ubuntu detected, but not amd64"
                 __setup_unsupported
