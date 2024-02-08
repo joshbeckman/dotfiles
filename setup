@@ -35,3 +35,68 @@ git clone https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/p
 git clone https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
 git clone https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
 echo '  ======  installed neovim plugins'
+
+__setup_arch(){
+        echo "Arch Linux detected!"
+
+        if command -v pacman &> /dev/null
+        then
+                echo "pacman found"
+        else
+                echo "pacman not found"
+        fi
+
+}
+
+__setup_ubuntu(){
+        if [ "$(dpkg --print-architecture)" = "amd64" ]; then
+                echo "Ubuntu detected"
+        else
+                echo "Ubuntu detected, but not amd64"
+                __setup_unsupported
+        fi
+}
+
+__setup_linux(){
+        echo "Detected Linux!"
+        echo "Checking distro..."
+        if (uname -a | grep -qi "Microsoft"); then
+    OS="ubuntuwsl"
+  elif ! command -v lsb_release &> /dev/null; then
+    echo "lsb_release could not be found. Falling back to /etc/os-release"
+    OS="$(grep -Po '(?<=^ID=).*$' /etc/os-release | tr '[:upper:]' '[:lower:]')" 2>/dev/null
+  else
+    OS=$(lsb_release -i | awk '{ print $3 }' | tr '[:upper:]' '[:lower:]')
+  fi
+        case "$OS" in
+                "arch" | "manjarolinux" | "endeavouros")
+                        __setup_arch;;
+                "ubuntu" | "ubuntuwsl" | "debian" | "linuxmint" | "parrot" | "kali" | "elementary" | "pop")
+                        __setup_ubuntu;;
+                *)
+                        __setup_unsupported;;
+        esac
+}
+
+__setup_mac(){
+        echo "Detected Mac!"
+
+        if command -v brew &> /dev/null
+        then
+                echo "Installing with brew"
+        else
+                echo "Could not find brew"
+        fi
+
+}
+
+__setup_unsupported(){
+        echo "  ======  Unknown or unsupported OS or architecture"
+}
+
+# TODO: would be great to support others!
+case "$OSTYPE" in
+  linux*)         __setup_linux ;;
+  darwin*)        __setup_mac ;;
+  *)              __setup_unsupported ;;
+esac
