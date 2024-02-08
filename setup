@@ -51,6 +51,10 @@ __setup_arch(){
 __setup_ubuntu(){
         if [ "$(dpkg --print-architecture)" = "amd64" ]; then
                 echo "Ubuntu detected"
+                sudo apt-get install -y ripgrep fzf exuberant-ctags xsel
+                # configure debian fzf location to vim, add this to .vimrc
+                echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.vimrc
+                echo "source /usr/share/doc/fzf/examples/fzf.vim" >> ~/.config/nvim/init.vim
         else
                 echo "Ubuntu detected, but not amd64"
                 __setup_unsupported
@@ -83,7 +87,12 @@ __setup_mac(){
 
         if command -v brew &> /dev/null
         then
+                echo "Refreshing your brew"
+                brew update && brew upgrade && brew cleanup
                 echo "Installing with brew"
+                brew install tmux neovim tree tig ripgrep fzf bat gh ctags
+                brew install raycast --cask
+                brew install shortcat --cask
         else
                 echo "Could not find brew"
         fi
@@ -94,7 +103,6 @@ __setup_unsupported(){
         echo "  ======  Unknown or unsupported OS or architecture"
 }
 
-# TODO: would be great to support others!
 case "$OSTYPE" in
   linux*)         __setup_linux ;;
   darwin*)        __setup_mac ;;
