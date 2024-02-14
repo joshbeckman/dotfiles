@@ -1,3 +1,5 @@
+#!/usr/bin/zsh
+
 # utility functions
 function git_clone_or_update() {
         if [ -d "$2" ]; then
