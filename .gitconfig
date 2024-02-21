@@ -14,6 +14,7 @@
     browsemerges = !open $(git remote get-url origin | sed s!git@!https://! | sed s!com:!com/! | sed s!\\\\.git!!)/merge_requests
     browsepulls = !open $(git remote get-url origin | sed s!git@!https://! | sed s!com:!com/! | sed s!\\\\.git!!)/pulls
     brs = show-branch --sha1-name
+    c = commit
     ca = commit --amend
     cac = commit --amend -c
     cb = symbolic-ref --short HEAD      # get current branch name, simply
@@ -58,6 +59,7 @@
 	tool = vimdiff
 [commit]
         template = ~/.git-templates/.gitmessage
+        verbose = true
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
