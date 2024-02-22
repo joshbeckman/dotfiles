@@ -306,7 +306,7 @@ export RIPGREP_CONFIG_PATH=~/.ripgreprc
 alias buildctags="~/dotfiles/.git-templates/hooks/ctags"
 alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
 alias ef='nvim "$(fzf)"'
-alias l='ls -FGA'
+alias l='ls -lAF --color --group-directories-first'
 
 # kitty terminal emulator control commands
 # function kt () {
