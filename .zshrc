@@ -328,7 +328,7 @@ function rgv () {
 }
 
 function daily_proverb () {
-    curl https://notes.joshbeckman.org/humans.txt --silent | head -n 1
+    curl https://www.joshbeckman.org/humans.txt --silent | head -n 1
 }
 
 # Load Git completion
@@ -363,4 +363,4 @@ if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/jo
 # attach to an existing tmux session if any exists
 # (useful for remote shell logins with this setup)
 if [ "$TMUX" = ""  ]; then tmux new -As0; fi
-proverb
+daily_proverb
