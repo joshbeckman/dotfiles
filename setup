@@ -93,10 +93,8 @@ __setup_mac(){
         then
                 echo "Refreshing your brew"
                 brew update && brew upgrade && brew cleanup
-                echo "Installing with brew"
-                brew install tmux neovim tree tig ripgrep fzf bat gh ctags
-                brew install raycast --cask
-                brew install shortcat --cask
+                echo "Installing basics with brew bundle"
+                brew bundle install --no-lock
         else
                 echo "Could not find brew"
         fi
