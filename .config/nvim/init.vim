@@ -110,6 +110,8 @@ endif
 " Per default, netrw leaves unmodified buffers open. This autocommand
 " deletes netrw's buffer once it's hidden (using ':q', for example)
 autocmd FileType netrw setl bufhidden=delete
+" navigate to previous tab when closing a tab
+autocmd TabClosed * tabprevious
 
 " configure fuzzy-finder
 set rtp+=/opt/homebrew/opt/fzf
