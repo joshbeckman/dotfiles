@@ -144,6 +144,8 @@ fancy_dir () {
 }
 
 setopt prompt_subst
+# backwards-compatible comments
+setopt interactive_comments
 
 # export PS1='$(fancy_dir) $(git_branch) $(git_dot)$(seasonal_chevrons) '
 export PS1='%n $(fancy_dir) $(seasonal_chevrons) '
