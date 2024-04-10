@@ -54,6 +54,12 @@ nnoremap <c-j> <c-w>j
 nnoremap <c-k> <c-w>k
 nnoremap <c-h> <c-w>h
 nnoremap <c-l> <c-w>l
+" Re-select visual block after indenting
+vnoremap < <gv
+vnoremap > >gv
+" Move visual block
+vnoremap J :m '>+1<CR>gv=gv
+vnoremap K :m '<-2<CR>gv=gv
 
 set backspace=indent,eol,start  " more powerful backspacing
 set autowrite
