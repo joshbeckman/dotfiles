@@ -4,7 +4,7 @@
 function git_clone_or_update() {
         if [ -d "$2" ]; then
                 echo "  ======  updating $2"
-                cd $2 && git pull
+                cd $2 && git pull && cd -
         else
                 echo "  ======  cloning $1 into $2"
                 git clone --depth 1 $1 $2
