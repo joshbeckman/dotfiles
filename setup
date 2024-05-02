@@ -94,7 +94,7 @@ __setup_mac(){
                 echo "Refreshing your brew"
                 brew update && brew upgrade && brew cleanup
                 echo "Installing basics with brew bundle"
-                brew bundle install --no-lock
+                brew bundle install --no-lock --file ~/Brewfile
         else
                 echo "Could not find brew"
         fi
