@@ -308,7 +308,7 @@ export RIPGREP_CONFIG_PATH=~/.ripgreprc
 alias buildctags="~/dotfiles/.git-templates/hooks/ctags"
 alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
 alias ef='nvim "$(fzf)"'
-alias l='ls -lAF --color --group-directories-first'
+alias l='gls -lAF --color --group-directories-first'
 
 # kitty terminal emulator control commands
 # function kt () {
@@ -327,6 +327,20 @@ alias l='ls -lAF --color --group-directories-first'
 # search files and open in vim as quickfix
 function rgv () {
     nvim -q <(rg --vimgrep $@) -c :cwindow
+}
+
+# easy handles to rename tmux things
+function tmux_rename_window () {
+    tmux rename-window $1
+}
+function tmux_rename_session () {
+    tmux rename-session $1
+}
+function tmux_rename_pane () {
+    tmux select-pane -T $1
+}
+function tmux_rename () {
+    tmux_rename_window $1 && tmux_rename_session $1
 }
 
 function daily_proverb () {
