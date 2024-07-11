@@ -330,17 +330,19 @@ function rgv () {
 }
 
 # easy handles to rename tmux things
-function tmux_rename_window () {
+function twindow_rename () {
     tmux rename-window $1
 }
-function tmux_rename_session () {
+function tsession_rename () {
     tmux rename-session $1
 }
-function tmux_rename_pane () {
+function tpane_rename () {
     tmux select-pane -T $1
 }
-function tmux_rename () {
-    tmux_rename_window $1 && tmux_rename_session $1
+function tnw () {
+    local path_name="$(basename "$PWD" | tr . -)"
+    local name=${1-$path_name}
+    tmux new-window -n $name
 }
 
 function daily_proverb () {
