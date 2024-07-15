@@ -143,12 +143,21 @@ fancy_dir () {
   return
 }
 
+# set the username to the spin fqdn if it's set
+fancy_user() {
+    if [ -n "$SPIN_FQDN" ]; then
+        echo -n "$SPIN_FQDN"
+    else
+        echo -n "$USER@$HOST"
+    fi
+}
+
 setopt prompt_subst
 # backwards-compatible comments
 setopt interactive_comments
 
 # export PS1='$(fancy_dir) $(git_branch) $(git_dot)$(seasonal_chevrons) '
-export PS1='%n $(fancy_dir) $(seasonal_chevrons) '
+export PS1='$(fancy_user) $(fancy_dir) $(seasonal_chevrons) '
 . ~/.zsh/git-prompt.sh
 export RPROMPT=$'$(__git_ps1 "%s")'
 
