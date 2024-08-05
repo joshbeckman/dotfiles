@@ -40,11 +40,13 @@ nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' .
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>t <C-w><C-]><C-w>T
+nnoremap <Leader>T :tabnew<CR>:Tags<CR>
 nnoremap <Leader>ld :LspDefinition<CR>
 nnoremap <Leader>nn :set nonumber norelativenumber<CR>
 nnoremap <Leader>p :set paste<CR><esc>"*]p:set nopaste<cr>"
 nnoremap <Leader>q :q<CR>
 nnoremap <Leader>w :w<CR>
+nnoremap <Leader>W :Windows<CR>
 map <silent> <Leader>cop :call RubocopAutocorrect()<cr>
 map <silent> <Leader>eslint :call EslintAutocorrect()<cr>
 map <silent> <leader>aj :ALENext<cr>
