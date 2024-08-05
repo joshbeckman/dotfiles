@@ -11,6 +11,7 @@ brew "fzf"
 brew "gh"
 brew "git"
 brew "neovim"
+brew "perl"
 brew "pinentry-mac" if OS.mac?
 brew "reattach-to-user-namespace"
 brew "ripgrep"

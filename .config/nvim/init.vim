@@ -35,7 +35,7 @@ nnoremap <Leader>e :find
 nnoremap <Leader>o :tabf 
 nnoremap <Leader>v :vert sf 
 nnoremap <Leader>h :sf 
-nnoremap <Leader>f :tabnew<CR>:FZF<CR>
+nnoremap <Leader>f :tabnew<CR>:Files<CR>
 nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>

@@ -52,6 +52,7 @@ git_clone_or_update https://github.com/tek/vim-textobj-ruby.git ~/.local/share/n
 git_clone_or_update https://github.com/jiangmiao/auto-pairs.git ~/.local/share/nvim/site/pack/git-plugins/start/auto-pairs
 git_clone_or_update https://github.com/github/copilot.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/copilot.vim
 git_clone_or_update https://github.com/maxmx03/solarized.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/solarized.nvim
+git_clone_or_update https://github.com/junegunn/fzf.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/fzf.vim
 # git_clone_or_update https://github.com/thiagoalessio/rainbow_levels.vim.git ~/.local/share/nvim/site/pack/git-plugins/start/rainbow_levels.vim
 # git_clone_or_update https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
 echo '  ======  installed neovim plugins'
@@ -59,7 +60,7 @@ echo '  ======  installed neovim plugins'
 __setup_ubuntu(){
         if [ "$(dpkg --print-architecture)" = "amd64" ]; then
                 echo "Ubuntu detected"
-                sudo apt-get install -y ripgrep fzf exuberant-ctags xsel
+                sudo apt-get install -y ripgrep fzf exuberant-ctags xsel bat
                 append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
                 append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
         else
