@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+
+require 'json'
+
+repo = 'Shopify/joshbeckman-issues'
+issue_id = `gh issue list -l weeknotes -R #{repo}`.match(/\d+/)&.to_a&.first
+if ARGV.length == 1
+  if (ARGV[0] == '-V' || ARGV[0] == '--view')
+    exec "gh issue view #{issue_id} -c -R #{repo}"
+    return
+  end
+  exec "gh issue comment #{issue_id} -R #{repo} -b #{JSON.dump(ARGV[0])}"
+else
+  exec "gh issue comment #{issue_id} -e -R #{repo}"
+end
