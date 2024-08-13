@@ -353,6 +353,13 @@ function tnw () {
     local name=${1-$path_name}
     tmux new-window -n $name
 }
+# easy handles to work with wezterm
+function wtrename () {
+    wezterm cli set-tab-title $1
+}
+function wwrename () {
+    wezterm cli rename-workspace $1
+}
 
 function daily_proverb () {
     curl https://www.joshbeckman.org/humans.txt --silent | head -n 1

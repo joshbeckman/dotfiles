@@ -8,17 +8,7 @@ let mapleader = "\<Space>"
 
 """""""    themes and schemes
 set background=light
-" to set up solarized light theme
-" (my old reliable workhorse)
-" set background=light
 colorscheme solarized
-"
-" to set up nord (dark) theme
-" (my favorite for dark rooms and winter months)
-" colorscheme nord
-
-" to set up papercolor light theme
-" (my favorite for bright rooms and summer months)
 
 " Use tab and shift-tab to cycle through tabs
 nnoremap <Tab> :tabn<CR>
