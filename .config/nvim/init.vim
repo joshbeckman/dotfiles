@@ -117,6 +117,9 @@ set grepformat^=%f:%l:%c:%m
 
 " include tags files in completion list
 set complete+=t
+" include custom words in completion list
+" ref: https://superuser.com/questions/102343/can-i-add-a-set-of-words-to-the-vim-autocomplete-vocabulary
+set complete+=k~/.config/nvim/keywords.txt
 " change the 'completeopt' option so that Vim's popup menu doesn't select the
 " first completion item, but rather just inserts the longest common text of
 " all matches; and the menu will come up if there's more than one match.
