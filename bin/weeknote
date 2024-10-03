@@ -8,6 +8,9 @@ if ARGV.length == 1
   if (ARGV[0] == '-V' || ARGV[0] == '--view')
     exec "gh issue view #{issue_id} -c -R #{repo}"
     return
+  elsif (ARGV[0] == '-O' || ARGV[0] == '--open')
+    exec "gh issue view #{issue_id} -w -R #{repo}"
+    return
   end
   exec "gh issue comment #{issue_id} -R #{repo} -b #{JSON.dump(ARGV[0])}"
 else
