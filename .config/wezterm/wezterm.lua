@@ -203,6 +203,12 @@ config.keys = {
     -- Present a list of existing workspaces
     action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|WORKSPACES' },
   },
+  {
+    key = 'l',
+    mods = 'LEADER',
+    -- Present a list of existing tabs
+    action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|TABS' },
+  },
 }
 
 config.key_tables = {
