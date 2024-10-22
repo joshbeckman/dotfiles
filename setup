@@ -67,6 +67,11 @@ __setup_ubuntu(){
                 echo "Ubuntu detected, but not amd64"
                 __setup_unsupported
         fi
+        if command -v nix-env &> /dev/null
+        then
+                echo "Nix detected"
+                nix-env -iA nixpkgs.bash nixpkgs.git nixpkgs.ripgrep nixpkgs.fzf nixpkgs.ctags nixpkgs.bat
+        fi
 }
 
 __setup_linux(){
