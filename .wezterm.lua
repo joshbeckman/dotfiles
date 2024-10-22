@@ -201,13 +201,13 @@ config.keys = {
   },
   {
     key = 'f',
-    mods = 'LEADER',
+    mods = 'CMD|SHIFT',
     -- Present a list of existing workspaces
     action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|WORKSPACES' },
   },
   {
-    key = 't',
-    mods = 'LEADER',
+    key = 'a',
+    mods = 'CMD|SHIFT',
     -- Present a list of existing tabs
     action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|TABS' },
   },
