@@ -101,7 +101,7 @@ end)
 local function move_pane(key, direction)
   return {
     key = key,
-    mods = 'LEADER',
+    mods = 'CTRL',
     action = wezterm.action.ActivatePaneDirection(direction),
   }
 end
