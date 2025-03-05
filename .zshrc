@@ -316,7 +316,6 @@ export RIPGREP_CONFIG_PATH=~/.ripgreprc
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias buildctags="~/dotfiles/.git-templates/hooks/ctags"
 alias dateu="date -u +\"%Y-%m-%dT%H:%M:%SZ\""
-alias ef='nvim "$(fzf)"'
 alias l='gls -lAF --color --group-directories-first'
 
 # kitty terminal emulator control commands
@@ -332,6 +331,14 @@ alias l='gls -lAF --color --group-directories-first'
 # function kwt () {
 #   kitty @ set-window-title $@
 # }
+
+function ef () {
+    if [ $# -gt 0 ]; then
+        echo "Usage: ef"
+        return 1
+    fi
+    nvim "$(fzf)"
+}
 
 # search files and open in vim as quickfix
 function rgv () {

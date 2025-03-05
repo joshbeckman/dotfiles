@@ -25,10 +25,12 @@ nnoremap <Leader>e :find
 nnoremap <Leader>o :tabf 
 nnoremap <Leader>v :vert sf 
 nnoremap <Leader>h :sf 
-nnoremap <Leader>f :tabnew<CR>:Files<CR>
+nnoremap <Leader>f :Files<CR>
+nnoremap <Leader>F :tabnew<CR>:Files<CR>
 nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
+nnoremap <Leader>s :Buffers<CR>
 nnoremap <Leader>t <C-w><C-]><C-w>T
 nnoremap <Leader>T :tabnew<CR>:Tags<CR>
 nnoremap <Leader>ld :LspDefinition<CR>
