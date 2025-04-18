@@ -25,8 +25,8 @@ nnoremap <Leader>e :find
 nnoremap <Leader>o :tabf 
 nnoremap <Leader>v :vert sf 
 nnoremap <Leader>h :sf 
-nnoremap <Leader>f :Files<CR>
-nnoremap <Leader>F :tabnew<CR>:Files<CR>
+nnoremap <Leader>f :tabnew<CR>:Files<CR>
+nnoremap <Leader>F :tabnew<CR>:FindSimilarFiles<CR>
 nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
@@ -221,3 +221,13 @@ nnoremap <Leader>3 "xciw[<C-r>x]()<Esc>
 vnoremap <Leader>3 "xc[<C-r>x]()<Esc>
 nnoremap <Leader>4 "xciw[<C-r>"x(<Esc>"*pli)<Esc>
 vnoremap <Leader>4 "xc[<C-r>x](<Esc>"*pli)<Esc>
+
+" Command that allows searching for similar files
+command! FindSimilarFiles call FindSimilarFiles()
+
+function! FindSimilarFiles()
+    " https://vim.fandom.com/wiki/Get_the_name_of_the_current_file
+    let parent_dir = expand("%:p:h:t")
+    let filename_root = expand("%:t:r")
+    call fzf#vim#files(".", {'options': ['--query', parent_dir . "/" . filename_root]})
+endfunction
