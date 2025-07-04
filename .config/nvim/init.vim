@@ -193,7 +193,7 @@ let g:ale_fixers['ruby'] = ['rubocop']
 " set statusline+=%1*buf:%-3n%*                      " buffer number
 
 function! RubocopAutocorrect()
-  execute "!rubocop -a " . bufname("%")
+  execute "!bundle exec rubocop -a " . bufname("%")
   :e
 endfunction
 function! EslintAutocorrect()

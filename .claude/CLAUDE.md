@@ -7,9 +7,11 @@ RULES:
 
 ---
 
-### General Coding Practices
+## General Coding Practices
 
-1. **Avoid Adding Comments**: When making changes to files, avoid adding comments explaining the changes. The codebase should be self-documenting, and commit messages should explain the reasoning behind changes rather than inline comments. This keeps the code clean and minimizes noise.
+**Code Comment Guidelines**: Write comments that explain **why the code isn't written another way** rather than what it does. Focus on documenting "negative information" - what the code is *not* doing and why certain approaches were rejected. Comments should provide context about constraints, trade-offs, and non-obvious decisions that led to the current implementation. This is especially important for future developers and AI agents who need to understand not just the solution, but the problem space and alternatives that were considered.
+
+**When to Comment**: Generally, avoid comments. Add comments when: (1) you chose one approach over another seemingly valid option, (2) there are non-obvious constraints or requirements driving the implementation, (3) the code might appear inefficient or strange without context, (4) you're working around external limitations, or (5) future maintainers might reasonably ask "why didn't you just...?" The goal is to prevent others from attempting "improvements" that you already considered and rejected for good reasons. Keep comments brief but include the critical context that the code itself cannot convey.
 
 ## Commits
 
