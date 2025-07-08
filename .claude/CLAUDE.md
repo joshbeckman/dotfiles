@@ -7,7 +7,15 @@ RULES:
 
 ---
 
-## General Coding Practices
+## General Guidelines for Claude Code
+
+After making a set of changes to files or satisfying a task, you MUST display a notification to tell me what's been done. Use the title "Claude Code" and a brief descriptive message. Here's an example:
+
+```bash
+/usr/bin/osascript -e "display notification \"I've finished refactoring the FooBar class into smaller methods\" with title \"Claude Code\" sound name \"Sosumi\""
+```
+
+### General Coding Practices
 
 **Code Comment Guidelines**: Write comments that explain **why the code isn't written another way** rather than what it does. Focus on documenting "negative information" - what the code is *not* doing and why certain approaches were rejected. Comments should provide context about constraints, trade-offs, and non-obvious decisions that led to the current implementation. This is especially important for future developers and AI agents who need to understand not just the solution, but the problem space and alternatives that were considered.
 
@@ -20,6 +28,14 @@ Follow the guidelines of [Conventional Commits](https://www.conventionalcommits.
 ## GitHub Workflow
 
 This section outlines the exact process for interacting with GitHub, creating PRs, and managing issues.
+
+### Referencing Issues and Pull Requests
+
+When commenting/writing/anything that references an issue or pull request, you MUST use the following full-clarity markkdown format:
+
+```markdown
+[<issue_or_pr_title>](<issue_or_pr_url>)
+```
 
 ### Issue and Pull Request Management
 

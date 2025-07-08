@@ -41,6 +41,7 @@
     uptags = !git push origin && git push origin --tags
     web = instaweb
     wipe = !git add -A && git commit -qm 'WIPE SAVEPOINT' && git reset HEAD~1 --hard
+    cleanonmain = !git checkout main && git reset --hard && git clean -fdx && git pull origin && git remote prune origin && nme "clean on main"
 [init]
 	templatedir = ~/.git-templates
 [github]
