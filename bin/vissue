@@ -1,0 +1,623 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# This is a script that fetches a GitHub issue and its comments and prints them in markdown format.
+# It is ideal to pipe the output of this script to an LLM
+# or a file and then open it in a markdown viewer.
+#
+# Requires: `gh` (GitHub CLI) to be installed.
+#
+# Usage:
+#  vissue https://some/url/to/issue_or_pr
+
+require 'json'
+require 'time'
+require 'fileutils'
+require 'open3'
+
+EXCLUDED_USERS = %w[github-actions].freeze
+MAX_DIFF_LINES = 800
+
+Commit = Struct.new(
+  :authoredDate,
+  :authors,
+  :committedDate,
+  :messageBody,
+  :messageHeadline,
+  :oid,
+  keyword_init: true
+)
+Comment = Struct.new(
+  :id,
+  :author,
+  :authorAssociation,
+  :body,
+  :createdAt,
+  :includesCreatedEdit,
+  :isMinimized,
+  :minimizedReason,
+  :reactionGroups,
+  :url,
+  :viewerDidAuthor,
+  keyword_init: true
+)
+Review = Struct.new(
+  :id,
+  :author,
+  :authorAssociation,
+  :body,
+  :commit,
+  :includesCreatedEdit,
+  :reactionGroups,
+  :state,
+  :submittedAt,
+  :url,
+  keyword_init: true
+)
+
+ReviewComment = Struct.new(
+  :id,
+  :user,
+  :body,
+  :created_at,
+  :updated_at,
+  :html_url,
+  :author_association,
+  :original_commit_id,
+  :commit_id,
+  :url,
+  :pull_request_review_id,
+  :node_id,
+  :diff_hunk,
+  :path,
+  :pull_request_url,
+  :_links,
+  :reactions,
+  :start_line,
+  :original_start_line,
+  :start_side,
+  :line,
+  :original_line,
+  :side,
+  :in_reply_to_id,
+  :original_position,
+  :position,
+  :subject_type,
+  keyword_init: true
+)
+
+class TimelineEvent
+  attr_accessor :actor, :event, :created_at, :label, :milestone, :rename, :assignee,
+                :assigner, :review_requester, :requested_reviewer, :dismissed_review,
+                :source, :state, :commit_id, :body, :url
+
+  def initialize(data)
+    @actor = data['actor']
+    @event = data['event']
+    @created_at = data['created_at']
+    @label = data['label']
+    @milestone = data['milestone']
+    @rename = data['rename']
+    @assignee = data['assignee']
+    @assigner = data['assigner']
+    @review_requester = data['review_requester']
+    @requested_reviewer = data['requested_reviewer']
+    @dismissed_review = data['dismissed_review']
+    @source = data['source']
+    @state = data['state']
+    @commit_id = data['commit_id']
+    @body = data['body']
+    @url = data['url']
+  end
+end
+
+def strip_html_comments(string)
+  string.gsub(/<!--.*?-->/m, '')
+end
+
+def setup_issue_directory(url)
+  # Remove protocol and create directory path
+  url_path = url.gsub(%r{^https?://}, '')
+  issue_dir = "/tmp/gh_issue/#{url_path}"
+  FileUtils.mkdir_p(issue_dir)
+  FileUtils.rm_rf(Dir.glob("#{issue_dir}/*"))
+  issue_dir
+end
+
+def extract_repo_info(url)
+  parts = url.split('/')
+  owner = parts[3]
+  repo = parts[4]
+  number = parts[6]
+  [owner, repo, number]
+end
+
+def fetch_timeline(url)
+  owner, repo, number = extract_repo_info(url)
+  timeline_data = `gh api repos/#{owner}/#{repo}/issues/#{number}/timeline --paginate`
+  JSON.parse(timeline_data).map { |event| TimelineEvent.new(event) }
+rescue JSON::ParserError
+  []
+end
+
+def download_images_for_issue(url, issue_dir)
+  owner, repo, number = extract_repo_info(url)
+  is_pr = url.include?('/pull/')
+
+  # Get HTML body for issue/PR
+  body_html = if is_pr
+                `gh api repos/#{owner}/#{repo}/pulls/#{number} -H "Accept: application/vnd.github.html+json" --jq '.body_html'`
+              else
+                `gh api repos/#{owner}/#{repo}/issues/#{number} -H "Accept: application/vnd.github.html+json" --jq '.body_html'`
+              end
+
+  # Get HTML for comments
+  comments_html = `gh api repos/#{owner}/#{repo}/issues/#{number}/comments -H "Accept: application/vnd.github.html+json" --jq '.[].body_html'`
+
+  # Extract GitHub private image URLs
+  github_images = []
+  github_images.concat(body_html.scan(%r{https://private-user-images\.githubusercontent\.com[^"]+}))
+  github_images.concat(comments_html.scan(%r{https://private-user-images\.githubusercontent\.com[^"]+}))
+
+  # Download GitHub images
+  image_map = {}
+  github_images.uniq.each_with_index do |img_url, i|
+    local_path = "#{issue_dir}/github_image_#{i + 1}.png"
+    `curl -L -o "#{local_path}" "#{img_url}" 2>/dev/null`
+    # Extract UUID from the URL to map it
+    if match = img_url.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/)
+      uuid = match[1]
+      image_map[uuid] = local_path
+    end
+  end
+
+  # Get markdown body for external images
+  body_md = if is_pr
+              `gh api repos/#{owner}/#{repo}/pulls/#{number} --jq '.body'`
+            else
+              `gh api repos/#{owner}/#{repo}/issues/#{number} --jq '.body'`
+            end
+
+  # Extract and download external images
+  external_images = body_md.scan(%r{https://[^)]+\.(png|jpg|jpeg|gif)}i)
+  external_images.uniq.each do |img_url, _|
+    next if img_url.include?('githubusercontent.com')
+
+    filename = File.basename(img_url.index(/[?#]/) ? img_url[0..img_url.index(/[?#]/) - 1] : img_url)
+    local_path = "#{issue_dir}/external_image_#{filename}"
+    `curl -L -o "#{local_path}" "#{img_url}" 2>/dev/null`
+  end
+
+  image_map
+end
+
+def replace_image_urls(content, image_map)
+  # Replace GitHub attachment URLs with local paths
+  image_map.each do |uuid, local_path|
+    content.gsub!(%r{https://github\.com/user-attachments/assets/#{uuid}}, local_path)
+  end
+  content
+end
+
+# detect any bare (non-markdown) URLs to a github issue/pr
+# use `gh issue view` or `gh pr view` to get the title
+# replace the link with a markdown link containing the title
+def hydrate_issue_links(string)
+  urls = string.scan(%r{(?<=\s)(https://github\.com/[^/]+/[^/]+/(?:issues|pull)/\d+)}).flatten
+  return string if urls.empty?
+
+  threads = urls.map do |url|
+    Thread.new do
+      # if the response isn't parsable as JSON, it's likely an error message
+      # so we'll just return the URL as is
+      resp = `gh issue view #{url} --json title`
+      [url, JSON.parse(resp)['title']]
+    rescue JSON::ParserError
+      [url, url]
+    end
+  end
+  threads.map(&:value).each do |url, title|
+    next if title == url
+
+    string.gsub!(" #{url}", " [#{title}](#{url})")
+  end
+  string
+end
+
+def render_user(user)
+  "@#{user['login']}"
+end
+
+def render_time(timestamp)
+  t = Time.parse(timestamp)
+  date = t.strftime('%Y-%m-%d')
+  day = t.strftime('%A')
+  time = t.strftime('%H:%M:%S')
+  "on #{day} (#{date}) at #{time}"
+end
+
+def render_comment(comment, image_map = {})
+  str = ["## #{render_user(comment.author)} [commented #{render_time(comment.createdAt)}](#{comment.url})"]
+  str << ''
+  body = hydrate_issue_links(strip_html_comments(comment.body))
+  body = replace_image_urls(body, image_map) unless image_map.empty?
+  str << body
+  str.join("\n")
+end
+
+def render_commit(commit)
+  str = ["## #{commit.authors.map do |author|
+                 render_user(author)
+               end.join(', ')} committed a change #{render_time(commit.committedDate)}"]
+  str << ''
+  str << commit.messageHeadline
+  if commit.messageBody.length > 0
+    str << ''
+    str << commit.messageBody
+  end
+  str.join("\n")
+end
+
+def render_review(review, image_map = {})
+  str = ["## #{render_user(review.author)} reviewed (#{review.state}) #{render_time(review.submittedAt)}"]
+  str << ''
+  if review.body.length > 0
+    body = hydrate_issue_links(strip_html_comments(review.body))
+    body = replace_image_urls(body, image_map) unless image_map.empty?
+    str << body
+  end
+  str.join("\n")
+end
+
+def render_review_comment(review_comment, image_map = {})
+  str = ["## #{render_user(review_comment.user)} [commented #{render_time(review_comment.created_at)}](#{review_comment.html_url})"]
+  str << ''
+  str << "file: #{review_comment.path}"
+  str << "```diff\n#{review_comment.diff_hunk}\n```" if review_comment.diff_hunk&.length&.positive?
+  body = hydrate_issue_links(strip_html_comments(review_comment.body))
+  body = replace_image_urls(body, image_map) unless image_map.empty?
+  str << body
+  str.join("\n")
+end
+
+def group_timeline_events(events)
+  grouped = []
+  current_group = []
+
+  events.each do |event|
+    if current_group.empty?
+      current_group << event
+    else
+      # Check if this event can be grouped with the previous ones
+      first_event = current_group.first
+      same_actor = event.actor&.dig('login') == first_event.actor&.dig('login')
+      same_time = event.created_at == first_event.created_at
+      groupable_type = %w[labeled unlabeled assigned unassigned review_requested].include?(event.event)
+
+      if same_actor && same_time && groupable_type && event.event == first_event.event
+        current_group << event
+      else
+        # Flush current group and start new one
+        grouped << current_group
+        current_group = [event]
+      end
+    end
+  end
+
+  # Don't forget the last group
+  grouped << current_group unless current_group.empty?
+
+  grouped
+end
+
+def render_timeline_event(events)
+  return nil if events.empty?
+
+  first_event = events.first
+  return nil if EXCLUDED_USERS.include?(first_event.actor&.dig('login'))
+
+  if events.length == 1
+    event = first_event
+    case event.event
+    when 'labeled'
+      "### 🏷️ #{render_user(event.actor)} added label `#{event.label['name']}` #{render_time(event.created_at)}"
+    when 'unlabeled'
+      "### 🏷️ #{render_user(event.actor)} removed label `#{event.label['name']}` #{render_time(event.created_at)}"
+    when 'milestoned'
+      "### 🎯 #{render_user(event.actor)} added to milestone `#{event.milestone['title']}` #{render_time(event.created_at)}"
+    when 'demilestoned'
+      "### 🎯 #{render_user(event.actor)} removed from milestone #{render_time(event.created_at)}"
+    when 'assigned'
+      "### 👤 #{render_user(event.actor)} assigned #{render_user(event.assignee)} #{render_time(event.created_at)}"
+    when 'unassigned'
+      "### 👤 #{render_user(event.actor)} unassigned #{render_user(event.assignee)} #{render_time(event.created_at)}"
+    when 'renamed'
+      "### ✏️ #{render_user(event.actor)} renamed issue #{render_time(event.created_at)}\nFrom: `#{event.rename['from']}`\nTo: `#{event.rename['to']}`"
+    when 'closed'
+      "### 🔒 #{render_user(event.actor)} closed this #{render_time(event.created_at)}"
+    when 'reopened'
+      "### 🔓 #{render_user(event.actor)} reopened this #{render_time(event.created_at)}"
+    when 'cross-referenced'
+      if event.source && event.source['issue']
+        "### 🔗 #{render_user(event.actor)} mentioned this in [##{event.source['issue']['number']}: #{event.source['issue']['title']}](#{event.source['issue']['html_url']}) #{render_time(event.created_at)}"
+      else
+        "### 🔗 #{render_user(event.actor)} referenced this #{render_time(event.created_at)}"
+      end
+    when 'referenced'
+      "### 🔗 #{render_user(event.actor)} referenced this in a commit #{render_time(event.created_at)}"
+    when 'head_ref_force_pushed'
+      "### 🔄 #{render_user(event.actor)} force-pushed the branch #{render_time(event.created_at)}"
+    when 'head_ref_deleted'
+      "### 🗑️ #{render_user(event.actor)} deleted the head branch #{render_time(event.created_at)}"
+    when 'merged'
+      "### ✅ #{render_user(event.actor)} merged this #{render_time(event.created_at)}"
+    when 'review_requested'
+      "### 👀 #{render_user(event.review_requester)} requested review from #{render_user(event.requested_reviewer)} #{render_time(event.created_at)}"
+    when 'review_request_removed'
+      "### 👀 #{render_user(event.actor)} removed review request #{render_time(event.created_at)}"
+    when 'deployed'
+      "### 🚀 Deployed #{render_time(event.created_at)}"
+    when 'ready_for_review'
+      "### ✅ #{render_user(event.actor)} marked as ready for review #{render_time(event.created_at)}"
+    when 'convert_to_draft'
+      "### 📝 #{render_user(event.actor)} converted to draft #{render_time(event.created_at)}"
+    end
+  else
+    # Handle grouped events
+    case first_event.event
+    when 'labeled'
+      labels = events.map { |e| "`#{e.label['name']}`" }.join(', ')
+      "### 🏷️ #{render_user(first_event.actor)} added labels #{labels} #{render_time(first_event.created_at)}"
+    when 'unlabeled'
+      labels = events.map { |e| "`#{e.label['name']}`" }.join(', ')
+      "### 🏷️ #{render_user(first_event.actor)} removed labels #{labels} #{render_time(first_event.created_at)}"
+    when 'assigned'
+      assignees = events.map { |e| render_user(e.assignee) }.join(', ')
+      "### 👤 #{render_user(first_event.actor)} assigned #{assignees} #{render_time(first_event.created_at)}"
+    when 'unassigned'
+      assignees = events.map { |e| render_user(e.assignee) }.join(', ')
+      "### 👤 #{render_user(first_event.actor)} unassigned #{assignees} #{render_time(first_event.created_at)}"
+    when 'review_requested'
+      reviewers = events.map { |e| render_user(e.requested_reviewer) }.join(', ')
+      "### 👀 #{render_user(first_event.review_requester)} requested review from #{reviewers} #{render_time(first_event.created_at)}"
+    end
+  end
+end
+
+def render_issue(url)
+  resp = `gh issue view #{url} --json comments,body,title,author,createdAt,closedAt,assignees,labels,number`
+  data = JSON.parse(resp)
+
+  # Setup directory and download images
+  issue_dir = setup_issue_directory(url)
+  image_map = download_images_for_issue(url, issue_dir)
+
+  # Fetch timeline events
+  timeline_events = fetch_timeline(url)
+
+  str = ["# Issue ##{data['number']}: [#{data['title']}](#{url}) opened by #{render_user(data['author'])} #{render_time(data['createdAt'])}"]
+  str << ''
+  body = hydrate_issue_links(strip_html_comments(data['body']))
+  body = replace_image_urls(body, image_map) unless image_map.empty?
+  str << body
+  str << ''
+
+  # Combine comments and timeline events
+  comments = data['comments'].map { |comment| Comment.new(comment) }
+
+  # Merge and sort by created_at
+  all_events = comments + timeline_events
+  all_events.sort_by! do |event|
+    case event
+    when Comment
+      event.createdAt
+    when TimelineEvent
+      event.created_at
+    end
+  end
+
+  # Render all events
+  # Separate timeline events from other events for grouping
+  timeline_events_to_group = []
+  other_events = []
+
+  all_events.each do |event|
+    if event.is_a?(TimelineEvent)
+      timeline_events_to_group << event
+    else
+      # Flush any pending timeline events before adding non-timeline event
+      unless timeline_events_to_group.empty?
+        grouped = group_timeline_events(timeline_events_to_group)
+        grouped.each do |group|
+          rendered = render_timeline_event(group)
+          other_events << [group.first.created_at, rendered] if rendered
+        end
+        timeline_events_to_group = []
+      end
+      other_events << [event.createdAt, render_comment(event, image_map)]
+    end
+  end
+
+  # Don't forget to flush remaining timeline events
+  unless timeline_events_to_group.empty?
+    grouped = group_timeline_events(timeline_events_to_group)
+    grouped.each do |group|
+      rendered = render_timeline_event(group)
+      other_events << [group.first.created_at, rendered] if rendered
+    end
+  end
+
+  # Sort by timestamp and render
+  other_events.sort_by { |timestamp, _| timestamp || '1970-01-01T00:00:00Z' }.each do |_, content|
+    str << content
+    str << ''
+  end
+
+  str << ''
+  str << "## Labeled: #{data['labels'].map { |label| label['name'] }.join(', ')}" unless data['labels'].empty?
+  if data['closedAt']
+    str << ''
+    str << "## Closed #{render_time(data['closedAt'])}"
+  elsif data['assignees'].length > 0
+    str << ''
+    str << "## Assigned to: #{data['assignees'].map { |assignee| render_user(assignee) }.join(', ')}"
+  end
+  str.join("\n")
+rescue JSON::ParserError
+  if resp.include?('Not Found')
+    "Issue not found: #{url}"
+  elsif resp.include?('rate limit')
+    sleep(1 + rand)
+    retry
+  end
+end
+
+def render_pr(url)
+  resp = `gh pr view #{url} --json comments,commits,reviews,body,title,author,createdAt,closedAt,mergedAt,assignees,additions,deletions,changedFiles,labels,number`
+  data = JSON.parse(resp)
+  total_diff_lines = data['additions'] + data['deletions']
+
+  # Setup directory and download images
+  issue_dir = setup_issue_directory(url)
+  image_map = download_images_for_issue(url, issue_dir)
+
+  # Fetch timeline events
+  timeline_events = fetch_timeline(url)
+
+  diff = ''
+  if total_diff_lines < MAX_DIFF_LINES
+    diff = `gh pr diff #{url}`
+    diff = "```diff\n#{diff}\n```"
+  else
+    diff = `gh pr diff #{url} --name-only`
+    diff = "```text\n#{diff}\n```"
+  end
+  #
+  # ref as to why they aren't included: https://github.com/cli/cli/discussions/3993
+  review_comments = begin
+    JSON.parse(`gh api repos/#{url.split('/')[3]}/#{url.split('/')[4]}/pulls/#{url.split('/')[6]}/comments`)
+  rescue JSON::ParserError
+    []
+  end
+
+  str = ["# Pull Request ##{data['number']}: [#{data['title']}](#{url}) opened by #{render_user(data['author'])} #{render_time(data['createdAt'])}"]
+  str << ''
+  body = hydrate_issue_links(strip_html_comments(data['body']))
+  body = replace_image_urls(body, image_map) unless image_map.empty?
+  str << body
+  str << ''
+  str << "## Stats: #{data['additions']} lines added, #{data['deletions']} lines deleted, #{data['changedFiles']} files changed"
+  str << ''
+  str << diff
+  str << ''
+  entries = data['comments']
+            .map { |comment| Comment.new(comment) }
+            .concat(data['reviews'].map { |review| Review.new(review) })
+            .concat(review_comments.map { |comment| ReviewComment.new(comment) })
+            .concat(data['commits'].map { |commit| Commit.new(commit) })
+            .concat(timeline_events)
+            .sort_by do |entry|
+    timestamp = case entry
+                when Comment
+                  entry.createdAt
+                when Review
+                  entry.submittedAt
+                when ReviewComment
+                  entry.created_at
+                when Commit
+                  entry.committedDate
+                when TimelineEvent
+                  entry.created_at
+                end
+    timestamp || '1970-01-01T00:00:00Z'
+  end
+  # Process entries and group timeline events
+  timeline_events_to_group = []
+  final_entries = []
+
+  entries.each do |entry|
+    if entry.is_a?(TimelineEvent)
+      timeline_events_to_group << entry
+    else
+      # Flush any pending timeline events
+      unless timeline_events_to_group.empty?
+        grouped = group_timeline_events(timeline_events_to_group)
+        grouped.each do |group|
+          rendered = render_timeline_event(group)
+          final_entries << [group.first.created_at, rendered] if rendered
+        end
+        timeline_events_to_group = []
+      end
+
+      # Add non-timeline event
+      timestamp = case entry
+                  when Comment
+                    entry.createdAt
+                  when Review
+                    entry.submittedAt
+                  when ReviewComment
+                    entry.created_at
+                  when Commit
+                    entry.committedDate
+                  end
+
+      rendered = case entry
+                 when Comment
+                   render_comment(entry, image_map)
+                 when Review
+                   render_review(entry, image_map)
+                 when ReviewComment
+                   render_review_comment(entry, image_map)
+                 when Commit
+                   render_commit(entry)
+                 end
+
+      final_entries << [timestamp, rendered] if rendered
+    end
+  end
+
+  # Don't forget remaining timeline events
+  unless timeline_events_to_group.empty?
+    grouped = group_timeline_events(timeline_events_to_group)
+    grouped.each do |group|
+      rendered = render_timeline_event(group)
+      final_entries << [group.first.created_at, rendered] if rendered
+    end
+  end
+
+  # Sort and render
+  final_entries.sort_by { |timestamp, _| timestamp || '1970-01-01T00:00:00Z' }.each do |_, content|
+    str << content
+    str << ''
+  end
+  str << ''
+  str << "## Labeled: #{data['labels'].map { |label| label['name'] }.join(', ')}" unless data['labels'].empty?
+  if data['mergedAt']
+    str << ''
+    str << "## Merged #{render_time(data['mergedAt'])}"
+  elsif data['closedAt']
+    str << ''
+    str << "## Closed #{render_time(data['closedAt'])}"
+  elsif data['assignees'].length > 0
+    str << ''
+    str << "## Assigned to: #{data['assignees'].map { |assignee| render_user(assignee) }.join(', ')}"
+  end
+  str.join("\n")
+rescue JSON::ParserError
+  if resp.include?('Not Found')
+    "PR not found: #{url}"
+  elsif resp.include?('rate limit')
+    sleep(1 + rand)
+    retry
+  end
+end
+
+url = ARGV[0]
+issue_type = url.include?('/pull/') ? 'pr' : 'issue'
+rendered = case issue_type
+           when 'pr'
+             render_pr(url)
+           when 'issue'
+             render_issue(url)
+           end
+puts rendered
