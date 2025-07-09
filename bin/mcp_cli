@@ -1,0 +1,407 @@
+#!/usr/bin/env ruby
+
+require 'json'
+require 'open3'
+require 'optparse'
+
+class MCPCli
+  def initialize
+    @commands = {
+      'list' => method(:list_servers),
+      'tools' => method(:list_tools),
+      'prompts' => method(:list_prompts),
+      'resources' => method(:list_resources),
+      'call' => method(:call_tool),
+      'prompt' => method(:call_prompt)
+    }
+    @claude_config_path = File.expand_path('~/.claude.json')
+  end
+
+  def run(args)
+    if args.empty? || args[0] == '--help' || args[0] == '-h'
+      show_help
+      exit 0
+    end
+
+    command = args[0]
+    if @commands.key?(command)
+      @commands[command].call(args[1..])
+    else
+      puts "Unknown command: #{command}"
+      show_help
+      exit 1
+    end
+  rescue StandardError => e
+    puts "Error: #{e.message}"
+    exit 1
+  end
+
+  private
+
+  def show_help
+    puts <<~HELP
+      MCP CLI - Call MCP servers from the command line
+
+      Usage:
+        mcp_cli list                                 List available MCP servers
+        mcp_cli tools <server_name>                  List tools available on a server
+        mcp_cli prompts <server_name>                List prompts available on a server
+        mcp_cli resources <server_name>              List resources available on a server
+        mcp_cli call <server_name> <tool> [args]     Call a tool on a server
+        mcp_cli prompt <server_name> <prompt> [args] Get a prompt from a server
+
+      Examples:
+        mcp_cli list
+        mcp_cli tools vault
+        mcp_cli prompts vault
+        mcp_cli resources vault
+        mcp_cli call vault search_all '{"query": "example"}'
+        mcp_cli prompt vault explain '{"topic": "MCP servers"}'
+    HELP
+  end
+
+  def list_servers(_args)
+    servers = load_mcp_servers
+
+    if servers.empty?
+      puts 'No MCP servers configured'
+    else
+      puts 'Available MCP servers:'
+      servers.each do |name, config|
+        cmd_display = [config['command'], *config['args']].join(' ')
+        puts "  #{name}: #{cmd_display}"
+      end
+    end
+  end
+
+  def list_tools(args)
+    if args.empty?
+      puts 'Error: Server name required'
+      puts 'Usage: mcp_cli tools <server_name>'
+      exit 1
+    end
+
+    server_name = args[0]
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+
+    server_info = parse_server_config(server_name, servers[server_name])
+
+    env = ENV.to_h.merge(server_info[:env] || {})
+
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    tools = mcp_client.list_tools
+
+    if tools.empty?
+      puts "No tools available on server '#{server_name}'"
+    else
+      puts "Tools available on '#{server_name}':"
+      tools.each do |tool|
+        puts "\n  #{tool['name']}"
+        puts "    Description: #{tool['description']}" if tool['description']
+        next unless tool['inputSchema'] && tool['inputSchema']['properties']
+
+        puts '    Parameters:'
+        tool['inputSchema']['properties'].each do |param, schema|
+          required = tool['inputSchema']['required']&.include?(param) ? ' (required)' : ''
+          puts "      - #{param}: #{schema['type']}#{required}"
+          puts "        #{schema['description']}" if schema['description']
+        end
+      end
+    end
+  end
+
+  def list_prompts(args)
+    if args.empty?
+      puts "Error: Server name required"
+      puts "Usage: mcp_cli prompts <server_name>"
+      exit 1
+    end
+
+    server_name = args[0]
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+    
+    server_info = parse_server_config(server_name, servers[server_name])
+    
+    env = ENV.to_h.merge(server_info[:env] || {})
+    
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    prompts = mcp_client.list_prompts
+    
+    if prompts.empty?
+      puts "No prompts available on server '#{server_name}'"
+    else
+      puts "Prompts available on '#{server_name}':"
+      prompts.each do |prompt|
+        puts "\n  #{prompt['name']}"
+        puts "    Description: #{prompt['description']}" if prompt['description']
+        if prompt['arguments']
+          puts "    Arguments:"
+          prompt['arguments'].each do |arg|
+            required = arg['required'] ? ' (required)' : ''
+            puts "      - #{arg['name']}#{required}"
+            puts "        #{arg['description']}" if arg['description']
+          end
+        end
+      end
+    end
+  end
+
+  def list_resources(args)
+    if args.empty?
+      puts "Error: Server name required"
+      puts "Usage: mcp_cli resources <server_name>"
+      exit 1
+    end
+
+    server_name = args[0]
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+    
+    server_info = parse_server_config(server_name, servers[server_name])
+    
+    env = ENV.to_h.merge(server_info[:env] || {})
+    
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    resources = mcp_client.list_resources
+    
+    if resources.empty?
+      puts "No resources available on server '#{server_name}'"
+    else
+      puts "Resources available on '#{server_name}':"
+      resources.each do |resource|
+        puts "\n  #{resource['uri']}"
+        puts "    Name: #{resource['name']}" if resource['name']
+        puts "    Description: #{resource['description']}" if resource['description']
+        puts "    MIME type: #{resource['mimeType']}" if resource['mimeType']
+      end
+    end
+  end
+
+  def call_tool(args)
+    if args.length < 2
+      puts 'Error: Server name and tool name required'
+      puts 'Usage: mcp_cli call <server_name> <tool> [arguments_json]'
+      exit 1
+    end
+
+    server_name = args[0]
+    tool_name = args[1]
+    tool_args = args[2] ? JSON.parse(args[2]) : {}
+
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+
+    server_info = parse_server_config(server_name, servers[server_name])
+    env = ENV.to_h.merge(server_info[:env] || {})
+
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    result = mcp_client.call_tool(tool_name, tool_args)
+
+    puts JSON.pretty_generate(result)
+  end
+
+  def call_prompt(args)
+    if args.length < 2
+      puts 'Error: Server name and prompt name required'
+      puts 'Usage: mcp_cli prompt <server_name> <prompt> [arguments_json]'
+      exit 1
+    end
+
+    server_name = args[0]
+    prompt_name = args[1]
+    prompt_args = args[2] ? JSON.parse(args[2]) : {}
+
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+
+    server_info = parse_server_config(server_name, servers[server_name])
+    env = ENV.to_h.merge(server_info[:env] || {})
+
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    result = mcp_client.get_prompt(prompt_name, prompt_args)
+
+    puts result
+  end
+
+  def load_mcp_servers
+    raise "Claude configuration file not found at #{@claude_config_path}" unless File.exist?(@claude_config_path)
+
+    config = JSON.parse(File.read(@claude_config_path))
+    config['mcpServers'] || {}
+  end
+
+  def parse_server_config(name, config)
+    unless config['type'].nil? || config['type'] == 'stdio'
+      raise "Server '#{name}' is not a stdio server (type: #{config['type']})"
+    end
+
+    {
+      name: name,
+      type: config['type'] || 'stdio',
+      command: config['command'],
+      args: config['args'] || [],
+      env: config['env'] || {}
+    }
+  end
+end
+
+class MCPClient
+  def initialize(command, args, env)
+    @command = command
+    @args = args || []
+    @env = env
+    @process = nil
+    @reader_thread = nil
+    @message_id = 0
+    @pending_requests = {}
+    @initialized = false
+  end
+
+  def list_tools
+    ensure_initialized
+    response = send_request('tools/list', {})
+    response['tools'] || []
+  end
+
+  def list_prompts
+    ensure_initialized
+    response = send_request('prompts/list', {})
+    response['prompts'] || []
+  end
+
+  def list_resources
+    ensure_initialized
+    response = send_request('resources/list', {})
+    response['resources'] || []
+  end
+
+  def call_tool(tool_name, arguments)
+    ensure_initialized
+    response = send_request('tools/call', {
+                              name: tool_name,
+                              arguments: arguments
+                            })
+    response['content'] || response
+  end
+
+  def get_prompt(prompt_name, arguments)
+    ensure_initialized
+    response = send_request('prompts/get', {
+                              name: prompt_name,
+                              arguments: arguments
+                            })
+    if response['messages']
+      response['messages'].map { |msg| msg['content']['text'] || msg['content'] }.join("\n\n")
+    else
+      response
+    end
+  end
+
+  private
+
+  def ensure_initialized
+    return if @initialized
+
+    start_process
+    send_request('initialize', {
+                   protocolVersion: '2024-11-05',
+                   capabilities: {
+                     roots: { listChanged: true },
+                     sampling: {}
+                   },
+                   clientInfo: {
+                     name: 'mcp_cli',
+                     version: '1.0.0'
+                   }
+                 })
+
+    @initialized = true
+  end
+
+  def start_process
+    cmd = [@command] + @args
+    @stdin, @stdout, @stderr, @wait_thread = Open3.popen3(@env, *cmd)
+
+    @reader_thread = Thread.new do
+      while line = @stdout.gets
+        handle_message(JSON.parse(line))
+      end
+    rescue StandardError => e
+      puts "Reader thread error: #{e.message}"
+    end
+  end
+
+  def send_request(method, params)
+    message_id = next_message_id
+    message = {
+      jsonrpc: '2.0',
+      id: message_id,
+      method: method,
+      params: params
+    }
+
+    @stdin.puts(JSON.generate(message))
+    @stdin.flush
+
+    wait_for_response(message_id)
+  end
+
+  def handle_message(message)
+    return unless message['id'] && @pending_requests[message['id']]
+
+    @pending_requests[message['id']][:response] = message
+    @pending_requests[message['id']][:condition].signal
+  end
+
+  def wait_for_response(message_id)
+    mutex = Mutex.new
+    condition = ConditionVariable.new
+    @pending_requests[message_id] = { condition: condition, response: nil }
+
+    mutex.synchronize do
+      condition.wait(mutex, 30)
+    end
+
+    response = @pending_requests[message_id][:response]
+    @pending_requests.delete(message_id)
+
+    if response.nil?
+      raise 'Timeout waiting for response'
+    elsif response['error']
+      raise "MCP Error: #{response['error']['message']}"
+    end
+
+    response['result']
+  end
+
+  def next_message_id
+    @message_id += 1
+  end
+
+  def cleanup
+    @reader_thread&.kill
+    @stdin&.close
+    @stdout&.close
+    @stderr&.close
+    @wait_thread&.kill
+  end
+end
+
+MCPCli.new.run(ARGV) if __FILE__ == $0
