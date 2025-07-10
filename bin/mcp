@@ -299,10 +299,10 @@ class MCPCli
       exit 1
     end
 
-    server_info = parse_server_config(server_name, servers[server_name])
-    env = ENV.to_h.merge(server_info[:env] || {})
+    server_config = parse_server_config(server_name, servers[server_name])
+    env = ENV.to_h.merge(server_config[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_config[:command], server_config[:args], env)
     server_info = mcp_client.get_server_info
 
     puts "Server: #{server_name}"
@@ -314,10 +314,26 @@ class MCPCli
       puts "Protocol Version: #{server_info['protocolVersion']}"
     end
 
+    puts "\nConfiguration:"
+    puts "  Type: #{server_config[:type]}"
+    puts "  Command: #{server_config[:command]}"
+    if server_config[:args] && !server_config[:args].empty?
+      puts "  Args:"
+      server_config[:args].each do |arg|
+        puts "    - #{arg}"
+      end
+    end
+    if server_config[:env] && !server_config[:env].empty?
+      puts "  Environment:"
+      server_config[:env].each do |key, value|
+        puts "    #{key}: #{value}"
+      end
+    end
+
     if server_info['capabilities']
-      puts "Capabilities:"
+      puts "\nCapabilities:"
       server_info['capabilities'].each do |cap, value|
-        puts "  - #{cap}: #{value.inspect}"
+        puts "  #{cap}: #{value.inspect}"
       end
     end
   end
