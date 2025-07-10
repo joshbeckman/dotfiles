@@ -12,7 +12,9 @@ class MCPCli
       'prompts' => method(:list_prompts),
       'resources' => method(:list_resources),
       'call' => method(:call_tool),
-      'prompt' => method(:call_prompt)
+      'prompt' => method(:call_prompt),
+      'info' => method(:show_info),
+      'version' => method(:show_version)
     }
     @claude_config_path = File.expand_path('~/.claude.json')
     @mcp_config_path = nil
@@ -85,6 +87,8 @@ class MCPCli
         mcp_cli [--mcp-config <path>] resources <server_name>              List resources available on a server
         mcp_cli [--mcp-config <path>] call <server_name> <tool> [args]     Call a tool on a server
         mcp_cli [--mcp-config <path>] prompt <server_name> <prompt> [args] Get a prompt from a server
+        mcp_cli [--mcp-config <path>] info <server_name>                   Get detailed server information
+        mcp_cli [--mcp-config <path>] version <server_name>                Get server version only
 
       Options:
         --mcp-config <path>  Path to MCP configuration JSON file (defaults to ~/.claude.json)
@@ -96,6 +100,8 @@ class MCPCli
         mcp_cli resources vault
         mcp_cli call vault search_all '{"query": "example"}'
         mcp_cli prompt vault explain '{"topic": "MCP servers"}'
+        mcp_cli info vault
+        mcp_cli version vault
     HELP
   end
 
@@ -279,6 +285,70 @@ class MCPCli
     puts result
   end
 
+  def show_info(args)
+    if args.empty?
+      puts 'Error: Server name required'
+      puts 'Usage: mcp_cli info <server_name>'
+      exit 1
+    end
+
+    server_name = args[0]
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+
+    server_info = parse_server_config(server_name, servers[server_name])
+    env = ENV.to_h.merge(server_info[:env] || {})
+
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    server_info = mcp_client.get_server_info
+
+    puts "Server: #{server_name}"
+    puts "Name: #{server_info['name']}" if server_info['name']
+    puts "Version: #{server_info['version']}" if server_info['version']
+    puts "Description: #{server_info['description']}" if server_info['description']
+
+    if server_info['protocolVersion']
+      puts "Protocol Version: #{server_info['protocolVersion']}"
+    end
+
+    if server_info['capabilities']
+      puts "Capabilities:"
+      server_info['capabilities'].each do |cap, value|
+        puts "  - #{cap}: #{value.inspect}"
+      end
+    end
+  end
+
+  def show_version(args)
+    if args.empty?
+      puts 'Error: Server name required'
+      puts 'Usage: mcp_cli version <server_name>'
+      exit 1
+    end
+
+    server_name = args[0]
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+
+    server_info = parse_server_config(server_name, servers[server_name])
+    env = ENV.to_h.merge(server_info[:env] || {})
+
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    server_info = mcp_client.get_server_info
+
+    if server_info['version']
+      puts server_info['version']
+    else
+      puts "Version information not available"
+    end
+  end
+
   def load_mcp_servers
     config_path = @mcp_config_path || @claude_config_path
 
@@ -319,6 +389,7 @@ class MCPClient
     @message_id = 0
     @pending_requests = {}
     @initialized = false
+    @server_info = nil
   end
 
   def list_tools
@@ -361,13 +432,18 @@ class MCPClient
     end
   end
 
+  def get_server_info
+    ensure_initialized
+    @server_info || {}
+  end
+
   private
 
   def ensure_initialized
     return if @initialized
 
     start_process
-    send_request('initialize', {
+    response = send_request('initialize', {
                    protocolVersion: '2024-11-05',
                    capabilities: {
                      roots: { listChanged: true },
@@ -379,6 +455,7 @@ class MCPClient
                    }
                  })
 
+    @server_info = response['serverInfo'] if response['serverInfo']
     @initialized = true
   end
 
