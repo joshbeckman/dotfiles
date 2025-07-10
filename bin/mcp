@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
 
 require 'json'
 require 'open3'
@@ -57,12 +58,11 @@ class MCPCli
         result[:help] = true
         return result
       when '--mcp-config'
-        if i + 1 < args.length
-          result[:mcp_config] = args[i + 1]
-          i += 1
-        else
-          raise "--mcp-config requires a path argument"
-        end
+        raise '--mcp-config requires a path argument' unless i + 1 < args.length
+
+        result[:mcp_config] = args[i + 1]
+        i += 1
+
       else
         remaining_args << args[i]
       end
@@ -71,7 +71,7 @@ class MCPCli
 
     unless remaining_args.empty?
       result[:command] = remaining_args[0]
-      result[:args] = remaining_args[1..-1] || []
+      result[:args] = remaining_args[1..] || []
     end
 
     result
@@ -164,8 +164,8 @@ class MCPCli
 
   def list_prompts(args)
     if args.empty?
-      puts "Error: Server name required"
-      puts "Usage: mcp_cli prompts <server_name>"
+      puts 'Error: Server name required'
+      puts 'Usage: mcp_cli prompts <server_name>'
       exit 1
     end
 
@@ -190,13 +190,13 @@ class MCPCli
       prompts.each do |prompt|
         puts "\n  #{prompt['name']}"
         puts "    Description: #{prompt['description']}" if prompt['description']
-        if prompt['arguments']
-          puts "    Arguments:"
-          prompt['arguments'].each do |arg|
-            required = arg['required'] ? ' (required)' : ''
-            puts "      - #{arg['name']}#{required}"
-            puts "        #{arg['description']}" if arg['description']
-          end
+        next unless prompt['arguments']
+
+        puts '    Arguments:'
+        prompt['arguments'].each do |arg|
+          required = arg['required'] ? ' (required)' : ''
+          puts "      - #{arg['name']}#{required}"
+          puts "        #{arg['description']}" if arg['description']
         end
       end
     end
@@ -204,8 +204,8 @@ class MCPCli
 
   def list_resources(args)
     if args.empty?
-      puts "Error: Server name required"
-      puts "Usage: mcp_cli resources <server_name>"
+      puts 'Error: Server name required'
+      puts 'Usage: mcp_cli resources <server_name>'
       exit 1
     end
 
@@ -313,15 +313,13 @@ class MCPCli
     puts "Version: #{server_info['version']}" if server_info['version']
     puts "Description: #{server_info['description']}" if server_info['description']
 
-    if server_info['protocolVersion']
-      puts "Protocol Version: #{server_info['protocolVersion']}"
-    end
+    puts "Protocol Version: #{server_info['protocolVersion']}" if server_info['protocolVersion']
 
-    if server_info['capabilities']
-      puts "\nCapabilities:"
-      server_info['capabilities'].each do |cap, value|
-        puts "  #{cap}: #{value.inspect}"
-      end
+    return unless server_info['capabilities']
+
+    puts "\nCapabilities:"
+    server_info['capabilities'].each do |cap, value|
+      puts "  #{cap}: #{value.inspect}"
     end
   end
 
@@ -345,11 +343,7 @@ class MCPCli
     mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
     server_info = mcp_client.get_server_info
 
-    if server_info['version']
-      puts server_info['version']
-    else
-      puts "Version information not available"
-    end
+    puts server_info['version'] || 'Version information not available'
   end
 
   def show_config(args)
@@ -372,16 +366,16 @@ class MCPCli
     puts "Type: #{server_config[:type]}"
     puts "Command: #{server_config[:command]}"
     if server_config[:args] && !server_config[:args].empty?
-      puts "Args:"
+      puts 'Args:'
       server_config[:args].each do |arg|
         puts "  - #{arg}"
       end
     end
-    if server_config[:env] && !server_config[:env].empty?
-      puts "Environment:"
-      server_config[:env].each do |key, value|
-        puts "  #{key}: #{value}"
-      end
+    return unless server_config[:env] && !server_config[:env].empty?
+
+    puts 'Environment:'
+    server_config[:env].each do |key, value|
+      puts "  #{key}: #{value}"
     end
   end
 
@@ -389,11 +383,10 @@ class MCPCli
     config_path = @mcp_config_path || @claude_config_path
 
     unless File.exist?(config_path)
-      if @mcp_config_path
-        raise "MCP configuration file not found at #{config_path}"
-      else
-        raise "Claude configuration file not found at #{config_path}"
-      end
+      raise "MCP configuration file not found at #{config_path}" if @mcp_config_path
+
+      raise "Claude configuration file not found at #{config_path}"
+
     end
 
     config = JSON.parse(File.read(config_path))
@@ -480,16 +473,16 @@ class MCPClient
 
     start_process
     response = send_request('initialize', {
-                   protocolVersion: '2024-11-05',
-                   capabilities: {
-                     roots: { listChanged: true },
-                     sampling: {}
-                   },
-                   clientInfo: {
-                     name: 'mcp_cli',
-                     version: '1.0.0'
-                   }
-                 })
+                              protocolVersion: '2024-11-05',
+                              capabilities: {
+                                roots: { listChanged: true },
+                                sampling: {}
+                              },
+                              clientInfo: {
+                                name: 'mcp_cli',
+                                version: '1.0.0'
+                              }
+                            })
 
     @server_info = response['serverInfo'] if response['serverInfo']
     @initialized = true
@@ -500,7 +493,7 @@ class MCPClient
     @stdin, @stdout, @stderr, @wait_thread = Open3.popen3(@env, *cmd)
 
     @reader_thread = Thread.new do
-      while line = @stdout.gets
+      while (line = @stdout.gets)
         handle_message(JSON.parse(line))
       end
     rescue StandardError => e
@@ -564,4 +557,4 @@ class MCPClient
   end
 end
 
-MCPCli.new.run(ARGV) if __FILE__ == $0
+MCPCli.new.run(ARGV) if __FILE__ == $PROGRAM_NAME
