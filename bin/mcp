@@ -100,7 +100,7 @@ class MCPCli
   end
 
   def show_self_version
-    puts CLIENT_INFO[:version]
+    puts "#{CLIENT_INFO[:version]} (#{CLIENT_INFO[:name]})"
   end
 
   def show_help
