@@ -144,49 +144,73 @@ def download_images_for_issue(url, issue_dir)
   owner, repo, number = extract_repo_info(url)
   is_pr = url.include?('/pull/')
 
-  # Get HTML body for issue/PR
-  body_html = if is_pr
-                `gh api repos/#{owner}/#{repo}/pulls/#{number} -H "Accept: application/vnd.github.html+json" --jq '.body_html'`
-              else
-                `gh api repos/#{owner}/#{repo}/issues/#{number} -H "Accept: application/vnd.github.html+json" --jq '.body_html'`
-              end
+  # Parallelize API calls - get both body and body_html in one request
+  body_thread = Thread.new do
+    begin
+      if is_pr
+        resp = `gh api repos/#{owner}/#{repo}/pulls/#{number} -H "Accept: application/vnd.github.html+json --json body,body_html"`
+      else
+        resp = `gh api repos/#{owner}/#{repo}/issues/#{number} -H "Accept: application/vnd.github.html+json --json body,body_html"`
+      end
+      data = JSON.parse(resp)
+      [data['body_html'] || '', data['body'] || '']
+    rescue JSON::ParserError
+      ['', '']
+    end
+  end
 
-  # Get HTML for comments
-  comments_html = `gh api repos/#{owner}/#{repo}/issues/#{number}/comments -H "Accept: application/vnd.github.html+json" --jq '.[].body_html'`
+  comments_html_thread = Thread.new do
+    `gh api repos/#{owner}/#{repo}/issues/#{number}/comments -H "Accept: application/vnd.github.html+json" --jq '.[].body_html'`
+  end
+
+  # Wait for content
+  body_html, body_md = body_thread.value
+  comments_html = comments_html_thread.value
 
   # Extract GitHub private image URLs
   github_images = []
   github_images.concat(body_html.scan(%r{https://private-user-images\.githubusercontent\.com[^"]+}))
   github_images.concat(comments_html.scan(%r{https://private-user-images\.githubusercontent\.com[^"]+}))
 
-  # Download GitHub images
+  # Download GitHub images in parallel
   image_map = {}
+  github_image_threads = []
   github_images.uniq.each_with_index do |img_url, i|
-    local_path = "#{issue_dir}/github_image_#{i + 1}.png"
-    `curl -L -o "#{local_path}" "#{img_url}" 2>/dev/null`
-    # Extract UUID from the URL to map it
-    if match = img_url.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/)
-      uuid = match[1]
+    github_image_threads << Thread.new do
+      local_path = "#{issue_dir}/github_image_#{i + 1}.png"
+      `curl -L -o "#{local_path}" "#{img_url}" 2>/dev/null`
+      # Extract UUID from the URL to map it
+      if match = img_url.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/)
+        uuid = match[1]
+        [uuid, local_path]
+      end
+    end
+  end
+
+  # Extract and download external images in parallel
+  external_images = body_md.scan(%r{https://[^)]+\.(png|jpg|jpeg|gif)}i)
+  external_image_threads = []
+  external_images.uniq.each do |img_url, _|
+    next if img_url.include?('githubusercontent.com')
+
+    external_image_threads << Thread.new do
+      filename = File.basename(img_url.index(/[?#]/) ? img_url[0..img_url.index(/[?#]/) - 1] : img_url)
+      local_path = "#{issue_dir}/external_image_#{filename}"
+      `curl -L -o "#{local_path}" "#{img_url}" 2>/dev/null`
+    end
+  end
+
+  # Collect results from GitHub image threads
+  github_image_threads.each do |thread|
+    result = thread.value
+    if result
+      uuid, local_path = result
       image_map[uuid] = local_path
     end
   end
 
-  # Get markdown body for external images
-  body_md = if is_pr
-              `gh api repos/#{owner}/#{repo}/pulls/#{number} --jq '.body'`
-            else
-              `gh api repos/#{owner}/#{repo}/issues/#{number} --jq '.body'`
-            end
-
-  # Extract and download external images
-  external_images = body_md.scan(%r{https://[^)]+\.(png|jpg|jpeg|gif)}i)
-  external_images.uniq.each do |img_url, _|
-    next if img_url.include?('githubusercontent.com')
-
-    filename = File.basename(img_url.index(/[?#]/) ? img_url[0..img_url.index(/[?#]/) - 1] : img_url)
-    local_path = "#{issue_dir}/external_image_#{filename}"
-    `curl -L -o "#{local_path}" "#{img_url}" 2>/dev/null`
-  end
+  # Wait for external image threads to complete
+  external_image_threads.each(&:value)
 
   image_map
 end
@@ -225,6 +249,8 @@ def hydrate_issue_links(string)
 end
 
 def render_user(user)
+  return '(unknown user)' if user.nil?
+
   "@#{user['login']}"
 end
 
@@ -385,15 +411,24 @@ def render_timeline_event(events)
 end
 
 def render_issue(url)
-  resp = `gh issue view #{url} --json comments,body,title,author,createdAt,closedAt,assignees,labels,number`
-  data = JSON.parse(resp)
+  # Parallelize initial data fetching
+  issue_thread = Thread.new do
+    resp = `gh issue view #{url} --json comments,body,title,author,createdAt,closedAt,assignees,labels,number`
+    JSON.parse(resp)
+  end
 
-  # Setup directory and download images
+  timeline_thread = Thread.new { fetch_timeline(url) }
+
+  # Setup directory while other operations run
   issue_dir = setup_issue_directory(url)
-  image_map = download_images_for_issue(url, issue_dir)
 
-  # Fetch timeline events
-  timeline_events = fetch_timeline(url)
+  # Start image download in parallel
+  image_thread = Thread.new { download_images_for_issue(url, issue_dir) }
+
+  # Wait for results
+  data = issue_thread.value
+  timeline_events = timeline_thread.value
+  image_map = image_thread.value
 
   str = ["# Issue ##{data['number']}: [#{data['title']}](#{url}) opened by #{render_user(data['author'])} #{render_time(data['createdAt'])}"]
   str << ''
@@ -463,42 +498,72 @@ def render_issue(url)
     str << "## Assigned to: #{data['assignees'].map { |assignee| render_user(assignee) }.join(', ')}"
   end
   str.join("\n")
-rescue JSON::ParserError
+rescue JSON::ParserError => e
+  # Check if we can access the response from any of the threads
+  if issue_thread && issue_thread.alive?
+    issue_thread.kill
+  end
+  if timeline_thread && timeline_thread.alive?
+    timeline_thread.kill
+  end
+  if image_thread && image_thread.alive?
+    image_thread.kill
+  end
+  
+  # Try to get the response for error messages
+  resp = `gh issue view #{url} 2>&1`
   if resp.include?('Not Found')
     "Issue not found: #{url}"
   elsif resp.include?('rate limit')
     sleep(1 + rand)
     retry
+  else
+    "Error parsing issue: #{e.message}"
   end
 end
 
 def render_pr(url)
-  resp = `gh pr view #{url} --json comments,commits,reviews,body,title,author,createdAt,closedAt,mergedAt,assignees,additions,deletions,changedFiles,labels,number`
-  data = JSON.parse(resp)
+  # Parallelize all initial data fetching
+  pr_thread = Thread.new do
+    resp = `gh pr view #{url} --json comments,commits,reviews,body,title,author,createdAt,closedAt,mergedAt,assignees,additions,deletions,changedFiles,labels,number`
+    JSON.parse(resp)
+  end
+
+  timeline_thread = Thread.new { fetch_timeline(url) }
+
+  review_comments_thread = Thread.new do
+    begin
+      JSON.parse(`gh api repos/#{url.split('/')[3]}/#{url.split('/')[4]}/pulls/#{url.split('/')[6]}/comments`)
+    rescue JSON::ParserError
+      []
+    end
+  end
+
+  # Setup directory while other operations run
+  issue_dir = setup_issue_directory(url)
+
+  # Wait for PR data first to determine diff strategy
+  data = pr_thread.value
   total_diff_lines = data['additions'] + data['deletions']
 
-  # Setup directory and download images
-  issue_dir = setup_issue_directory(url)
-  image_map = download_images_for_issue(url, issue_dir)
-
-  # Fetch timeline events
-  timeline_events = fetch_timeline(url)
-
-  diff = ''
-  if total_diff_lines < MAX_DIFF_LINES
-    diff = `gh pr diff #{url}`
-    diff = "```diff\n#{diff}\n```"
-  else
-    diff = `gh pr diff #{url} --name-only`
-    diff = "```text\n#{diff}\n```"
+  # Start diff and image download in parallel
+  diff_thread = Thread.new do
+    if total_diff_lines < MAX_DIFF_LINES
+      diff = `gh pr diff #{url}`
+      "```diff\n#{diff}\n```"
+    else
+      diff = `gh pr diff #{url} --name-only`
+      "```text\n#{diff}\n```"
+    end
   end
-  #
-  # ref as to why they aren't included: https://github.com/cli/cli/discussions/3993
-  review_comments = begin
-    JSON.parse(`gh api repos/#{url.split('/')[3]}/#{url.split('/')[4]}/pulls/#{url.split('/')[6]}/comments`)
-  rescue JSON::ParserError
-    []
-  end
+
+  image_thread = Thread.new { download_images_for_issue(url, issue_dir) }
+
+  # Wait for remaining results
+  timeline_events = timeline_thread.value
+  review_comments = review_comments_thread.value
+  diff = diff_thread.value
+  image_map = image_thread.value
 
   str = ["# Pull Request ##{data['number']}: [#{data['title']}](#{url}) opened by #{render_user(data['author'])} #{render_time(data['createdAt'])}"]
   str << ''
@@ -603,12 +668,21 @@ def render_pr(url)
     str << "## Assigned to: #{data['assignees'].map { |assignee| render_user(assignee) }.join(', ')}"
   end
   str.join("\n")
-rescue JSON::ParserError
+rescue JSON::ParserError => e
+  # Kill any remaining threads
+  [pr_thread, timeline_thread, review_comments_thread, diff_thread, image_thread].each do |thread|
+    thread.kill if thread && thread.alive?
+  end
+  
+  # Try to get the response for error messages
+  resp = `gh pr view #{url} 2>&1`
   if resp.include?('Not Found')
     "PR not found: #{url}"
   elsif resp.include?('rate limit')
     sleep(1 + rand)
     retry
+  else
+    "Error parsing PR: #{e.message}"
   end
 end
 
