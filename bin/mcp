@@ -5,6 +5,13 @@ require 'json'
 require 'open3'
 require 'optparse'
 
+FILE_NAME = File.basename(__FILE__)
+
+CLIENT_INFO = {
+  name: 'MCP CLI',
+  version: '1.0.0'
+}.freeze
+
 class MCPCli
   def initialize
     @commands = {
@@ -20,10 +27,16 @@ class MCPCli
     }
     @claude_config_path = File.expand_path('~/.claude.json')
     @mcp_config_path = nil
+    @protocol_version = '2025-06-18'
   end
 
   def run(args)
     parsed_args = parse_args(args)
+
+    if parsed_args[:version]
+      show_self_version
+      exit 0
+    end
 
     if parsed_args[:help] || parsed_args[:command].nil?
       show_help
@@ -31,6 +44,7 @@ class MCPCli
     end
 
     @mcp_config_path = parsed_args[:mcp_config] if parsed_args[:mcp_config]
+    @protocol_version = parsed_args[:protocol_version]
     command = parsed_args[:command]
 
     if @commands.key?(command)
@@ -48,7 +62,7 @@ class MCPCli
   private
 
   def parse_args(args)
-    result = { help: false, mcp_config: nil, command: nil, args: [] }
+    result = { help: false, version: false, mcp_config: nil, protocol_version: '2025-06-18', command: nil, args: [] }
     remaining_args = []
 
     i = 0
@@ -57,10 +71,18 @@ class MCPCli
       when '--help', '-h'
         result[:help] = true
         return result
+      when '--version', '-v'
+        result[:version] = true
+        return result
       when '--mcp-config'
         raise '--mcp-config requires a path argument' unless i + 1 < args.length
 
         result[:mcp_config] = args[i + 1]
+        i += 1
+      when '--protocol-version'
+        raise '--protocol-version requires a version argument' unless i + 1 < args.length
+
+        result[:protocol_version] = args[i + 1]
         i += 1
 
       else
@@ -77,34 +99,41 @@ class MCPCli
     result
   end
 
+  def show_self_version
+    puts CLIENT_INFO[:version]
+  end
+
   def show_help
     puts <<~HELP
-      MCP CLI - Call MCP servers from the command line
+      #{CLIENT_INFO[:name]} #{CLIENT_INFO[:version]} - Call MCP servers from the command line
 
       Usage:
-        mcp_cli [--mcp-config <path>] list                                 List available MCP servers
-        mcp_cli [--mcp-config <path>] tools <server_name>                  List tools available on a server
-        mcp_cli [--mcp-config <path>] prompts <server_name>                List prompts available on a server
-        mcp_cli [--mcp-config <path>] resources <server_name>              List resources available on a server
-        mcp_cli [--mcp-config <path>] call <server_name> <tool> [args]     Call a tool on a server
-        mcp_cli [--mcp-config <path>] prompt <server_name> <prompt> [args] Get a prompt from a server
-        mcp_cli [--mcp-config <path>] info <server_name>                   Get detailed server information
-        mcp_cli [--mcp-config <path>] version <server_name>                Get server version only
-        mcp_cli [--mcp-config <path>] config <server_name>                 Show server configuration
+        #{FILE_NAME} list                                 List available MCP servers
+        #{FILE_NAME} tools <server_name>                  List tools available on a server
+        #{FILE_NAME} prompts <server_name>                List prompts available on a server
+        #{FILE_NAME} resources <server_name>              List resources available on a server
+        #{FILE_NAME} call <server_name> <tool> [args]     Call a tool on a server
+        #{FILE_NAME} prompt <server_name> <prompt> [args] Get a prompt from a server
+        #{FILE_NAME} info <server_name>                   Get detailed server information
+        #{FILE_NAME} version <server_name>                Get server version only
+        #{FILE_NAME} config <server_name>                 Show server configuration
 
       Options:
-        --mcp-config <path>  Path to MCP configuration JSON file (defaults to ~/.claude.json)
+        --mcp-config <path>        Path to MCP configuration JSON file (defaults to ~/.claude.json)
+        --protocol-version <ver>   MCP protocol version (defaults to #{@protocol_version})
 
       Examples:
-        mcp_cli list
-        mcp_cli tools vault
-        mcp_cli prompts vault
-        mcp_cli resources vault
-        mcp_cli call vault search_all '{"query": "example"}'
-        mcp_cli prompt vault explain '{"topic": "MCP servers"}'
-        mcp_cli info vault
-        mcp_cli version vault
-        mcp_cli config vault
+        #{FILE_NAME} list
+        #{FILE_NAME} tools vault
+        #{FILE_NAME} prompts vault
+        #{FILE_NAME} resources vault
+        #{FILE_NAME} call vault search_all '{"query": "example"}'
+        #{FILE_NAME} prompt vault explain '{"topic": "MCP servers"}'
+        #{FILE_NAME} info vault
+        #{FILE_NAME} version vault
+        #{FILE_NAME} config vault
+        #{FILE_NAME} --protocol-version #{@protocol_version} tools vault
+        #{FILE_NAME} --mcp-config /path/to/mcp.json tools vault
     HELP
   end
 
@@ -125,7 +154,7 @@ class MCPCli
   def list_tools(args)
     if args.empty?
       puts 'Error: Server name required'
-      puts 'Usage: mcp_cli tools <server_name>'
+      puts "Usage: #{FILE_NAME} tools <server_name>"
       exit 1
     end
 
@@ -140,7 +169,7 @@ class MCPCli
 
     env = ENV.to_h.merge(server_info[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
     tools = mcp_client.list_tools
 
     if tools.empty?
@@ -165,7 +194,7 @@ class MCPCli
   def list_prompts(args)
     if args.empty?
       puts 'Error: Server name required'
-      puts 'Usage: mcp_cli prompts <server_name>'
+      puts "Usage: #{FILE_NAME} prompts <server_name>"
       exit 1
     end
 
@@ -180,7 +209,7 @@ class MCPCli
 
     env = ENV.to_h.merge(server_info[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
     prompts = mcp_client.list_prompts
 
     if prompts.empty?
@@ -205,7 +234,7 @@ class MCPCli
   def list_resources(args)
     if args.empty?
       puts 'Error: Server name required'
-      puts 'Usage: mcp_cli resources <server_name>'
+      puts "Usage: #{FILE_NAME} resources <server_name>"
       exit 1
     end
 
@@ -220,7 +249,7 @@ class MCPCli
 
     env = ENV.to_h.merge(server_info[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
     resources = mcp_client.list_resources
 
     if resources.empty?
@@ -239,7 +268,7 @@ class MCPCli
   def call_tool(args)
     if args.length < 2
       puts 'Error: Server name and tool name required'
-      puts 'Usage: mcp_cli call <server_name> <tool> [arguments_json]'
+      puts "Usage: #{FILE_NAME} call <server_name> <tool> [arguments_json]"
       exit 1
     end
 
@@ -256,7 +285,7 @@ class MCPCli
     server_info = parse_server_config(server_name, servers[server_name])
     env = ENV.to_h.merge(server_info[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
     result = mcp_client.call_tool(tool_name, tool_args)
 
     puts JSON.pretty_generate(result)
@@ -265,7 +294,7 @@ class MCPCli
   def call_prompt(args)
     if args.length < 2
       puts 'Error: Server name and prompt name required'
-      puts 'Usage: mcp_cli prompt <server_name> <prompt> [arguments_json]'
+      puts "Usage: #{FILE_NAME} prompt <server_name> <prompt> [arguments_json]"
       exit 1
     end
 
@@ -282,7 +311,7 @@ class MCPCli
     server_info = parse_server_config(server_name, servers[server_name])
     env = ENV.to_h.merge(server_info[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
     result = mcp_client.get_prompt(prompt_name, prompt_args)
 
     puts result
@@ -291,7 +320,7 @@ class MCPCli
   def show_info(args)
     if args.empty?
       puts 'Error: Server name required'
-      puts 'Usage: mcp_cli info <server_name>'
+      puts "Usage: #{FILE_NAME} info <server_name>"
       exit 1
     end
 
@@ -305,7 +334,7 @@ class MCPCli
     server_config = parse_server_config(server_name, servers[server_name])
     env = ENV.to_h.merge(server_config[:env] || {})
 
-    mcp_client = MCPClient.new(server_config[:command], server_config[:args], env)
+    mcp_client = MCPClient.new(server_config[:command], server_config[:args], env, @protocol_version)
     server_info = mcp_client.get_server_info
 
     puts "Server: #{server_name}"
@@ -326,7 +355,7 @@ class MCPCli
   def show_version(args)
     if args.empty?
       puts 'Error: Server name required'
-      puts 'Usage: mcp_cli version <server_name>'
+      puts "Usage: #{FILE_NAME} version <server_name>"
       exit 1
     end
 
@@ -340,7 +369,7 @@ class MCPCli
     server_info = parse_server_config(server_name, servers[server_name])
     env = ENV.to_h.merge(server_info[:env] || {})
 
-    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
+    mcp_client = MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
     server_info = mcp_client.get_server_info
 
     puts server_info['version'] || 'Version information not available'
@@ -349,7 +378,7 @@ class MCPCli
   def show_config(args)
     if args.empty?
       puts 'Error: Server name required'
-      puts 'Usage: mcp_cli config <server_name>'
+      puts "Usage: #{FILE_NAME} config <server_name>"
       exit 1
     end
 
@@ -409,10 +438,11 @@ class MCPCli
 end
 
 class MCPClient
-  def initialize(command, args, env)
+  def initialize(command, args, env, protocol_version = '2025-06-18')
     @command = command
     @args = args || []
     @env = env
+    @protocol_version = protocol_version
     @process = nil
     @reader_thread = nil
     @message_id = 0
@@ -473,15 +503,12 @@ class MCPClient
 
     start_process
     response = send_request('initialize', {
-                              protocolVersion: '2024-11-05',
+                              protocolVersion: @protocol_version,
                               capabilities: {
                                 roots: { listChanged: true },
                                 sampling: {}
                               },
-                              clientInfo: {
-                                name: 'mcp_cli',
-                                version: '1.0.0'
-                              }
+                              clientInfo: CLIENT_INFO
                             })
 
     @server_info = response['serverInfo'] if response['serverInfo']
