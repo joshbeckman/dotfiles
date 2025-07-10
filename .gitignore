@@ -3,3 +3,8 @@
 bin/dlv
 bin/errcheck
 bin/golint
+
+# Claude Code local data
+.claude/projects/
+.claude/statsig/
+.claude/todos/
