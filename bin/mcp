@@ -14,7 +14,8 @@ class MCPCli
       'call' => method(:call_tool),
       'prompt' => method(:call_prompt),
       'info' => method(:show_info),
-      'version' => method(:show_version)
+      'version' => method(:show_version),
+      'config' => method(:show_config)
     }
     @claude_config_path = File.expand_path('~/.claude.json')
     @mcp_config_path = nil
@@ -89,6 +90,7 @@ class MCPCli
         mcp_cli [--mcp-config <path>] prompt <server_name> <prompt> [args] Get a prompt from a server
         mcp_cli [--mcp-config <path>] info <server_name>                   Get detailed server information
         mcp_cli [--mcp-config <path>] version <server_name>                Get server version only
+        mcp_cli [--mcp-config <path>] config <server_name>                 Show server configuration
 
       Options:
         --mcp-config <path>  Path to MCP configuration JSON file (defaults to ~/.claude.json)
@@ -102,6 +104,7 @@ class MCPCli
         mcp_cli prompt vault explain '{"topic": "MCP servers"}'
         mcp_cli info vault
         mcp_cli version vault
+        mcp_cli config vault
     HELP
   end
 
@@ -314,22 +317,6 @@ class MCPCli
       puts "Protocol Version: #{server_info['protocolVersion']}"
     end
 
-    puts "\nConfiguration:"
-    puts "  Type: #{server_config[:type]}"
-    puts "  Command: #{server_config[:command]}"
-    if server_config[:args] && !server_config[:args].empty?
-      puts "  Args:"
-      server_config[:args].each do |arg|
-        puts "    - #{arg}"
-      end
-    end
-    if server_config[:env] && !server_config[:env].empty?
-      puts "  Environment:"
-      server_config[:env].each do |key, value|
-        puts "    #{key}: #{value}"
-      end
-    end
-
     if server_info['capabilities']
       puts "\nCapabilities:"
       server_info['capabilities'].each do |cap, value|
@@ -362,6 +349,39 @@ class MCPCli
       puts server_info['version']
     else
       puts "Version information not available"
+    end
+  end
+
+  def show_config(args)
+    if args.empty?
+      puts 'Error: Server name required'
+      puts 'Usage: mcp_cli config <server_name>'
+      exit 1
+    end
+
+    server_name = args[0]
+    servers = load_mcp_servers
+    unless servers.key?(server_name)
+      puts "Error: Server '#{server_name}' not found"
+      exit 1
+    end
+
+    server_config = parse_server_config(server_name, servers[server_name])
+
+    puts "Server: #{server_name}"
+    puts "Type: #{server_config[:type]}"
+    puts "Command: #{server_config[:command]}"
+    if server_config[:args] && !server_config[:args].empty?
+      puts "Args:"
+      server_config[:args].each do |arg|
+        puts "  - #{arg}"
+      end
+    end
+    if server_config[:env] && !server_config[:env].empty?
+      puts "Environment:"
+      server_config[:env].each do |key, value|
+        puts "  #{key}: #{value}"
+      end
     end
   end
 
