@@ -15,17 +15,22 @@ class MCPCli
       'prompt' => method(:call_prompt)
     }
     @claude_config_path = File.expand_path('~/.claude.json')
+    @mcp_config_path = nil
   end
 
   def run(args)
-    if args.empty? || args[0] == '--help' || args[0] == '-h'
+    parsed_args = parse_args(args)
+
+    if parsed_args[:help] || parsed_args[:command].nil?
       show_help
       exit 0
     end
 
-    command = args[0]
+    @mcp_config_path = parsed_args[:mcp_config] if parsed_args[:mcp_config]
+    command = parsed_args[:command]
+
     if @commands.key?(command)
-      @commands[command].call(args[1..])
+      @commands[command].call(parsed_args[:args])
     else
       puts "Unknown command: #{command}"
       show_help
@@ -38,17 +43,51 @@ class MCPCli
 
   private
 
+  def parse_args(args)
+    result = { help: false, mcp_config: nil, command: nil, args: [] }
+    remaining_args = []
+
+    i = 0
+    while i < args.length
+      case args[i]
+      when '--help', '-h'
+        result[:help] = true
+        return result
+      when '--mcp-config'
+        if i + 1 < args.length
+          result[:mcp_config] = args[i + 1]
+          i += 1
+        else
+          raise "--mcp-config requires a path argument"
+        end
+      else
+        remaining_args << args[i]
+      end
+      i += 1
+    end
+
+    unless remaining_args.empty?
+      result[:command] = remaining_args[0]
+      result[:args] = remaining_args[1..-1] || []
+    end
+
+    result
+  end
+
   def show_help
     puts <<~HELP
       MCP CLI - Call MCP servers from the command line
 
       Usage:
-        mcp_cli list                                 List available MCP servers
-        mcp_cli tools <server_name>                  List tools available on a server
-        mcp_cli prompts <server_name>                List prompts available on a server
-        mcp_cli resources <server_name>              List resources available on a server
-        mcp_cli call <server_name> <tool> [args]     Call a tool on a server
-        mcp_cli prompt <server_name> <prompt> [args] Get a prompt from a server
+        mcp_cli [--mcp-config <path>] list                                 List available MCP servers
+        mcp_cli [--mcp-config <path>] tools <server_name>                  List tools available on a server
+        mcp_cli [--mcp-config <path>] prompts <server_name>                List prompts available on a server
+        mcp_cli [--mcp-config <path>] resources <server_name>              List resources available on a server
+        mcp_cli [--mcp-config <path>] call <server_name> <tool> [args]     Call a tool on a server
+        mcp_cli [--mcp-config <path>] prompt <server_name> <prompt> [args] Get a prompt from a server
+
+      Options:
+        --mcp-config <path>  Path to MCP configuration JSON file (defaults to ~/.claude.json)
 
       Examples:
         mcp_cli list
@@ -127,14 +166,14 @@ class MCPCli
       puts "Error: Server '#{server_name}' not found"
       exit 1
     end
-    
+
     server_info = parse_server_config(server_name, servers[server_name])
-    
+
     env = ENV.to_h.merge(server_info[:env] || {})
-    
+
     mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
     prompts = mcp_client.list_prompts
-    
+
     if prompts.empty?
       puts "No prompts available on server '#{server_name}'"
     else
@@ -167,14 +206,14 @@ class MCPCli
       puts "Error: Server '#{server_name}' not found"
       exit 1
     end
-    
+
     server_info = parse_server_config(server_name, servers[server_name])
-    
+
     env = ENV.to_h.merge(server_info[:env] || {})
-    
+
     mcp_client = MCPClient.new(server_info[:command], server_info[:args], env)
     resources = mcp_client.list_resources
-    
+
     if resources.empty?
       puts "No resources available on server '#{server_name}'"
     else
@@ -241,9 +280,17 @@ class MCPCli
   end
 
   def load_mcp_servers
-    raise "Claude configuration file not found at #{@claude_config_path}" unless File.exist?(@claude_config_path)
+    config_path = @mcp_config_path || @claude_config_path
 
-    config = JSON.parse(File.read(@claude_config_path))
+    unless File.exist?(config_path)
+      if @mcp_config_path
+        raise "MCP configuration file not found at #{config_path}"
+      else
+        raise "Claude configuration file not found at #{config_path}"
+      end
+    end
+
+    config = JSON.parse(File.read(config_path))
     config['mcpServers'] || {}
   end
 
