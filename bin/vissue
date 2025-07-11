@@ -588,7 +588,8 @@ def render_check_status(check_data)
                else '❓'
                end
              end
-      str << "- #{icon} **#{check['name']}**: #{check['conclusion'] || check['status']}"
+      details_link = check['details_url'] ? " ([details](#{check['details_url']}))" : ""
+      str << "- #{icon} **#{check['name']}**: #{check['conclusion'] || check['status']}#{details_link}"
     end
   end
 
