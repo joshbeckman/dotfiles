@@ -509,7 +509,7 @@ rescue JSON::ParserError => e
   if image_thread && image_thread.alive?
     image_thread.kill
   end
-  
+
   # Try to get the response for error messages
   resp = `gh issue view #{url} 2>&1`
   if resp.include?('Not Found')
@@ -520,6 +520,92 @@ rescue JSON::ParserError => e
   else
     "Error parsing issue: #{e.message}"
   end
+end
+
+def fetch_check_status(url)
+  owner, repo, number = extract_repo_info(url)
+  begin
+    resp = `gh api repos/#{owner}/#{repo}/pulls/#{number}/commits`
+    commits = JSON.parse(resp)
+    return nil if commits.empty?
+
+    latest_commit_sha = commits.last['sha']
+
+    # Get both status and check runs
+    status_resp = `gh api repos/#{owner}/#{repo}/commits/#{latest_commit_sha}/status`
+    status_data = JSON.parse(status_resp)
+
+    check_runs_resp = `gh api repos/#{owner}/#{repo}/commits/#{latest_commit_sha}/check-runs`
+    check_runs_data = JSON.parse(check_runs_resp)
+
+    {
+      status: status_data,
+      check_runs: check_runs_data['check_runs'] || []
+    }
+  rescue JSON::ParserError
+    nil
+  end
+end
+
+def render_check_status(check_data)
+  return nil if check_data.nil?
+
+  str = ["## CI/Checks Status"]
+
+  # Render status checks (legacy)
+  status = check_data[:status]
+  if status && status['statuses'] && !status['statuses'].empty?
+    str << ""
+    str << "### Status Checks"
+    status['statuses'].each do |s|
+      icon = case s['state']
+             when 'success' then '✅'
+             when 'failure' then '❌'
+             when 'error' then '⚠️'
+             when 'pending' then '⏳'
+             else '❓'
+             end
+      str << "- #{icon} **#{s['context']}**: #{s['description']}"
+    end
+  end
+
+  # Render check runs
+  if check_data[:check_runs] && !check_data[:check_runs].empty?
+    str << "" unless status && status['statuses'] && !status['statuses'].empty?
+    str << "### Check Runs"
+    check_data[:check_runs].each do |check|
+      icon = case check['conclusion']
+             when 'success' then '✅'
+             when 'failure' then '❌'
+             when 'cancelled' then '🚫'
+             when 'skipped' then '⏭️'
+             when 'neutral' then '⚪'
+             when 'timed_out' then '⏰'
+             else
+               case check['status']
+               when 'in_progress' then '⏳'
+               when 'queued' then '⏳'
+               else '❓'
+               end
+             end
+      str << "- #{icon} **#{check['name']}**: #{check['conclusion'] || check['status']}"
+    end
+  end
+
+  # Overall status
+  if status && status['state']
+    str << ""
+    overall_icon = case status['state']
+                   when 'success' then '✅'
+                   when 'failure' then '❌'
+                   when 'error' then '⚠️'
+                   when 'pending' then '⏳'
+                   else '❓'
+                   end
+    str << "**Overall Status**: #{overall_icon} #{status['state']}"
+  end
+
+  str.join("\n")
 end
 
 def render_pr(url)
@@ -559,11 +645,20 @@ def render_pr(url)
 
   image_thread = Thread.new { download_images_for_issue(url, issue_dir) }
 
+  check_status_thread = Thread.new do
+    if data['closedAt'].nil? && data['mergedAt'].nil?
+      fetch_check_status(url)
+    else
+      nil
+    end
+  end
+
   # Wait for remaining results
   timeline_events = timeline_thread.value
   review_comments = review_comments_thread.value
   diff = diff_thread.value
   image_map = image_thread.value
+  check_status_data = check_status_thread.value
 
   str = ["# Pull Request ##{data['number']}: [#{data['title']}](#{url}) opened by #{render_user(data['author'])} #{render_time(data['createdAt'])}"]
   str << ''
@@ -667,13 +762,21 @@ def render_pr(url)
     str << ''
     str << "## Assigned to: #{data['assignees'].map { |assignee| render_user(assignee) }.join(', ')}"
   end
+
+  if check_status_data
+    check_status_output = render_check_status(check_status_data)
+    if check_status_output
+      str << ''
+      str << check_status_output
+    end
+  end
+
   str.join("\n")
 rescue JSON::ParserError => e
-  # Kill any remaining threads
-  [pr_thread, timeline_thread, review_comments_thread, diff_thread, image_thread].each do |thread|
+  [pr_thread, timeline_thread, review_comments_thread, diff_thread, image_thread, check_status_thread].each do |thread|
     thread.kill if thread && thread.alive?
   end
-  
+
   # Try to get the response for error messages
   resp = `gh pr view #{url} 2>&1`
   if resp.include?('Not Found')
