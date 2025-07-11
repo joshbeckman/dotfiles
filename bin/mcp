@@ -29,6 +29,8 @@ class MCPCli
       'config' => method(:show_config)
     }
     @claude_config_path = File.expand_path('~/.claude.json')
+    @cursor_config_path = File.expand_path('~/.cursor/mcp.json')
+    @vscode_config_path = File.expand_path('~/.vscode/mcp.json')
     @mcp_config_path = nil
     @protocol_version = '2025-06-18'
   end
@@ -134,7 +136,9 @@ class MCPCli
         #{FILE_NAME} config <server_name>                 Show server configuration
 
       Options:
-        --mcp-config <path>        Path to MCP configuration JSON file (defaults to ~/.claude.json)
+        --mcp-config <path>        Path to MCP configuration JSON file 
+                                   (defaults to first found: ~/.claude.json, ~/.cursor/mcp.json, ~/.vscode/mcp.json)
+                                   (use 'claude', 'cursor', or 'vscode' to specify a default)
         --protocol-version <ver>   MCP protocol version (defaults to #{@protocol_version})
 
       Examples:
@@ -154,12 +158,12 @@ class MCPCli
   end
 
   def list_servers(_args)
-    servers = load_mcp_servers
+    servers, config_path = load_mcp_servers_with_path
 
     if servers.empty?
       puts 'No MCP servers configured'
     else
-      puts 'Available MCP servers:'
+      puts "Available MCP servers (from #{config_path}):"
       servers.each do |name, config|
         type = config['type'] || 'stdio'
         case type
@@ -449,17 +453,38 @@ class MCPCli
   end
 
   def load_mcp_servers
-    config_path = @mcp_config_path || @claude_config_path
+    servers, _ = load_mcp_servers_with_path
+    servers
+  end
 
-    unless File.exist?(config_path)
-      raise "MCP configuration file not found at #{config_path}" if @mcp_config_path
+  def load_mcp_servers_with_path
+    if @mcp_config_path
+      config_path = case @mcp_config_path
+                    when 'claude'
+                      @claude_config_path
+                    when 'cursor'
+                      @cursor_config_path
+                    when 'vscode'
+                      @vscode_config_path
+                    else
+                      @mcp_config_path
+                    end
+      unless File.exist?(config_path)
+        raise "MCP configuration file not found at #{config_path}"
+      end
+    else
+      config_path = [@claude_config_path, @cursor_config_path, @vscode_config_path].find do |path|
+        File.exist?(path)
+      end
 
-      raise "Claude configuration file not found at #{config_path}"
-
+      unless config_path
+        raise "No MCP configuration file found. Tried:\n  #{@claude_config_path}\n  #{@cursor_config_path}\n  #{@vscode_config_path}"
+      end
     end
 
     config = JSON.parse(File.read(config_path))
-    config['mcpServers'] || {}
+    servers = config['mcpServers'] || config['servers'] || {}
+    [servers, config_path]
   end
 
   def parse_server_config(name, config)
