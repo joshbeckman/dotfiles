@@ -44,18 +44,15 @@ When commenting/writing/anything that references an issue or pull request, you M
 ```bash
 # List all issues in a repo
 gh issue list
-
 # List issues with specific label
 gh issue list --label "Discovery"
-
+# Search issues with a query
+gh issue list --search "DiscoveryToggle in:title"
 # Search issues with a query
 gh issue list --search "DiscoveryToggle in:title"
 
-# Use `vissue` command to view an individual issue (it includes more informatino)
-vissue ISSUE_URL
-
-# Search issues with a query
-gh issue list --search "DiscoveryToggle in:title"
+# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `shadowenv exec -- gh extension install joshbeckman/gh-view-md`)
+gh view-md ISSUE_URL
 ```
 
 2. **Managing Labels**:
@@ -74,15 +71,15 @@ gh issue edit ISSUE_URL --remove-label "Label"
 ```bash
 # List all PRs in a repo
 gh pr list
-
 # List PRs with specific label
 gh pr list --label "Discovery"
-
 # Search PRs with a query
 gh pr list --search "DiscoveryToggle in:title"
 
-# Use `vissue` command to view an individual PR (it includes more informatino)
-vissue PR_URL
+# View a specific PR with the `joshbeckman/gh-view-md` shadowenv exec -- gh CLI extension
+gh view-md PR_URL
+# you can specify the max diff to show with the `--max-diff` option (default is 800 lines)
+gh view-md PR_URL --max-diff 1000
 ```
 
 4. **Commenting on Issues and PRs**:
