@@ -1,11 +1,12 @@
-RULES:
-- Do not leave comments in your code
-- Do not leave any unused imports, variables, or functions in your code
-- When writing tests, always ensure that there is 100% branch coverage for all files that you have modified.
-- Whenever you write tests, ensure that you are following all relevant guidelines for writing tests (search for any cursor rules in the repo or CLAUDE.md files in the repo that include instructions about test writing)
-- Before finishing anything you are working on, think hard to ensure that you have followed every single rule in this list, and also in the prompt I gave you
+## Who I (the user) am
 
----
+I am Josh Beckman (more info at https://www.joshbeckman.org/about).
+
+My GitHub username is @!`git config github.user` and my email address is !`git config user.email`
+
+My main text editor is !`git config core.editor`.
+
+I make things. Not too much. Mostly for others.
 
 ## General Guidelines for Claude Code
 
