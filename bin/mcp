@@ -71,8 +71,8 @@ class MCPCli
     when 'stdio'
       env = ENV.to_h.merge(server_info[:env] || {})
       MCPClient.new(server_info[:command], server_info[:args], env, @protocol_version)
-    when 'streamable-http'
-      HTTPMCPClient.new(server_info[:url], @protocol_version)
+    when 'streamable-http', 'http'
+      HTTPMCPClient.new(server_info[:url], server_info[:headers], @protocol_version)
     else
       raise "Unsupported server type: #{server_info[:type]}"
     end
@@ -170,7 +170,7 @@ class MCPCli
         when 'stdio'
           cmd_display = [config['command'], *config['args']].join(' ')
           puts "  #{name}: #{cmd_display}"
-        when 'streamable-http'
+        when 'streamable-http', 'http'
           puts "  #{name}: #{config['url']}"
         else
           puts "  #{name}: (#{type})"
@@ -447,7 +447,7 @@ class MCPCli
           puts "  #{key}: #{value}"
         end
       end
-    when 'streamable-http'
+    when 'streamable-http', 'http'
       puts "URL: #{server_config[:url]}"
     end
   end
@@ -494,16 +494,17 @@ class MCPCli
     when 'stdio', nil
       {
         name: name,
-        type: 'stdio',
+        type: type,
         command: config['command'],
         args: config['args'] || [],
         env: config['env'] || {}
       }
-    when 'streamable-http'
+    when 'streamable-http', 'http'
       {
         name: name,
-        type: 'streamable-http',
-        url: config['url']
+        type: type,
+        url: config['url'],
+        headers: config['headers'] || {},
       }
     else
       raise "Server '#{name}' has unsupported type: #{type}"
@@ -659,8 +660,9 @@ class MCPClient
 end
 
 class HTTPMCPClient
-  def initialize(url, protocol_version = '2025-06-18')
+  def initialize(url, headers = {}, protocol_version = '2025-06-18')
     @url = url
+    @headers = headers
     @protocol_version = protocol_version
     @initialized = false
     @server_info = nil
@@ -745,6 +747,9 @@ class HTTPMCPClient
     request = Net::HTTP::Post.new(uri.path.empty? ? '/' : uri.path)
     request['Content-Type'] = 'application/json'
     request['Accept'] = 'text/event-stream, application/json'
+    @headers.each do |key, value|
+      request[key] = value
+    end
     request.body = JSON.generate(message)
 
     response = http.request(request)
