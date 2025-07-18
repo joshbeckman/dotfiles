@@ -1,0 +1,15 @@
+#!/bin/sh
+
+# require .personal-mcp-read-token file in home directory
+if [ ! -f ~/.personal-mcp-read-token ]; then
+  echo "Error: .personal-mcp-read-token file not found in home directory."
+  exit 1
+fi
+
+# require jq for JSON parsing
+if ! command -v jq &> /dev/null; then
+  echo "Error: jq is required but not installed."
+  exit 1
+fi
+
+curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api -H "Authorization: Bearer $(head ~/.personal-mcp-read-token | tr -d '\n')" --silent | jq -r '.status'

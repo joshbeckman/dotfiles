@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# require argument
+if [ -z "$1" ]; then
+  echo "Usage: $0 <status>"
+  exit 1
+fi
+# require .personal-mcp-write-token file in home directory
+if [ ! -f ~/.personal-mcp-write-token ]; then
+  echo "Error: .personal-mcp-write-token file not found in home directory."
+  exit 1
+fi
+
+curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/update -X POST -F "status=\"${*/\"/\\\"}\"" -F "write_password=$(head ~/.personal-mcp-write-token | tr -d '\n')" --silent
