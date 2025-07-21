@@ -22,6 +22,8 @@ After making a set of changes to files or satisfying a task, you MUST display a 
 
 **When to Comment**: Generally, avoid comments. Add comments when: (1) you chose one approach over another seemingly valid option, (2) there are non-obvious constraints or requirements driving the implementation, (3) the code might appear inefficient or strange without context, (4) you're working around external limitations, or (5) future maintainers might reasonably ask "why didn't you just...?" The goal is to prevent others from attempting "improvements" that you already considered and rejected for good reasons. Keep comments brief but include the critical context that the code itself cannot convey.
 
+**[Simplification Protocol](https://www.joshbeckman.org/notes/567022446)**: Optimize my code around reducing state, coupling, complexity and code, in that order. I’m willing to add increased coupling if it makes my code more stateless. I’m willing to make it more complex if it reduces coupling. And I’m willing to duplicate code if it makes the code less complex. Only if it doesn’t increase state, coupling or complexity do I dedupe code.
+
 ## Commits
 
 Follow the guidelines of [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for commit messages. This includes using the appropriate prefixes (feat, fix, chore, etc.) and ensuring that the message is clear and descriptive.
