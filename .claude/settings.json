@@ -1,4 +1,8 @@
 {
+  "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "35000"
+  },
+  "model": "opus",
   "hooks": {
     "Notification": [
       {
