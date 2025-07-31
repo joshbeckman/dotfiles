@@ -1,5 +1,19 @@
 #!/bin/sh
 
+VERBOSE=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -v|--verbose)
+      VERBOSE=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [-v|--verbose]"
+      exit 1
+      ;;
+  esac
+done
+
 # require .personal-mcp-read-token file in home directory
 if [ ! -f ~/.personal-mcp-read-token ]; then
   echo "Error: .personal-mcp-read-token file not found in home directory."
@@ -12,4 +26,8 @@ if ! command -v jq &> /dev/null; then
   exit 1
 fi
 
-curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api -H "Authorization: Bearer $(head ~/.personal-mcp-read-token | tr -d '\n')" --silent | jq -r '.status'
+if [ "$VERBOSE" = true ]; then
+  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api -H "Authorization: Bearer $(head ~/.personal-mcp-read-token | tr -d '\n')" --silent | jq -r '"\(.status)\nUpdated: \(.updated_at)"'
+else
+  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api -H "Authorization: Bearer $(head ~/.personal-mcp-read-token | tr -d '\n')" --silent | jq -r '.status'
+fi
