@@ -1,8 +1,10 @@
 {
+  "cleanupPeriodDays": 60,
   "env": {
-    "MAX_MCP_OUTPUT_TOKENS": "35000"
+    "MAX_MCP_OUTPUT_TOKENS": "35000",
+    "EDITOR": "nvim",
+    "GIT_EDITOR": "nvim"
   },
-  "model": "opus",
   "hooks": {
     "Notification": [
       {
@@ -14,6 +16,14 @@
           }
         ]
       }
+    ]
+  },
+  "includeCoAuthoredBy": true,
+  "model": "opus",
+  "permissions": {
+    "additionalDirectories": [
+      "~/Downloads",
+      "/tmp"
     ]
   }
 }
