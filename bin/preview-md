@@ -23,7 +23,13 @@ if ! command -v pandoc &> /dev/null; then
     exit 1
 fi
 
-tmpfile=$(mktemp /tmp/preview-XXXXXX.html)
+# Create unique tmpfile with timestamp and process ID
+timestamp=$(date +%Y%m%d_%H%M%S)
+tmpfile="/tmp/preview-md-${timestamp}-$$.html"
+
+# Add cleanup trap to remove tmpfile after browser opens
+trap "sleep 5; rm -f '$tmpfile'" EXIT
+
 echo '<style>body { max-width: 800px; margin: 1em auto; padding: 1em; font-family: sans-serif; }</style>' > "$tmpfile"
 pandoc -f gfm -t html >> "$tmpfile"
 open "$tmpfile"
