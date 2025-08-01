@@ -5,10 +5,11 @@ if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     echo "preview-md - Preview markdown as HTML in your browser"
     echo ""
     echo "Usage: preview-md [FILE]"
+    echo "       preview-md \"STRING\""
     echo "       command | preview-md"
     echo "       preview-md < file.md"
     echo ""
-    echo "Reads markdown from stdin or a file and opens it as HTML in your browser."
+    echo "Reads markdown from stdin, a file, or a string argument and opens it as HTML in your browser."
     echo "Uses pandoc to convert GitHub Flavored Markdown to HTML."
     exit 0
 fi
@@ -31,5 +32,20 @@ tmpfile="/tmp/preview-md-${timestamp}-$$.html"
 trap "sleep 5; rm -f '$tmpfile'" EXIT
 
 echo '<style>body { max-width: 800px; margin: 1em auto; padding: 1em; font-family: sans-serif; }</style>' > "$tmpfile"
-pandoc -f gfm -t html >> "$tmpfile"
+
+# Handle different input modes
+if [[ $# -eq 1 ]]; then
+    # Check if argument is a file
+    if [[ -f "$1" ]]; then
+        # It's a file, read from it
+        pandoc -f gfm -t html "$1" >> "$tmpfile"
+    else
+        # It's a string, process it directly
+        echo "$1" | pandoc -f gfm -t html >> "$tmpfile"
+    fi
+else
+    # No arguments, read from stdin
+    pandoc -f gfm -t html >> "$tmpfile"
+fi
+
 open "$tmpfile"
