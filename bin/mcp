@@ -129,7 +129,7 @@ class MCPCli
         #{FILE_NAME} tools <server_name> [tool_name]      List tools or show tool details
         #{FILE_NAME} prompts <server_name>                List prompts available on a server
         #{FILE_NAME} resources <server_name>              List resources available on a server
-        #{FILE_NAME} call <server_name> <tool> [args]     Call a tool on a server
+        #{FILE_NAME} call <server_name> <tool> [args]     Call a tool on a server (JSON or --flags)
         #{FILE_NAME} prompt <server_name> <prompt> [args] Get a prompt from a server
         #{FILE_NAME} info <server_name>                   Get detailed server information
         #{FILE_NAME} version <server_name>                Get server version only
@@ -148,6 +148,7 @@ class MCPCli
         #{FILE_NAME} prompts vault
         #{FILE_NAME} resources vault
         #{FILE_NAME} call vault search_all '{"query": "example"}'
+        #{FILE_NAME} call vault search_all --query example
         #{FILE_NAME} prompt vault explain '{"topic": "MCP servers"}'
         #{FILE_NAME} info vault
         #{FILE_NAME} version vault
@@ -310,13 +311,23 @@ class MCPCli
   def call_tool(args)
     if args.length < 2
       puts 'Error: Server name and tool name required'
-      puts "Usage: #{FILE_NAME} call <server_name> <tool> [arguments_json]"
+      puts "Usage: #{FILE_NAME} call <server_name> <tool> [arguments]"
+      puts "Arguments can be JSON: '{\"key\": \"value\"}'"
+      puts "Or flags: --key value --key2 value2"
       exit 1
     end
 
     server_name = args[0]
     tool_name = args[1]
-    tool_args = args[2] ? JSON.parse(args[2]) : {}
+    remaining_args = args[2..]
+    # Parse tool arguments - either JSON or flags
+    tool_args = if remaining_args.empty?
+      {}
+    elsif remaining_args.length == 1 && remaining_args[0].start_with?('{')
+      JSON.parse(remaining_args[0])
+    else
+      parse_tool_flags(remaining_args)
+    end
 
     servers = load_mcp_servers
     unless servers.key?(server_name)
@@ -509,6 +520,40 @@ class MCPCli
     else
       raise "Server '#{name}' has unsupported type: #{type}"
     end
+  end
+
+  def parse_tool_flags(args)
+    result = {}
+    i = 0
+    while i < args.length
+      arg = args[i]
+      if arg.start_with?('--')
+        key = arg[2..] # Remove '--' prefix
+        # Check if there's a value following this flag
+        if i + 1 < args.length && !args[i + 1].start_with?('--')
+          # Next argument is the value
+          value = args[i + 1]
+          # Try to parse the value as JSON if it looks like JSON
+          result[key] = if value =~ /^(\{|\[|true|false|null|\d+(\.\d+)?$)/
+            begin
+              JSON.parse(value)
+            rescue JSON::ParserError
+              value # If parsing fails, use as string
+            end
+          else
+            value
+          end
+          i += 2
+        else
+          # Boolean flag without a value
+          result[key] = true
+          i += 1
+        end
+      else
+        raise "Invalid argument: '#{arg}'. Arguments must be in --key value format or JSON."
+      end
+    end
+    result
   end
 end
 
