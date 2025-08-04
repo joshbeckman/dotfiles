@@ -5,6 +5,14 @@
     "EDITOR": "nvim",
     "GIT_EDITOR": "nvim"
   },
+  "includeCoAuthoredBy": true,
+  "permissions": {
+    "additionalDirectories": [
+      "~/Downloads",
+      "/tmp"
+    ]
+  },
+  "model": "opus",
   "hooks": {
     "Notification": [
       {
@@ -18,12 +26,8 @@
       }
     ]
   },
-  "includeCoAuthoredBy": true,
-  "model": "opus",
-  "permissions": {
-    "additionalDirectories": [
-      "~/Downloads",
-      "/tmp"
-    ]
-  }
+  "feedbackSurveyState": {
+    "lastShownTime": 1754147115362
+  },
+  "$schema": "https://json.schemastore.org/claude-code-settings.json"
 }
