@@ -231,3 +231,19 @@ function! FindSimilarFiles()
     let filename_root = expand("%:t:r")
     call fzf#vim#files(".", {'options': ['--query', parent_dir . "/" . filename_root]})
 endfunction
+
+" Command to preview markdown files using the preview-md shell script
+command! PreviewMd call PreviewMarkdown()
+
+function! PreviewMarkdown()
+    let filepath = expand("%:p")
+    execute "!preview-md " . shellescape(filepath)
+endfunction
+
+" Command to show word count stats for the current file
+command! Wc call WordCount()
+
+function! WordCount()
+    let filepath = expand("%:p")
+    execute "!wc " . shellescape(filepath)
+endfunction
