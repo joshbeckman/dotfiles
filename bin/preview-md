@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Check for help flag
 if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     echo "preview-md - Preview markdown as HTML in your browser"
     echo ""
@@ -14,7 +13,6 @@ if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     exit 0
 fi
 
-# Check if pandoc is installed
 if ! command -v pandoc &> /dev/null; then
     echo "Error: pandoc is not installed." >&2
     echo "Please install pandoc to use this tool:" >&2
@@ -24,27 +22,21 @@ if ! command -v pandoc &> /dev/null; then
     exit 1
 fi
 
-# Create unique tmpfile with timestamp and process ID
 timestamp=$(date +%Y%m%d_%H%M%S)
 tmpfile="/tmp/preview-md-${timestamp}-$$.html"
 
 # Add cleanup trap to remove tmpfile after browser opens
 trap "sleep 5; rm -f '$tmpfile'" EXIT
 
-echo '<style>body { max-width: 800px; margin: 1em auto; padding: 1em; font-family: sans-serif; }</style>' > "$tmpfile"
+echo '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"><style>body { max-width: 800px; margin: 1em auto; padding: 1em; font-family: "IBM Plex Sans", sans-serif; }</style>' > "$tmpfile"
 
-# Handle different input modes
 if [[ $# -eq 1 ]]; then
-    # Check if argument is a file
     if [[ -f "$1" ]]; then
-        # It's a file, read from it
         pandoc -f gfm -t html "$1" >> "$tmpfile"
     else
-        # It's a string, process it directly
         echo "$1" | pandoc -f gfm -t html >> "$tmpfile"
     fi
 else
-    # No arguments, read from stdin
     pandoc -f gfm -t html >> "$tmpfile"
 fi
 
