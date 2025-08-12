@@ -28,7 +28,7 @@ tmpfile="/tmp/preview-md-${timestamp}-$$.html"
 # Add cleanup trap to remove tmpfile after browser opens
 trap "sleep 5; rm -f '$tmpfile'" EXIT
 
-echo '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"><style>body { max-width: 800px; margin: 1em auto; padding: 1em; font-family: "IBM Plex Sans", sans-serif; }</style>' > "$tmpfile"
+echo '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"><link href="https://www.joshbeckman.org/assets/css/site.css" rel="stylesheet"><style>body { max-width: 800px; margin: 1em auto; padding: 1em; font-family: "IBM Plex Sans", sans-serif; }</style>' > "$tmpfile"
 
 if [[ $# -eq 1 ]]; then
     if [[ -f "$1" ]]; then
