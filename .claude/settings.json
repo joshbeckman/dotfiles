@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "cleanupPeriodDays": 60,
   "env": {
     "MAX_MCP_OUTPUT_TOKENS": "35000",
@@ -7,6 +8,17 @@
   },
   "includeCoAuthoredBy": true,
   "permissions": {
+    "allow": [
+      "Bash(/usr/bin/osascript:*)",
+      "Bash(grep:*)",
+      "Bash(mcp:*)",
+      "mcp__josh-notes__search_posts",
+      "WebFetch(domain:www.joshbeckman.org)",
+      "mcp__josh-beckman-status__get_status",
+      "mcp__josh-beckman-status__get_current_time_of_day",
+      "Bash(preview-md:*)",
+      "mcp__josh-notes__get_post"
+    ],
     "additionalDirectories": [
       "~/Downloads",
       "/tmp"
@@ -28,6 +40,5 @@
   },
   "feedbackSurveyState": {
     "lastShownTime": 1754147115362
-  },
-  "$schema": "https://json.schemastore.org/claude-code-settings.json"
+  }
 }

@@ -8,3 +8,5 @@ bin/golint
 .claude/projects/
 .claude/statsig/
 .claude/todos/
+
+bin/.auto-review-skip
