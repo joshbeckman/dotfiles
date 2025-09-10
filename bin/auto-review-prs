@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKIP_FILE="$SCRIPT_DIR/.auto-review-skip"
+
+# Handle script arguments
+if [[ "${1:-}" == "--clear-skips" ]]; then
+  echo "Clearing skip list..."
+  > "$SKIP_FILE"
+  echo "Skip list cleared."
+  exit 0
+elif [[ "${1:-}" == "--list-skips" ]]; then
+  echo "Skipped PRs:"
+  if [[ -f "$SKIP_FILE" ]]; then
+    cat "$SKIP_FILE"
+  else
+    echo "(none)"
+  fi
+  exit 0
+elif [[ "${1:-}" == "--help" ]]; then
+  echo "Auto PR Review Tool"
+  echo "==================="
+  echo ""
+  echo "DESCRIPTION:"
+  echo "  Continuously monitors GitHub for pull requests where you are requested"
+  echo "  as a reviewer. When found, displays a dialog to confirm the review,"
+  echo "  then launches Claude with the '/review-pr' command to assist with"
+  echo "  code review."
+  echo ""
+  echo "FEATURES:"
+  echo "  - Polls GitHub every minute for PRs requiring your review"
+  echo "  - Processes oldest PRs first"
+  echo "  - Shows PR details (repo, number, title, author) in a dialog"
+  echo "  - Allows skipping PRs temporarily or permanently"
+  echo "  - Displays macOS notifications for key events"
+  echo "  - Clears screen between checks for clean output"
+  echo ""
+  echo "USAGE:"
+  echo "  $0 [options]"
+  echo ""
+  echo "OPTIONS:"
+  echo "  --list-skips   Show all permanently skipped PRs"
+  echo "  --clear-skips  Clear the skip list (un-skip all PRs)"
+  echo "  --help         Show this help message"
+  echo ""
+  echo "The dialog will auto-confirm after 30 seconds if no response."
+  exit 0
+fi
+
+# Create skip file if it doesn't exist
+touch "$SKIP_FILE"
+
+echo "Starting automated PR review loop..."
+echo "You'll be prompted to confirm each PR review"
+echo ""
+
+while true; do
+  # Clear screen for clean output
+  clear
+  echo "Auto PR Review - $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "=================================="
+  echo ""
+  
+  # Ensure we're on main branch for a clean starting point
+  echo "Switching to main branch..."
+  if ! git checkout main >/dev/null 2>&1; then
+    echo "Warning: Could not switch to main branch. Continuing anyway..."
+  fi
+  
+  echo "Checking for PRs requiring review..."
+  # Fetch ALL PRs that need review from me, sorted by creation date (oldest first)
+  ALL_PRS=$(shadowenv exec -- gh pr list \
+    --search "review-requested:@me" \
+    --state open \
+    --json url,createdAt,title,author,number \
+    --jq 'sort_by(.createdAt)' \
+    2>/dev/null || echo "[]")
+  echo $ALL_PRS | jq -r '.[] | "\(.url) - \(.title) by \(.author.login) (#\(.number))"'
+
+  # Process all PRs that are not in the permanent skip list
+  if [[ "$ALL_PRS" != "[]" ]]; then
+    PR_COUNT=$(echo "$ALL_PRS" | jq 'length')
+    REVIEWED_ANY=false
+    
+    for i in $(seq 0 $((PR_COUNT - 1))); do
+      PR_DATA=$(echo "$ALL_PRS" | jq ".[$i]")
+      PR_URL=$(echo "$PR_DATA" | jq -r '.url')
+      
+      # Skip if in permanent skip list
+      if grep -Fxq "$PR_URL" "$SKIP_FILE" 2>/dev/null; then
+        echo "Skipping PR (in permanent skip list): $PR_URL"
+        continue
+      fi
+      
+      PR_NUMBER=$(echo "$PR_DATA" | jq -r '.number')
+      PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+      PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
+      PR_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/.*|\1|')
+      echo "Found PR to review: $PR_REPO#$PR_NUMBER - $PR_TITLE (by @$PR_AUTHOR)"
+      
+      DIALOG_RESULT=$(/usr/bin/osascript -e "
+        set theAnswer to button returned of (display dialog \"${PR_REPO} PR #${PR_NUMBER} by @${PR_AUTHOR}\" & return & return & \"${PR_TITLE}\" & return & return & \"${PR_URL}\" ¬
+          buttons {\"Skip This Time\", \"Skip Always\", \"Review\"} ¬
+          default button \"Review\" ¬
+          with title \"Auto PR Review\" ¬
+          giving up after 30)
+        return theAnswer
+      " 2>/dev/null || echo "timeout")
+
+      case "$DIALOG_RESULT" in
+        "Skip This Time")
+          echo "Skipping PR for this run only, moving to next PR..."
+          /usr/bin/osascript -e "display notification \"Skipping PR #${PR_NUMBER} this time\" with title \"Auto PR Review\" sound name \"Pop\""
+          # Just continue to the next PR in the for loop
+          continue
+          ;;
+        "Skip Always")
+          echo "Adding PR to permanent skip list"
+          echo "$PR_URL" >> "$SKIP_FILE"
+          /usr/bin/osascript -e "display notification \"PR #${PR_NUMBER} added to skip list\" with title \"Auto PR Review\" sound name \"Pop\""
+          # Continue to the next PR in the for loop
+          continue
+          ;;
+        "timeout")
+          echo "Dialog timed out after 30 seconds, proceeding with review..."
+          ;;
+        *)
+          echo "Proceeding with review..."
+          ;;
+      esac
+
+      echo "Running claude review..."
+      # Run claude with the review-pr command
+      if /opt/dev/bin/devx claude "/review-pr $PR_URL"; then
+        echo "Successfully reviewed PR: $PR_URL"
+        /usr/bin/osascript -e "display notification \"Successfully reviewed PR\" with title \"Auto PR Review\" sound name \"Glass\""
+        REVIEWED_ANY=true
+        # After reviewing, break to restart and check for new PRs
+        break
+      else
+        echo "Failed to review PR: $PR_URL"
+        /usr/bin/osascript -e "display notification \"Failed to review PR\" with title \"Auto PR Review\" sound name \"Basso\""
+      fi
+      
+      # Small delay before checking next PR
+      echo "Waiting 10 seconds before next PR..."
+      sleep 10
+    done
+    
+    if [[ "$REVIEWED_ANY" == false ]]; then
+      echo "No PRs were reviewed (all skipped). Sleeping for a minute..."
+      sleep 60
+    else
+      echo "Completed review cycle. Waiting 10 seconds before next check..."
+      sleep 10
+    fi
+  else
+    echo "No PRs requiring review. Sleeping for a minute..."
+    sleep 60
+  fi
+done
