@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+# Get PR details and construct comparison URL
+COMPARISON_URL=$(gh pr view $1 --json headRefName,baseRefName,headRepositoryOwner,headRepository -q '"repos/\(.headRepositoryOwner.login)/\(.headRepository.name)/compare/\(.baseRefName)...\(.headRefName)"')
+
+# Compare the branches
+gh api "$COMPARISON_URL" --jq '.behind_by'
