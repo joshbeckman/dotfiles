@@ -10,8 +10,10 @@
   "permissions": {
     "allow": [
       "Bash(/usr/bin/osascript:*)",
+      "Bash(terminal-notifier:*)",
       "Bash(grep:*)",
       "Bash(mcp:*)",
+      "Bash(pwd:*)",
       "mcp__josh-notes__search_posts",
       "WebFetch(domain:www.joshbeckman.org)",
       "mcp__josh-beckman-status__get_status",
@@ -32,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.message' | xargs -I {} /usr/bin/osascript -e 'display notification \"{}\" with title \"Claude\" sound name \"Sosumi\"'"
+            "command": "jq -r '.message' | xargs -I {} terminal-notifier -message \"{}\" -title \"Claude Hook\" -group \"$(pwd):hook\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       }

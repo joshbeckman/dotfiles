@@ -10,10 +10,10 @@ I make things. Not too much. Mostly for others.
 
 ## General Guidelines for Claude Code
 
-After making a set of changes to files or satisfying a task, you MUST display a notification to tell me what's been done. Use the title "Claude Code" and a brief descriptive message. Here's an example:
+After making a set of changes to files or satisfying a task, you MUST display a `terminal-notifier` notification to tell me what's been done. Use a title and a brief descriptive message. Here's an example:
 
 ```bash
-/usr/bin/osascript -e "display notification \"I've finished refactoring the FooBar class into smaller methods\" with title \"Claude Code\" sound name \"Sosumi\""
+terminal-notifier -message "I've finished refactoring the FooBar class into smaller methods" -title "Claude Code" -group $PWD -execute "/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE" -activate com.github.wez.wezterm
 ```
 
 ### Comments in Code
