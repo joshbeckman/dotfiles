@@ -9,6 +9,7 @@ let mapleader = "\<Space>"
 """""""    themes and schemes
 set background=light
 colorscheme solarized
+let $BAT_THEME = 'gruvbox-light'
 
 " Use tab and shift-tab to cycle through tabs
 nnoremap <Tab> :tabn<CR>
