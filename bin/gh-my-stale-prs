@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# typed: strict
+# frozen_string_literal: true
+
+require "json"
+STALE = 400
+
+assigned_pr_data = %x(gh search prs --assignee "@me" --state open --owner Shopify,shop --json number,url,repository,title --limit 1000)
+prs = JSON.parse(assigned_pr_data)
+
+puts "Stale PRs (more than #{STALE} commits behind main):"
+stale_count = 0
+prs.reverse.each do |pr|
+  staleness = %x(gh pr-staleness #{pr["url"]}).strip
+  if staleness.to_i < STALE
+    next
+  end
+
+  stale_count += 1
+  puts "PR #{pr["repository"]["nameWithOwner"]}##{pr["number"]}: #{pr["title"]}"
+  puts "  #{pr["url"]}"
+  puts "  #{staleness} commits stale"
+  %x(terminal-notifier -title "PR #{pr["repository"]["nameWithOwner"]}##{pr["number"]} is #{staleness} commits stale" -message "#{pr["title"]}" -open "#{pr["url"]}")
+  sleep(0.5)
+end
+if stale_count.zero?
+  puts "None! 🎉"
+end
