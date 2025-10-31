@@ -38,7 +38,6 @@ nnoremap <Leader>ld :LspDefinition<CR>
 nnoremap <Leader>nn :set nonumber norelativenumber<CR>
 nnoremap <Leader>p :set paste<CR><esc>"*]p:set nopaste<cr>"
 nnoremap <Leader>q :q<CR>
-nnoremap <Leader>Q :qa<CR>
 nnoremap <Leader>w :w<CR>
 nnoremap <Leader>W :Windows<CR>
 map <silent> <Leader>cop :call RubocopAutocorrect()<cr>
