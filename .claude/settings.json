@@ -26,7 +26,6 @@
       "/tmp"
     ]
   },
-  "model": "opus",
   "hooks": {
     "Notification": [
       {
@@ -40,6 +39,7 @@
       }
     ]
   },
+  "alwaysThinkingEnabled": false,
   "feedbackSurveyState": {
     "lastShownTime": 1754147115362
   }
