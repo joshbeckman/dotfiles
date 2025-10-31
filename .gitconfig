@@ -42,6 +42,28 @@
     web = instaweb
     wipe = !git add -A && git commit -qm 'WIPE SAVEPOINT' && git reset HEAD~1 --hard
     cleanonmain = !git checkout main && gt sync && git remote prune origin
+    claude-commit = "!f() { \
+        DIFF=$(git diff --cached); \
+        if [ -z \"$DIFF\" ]; then \
+            echo 'No staged changes to commit'; \
+            exit 1; \
+        fi; \
+        CLAUDE_CMD='claude'; \
+        if command -v devx >/dev/null 2>&1 && devx claude -- --version >/dev/null 2>&1; then \
+            CLAUDE_CMD='devx claude --'; \
+        elif ! command -v claude >/dev/null 2>&1; then \
+            echo 'Neither claude nor devx claude command found'; \
+            exit 1; \
+        fi; \
+        PROMPT=\"Generate a git commit message following Conventional Commits format for these staged changes. Respond with ONLY the commit message text (no markdown, no code blocks, no explanation).\n\nFormat:\n<type>[optional scope]: <description>\n\n<optional body with more details>\n\nRules:\n- Keep the first line (title) under 50 characters if possible\n- Include a blank line between title and body\n- In the body, explain what changed and why (not how)\n- Focus on the motivation and context for the change\n\nStaged changes:\n$DIFF\"; \
+        MSG=$(echo \"$PROMPT\" | $CLAUDE_CMD --print 2>/dev/null | sed 's/^```.*//g' | sed 's/^```$//g'); \
+        if [ -n \"$MSG\" ]; then \
+            git commit -v -e -m \"$MSG\"; \
+        else \
+            echo 'Failed to generate commit message'; \
+            exit 1; \
+        fi; \
+    }; f"
 [init]
 	templatedir = ~/.git-templates
 [github]
