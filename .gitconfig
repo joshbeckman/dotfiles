@@ -78,11 +78,19 @@
 	enabled = true
 [gitlab]
 	url = https://gitlab.com
+[difftool]
+        prompt = true
+[diff]
+        tool = nvimdiff
+[difftool "nvimdiff"]
+        cmd = "nvim -d \"$LOCAL\" \"$REMOTE\""
 [merge]
-	tool = vimdiff
+	tool = nvimdiff
 [commit]
         template = ~/.git-templates/.gitmessage
         verbose = true
+[gpg]
+	program = /opt/homebrew/bin/gpg
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
