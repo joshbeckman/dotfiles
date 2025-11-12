@@ -163,36 +163,38 @@ let g:ale_fixers = {}
 let g:ale_fixers['javascript'] = ['prettier']
 let g:ale_fixers['ruby'] = ['rubocop']
 
-" hi clear StatusLine
-" hi clear StatusLineNC
-" hi clear SignColumn
-" hi LineNr ctermfg=grey
-" hi StatusLine   term=bold cterm=bold ctermfg=White
-" hi StatusLineNC term=bold cterm=bold ctermfg=White
+hi clear StatusLine
+hi clear StatusLineNC
+hi clear SignColumn
+hi LineNr ctermfg=grey
+hi StatusLine   term=bold cterm=bold ctermfg=White
+hi StatusLineNC term=bold cterm=bold ctermfg=White
 " hi User1                      ctermfg=4          guifg=#40ffff            " Identifier
 " hi User2                      ctermfg=2 gui=bold guifg=#ffff60            " Statement
 " hi User3 term=bold cterm=bold ctermfg=1          guifg=White   guibg=Red  " Error
 " hi User4                      ctermfg=1          guifg=Orange             " Special
 " hi User5                      ctermfg=10         guifg=#80a0ff            " Comment
 " hi User6 term=bold cterm=bold ctermfg=1          guifg=Red                " WarningMsg
-" set laststatus=2                                " always show statusline"
-" set statusline=
-" set statusline+=%6*%m%r%*                          " modified, readonly
-" set statusline+=\ 
-" set statusline+=%7*%{expand('%:h')}/               " relative path to file's directory
-" set statusline+=%5*%t%*                            " file name
-" set statusline+=\ 
-" set statusline+=\ 
-" set statusline+=%<                                 " truncate here if needed
-" set statusline+=%5*%L\ lines%*                     " number of lines
-" 
-" set statusline+=%=                                 " switch to RHS
-" 
-" set statusline+=%5*line:%-4.l%*                         " line
-" set statusline+=%5*col:%-3.c%*                          " column
-" set statusline+=\ 
-" set statusline+=\ 
-" set statusline+=%1*buf:%-3n%*                      " buffer number
+set laststatus=2                                " always show statusline"
+set statusline=
+set statusline+=%6*%m%r%*                          " modified, readonly
+set statusline+=\ 
+set statusline+=%7*%{expand('%:h')}/               " relative path to file's directory
+set statusline+=%5*%t%*                            " file name
+set statusline+=\ 
+set statusline+=\ 
+set statusline+=%<                                 " truncate here if needed
+set statusline+=%5*%L\ lines%*                     " number of lines
+
+set statusline+=%=                                 " switch to RHS
+
+set statusline+=%5*line:%-4.l%*                         " line
+set statusline+=%5*col:%-3.c%*                          " column
+set statusline+=\ 
+set statusline+=\ 
+set statusline+=%1*buf:%-3n%*                      " buffer number
+" show wordcount on markdown files
+autocmd FileType markdown setlocal statusline+=%5*words:%{wordcount().words}%*
 
 function! RubocopAutocorrect()
   execute "!bundle exec rubocop -a " . bufname("%")
