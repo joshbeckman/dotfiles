@@ -405,3 +405,4 @@ if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/jo
 # (useful for remote shell logins with this setup)
 # if [ "$TMUX" = ""  ]; then tmux new -As0; fi
 daily_proverb
+export GPG_TTY=$(tty)
