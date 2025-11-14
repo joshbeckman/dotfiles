@@ -10,6 +10,7 @@ brew "ctags"
 brew "fzf"
 brew "gh"
 brew "git"
+brew "git-delta"
 brew "neovim"
 brew "perl"
 brew "pinentry-mac" if OS.mac?
