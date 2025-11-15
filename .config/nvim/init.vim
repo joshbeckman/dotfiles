@@ -178,8 +178,7 @@ hi StatusLineNC term=bold cterm=bold ctermfg=White
 set laststatus=2                                " always show statusline"
 set statusline=
 set statusline+=%6*%m%r%*                          " modified, readonly
-set statusline+=\ 
-set statusline+=%7*%{expand('%:h')}/               " relative path to file's directory
+set statusline+=%7*%.20{expand('%:h')}/            " relative path to file's directory (max 50% width)
 set statusline+=%5*%t%*                            " file name
 set statusline+=\ 
 set statusline+=\ 

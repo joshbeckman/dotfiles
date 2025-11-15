@@ -3,6 +3,9 @@
 	email = josh@joshbeckman.org
 [core]
 	editor = nvim
+        pager = delta
+[interactive]
+    diffFilter = delta --color-only
 [alias]
     ada = add -A
     add = add -v
@@ -80,15 +83,15 @@
 	url = https://gitlab.com
 [difftool]
         prompt = true
-[diff]
-        tool = nvimdiff
-[difftool "nvimdiff"]
-        cmd = "nvim -d \"$LOCAL\" \"$REMOTE\""
 [merge]
-	tool = nvimdiff
+        conflictStyle = zdiff3
 [commit]
         template = ~/.git-templates/.gitmessage
         verbose = true
+[delta]
+    line-numbers = true
+    decorations = true
+    context = 3
 [gpg]
 	program = /opt/homebrew/bin/gpg
 [filter "lfs"]
