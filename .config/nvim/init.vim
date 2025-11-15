@@ -220,6 +220,8 @@ au BufRead,BufNewFile *.handler set filetype=javascript
 autocmd BufRead,BufNewFile *.md setlocal spell
 autocmd BufRead,BufNewFile *.txt setlocal spell
 autocmd FileType gitcommit setlocal spell
+autocmd FileType markdown let b:copilot_enabled = 0
+autocmd FileType text let b:copilot_enabled = 0
 " markdown helpers
 nnoremap <Leader>3 "xciw[<C-r>x]()<Esc>
 vnoremap <Leader>3 "xc[<C-r>x]()<Esc>
