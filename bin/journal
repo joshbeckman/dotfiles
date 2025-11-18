@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+JOURNAL_FILE="JOURNAL.md"
+CURRENT_DATE=$(date +"%B-%d")
+CURRENT_YEAR=$(date +"%Y")
+
+if [[ ! -f "$JOURNAL_FILE" ]]; then
+    {
+        echo "# Journal"
+        echo ""
+
+        for month in {1..12}; do
+            days_in_month=$(cal $month $CURRENT_YEAR | awk 'NF {DAYS = $NF} END {print DAYS}')
+
+            for day in $(seq 1 $days_in_month); do
+                month_padded=$(printf "%02d" $month)
+                day_padded=$(printf "%02d" $day)
+                day_date=$(date -j -f "%Y-%m-%d" "${CURRENT_YEAR}-${month_padded}-${day_padded}" "+%B-%d" 2>/dev/null)
+
+                echo "## $day_date"
+                echo ""
+            done
+        done
+    } > "$JOURNAL_FILE"
+fi
+
+if ! awk -v date="$CURRENT_DATE" -v year="$CURRENT_YEAR" '
+    /^## / { in_day = 0 }
+    $0 ~ "^## " date "$" { in_day = 1 }
+    in_day && /^### / && $2 == year { found = 1; exit }
+    END { exit !found }
+' "$JOURNAL_FILE"; then
+    awk -v date="$CURRENT_DATE" -v year="$CURRENT_YEAR" '
+        /^## / {
+            if (in_day && !year_added) {
+                print ""
+            }
+            in_day = 0
+            year_added = 0
+        }
+        $0 ~ "^## " date "$" {
+            in_day = 1
+            print
+            print ""
+            print "### " year
+            year_added = 1
+            next
+        }
+        { print }
+    ' "$JOURNAL_FILE" > "${JOURNAL_FILE}.tmp"
+    mv "${JOURNAL_FILE}.tmp" "$JOURNAL_FILE"
+fi
+
+LINE_NUM=$(awk -v date="$CURRENT_DATE" -v year="$CURRENT_YEAR" '
+    /^## / { in_day = 0 }
+    $0 ~ "^## " date "$" { in_day = 1 }
+    in_day && /^### / && $2 == year { print NR; exit }
+' "$JOURNAL_FILE")
+
+if [[ -z "$LINE_NUM" ]]; then
+    LINE_NUM=$(grep -n "^## $CURRENT_DATE$" "$JOURNAL_FILE" | cut -d: -f1)
+fi
+
+if [[ -n "$LINE_NUM" ]]; then
+    nvim "+${LINE_NUM}" "$JOURNAL_FILE"
+else
+    nvim "$JOURNAL_FILE"
+fi
