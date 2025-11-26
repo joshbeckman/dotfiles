@@ -29,9 +29,9 @@ nnoremap <Leader>h :sf
 nnoremap <Leader>f :tabnew<CR>:Files<CR>
 nnoremap <Leader>F :tabnew<CR>:FindSimilarFiles<CR>
 nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
-vnoremap <Leader>g y:grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R>"' ./<CR><CR>:cw<CR>
+vnoremap <Leader>g y:grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R>=escape(@",'[]().*^$\\')<CR>' ./<CR><CR>:cw<CR>
 nnoremap <Leader>G :let @z=expand('<cword>')<CR>:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include='*.<C-R>x' '<C-R>z' ./<CR><CR>:cw<CR>
-vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include='*.<C-R>x' '<C-R>"' ./<CR><CR>:cw<CR>
+vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include='*.<C-R>x' '<C-R>=escape(@",'[]().*^$\\')<CR>' ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>s :Buffers<CR>
