@@ -159,7 +159,31 @@ setopt interactive_comments
 # export PS1='$(fancy_dir) $(git_branch) $(git_dot)$(seasonal_chevrons) '
 export PS1='$(fancy_user) $(fancy_dir) $(seasonal_chevrons) '
 . ~/.zsh/git-prompt.sh
-export RPROMPT=$'$(__git_ps1 "%s")'
+
+# Async git prompt (pattern from https://vault.shopify.io/posts/336282)
+# Runs __git_ps1 in background so prompt never blocks on slow git operations
+ASYNC_GIT_STATUS=""
+ASYNC_GIT_TMP="${TMPDIR:-/tmp}/zsh_git_$$"
+
+_async_git_worker() {
+  __git_ps1 "%s" > "$ASYNC_GIT_TMP"
+  kill -USR1 $$ 2>/dev/null
+}
+
+TRAPUSR1() {
+  ASYNC_GIT_STATUS=$(<"$ASYNC_GIT_TMP")
+  zle && zle reset-prompt
+}
+
+_async_git_precmd() {
+  ASYNC_GIT_STATUS="..."
+  _async_git_worker &!
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _async_git_precmd
+
+export RPROMPT='${ASYNC_GIT_STATUS}'
 
 # Enable history search, ctrl-e, ctrl-a, etc.
 bindkey -e
