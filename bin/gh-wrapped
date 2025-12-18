@@ -118,7 +118,7 @@ if [[ -z "$CONTRIB_DATA" ]] || echo "$CONTRIB_DATA" | jq -e '.errors' >/dev/null
     exit 1
 fi
 
-# Get stars/followers data
+# Get stars/followers data and repos created this year
 STAR_DATA=$(gh api graphql -f query='
 query($username: String!) {
   user(login: $username) {
@@ -128,6 +128,15 @@ query($username: String!) {
         stargazerCount
       }
       totalCount
+    }
+    allRepos: repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        nameWithOwner
+        createdAt
+        isPrivate
+        primaryLanguage { name }
+        description
+      }
     }
     followers {
       totalCount
@@ -317,6 +326,27 @@ echo "$CONTRIB_DATA" | jq -r '
   .[:10][] |
   "| [\(.repository.nameWithOwner)](https://github.com/\(.repository.nameWithOwner)) | \(.contributions.totalCount) |"
 '
+
+# Get repos created this year
+REPOS_CREATED=$(echo "$STAR_DATA" | jq -r --arg start "$YEAR-01-01" --arg end "$YEAR-12-31" '
+  [.data.user.allRepos.nodes[] | select(.createdAt >= $start and .createdAt <= ($end + "T23:59:59Z"))]
+')
+REPOS_CREATED_COUNT=$(echo "$REPOS_CREATED" | jq 'length')
+
+if [[ "$REPOS_CREATED_COUNT" -gt 0 ]]; then
+cat << EOF
+
+## Repositories Created in $YEAR
+
+| Repository | Language | Description |
+|------------|----------|-------------|
+EOF
+
+echo "$REPOS_CREATED" | jq -r '
+  .[] |
+  "| [\(.nameWithOwner)](https://github.com/\(.nameWithOwner))\(if .isPrivate then " 🔒" else "" end) | \(.primaryLanguage.name // "-") | \(.description // "-" | .[0:50]) |"
+'
+fi
 
 cat << EOF
 
