@@ -147,6 +147,27 @@ query($username: String!) {
   }
 }' -f username="$USERNAME" 2>/dev/null)
 
+# Get gists created this year (REST API)
+GISTS_DATA=$(gh api "users/$USERNAME/gists" --paginate 2>/dev/null | jq --arg start "$YEAR-01-01" --arg end "$YEAR-12-31T23:59:59Z" '
+  [.[] | select(.created_at >= $start and .created_at <= $end)]
+')
+GISTS_COUNT=$(echo "$GISTS_DATA" | jq 'length')
+GISTS_PUBLIC=$(echo "$GISTS_DATA" | jq '[.[] | select(.public == true)] | length')
+GISTS_PRIVATE=$((GISTS_COUNT - GISTS_PUBLIC))
+
+# Get sponsors data (only works for authenticated user querying themselves)
+CURRENT_USER=$(gh api user --jq .login 2>/dev/null)
+if [[ "$USERNAME" == "$CURRENT_USER" ]]; then
+    SPONSORS_DATA=$(gh api graphql -f query='{ viewer { sponsoring(first: 50) { totalCount nodes { ... on User { login name } ... on Organization { login name } } } hasSponsorsListing sponsors { totalCount } } }' 2>/dev/null)
+    SPONSORING_COUNT=$(echo "$SPONSORS_DATA" | jq '.data.viewer.sponsoring.totalCount')
+    SPONSORS_COUNT=$(echo "$SPONSORS_DATA" | jq '.data.viewer.sponsors.totalCount')
+    HAS_SPONSORS_LISTING=$(echo "$SPONSORS_DATA" | jq -r '.data.viewer.hasSponsorsListing')
+else
+    SPONSORING_COUNT="N/A"
+    SPONSORS_COUNT="N/A"
+    HAS_SPONSORS_LISTING="false"
+fi
+
 # Extract all stats
 TOTAL_CONTRIBUTIONS=$(echo "$CONTRIB_DATA" | jq '.data.user.contributionsCollection.contributionCalendar.totalContributions')
 TOTAL_COMMITS=$(echo "$CONTRIB_DATA" | jq '.data.user.contributionsCollection.totalCommitContributions')
@@ -222,9 +243,7 @@ PEAK_COUNT=$(echo "$PEAK_INFO" | cut -d'|' -f2)
 
 # Output markdown
 cat << EOF
-# GitHub Wrapped $YEAR
-
-**[@$USERNAME](https://github.com/$USERNAME)**
+# GitHub Wrapped $YEAR for [@$USERNAME](https://github.com/$USERNAME)
 
 ## Contribution Summary
 
@@ -346,6 +365,49 @@ echo "$REPOS_CREATED" | jq -r '
   .[] |
   "| [\(.nameWithOwner)](https://github.com/\(.nameWithOwner))\(if .isPrivate then " 🔒" else "" end) | \(.primaryLanguage.name // "-") | \(.description // "-" | .[0:50]) |"
 '
+fi
+
+# Gists section
+if [[ "$GISTS_COUNT" -gt 0 ]]; then
+cat << EOF
+
+## Gists Created in $YEAR
+
+| Gist | Visibility | Files |
+|------|------------|-------|
+EOF
+
+echo "$GISTS_DATA" | jq -r '
+  .[] |
+  if .public then
+    (if (.description // "") == "" then ([.files | keys[]][0] // .id) else .description end) as $title |
+    "| [\($title | .[0:40])](https://gist.github.com/\(.id)) | Public | \([.files | keys[]] | join(", ") | .[0:30]) |"
+  else
+    ([.files | keys[] | split(".") | last] | unique | join(", ")) as $exts |
+    "| Private gist | 🔒 | \($exts) |"
+  end
+'
+
+echo ""
+echo "**Total:** $GISTS_COUNT gists ($GISTS_PUBLIC public, $GISTS_PRIVATE private)"
+fi
+
+# Sponsors section (only for self)
+if [[ "$USERNAME" == "$CURRENT_USER" && ("$SPONSORING_COUNT" != "0" || "$SPONSORS_COUNT" != "0" || "$HAS_SPONSORS_LISTING" == "true") ]]; then
+cat << EOF
+
+## GitHub Sponsors
+
+| Metric | Count |
+|--------|-------|
+| Sponsoring | $SPONSORING_COUNT |
+| Sponsors | $SPONSORS_COUNT |
+EOF
+
+if [[ "$SPONSORING_COUNT" -gt 0 ]]; then
+echo ""
+echo "**Supporting:** $(echo "$SPONSORS_DATA" | jq -r '[.data.viewer.sponsoring.nodes[].login] | map("[@\(.)](https://github.com/\(.))") | join(", ")')"
+fi
 fi
 
 cat << EOF
