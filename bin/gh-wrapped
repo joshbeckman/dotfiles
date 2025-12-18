@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# github-wrapped - Generate GitHub year-in-review stats as markdown
+# gh-wrapped - Generate GitHub year-in-review stats as markdown
 #
-# Usage: github-wrapped [year] [username]
+# Usage: gh-wrapped [year] [username]
 #   year     - The year to generate stats for (default: current year)
 #   username - GitHub username (default: from git config)
 #
@@ -12,11 +12,11 @@ set -euo pipefail
 
 show_help() {
     cat << 'EOF'
-github-wrapped - Generate GitHub year-in-review stats as markdown
+gh-wrapped - Generate GitHub year-in-review stats as markdown
 
 USAGE:
-    github-wrapped [year] [username]
-    github-wrapped --help
+    gh-wrapped [year] [username]
+    gh-wrapped --help
 
 ARGUMENTS:
     year        The year to generate stats for (default: current year)
@@ -36,17 +36,17 @@ DATA SOURCE:
     - Reviewing pull requests
     - Creating repositories
 
-    IMPORTANT: By default, only PUBLIC repository contributions are included
-    in the detailed breakdowns (languages, repositories). Private contribution
-    counts are shown separately but without details.
+    IMPORTANT: Total contribution counts include BOTH public and private repos.
+    The detailed breakdowns (languages, repositories) only show public repos -
+    GitHub's API doesn't expose private repo details for privacy reasons.
 
     For more info: https://docs.github.com/en/account-and-profile/setting-up-and-managing-your-github-profile/managing-contribution-settings-on-your-profile
 
 EXAMPLES:
-    github-wrapped                  # Current year, your username
-    github-wrapped 2024             # Specific year
-    github-wrapped 2024 octocat     # Specific year and user
-    github-wrapped 2025 | preview-md  # Preview as rendered markdown
+    gh-wrapped                  # Current year, your username
+    gh-wrapped 2024             # Specific year
+    gh-wrapped 2024 octocat     # Specific year and user
+    gh-wrapped 2025 | preview-md  # Preview as rendered markdown
 
 OUTPUT:
     Markdown-formatted stats including:
@@ -67,7 +67,7 @@ USERNAME="${2:-$(gh api user --jq .login 2>/dev/null || git config github.user)}
 
 if [[ -z "$USERNAME" ]]; then
     echo "Error: Could not determine GitHub username" >&2
-    echo "Usage: github-wrapped [year] [username]" >&2
+    echo "Usage: gh-wrapped [year] [username]" >&2
     exit 1
 fi
 
@@ -147,6 +147,16 @@ TOTAL_REVIEWS=$(echo "$CONTRIB_DATA" | jq '.data.user.contributionsCollection.to
 TOTAL_NEW_REPOS=$(echo "$CONTRIB_DATA" | jq '.data.user.contributionsCollection.totalRepositoryContributions')
 PRIVATE_CONTRIBS=$(echo "$CONTRIB_DATA" | jq '.data.user.contributionsCollection.restrictedContributionsCount')
 
+# Calculate public vs private breakdown
+PUBLIC_CONTRIBS=$((TOTAL_CONTRIBUTIONS - PRIVATE_CONTRIBS))
+if [[ "$TOTAL_CONTRIBUTIONS" -gt 0 ]]; then
+    PRIVATE_PCT=$(echo "scale=1; $PRIVATE_CONTRIBS * 100 / $TOTAL_CONTRIBUTIONS" | bc)
+    PUBLIC_PCT=$(echo "scale=1; $PUBLIC_CONTRIBS * 100 / $TOTAL_CONTRIBUTIONS" | bc)
+else
+    PRIVATE_PCT="0"
+    PUBLIC_PCT="0"
+fi
+
 TOTAL_STARS=$(echo "$STAR_DATA" | jq '[.data.user.repositories.nodes[].stargazerCount] | add // 0')
 FOLLOWERS=$(echo "$STAR_DATA" | jq '.data.user.followers.totalCount')
 FOLLOWING=$(echo "$STAR_DATA" | jq '.data.user.following.totalCount')
@@ -211,17 +221,15 @@ cat << EOF
 
 | Metric | Count |
 |--------|-------|
-| Total contributions | **$TOTAL_CONTRIBUTIONS** |
+| **Total contributions** | **$TOTAL_CONTRIBUTIONS** |
+| ↳ Public | $PUBLIC_CONTRIBS ($PUBLIC_PCT%) |
+| ↳ Private | $PRIVATE_CONTRIBS ($PRIVATE_PCT%) |
 | Commits | $TOTAL_COMMITS |
 | Pull requests | $TOTAL_PRS |
 | PR reviews | $TOTAL_REVIEWS |
 | Issues opened | $TOTAL_ISSUES |
 | New repositories | $TOTAL_NEW_REPOS |
 EOF
-
-if [[ "$PRIVATE_CONTRIBS" != "0" ]]; then
-    echo "| Private contributions | +$PRIVATE_CONTRIBS |"
-fi
 
 cat << EOF
 
@@ -278,7 +286,7 @@ done
 cat << EOF
 \`\`\`
 
-## Top Languages (by commits)
+## Top Languages (by commits to public repos)
 
 | Language | Commits |
 |----------|---------|
@@ -297,7 +305,7 @@ echo "$CONTRIB_DATA" | jq -r '
 
 cat << EOF
 
-## Top Repositories (by commits)
+## Top Repositories (by commits to public repos)
 
 | Repository | Commits |
 |------------|---------|
@@ -323,5 +331,5 @@ cat << EOF
 
 ---
 
-*Generated with [github-wrapped](https://github.com/$USERNAME/dotfiles/blob/master/bin/github-wrapped)*
+*Generated with [gh-wrapped](https://github.com/$USERNAME/dotfiles/blob/master/bin/gh-wrapped)*
 EOF
