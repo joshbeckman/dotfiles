@@ -7,9 +7,14 @@ imap kj <Esc>
 let mapleader = "\<Space>"
 
 """""""    themes and schemes
-set background=light
+if system('defaults read -g AppleInterfaceStyle 2>/dev/null') =~? 'dark'
+    set background=dark
+    let $BAT_THEME = 'gruvbox-dark'
+else
+    set background=light
+    let $BAT_THEME = 'gruvbox-light'
+endif
 colorscheme solarized
-let $BAT_THEME = 'gruvbox-light'
 
 " Use tab and shift-tab to cycle through tabs
 nnoremap <Tab> :tabn<CR>
