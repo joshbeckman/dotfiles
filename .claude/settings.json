@@ -39,7 +39,10 @@
       }
     ]
   },
-  "alwaysThinkingEnabled": false,
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  },
   "feedbackSurveyState": {
     "lastShownTime": 1754147115362
   }
