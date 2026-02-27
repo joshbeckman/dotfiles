@@ -19,11 +19,21 @@ MODEL=$(echo "$input" | jq -r '.model.display_name // "claude"')
 CONTEXT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d'.' -f1)
 COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 
-# Get git branch if in repo
+# Get git branch and dirty state if in repo
 GIT_BRANCH=""
+GIT_DIRTY=""
 if git rev-parse --git-dir > /dev/null 2>&1; then
     BRANCH=$(git branch --show-current 2>/dev/null)
-    [ -n "$BRANCH" ] && GIT_BRANCH=" ${GREEN} ${BRANCH}${RESET}"
+    [ -n "$BRANCH" ] && GIT_BRANCH=" ${GREEN} ${BRANCH}${RESET}"
+    STAT=$(git diff --shortstat 2>/dev/null)
+    if [ -n "$STAT" ]; then
+        ADDS=$(echo "$STAT" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
+        DELS=$(echo "$STAT" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+')
+        DIRTY=""
+        [ -n "$ADDS" ] && DIRTY="+${ADDS}"
+        [ -n "$DELS" ] && DIRTY="${DIRTY}-${DELS}"
+        [ -n "$DIRTY" ] && GIT_DIRTY=" ${PEACH}${DIRTY}${RESET}"
+    fi
 fi
 
 # Format cost to 2 decimal places, only show if > $0.00
@@ -43,4 +53,4 @@ else
 fi
 
 # Build the status line
-echo -e "${MAUVE} ${MODEL}${RESET}${GIT_BRANCH} ${CTX_COLOR}󰮉 ${CONTEXT}%${RESET}${COST_DISPLAY}\n"
+echo -e "${MAUVE} ${MODEL}${RESET}${GIT_BRANCH}${GIT_DIRTY} ${CTX_COLOR}󰮉 ${CONTEXT}%${RESET}${COST_DISPLAY}\n"
