@@ -166,7 +166,22 @@ ASYNC_GIT_STATUS=""
 ASYNC_GIT_TMP="${TMPDIR:-/tmp}/zsh_git_$$"
 
 _async_git_worker() {
-  __git_ps1 "%s" > "$ASYNC_GIT_TMP"
+  # __git_ps1 reads .git/HEAD directly, which in Shopify worktrees
+  # contains a synthetic `.invalid` ref rather than the real branch.
+  # git rev-parse goes through proper ref resolution and returns the
+  # actual branch name.
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -n "$branch" ]; then
+    local sparse=""
+    if [ -z "${GIT_PS1_OMITSPARSESTATE-}" ] &&
+       [ "$(git config --bool core.sparseCheckout)" = "true" ]; then
+      sparse="|SPARSE"
+    fi
+    echo -n "${branch}${sparse}" > "$ASYNC_GIT_TMP"
+  else
+    echo -n "" > "$ASYNC_GIT_TMP"
+  fi
   kill -USR1 $$ 2>/dev/null
 }
 
