@@ -73,6 +73,8 @@ This section outlines the exact process for interacting with GitHub, creating PR
 > [!NOTE]
 > You MUST use `gh view-md` to view GitHub issues and pull-requests
 
+When creating pull requests, ALWAYS assign me (the user) as the assignee using `--assignee @me`.
+
 ### Referencing Issues and Pull Requests
 
 When commenting/writing/anything that references an issue or pull request, you MUST use the following full-clarity markkdown format:
