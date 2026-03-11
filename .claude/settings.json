@@ -1,7 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "apiKeyHelper": "/opt/dev/bin/user/devx llm-gateway print-token --key",
   "cleanupPeriodDays": 60,
   "env": {
+    "ANTHROPIC_BASE_URL": "https://proxy.shopify.ai/vendors/anthropic-claude-code",
     "MAX_MCP_OUTPUT_TOKENS": "35000",
     "EDITOR": "nvim",
     "GIT_EDITOR": "nvim"
@@ -26,14 +28,56 @@
       "/tmp"
     ]
   },
+  "model": "opus[1m]",
   "hooks": {
     "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(basename \"$CWD\"):$(echo \"$CWD\" | md5 -q | cut -c1-4)\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIR): Permission Needed\" -sound Ping -group \"$CWD:permission\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(basename \"$CWD\"):$(echo \"$CWD\" | md5 -q | cut -c1-4)\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIR): Question\" -sound Ping -group \"$CWD:question\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+          }
+        ]
+      },
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(basename \"$CWD\"):$(echo \"$CWD\" | md5 -q | cut -c1-4)\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIR): Waiting\" -group \"$CWD:idle\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+          }
+        ]
+      }
+    ],
+    "Stop": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.message' | xargs -I {} terminal-notifier -message \"{}\" -title \"Claude Hook\" -group \"$(pwd):hook\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(basename \"$CWD\"):$(echo \"$CWD\" | md5 -q | cut -c1-4)\"; PREVIEW=$(echo \"$INPUT\" | jq -r '.last_assistant_message // \"Response complete\"' | tr '\\n' ' ' | cut -c1-80); terminal-notifier -message \"$PREVIEW\" -title \"Claude ($DIR): Done\" -group \"$CWD:stop\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/skills-update.mjs",
+            "timeout": 10000
           }
         ]
       }

@@ -10,12 +10,6 @@ I make things. Not too much. Mostly for others.
 
 ## General Guidelines for Claude Code
 
-After making a set of changes to files or satisfying a task, you MUST display a `terminal-notifier` notification to tell me what's been done. Use a title and a brief descriptive message. Here's an example:
-
-```bash
-terminal-notifier -message "I've finished refactoring the FooBar class into smaller methods" -title "Claude Code" -group $PWD -execute "/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE" -activate com.github.wez.wezterm
-```
-
 ### Comments in Code
 
 **Code Comment Guidelines**: Write comments that explain **why the code isn't written another way** rather than what it does. Focus on documenting "negative information" - what the code is *not* doing and why certain approaches were rejected. Comments should provide context about constraints, trade-offs, and non-obvious decisions that led to the current implementation. This is especially important for future developers and AI agents who need to understand not just the solution, but the problem space and alternatives that were considered.
