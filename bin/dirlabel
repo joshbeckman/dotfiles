@@ -1,0 +1,3 @@
+#!/bin/sh
+dir="${1:-$PWD}"
+echo "$(basename "$dir"):$(echo "$dir" | md5 -q | cut -c1-4)"

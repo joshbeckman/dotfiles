@@ -401,7 +401,9 @@ function tnw () {
 }
 # easy handles to work with wezterm
 function wtrename () {
-    wezterm cli set-tab-title $1
+    local default_name="${SPIN_FQDN:-$(dirlabel)}"
+    local name=${1-$default_name}
+    wezterm cli set-tab-title $name
 }
 function wwrename () {
     wezterm cli rename-workspace $1
