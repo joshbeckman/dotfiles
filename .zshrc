@@ -401,7 +401,7 @@ function tnw () {
 }
 # easy handles to work with wezterm
 function wtrename () {
-    local default_name="${SPIN_FQDN:-$(dirlabel)}"
+    local default_name="${SPIN_FQDN:-$(dirlabel-bip39)}"
     local name=${1-$default_name}
     wezterm cli set-tab-title $name
 }

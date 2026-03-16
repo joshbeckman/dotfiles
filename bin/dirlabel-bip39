@@ -1,0 +1,11 @@
+#!/bin/sh
+dir="${1:-$PWD}"
+hash=$(echo "$dir" | md5 -q)
+hex1=$(echo "$hash" | cut -c1-4)
+hex2=$(echo "$hash" | cut -c5-8)
+idx1=$(( 0x$hex1 % 2048 + 1 ))
+idx2=$(( 0x$hex2 % 2048 + 1 ))
+wordlist="$(dirname "$0")/../share/bip39-english.txt"
+w1=$(sed -n "${idx1}p" "$wordlist")
+w2=$(sed -n "${idx2}p" "$wordlist")
+echo "$(basename "$dir"):${w1}-${w2}"
