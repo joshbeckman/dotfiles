@@ -1,0 +1,121 @@
+#!/bin/bash
+
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    echo "preview-diff - Preview diffs as styled HTML in your browser"
+    echo ""
+    echo "Usage: preview-diff [FILE]"
+    echo "       preview-diff \"STRING\""
+    echo "       git diff | preview-diff"
+    echo "       preview-diff < changes.patch"
+    echo ""
+    echo "Reads unified diff from stdin, a file, or a string argument and opens it"
+    echo "as a styled HTML page in your browser with GitHub-style diff rendering."
+    exit 0
+fi
+
+timestamp=$(date +%Y%m%d_%H%M%S)
+tmpfile="/tmp/preview-diff-${timestamp}-$$.html"
+
+trap "sleep 5; rm -f '$tmpfile'" EXIT
+
+if [[ $# -eq 1 ]]; then
+    if [[ -f "$1" ]]; then
+        diff_input=$(cat "$1")
+    else
+        diff_input="$1"
+    fi
+else
+    diff_input=$(cat)
+fi
+
+if [[ -z "$diff_input" ]]; then
+    echo "Error: no diff input provided." >&2
+    exit 1
+fi
+
+# Convert diff text to HTML-escaped, styled lines
+diff_html=$(echo "$diff_input" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' | awk '
+{
+    line = $0
+    if (line ~ /^diff --git/) {
+        printf "<tr class=\"file-header\"><td></td><td>%s</td></tr>\n", line
+    } else if (line ~ /^index /) {
+        printf "<tr class=\"meta\"><td></td><td>%s</td></tr>\n", line
+    } else if (line ~ /^---/) {
+        printf "<tr class=\"meta old-file\"><td></td><td>%s</td></tr>\n", line
+    } else if (line ~ /^\+\+\+/) {
+        printf "<tr class=\"meta new-file\"><td></td><td>%s</td></tr>\n", line
+    } else if (line ~ /^@@/) {
+        printf "<tr class=\"hunk-header\"><td></td><td>%s</td></tr>\n", line
+    } else if (line ~ /^\+/) {
+        printf "<tr class=\"addition\"><td class=\"marker\">+</td><td>%s</td></tr>\n", substr(line, 2)
+    } else if (line ~ /^-/) {
+        printf "<tr class=\"deletion\"><td class=\"marker\">-</td><td>%s</td></tr>\n", substr(line, 2)
+    } else if (line ~ /^\\ No newline/) {
+        printf "<tr class=\"no-newline\"><td></td><td>%s</td></tr>\n", line
+    } else {
+        printf "<tr class=\"context\"><td class=\"marker\"> </td><td>%s</td></tr>\n", (length(line) > 0 ? substr(line, 2) : "")
+    }
+}')
+
+cat > "$tmpfile" <<HTMLEOF
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Diff Preview</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "IBM Plex Sans", sans-serif;
+    background: #f6f8fa;
+    padding: 2rem;
+    color: #1f2328;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    line-height: 20px;
+    background: #fff;
+    border: 1px solid #d1d9e0;
+    border-radius: 6px;
+    overflow: hidden;
+    table-layout: auto;
+  }
+  td { padding: 0 10px; white-space: pre-wrap; word-wrap: break-word; }
+  td.marker { width: 1ch; text-align: center; user-select: none; color: #636c76; padding: 0 4px; }
+  .file-header td {
+    background: #ddf4ff;
+    color: #0550ae;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-bottom: 1px solid #d1d9e0;
+    border-top: 1px solid #d1d9e0;
+  }
+  .meta td { background: #f6f8fa; color: #636c76; }
+  .hunk-header td {
+    background: #ddf4ff;
+    color: #0550ae;
+    padding: 4px 10px;
+    border-top: 1px solid #d1d9e0;
+  }
+  .addition { background: #dafbe1; }
+  .addition td.marker { color: #1a7f37; }
+  .deletion { background: #ffebe9; }
+  .deletion td.marker { color: #cf222e; }
+  .context { background: #fff; }
+  .no-newline td { background: #f6f8fa; color: #636c76; font-style: italic; }
+</style>
+</head>
+<body>
+<table>
+${diff_html}
+</table>
+</body>
+</html>
+HTMLEOF
+
+open "$tmpfile"
