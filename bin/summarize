@@ -7,10 +7,8 @@
 set -euo pipefail
 
 CLAUDE_CMD='claude'
-if command -v devx >/dev/null 2>&1 && devx claude -- --version >/dev/null 2>&1; then
-    CLAUDE_CMD='devx claude --'
-elif ! command -v claude >/dev/null 2>&1; then
-    echo 'Neither claude nor devx claude command found' >&2
+if ! command -v claude >/dev/null 2>&1; then
+    echo 'claude command not found' >&2
     exit 1
 fi
 
