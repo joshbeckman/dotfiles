@@ -371,47 +371,6 @@ alias l='gls -lAF --color --group-directories-first'
 #   kitty @ set-window-title $@
 # }
 
-function ef () {
-    if [ $# -gt 0 ]; then
-        echo "Usage: ef"
-        return 1
-    fi
-    nvim "$(fzf)"
-}
-
-# search files and open in vim as quickfix
-function rgv () {
-    nvim -q <(rg --vimgrep $@) -c :cwindow
-}
-
-# easy handles to rename tmux things
-function twindow_rename () {
-    tmux rename-window $1
-}
-function tsession_rename () {
-    tmux rename-session $1
-}
-function tpane_rename () {
-    tmux select-pane -T $1
-}
-function tnw () {
-    local path_name="$(basename "$PWD" | tr . -)"
-    local name=${1-$path_name}
-    tmux new-window -n $name
-}
-# easy handles to work with wezterm
-function wtrename () {
-    local default_name="${SPIN_FQDN:-$(dirlabel-bip39)}"
-    local name=${1-$default_name}
-    wezterm cli set-tab-title $name
-}
-function wwrename () {
-    wezterm cli rename-workspace $1
-}
-
-function daily_proverb () {
-    curl https://www.joshbeckman.org/humans.txt --silent | head -n 1
-}
 
 # Load Git completion
 zstyle ':completion:*:*:git:*' script ~/.zsh/git-completion.bash
@@ -445,5 +404,14 @@ if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/jo
 # attach to an existing tmux session if any exists
 # (useful for remote shell logins with this setup)
 # if [ "$TMUX" = ""  ]; then tmux new -As0; fi
-daily_proverb
+proverb
 export GPG_TTY=$(tty)
+
+alias python=/usr/bin/python3
+export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
+source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# Created by `pipx` on 2024-05-29 17:50:16
+export PATH="$PATH:/Users/joshbeckman/.local/bin"
+# support for deno
+export PATH="/Users/joshbeckman/.deno/bin:$PATH"
