@@ -1,0 +1,122 @@
+#!/bin/bash
+
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    echo "preview-patch - Preview a git patch/diff as HTML in your browser"
+    echo ""
+    echo "Usage: preview-patch [COMMIT]"
+    echo "       git diff | preview-patch"
+    echo "       git show HEAD | preview-patch"
+    echo ""
+    echo "With a commit argument, runs 'git show' on it."
+    echo "Without arguments, reads a unified diff from stdin."
+    exit 0
+fi
+
+timestamp=$(date +%Y%m%d_%H%M%S)
+tmpfile="/tmp/preview-patch-${timestamp}-$$.html"
+
+trap "sleep 5; rm -f '$tmpfile'" EXIT
+
+remote_url=$(git remote get-url origin 2>/dev/null | sed -E 's/\.git$//; s#git@([^:]+):#https://\1/#')
+
+if [[ $# -ge 1 ]]; then
+    diff_input=$(git show "$@")
+else
+    diff_input=$(cat)
+fi
+
+# Parse the diff into HTML with inline styling
+REMOTE_URL="$remote_url" python3 -c '
+import html, sys, os, re
+
+remote_url = os.environ.get("REMOTE_URL", "")
+diff = sys.stdin.read()
+lines = diff.split("\n")
+
+# Split into header (commit message) and diff hunks
+header_lines = []
+diff_lines = []
+in_diff = False
+for line in lines:
+    if line.startswith("diff --git") or in_diff:
+        in_diff = True
+        diff_lines.append(line)
+    else:
+        header_lines.append(line)
+
+def render_header(header_lines):
+    if not header_lines:
+        return ""
+    parts = []
+    for line in header_lines:
+        escaped = html.escape(line)
+        if line.startswith("commit "):
+            sha = line.split()[1] if len(line.split()) > 1 else ""
+            if remote_url and sha:
+                commit_url = f"{remote_url}/commit/{sha}"
+                parts.append(f"<span style=\"color:#b58900;font-weight:bold\">commit <a href=\"{commit_url}\" style=\"color:#b58900\">{html.escape(sha)}</a></span>")
+            else:
+                parts.append(f"<span style=\"color:#b58900;font-weight:bold\">{escaped}</span>")
+        elif line.startswith("Author:") or line.startswith("Date:"):
+            parts.append(f"<span style=\"color:#839496\">{escaped}</span>")
+        else:
+            parts.append(escaped)
+    return "\n".join(parts)
+
+def render_diff(diff_lines):
+    parts = []
+    for line in diff_lines:
+        escaped = html.escape(line)
+        if line.startswith("diff --git"):
+            parts.append(f"<span style=\"color:#268bd2;font-weight:bold\">{escaped}</span>")
+        elif line.startswith("index ") or line.startswith("---") or line.startswith("+++"):
+            parts.append(f"<span style=\"color:#586e75\">{escaped}</span>")
+        elif line.startswith("@@"):
+            parts.append(f"<span style=\"color:#6c71c4\">{escaped}</span>")
+        elif line.startswith("+"):
+            parts.append(f"<span style=\"background:#073642;color:#859900\">{escaped}</span>")
+        elif line.startswith("-"):
+            parts.append(f"<span style=\"background:#073642;color:#dc322f\">{escaped}</span>")
+        else:
+            parts.append(escaped)
+    return "\n".join(parts)
+
+header_html = render_header(header_lines)
+diff_html = render_diff(diff_lines)
+
+print(f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Patch Preview</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+body {{
+    background: #002b36;
+    color: #839496;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 2ch;
+    margin: 0;
+}}
+pre {{
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin: 0;
+}}
+.header {{
+    border-bottom: 1px solid #586e75;
+    padding-bottom: 1ch;
+    margin-bottom: 1ch;
+}}
+</style>
+</head>
+<body>
+<pre class="header">{header_html}</pre>
+<pre>{diff_html}</pre>
+</body>
+</html>""")
+' <<< "$diff_input" > "$tmpfile"
+
+open "$tmpfile"
