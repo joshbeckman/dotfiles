@@ -54,11 +54,11 @@ def render_header(header_lines):
             sha = line.split()[1] if len(line.split()) > 1 else ""
             if remote_url and sha:
                 commit_url = f"{remote_url}/commit/{sha}"
-                parts.append(f"<span style=\"color:#b58900;font-weight:bold\">commit <a href=\"{commit_url}\" style=\"color:#b58900\">{html.escape(sha)}</a></span>")
+                parts.append(f"<span class=\"commit\">commit <a href=\"{commit_url}\">{html.escape(sha)}</a></span>")
             else:
-                parts.append(f"<span style=\"color:#b58900;font-weight:bold\">{escaped}</span>")
+                parts.append(f"<span class=\"commit\">{escaped}</span>")
         elif line.startswith("Author:") or line.startswith("Date:"):
-            parts.append(f"<span style=\"color:#839496\">{escaped}</span>")
+            parts.append(f"<span class=\"meta\">{escaped}</span>")
         else:
             parts.append(escaped)
     return "\n".join(parts)
@@ -68,15 +68,15 @@ def render_diff(diff_lines):
     for line in diff_lines:
         escaped = html.escape(line)
         if line.startswith("diff --git"):
-            parts.append(f"<span style=\"color:#268bd2;font-weight:bold\">{escaped}</span>")
+            parts.append(f"<span class=\"file\">{escaped}</span>")
         elif line.startswith("index ") or line.startswith("---") or line.startswith("+++"):
-            parts.append(f"<span style=\"color:#586e75\">{escaped}</span>")
+            parts.append(f"<span class=\"index\">{escaped}</span>")
         elif line.startswith("@@"):
-            parts.append(f"<span style=\"color:#6c71c4\">{escaped}</span>")
+            parts.append(f"<span class=\"hunk\">{escaped}</span>")
         elif line.startswith("+"):
-            parts.append(f"<span style=\"background:#073642;color:#859900\">{escaped}</span>")
+            parts.append(f"<span class=\"add\">{escaped}</span>")
         elif line.startswith("-"):
-            parts.append(f"<span style=\"background:#073642;color:#dc322f\">{escaped}</span>")
+            parts.append(f"<span class=\"del\">{escaped}</span>")
         else:
             parts.append(escaped)
     return "\n".join(parts)
@@ -92,13 +92,13 @@ print(f"""<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 body {{
-    background: #002b36;
-    color: #839496;
     font-family: "IBM Plex Mono", monospace;
     font-size: 13px;
     line-height: 1.5;
     padding: 2ch;
     margin: 0;
+    background: #fdf6e3;
+    color: #657b83;
 }}
 pre {{
     white-space: pre-wrap;
@@ -106,9 +106,24 @@ pre {{
     margin: 0;
 }}
 .header {{
-    border-bottom: 1px solid #586e75;
+    border-bottom: 1px solid #93a1a1;
     padding-bottom: 1ch;
     margin-bottom: 1ch;
+}}
+.commit, .commit a {{ color: #b58900; font-weight: bold; }}
+.meta {{ color: #657b83; }}
+.file {{ color: #268bd2; font-weight: bold; }}
+.index {{ color: #93a1a1; }}
+.hunk {{ color: #6c71c4; }}
+.add {{ color: #859900; background: rgba(0,0,0,0.03); }}
+.del {{ color: #dc322f; background: rgba(0,0,0,0.03); }}
+@media (prefers-color-scheme: dark) {{
+    body {{ background: #002b36; color: #839496; }}
+    .header {{ border-color: #586e75; }}
+    .meta {{ color: #839496; }}
+    .index {{ color: #586e75; }}
+    .add {{ color: #859900; background: rgba(255,255,255,0.03); }}
+    .del {{ color: #dc322f; background: rgba(255,255,255,0.03); }}
 }}
 </style>
 </head>
