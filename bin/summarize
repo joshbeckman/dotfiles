@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Summarize text using Claude CLI with haiku model.
+# Usage: summarize <file>
+#        cat file.txt | summarize
+#        summarize <<< "some text"
+
+set -euo pipefail
+
+CLAUDE_CMD='claude'
+if command -v devx >/dev/null 2>&1 && devx claude -- --version >/dev/null 2>&1; then
+    CLAUDE_CMD='devx claude --'
+elif ! command -v claude >/dev/null 2>&1; then
+    echo 'Neither claude nor devx claude command found' >&2
+    exit 1
+fi
+
+if [ $# -ge 1 ] && [ -f "$1" ]; then
+    INPUT=$(cat "$1")
+elif [ ! -t 0 ]; then
+    INPUT=$(cat)
+else
+    echo "Usage: summarize <file>" >&2
+    echo "       command | summarize" >&2
+    exit 1
+fi
+
+if [ -z "$INPUT" ]; then
+    echo "No input to summarize" >&2
+    exit 1
+fi
+
+PROMPT="Summarize the following text concisely.
+
+$INPUT"
+
+echo "$PROMPT" | $CLAUDE_CMD --print --model haiku --max-turns 1 2>/dev/null

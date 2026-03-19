@@ -1,0 +1,3 @@
+#!/bin/sh
+
+tmux rename-session "$1"

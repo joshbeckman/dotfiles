@@ -1,0 +1,5 @@
+#!/bin/sh
+
+path_name="$(basename "$PWD" | tr . -)"
+name=${1-$path_name}
+tmux new-window -n "$name"

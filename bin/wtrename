@@ -1,0 +1,5 @@
+#!/bin/sh
+
+default_name="${SPIN_FQDN:-$(dirlabel-bip39)}"
+name=${1-$default_name}
+wezterm cli set-tab-title "$name"

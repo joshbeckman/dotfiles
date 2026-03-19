@@ -22,6 +22,8 @@ I make things. Not too much. Mostly for others.
 
 **[Simplification Protocol](https://www.joshbeckman.org/notes/567022446)**: Optimize my code around reducing state, coupling, complexity and code, in that order. I’m willing to add increased coupling if it makes my code more stateless. I’m willing to make it more complex if it reduces coupling. And I’m willing to duplicate code if it makes the code less complex. Only if it doesn’t increase state, coupling or complexity do I dedupe code.
 
+**Rob Pike's Rules**: Don't optimize without measuring — bottlenecks occur in surprising places. Prefer simple algorithms and simple data structures; fancy ones have big constants and more bugs. Data dominates: if you've chosen the right data structures, the algorithms will be self-evident.
+
 If you can see a better way to do it, strongly consider *keeping your mouth shut* if that way is only 5% better. If you improve by a few percent and distract by 50%, you’re probably not making things better. Save your insights for times where you think your way is 50+% better.
 
 ## Commits
@@ -91,7 +93,7 @@ gh issue list --search "DiscoveryToggle in:title"
 # Search issues with a query
 gh issue list --search "DiscoveryToggle in:title"
 
-# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `shadowenv exec -- gh extension install joshbeckman/gh-view-md`)
+# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `gh extension install joshbeckman/gh-view-md`)
 gh view-md ISSUE_URL
 ```
 
@@ -116,7 +118,7 @@ gh pr list --label "Discovery"
 # Search PRs with a query
 gh pr list --search "DiscoveryToggle in:title"
 
-# View a specific PR with the `joshbeckman/gh-view-md` shadowenv exec -- gh CLI extension
+# View a specific PR with the `joshbeckman/gh-view-md` gh CLI extension
 gh view-md PR_URL
 # you can specify the max diff to show with the `--max-diff` option (default is 800 lines)
 gh view-md PR_URL --max-diff 1000
