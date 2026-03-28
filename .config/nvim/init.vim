@@ -264,10 +264,18 @@ function! WordCount()
 endfunction
 
 " Command to critique a draft post via the critic cron API
-command! Critique call CritiqueDraft()
+let s:critic_base = 'https://joshbeckman--27194dee291c11f1a04e42dde27851f2.web.val.run'
+
+function! s:CriticCurl(endpoint, tmpjson)
+    return 'curl -s --max-time 300 -X POST'
+          \ . ' "' . s:critic_base . a:endpoint . '"'
+          \ . ' -H "Content-Type: application/json"'
+          \ . ' -H "Authorization: Bearer ' . $CRITIC_PASSWORD . '"'
+          \ . ' -d @' . shellescape(a:tmpjson)
+endfunction
 
 function! CritiqueDraft()
-    let filepath = expand("%:p")
+    let l:bufnr = bufnr('%')
     let filename = expand("%:t:r")
     let title = filename
     let timestamp = strftime("%Y%m%d%H%M%S")
@@ -275,17 +283,12 @@ function! CritiqueDraft()
 
     echo "Requesting critique..."
 
-    let content = join(getline(1, '$'), '\n')
+    let content = join(getline(1, '$'), "\n")
     let payload = json_encode({"title": title, "content": content})
     let tmpjson = tempname() . ".json"
     call writefile([payload], tmpjson)
 
-    let cmd = 'curl -s --max-time 300 -X POST'
-          \ . ' "https://joshbeckman--27194dee291c11f1a04e42dde27851f2.web.val.run/draft"'
-          \ . ' -H "Content-Type: application/json"'
-          \ . ' -H "Authorization: Bearer ' . $CRITIC_PASSWORD . '"'
-          \ . ' -d @' . shellescape(tmpjson)
-    let response = system(cmd)
+    let response = system(s:CriticCurl('/draft', tmpjson))
     call delete(tmpjson)
 
     try
@@ -302,6 +305,33 @@ function! CritiqueDraft()
 
     call writefile(split(critique, '\n'), outfile)
     execute "tabedit " . fnameescape(outfile)
+    tabprevious
+
+    echo "Annotating critique..."
+    call ale#other_source#StartChecking(l:bufnr, 'critique')
+
+    let ann_payload = json_encode({"content": content, "critique": critique})
+    let ann_tmpjson = tempname() . ".json"
+    call writefile([ann_payload], ann_tmpjson)
+
+    let ann_response = system(s:CriticCurl('/annotate', ann_tmpjson))
+    call delete(ann_tmpjson)
+
+    try
+        let annotations = json_decode(ann_response)
+        let ale_results = []
+        for ann in annotations
+            let item = {'lnum': ann.lnum, 'text': ann.text, 'type': ann.type}
+            if has_key(ann, 'end_lnum')
+                let item.end_lnum = ann.end_lnum
+            endif
+            call add(ale_results, item)
+        endfor
+        call ale#other_source#ShowResults(l:bufnr, 'critique', ale_results)
+    catch
+        echohl WarningMsg | echo "Annotation failed: " . ann_response[:200] | echohl None
+    endtry
+
     echo "Critique saved to " . outfile
 endfunction
 autocmd FileType markdown command! -buffer Critique call CritiqueDraft()
