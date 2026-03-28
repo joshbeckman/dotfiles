@@ -262,3 +262,48 @@ function! WordCount()
     let filepath = expand("%:p")
     execute "!wc " . shellescape(filepath)
 endfunction
+
+" Command to critique a draft post via the critic cron API
+command! Critique call CritiqueDraft()
+
+function! CritiqueDraft()
+    let filepath = expand("%:p")
+    let filename = expand("%:t:r")
+    let title = filename
+    let timestamp = strftime("%Y%m%d%H%M%S")
+    let outfile = expand("%:p:r") . "." . timestamp . ".critique.md"
+
+    echo "Requesting critique..."
+
+    let content = join(getline(1, '$'), '\n')
+    let payload = json_encode({"title": title, "content": content})
+    let tmpjson = tempname() . ".json"
+    call writefile([payload], tmpjson)
+
+    let cmd = 'curl -s --max-time 300 -X POST'
+          \ . ' "https://joshbeckman--27194dee291c11f1a04e42dde27851f2.web.val.run/draft"'
+          \ . ' -H "Content-Type: application/json"'
+          \ . ' -H "Authorization: Bearer ' . $CRITIC_PASSWORD . '"'
+          \ . ' -d @' . shellescape(tmpjson)
+    let response = system(cmd)
+    call delete(tmpjson)
+
+    try
+        let parsed = json_decode(response)
+        if has_key(parsed, 'error')
+            echoerr "Critique failed: " . parsed.error
+            return
+        endif
+        let critique = parsed.critique.markdown
+    catch
+        echoerr "Critique failed: " . response[:200]
+        return
+    endtry
+
+    call writefile(split(critique, '\n'), outfile)
+    execute "tabedit " . fnameescape(outfile)
+    echo "Critique saved to " . outfile
+endfunction
+autocmd FileType markdown command! -buffer Critique call CritiqueDraft()
+autocmd FileType text command! -buffer Critique call CritiqueDraft()
+autocmd FileType rtf command! -buffer Critique call CritiqueDraft()
