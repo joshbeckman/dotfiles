@@ -325,6 +325,16 @@ function! s:OnAnnotateExit(job_id, data, event)
             if has_key(ann, 'end_lnum')
                 let item.end_lnum = ann.end_lnum
             endif
+            if has_key(ann, 'phrase') && ann.phrase !=# ''
+                let line_text = getbufline(ctx.bufnr, ann.lnum)
+                if len(line_text) > 0
+                    let col_idx = stridx(line_text[0], ann.phrase)
+                    if col_idx >= 0
+                        let item.col = col_idx + 1
+                        let item.end_col = col_idx + len(ann.phrase) + 1
+                    endif
+                endif
+            endif
             call add(ale_results, item)
         endfor
         call ale#other_source#ShowResults(ctx.bufnr, 'critique', ale_results)
