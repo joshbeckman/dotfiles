@@ -265,60 +265,60 @@ endfunction
 
 " Command to critique a draft post via the critic cron API
 let s:critic_base = 'https://joshbeckman--27194dee291c11f1a04e42dde27851f2.web.val.run'
+let s:critique_jobs = {}
 
 function! s:CriticCurl(endpoint, tmpjson)
-    return 'curl -s --max-time 300 -X POST'
-          \ . ' "' . s:critic_base . a:endpoint . '"'
-          \ . ' -H "Content-Type: application/json"'
-          \ . ' -H "Authorization: Bearer ' . $CRITIC_PASSWORD . '"'
-          \ . ' -d @' . shellescape(a:tmpjson)
+    return ['curl', '-s', '--max-time', '300', '-X', 'POST',
+          \ s:critic_base . a:endpoint,
+          \ '-H', 'Content-Type: application/json',
+          \ '-H', 'Authorization: Bearer ' . $CRITIC_PASSWORD,
+          \ '-d', '@' . a:tmpjson]
 endfunction
 
-function! CritiqueDraft()
-    let l:bufnr = bufnr('%')
-    let filename = expand("%:t:r")
-    let title = filename
-    let timestamp = strftime("%Y%m%d%H%M%S")
-    let outfile = expand("%:p:r") . "." . timestamp . ".critique.md"
+function! s:OnCritiqueStdout(job_id, data, event)
+    let s:critique_jobs[a:job_id].response .= join(a:data, "\n")
+endfunction
 
-    echo "Requesting critique..."
-
-    let content = join(getline(1, '$'), "\n")
-    let payload = json_encode({"title": title, "content": content})
-    let tmpjson = tempname() . ".json"
-    call writefile([payload], tmpjson)
-
-    let response = system(s:CriticCurl('/draft', tmpjson))
-    call delete(tmpjson)
-
+function! s:OnCritiqueExit(job_id, data, event)
+    let ctx = remove(s:critique_jobs, a:job_id)
     try
-        let parsed = json_decode(response)
-        if has_key(parsed, 'error')
-            echoerr "Critique failed: " . parsed.error
+        let parsed = json_decode(ctx.response)
+        if type(parsed) == v:t_dict && has_key(parsed, 'error')
+            echohl ErrorMsg | echo "Critique failed: " . parsed.error | echohl None
             return
         endif
         let critique = parsed.critique.markdown
     catch
-        echoerr "Critique failed: " . response[:200]
+        echohl ErrorMsg | echo "Critique failed: " . ctx.response[:200] | echohl None
         return
     endtry
 
-    call writefile(split(critique, '\n'), outfile)
-    execute "tabedit " . fnameescape(outfile)
+    call writefile(split(critique, '\n'), ctx.outfile)
+    execute "tabedit " . fnameescape(ctx.outfile)
     tabprevious
 
-    echo "Annotating critique..."
-    call ale#other_source#StartChecking(l:bufnr, 'critique')
+    echo "Critique ready. Annotating..."
+    call ale#other_source#StartChecking(ctx.bufnr, 'critique')
 
-    let ann_payload = json_encode({"content": content, "critique": critique})
+    let ann_payload = json_encode({"content": ctx.content, "critique": critique})
     let ann_tmpjson = tempname() . ".json"
     call writefile([ann_payload], ann_tmpjson)
 
-    let ann_response = system(s:CriticCurl('/annotate', ann_tmpjson))
-    call delete(ann_tmpjson)
+    let ann_job = jobstart(s:CriticCurl('/annotate', ann_tmpjson), {
+          \ 'on_stdout': function('s:OnAnnotateStdout'),
+          \ 'on_exit': function('s:OnAnnotateExit'),
+          \ })
+    let s:critique_jobs[ann_job] = {'response': '', 'bufnr': ctx.bufnr}
+endfunction
 
+function! s:OnAnnotateStdout(job_id, data, event)
+    let s:critique_jobs[a:job_id].response .= join(a:data, "\n")
+endfunction
+
+function! s:OnAnnotateExit(job_id, data, event)
+    let ctx = remove(s:critique_jobs, a:job_id)
     try
-        let annotations = json_decode(ann_response)
+        let annotations = json_decode(ctx.response)
         let ale_results = []
         for ann in annotations
             let item = {'lnum': ann.lnum, 'text': ann.text, 'type': ann.type}
@@ -327,12 +327,37 @@ function! CritiqueDraft()
             endif
             call add(ale_results, item)
         endfor
-        call ale#other_source#ShowResults(l:bufnr, 'critique', ale_results)
+        call ale#other_source#ShowResults(ctx.bufnr, 'critique', ale_results)
+        echo "Critique annotations ready."
     catch
-        echohl WarningMsg | echo "Annotation failed: " . ann_response[:200] | echohl None
+        echohl WarningMsg | echo "Annotation failed: " . ctx.response[:200] | echohl None
     endtry
+endfunction
 
-    echo "Critique saved to " . outfile
+function! CritiqueDraft()
+    let l:bufnr = bufnr('%')
+    let filename = expand("%:t:r")
+    let title = filename
+    let timestamp = strftime("%Y%m%d%H%M%S")
+    let outfile = '/tmp/' . filename . "." . timestamp . ".critique.md"
+
+    let content = join(getline(1, '$'), "\n")
+    let payload = json_encode({"title": title, "content": content})
+    let tmpjson = tempname() . ".json"
+    call writefile([payload], tmpjson)
+
+    let job = jobstart(s:CriticCurl('/draft', tmpjson), {
+          \ 'on_stdout': function('s:OnCritiqueStdout'),
+          \ 'on_exit': function('s:OnCritiqueExit'),
+          \ })
+    let s:critique_jobs[job] = {
+          \ 'response': '',
+          \ 'bufnr': l:bufnr,
+          \ 'content': content,
+          \ 'outfile': outfile,
+          \ }
+
+    echo "Critique requested (running in background)..."
 endfunction
 autocmd FileType markdown command! -buffer Critique call CritiqueDraft()
 autocmd FileType text command! -buffer Critique call CritiqueDraft()
