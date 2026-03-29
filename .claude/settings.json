@@ -26,6 +26,7 @@
       "/tmp"
     ]
   },
+  "model": "opus[1m]",
   "hooks": {
     "Notification": [
       {
