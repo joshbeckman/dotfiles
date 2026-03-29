@@ -5,8 +5,21 @@ bin/errcheck
 bin/golint
 
 # Claude Code local data
+.claude/backups/
+.claude/cache/
+.claude/debug/
+.claude/file-history/
+.claude/history.jsonl
+.claude/paste-cache/
+.claude/plans/
+.claude/policy-limits.json
 .claude/projects/
+.claude/sessions/
+.claude/shell-snapshots/
+.claude/stats-cache.json
 .claude/statsig/
+.claude/tasks/
+.claude/telemetry/
 .claude/todos/
 
 bin/.auto-review-skip
