@@ -16,4 +16,4 @@ Do this by:
    - `git diff | preview-patch` for uncommitted changes
    - `git diff --staged | preview-patch` for staged changes
 
-Just run the command directly without explanation.
+Just run the command directly without explanation. The command opens a browser window and produces no stdout — empty output is expected. Do NOT retry or debug after running it.
