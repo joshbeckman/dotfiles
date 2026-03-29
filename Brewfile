@@ -28,4 +28,3 @@ cask "wezterm"
 cask "keycastr" if OS.mac?
 cask "raycast" if OS.mac?
 cask "shortcat" if OS.mac?
-cask "warp" if OS.mac?
