@@ -22,7 +22,7 @@ await blob.delete("myKey");
 Persistent SQL database. Always create tables before querying. When changing schemas, create a new table with a versioned name instead of using ALTER TABLE.
 
 ```ts
-import { sqlite } from "https://esm.town/v/stevekrouse/sqlite/main.tsx";
+import sqlite from "https://esm.town/v/std/sqlite@14-main/main.ts";
 
 const TABLE_NAME = 'my_app_users_2';
 

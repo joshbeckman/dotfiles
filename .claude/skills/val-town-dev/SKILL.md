@@ -113,7 +113,7 @@ Val Town provides hosted services importable via `https://esm.town/v/std/`:
 | Library | Import | Purpose |
 |---------|--------|---------|
 | Blob | `https://esm.town/v/std/blob` | Key-value storage (JSON, text, binary) |
-| SQLite | `https://esm.town/v/stevekrouse/sqlite/main.tsx` | Persistent SQL database |
+| SQLite | `https://esm.town/v/std/sqlite@14-main/main.ts` | Persistent SQL database |
 | OpenAI | `https://esm.town/v/std/openai` | GPT completions (pre-configured) |
 | Email | `https://esm.town/v/std/email` | Send emails to val owner |
 | Utils | `https://esm.town/v/std/utils/index.ts` | `serveFile`, `readFile`, `listFiles` |
