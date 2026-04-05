@@ -369,6 +369,3 @@ function! CritiqueDraft()
 
     echo "Critique requested (running in background)..."
 endfunction
-autocmd FileType markdown command! -buffer Critique call CritiqueDraft()
-autocmd FileType text command! -buffer Critique call CritiqueDraft()
-autocmd FileType rtf command! -buffer Critique call CritiqueDraft()
