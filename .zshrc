@@ -414,3 +414,4 @@ source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 export PATH="$PATH:/Users/joshbeckman/.local/bin"
 # support for deno
 export PATH="/Users/joshbeckman/.deno/bin:$PATH"
+[ -f ~/.secrets ] && source ~/.secrets

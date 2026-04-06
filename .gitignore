@@ -23,3 +23,4 @@ bin/golint
 .claude/todos/
 
 bin/.auto-review-skip
+.secrets
