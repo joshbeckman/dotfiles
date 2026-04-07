@@ -26,7 +26,13 @@ I make things. Not too much. Mostly for others.
 
 If you can see a better way to do it, strongly consider *keeping your mouth shut* if that way is only 5% better. If you improve by a few percent and distract by 50%, you’re probably not making things better. Save your insights for times where you think your way is 50+% better.
 
+### Debugging & Diagnosis
+
+When diagnosing performance or identifying 'slowest' items, carefully parse the actual metrics/timings rather than inferring from icons or labels. Confirm which items are the targets before proceeding.
+
 ## Commits
+
+When making git commits: always create new commits (do not amend) unless explicitly asked. Always ask for the PR URL if needed rather than guessing.
 
 Use **Conventional Commits** format for all commit messages:
 

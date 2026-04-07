@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(dirlabel-bip39 \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIR): Permission Needed\" -sound Ping -group \"$CWD:permission\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Permission Needed\" -sound Ping -group \"$CWD:permission\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       },
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(dirlabel-bip39 \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIR): Question\" -sound Ping -group \"$CWD:question\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Question\" -sound Ping -group \"$CWD:question\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       },
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(dirlabel-bip39 \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIR): Waiting\" -group \"$CWD:idle\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Waiting\" -group \"$CWD:idle\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       }
@@ -63,7 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(dirlabel-bip39 \"$CWD\")\"; PREVIEW=$(echo \"$INPUT\" | jq -r '.last_assistant_message // \"Response complete\"' | tr '\\n\"' ' ' | cut -c1-80); terminal-notifier -message \"$PREVIEW\" -title \"Claude ($DIR): Done\" -group \"$CWD:stop\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; PREVIEW=$(echo \"$INPUT\" | jq -r '.last_assistant_message // \"Response complete\"' | tr '\\n\"' ' ' | cut -c1-80); terminal-notifier -message \"$PREVIEW\" -title \"Claude ($DIRNAME:$DIR): Done\" -group \"$CWD:stop\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       }

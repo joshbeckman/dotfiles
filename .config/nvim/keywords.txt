@@ -39,3 +39,8 @@
 @scrollie
 @TimWillard
 @tjwp
+@ajshepley
+@FSHA
+@katiebauchman
+@shopify-build-cli
+@stale-pr-closer

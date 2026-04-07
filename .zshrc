@@ -387,6 +387,11 @@ autoload -Uz compinit && compinit
 # source ~/src/github.com/jdxcode/gh/bash/gl.bash
 # source ~/src/github.com/jdxcode/gh/completions/gl.bash
 
+
+# wtp — worktree pool manager
+export PATH="$HOME/src/github.com/shopify-playground/wtp/bin:$PATH"
+source "$HOME/src/github.com/shopify-playground/wtp/shell/wtp.zsh"
+
 . $HOME/.shellrc.load
 
 [ -f /opt/dev/dev.sh ] && source /opt/dev/dev.sh
@@ -394,7 +399,6 @@ if [ -e ~/.nix-profile/etc/profile.d/nix.sh ]; then . ~/.nix-profile/etc/profile
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
-[[ -f /opt/dev/sh/chruby/chruby.sh ]] && type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; }
 if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh; fi # added by Nix installer
 
 [[ -x /usr/local/bin/brew ]] && eval $(/usr/local/bin/brew shellenv)
@@ -415,3 +419,11 @@ export PATH="$PATH:/Users/joshbeckman/.local/bin"
 # support for deno
 export PATH="/Users/joshbeckman/.deno/bin:$PATH"
 [ -f ~/.secrets ] && source ~/.secrets
+
+[[ -f /opt/dev/sh/chruby/chruby.sh ]] && { type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; } }
+
+# cloudplatform: add Shopify clusters to your local kubernetes config
+export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}/Users/joshbeckman/.kube/config:/Users/joshbeckman/.kube/config.shopify.cloudplatform
+
+# Added by tec agent
+[[ -x /Users/joshbeckman/.local/state/tec/profiles/base/current/global/init ]] && eval "$(/Users/joshbeckman/.local/state/tec/profiles/base/current/global/init zsh)"
