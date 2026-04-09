@@ -389,8 +389,10 @@ autoload -Uz compinit && compinit
 
 
 # wtp — worktree pool manager
-export PATH="$HOME/src/github.com/shopify-playground/wtp/bin:$PATH"
-source "$HOME/src/github.com/shopify-playground/wtp/shell/wtp.zsh"
+if [ -d "$HOME/src/github.com/shopify-playground/wtp" ]; then
+  export PATH="$HOME/src/github.com/shopify-playground/wtp/bin:$PATH"
+  source "$HOME/src/github.com/shopify-playground/wtp/shell/wtp.zsh"
+fi
 
 . $HOME/.shellrc.load
 
