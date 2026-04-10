@@ -25,6 +25,7 @@
     cm = commit -am
     co = checkout
     cp = cherry-pick
+    diffp = "!git diff | preview-patch"
     fc = log --all --grep
     fix = "!f() { nvim -p `git diff --name-only | uniq`; }; f" # via https://gist.github.com/jacobvosmaer/3187346
     fup = push --set-upstream origin HEAD
