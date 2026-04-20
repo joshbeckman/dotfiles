@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+
+require 'net/http'
+
+base_url = 'https://www.joshbeckman.org'
+data_url = "#{base_url}/humans.txt"
+uri = URI.parse(data_url)
+req = Net::HTTP::Get.new(uri)
+begin
+  res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true, read_timeout: 3) { |http| http.request(req) }
+rescue Net::ReadTimeout
+  raise StandardError, 'Humans data request timed out'
+end
+raise StandardError, 'Humans data request failed' unless res.is_a?(Net::HTTPSuccess)
+
+fields = res.body.each_line.each_with_object({}) do |line, acc|
+  key, _, value = line.partition(':')
+  acc[key.strip.downcase] = value.strip unless value.empty?
+end
+
+puts ''
+puts "  Season: #{fields['season']}" if fields['season']
+puts "  Belief: #{fields['belief']}" if fields['belief']
+puts ''
