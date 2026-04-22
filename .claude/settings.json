@@ -1,10 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "apiKeyHelper": "/opt/dev/bin/user/devx llm-gateway print-token --key",
   "cleanupPeriodDays": 60,
   "env": {
     "MAX_MCP_OUTPUT_TOKENS": "35000",
     "EDITOR": "nvim",
-    "GIT_EDITOR": "nvim"
+    "GIT_EDITOR": "nvim",
+    "ANTHROPIC_BASE_URL": "https://proxy.shopify.ai/vendors/anthropic-claude-code",
+    "ANTHROPIC_CUSTOM_HEADERS": "X-Shopify-Session-Affinity-Header: X-Claude-Code-Session-Id\nShopify-Usage-Tag: [\"claude_code_cli\",\"ctx:default\",\"rtk:enabled\"]",
+    "ENABLE_TOOL_SEARCH": "true"
   },
   "includeCoAuthoredBy": true,
   "permissions": {
@@ -26,7 +30,7 @@
       "/tmp"
     ]
   },
-  "model": "opus[1m]",
+  "model": "opus",
   "hooks": {
     "Notification": [
       {
@@ -34,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Permission Needed\" -sound Ping -group \"$CWD:permission\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Permission Needed\" -sound Ping -group \"$SID:permission\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       },
@@ -43,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Question\" -sound Ping -group \"$CWD:question\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Question\" -sound Ping -group \"$SID:question\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       },
@@ -52,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Waiting\" -group \"$CWD:idle\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Waiting\" -group \"$SID:idle\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       }
@@ -63,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; PREVIEW=$(echo \"$INPUT\" | jq -r '.last_assistant_message // \"Response complete\"' | tr '\\n\"' ' ' | cut -c1-80); terminal-notifier -message \"$PREVIEW\" -title \"Claude ($DIRNAME:$DIR): Done\" -group \"$CWD:stop\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; PREVIEW=$(echo \"$INPUT\" | jq -r '.last_assistant_message // \"Response complete\"' | tr '\\n\"' ' ' | cut -c1-80); terminal-notifier -message \"$PREVIEW\" -title \"Claude ($DIRNAME:$DIR): Done\" -group \"$SID:stop\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
           }
         ]
       }
@@ -76,6 +80,39 @@
             "type": "command",
             "command": "~/.claude/hooks/skills-update.mjs",
             "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | jq -r '.session_id'); for g in permission question idle stop; do terminal-notifier -remove \"$SID:$g\" >/dev/null 2>&1 || true; done"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rtk hook claude"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | jq -r '.session_id'); for g in permission question idle stop; do terminal-notifier -remove \"$SID:$g\" >/dev/null 2>&1 || true; done"
           }
         ]
       }
