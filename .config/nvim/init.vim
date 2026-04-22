@@ -40,6 +40,7 @@ vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include='*.<C
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>s :Buffers<CR>
+nnoremap <Leader>S :!git s<CR>
 nnoremap <Leader>t <C-w><C-]><C-w>T
 nnoremap <Leader>T :tabnew<CR>:Tags<CR>
 nnoremap <Leader>ld :LspDefinition<CR>
@@ -69,6 +70,9 @@ set incsearch
 set hlsearch
 set ignorecase smartcase
 set signcolumn=yes
+" Default 4000ms delays CursorHold-driven plugins (gitgutter gutter + hunk
+" counts in the statusline). 100ms is gitgutter's recommended value.
+set updatetime=100
 " show trailing characters for e.g. spaces
 set list
 set listchars=tab:$\ ,trail:·
@@ -179,31 +183,28 @@ hi clear SignColumn
 hi LineNr ctermfg=grey
 hi StatusLine   term=bold cterm=bold ctermfg=White
 hi StatusLineNC term=bold cterm=bold ctermfg=White
-" hi User1                      ctermfg=4          guifg=#40ffff            " Identifier
-" hi User2                      ctermfg=2 gui=bold guifg=#ffff60            " Statement
-" hi User3 term=bold cterm=bold ctermfg=1          guifg=White   guibg=Red  " Error
-" hi User4                      ctermfg=1          guifg=Orange             " Special
-" hi User5                      ctermfg=10         guifg=#80a0ff            " Comment
-" hi User6 term=bold cterm=bold ctermfg=1          guifg=Red                " WarningMsg
 set laststatus=2                                " always show statusline"
-set statusline=
-set statusline+=%6*%m%r%*                          " modified, readonly
-set statusline+=%7*%.20{expand('%:h')}/            " relative path to file's directory (max 50% width)
-set statusline+=%5*%t%*                            " file name
-set statusline+=\ 
-set statusline+=\ 
-set statusline+=%<                                 " truncate here if needed
-set statusline+=%5*%L\ lines%*                     " number of lines
-
-set statusline+=%=                                 " switch to RHS
-
-set statusline+=%5*line:%-4.l%*                         " line
-set statusline+=%5*col:%-3.c%*                          " column
-set statusline+=\ 
-set statusline+=\ 
-set statusline+=%1*buf:%-3n%*                      " buffer number
+function! LinterStatus() abort
+  if !exists('g:loaded_ale') | return '' | endif
+  let c = ale#statusline#Count(bufnr(''))
+  if c.total == 0 | return '' | endif
+  return printf('E:%d W:%d  ', c.error + c.style_error, c.warning + c.style_warning)
+endfunction
+function! GitHunks() abort
+  if !exists('*GitGutterGetHunkSummary') | return '' | endif
+  let [a, m, r] = GitGutterGetHunkSummary()
+  if a == 0 && m == 0 && r == 0 | return '' | endif
+  let parts = []
+  if a > 0 | call add(parts, '+' . a) | endif
+  if m > 0 | call add(parts, '~' . m) | endif
+  if r > 0 | call add(parts, '-' . r) | endif
+  return join(parts, ' ') . '  '
+endfunction
+" Set in one shot via let& so Neovim's default statusline (installed by
+" runtime files after init.vim) can't leak in and double up on %= splits.
+let &statusline = '%6*%m%*%7*%.20{expand("%:h")}/%5*%t%*  %<%5*%l/%L%*%=%5*%{GitHunks()}%*%6*%{LinterStatus()}%*%5*col:%-3.c%*  %1*buf:%-3n%*'
 " show wordcount on markdown files
-autocmd FileType markdown setlocal statusline+=%5*words:%{wordcount().words}%*
+autocmd FileType markdown let &l:statusline = &statusline . '%5*words:%{wordcount().words}%*'
 
 function! RubocopAutocorrect()
   execute "!bundle exec rubocop -a " . bufname("%")
