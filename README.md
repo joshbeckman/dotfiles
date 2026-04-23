@@ -64,3 +64,17 @@ Run any script with `--help` or read the source — they're short.
 - **Brewfile tracks dependencies.** If a script or config relies on a Homebrew formula, add it to `Brewfile`.
 - **No secrets in version control.** Credentials, tokens, and API keys belong in files sourced separately (e.g. a `.secrets` file), not committed here.
 - **Conventional Commits.** Commit messages follow the `type(scope): description` format (e.g. `feat(zshrc):`, `fix(nvim):`).
+
+## Work and private content
+
+This repo is **public** and used on both personal and work (Shopify) machines. Internal tooling on the work machine writes proprietary content into tracked files — e.g. `/opt/dev/...` scripts add proxy URLs and an `apiKeyHelper` to `.claude/settings.json`; setup scripts drop a Shopify email, signing key, and internal paths into `.gitconfig`. These lines reappear after they're removed, so every commit needs a manual pass.
+
+**Before every commit**, review staged changes and strip anything that matches:
+
+- **Shopify identifiers** — `shopify.com`, `shopify.ai`, `shopify.io`, `josh.beckman@shopify.com`, `X-Shopify-*` headers
+- **Internal paths** — `/opt/dev`, `~/world`, `~/.shopify-build-tmp`, `~/.config/dev`
+- **Proxy/gateway config in `.claude/settings.json`** — `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, `apiKeyHelper`
+- **GPG signing keys** — `signingkey = ...` under `[user]` in `.gitconfig`
+- **Anything credential-shaped** — tokens, cookies, session IDs, bearer headers
+
+**For agents:** run `git diff --cached` before proposing a commit on this repo. If any of the above patterns appear in the staged diff, stop and flag them to the user rather than stripping silently — an unfamiliar internal URL or path may be new work content that isn't on this list yet. When in doubt, ask before committing.
