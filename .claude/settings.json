@@ -1,13 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "apiKeyHelper": "/opt/dev/bin/user/devx llm-gateway print-token --key",
   "cleanupPeriodDays": 60,
   "env": {
     "MAX_MCP_OUTPUT_TOKENS": "35000",
     "EDITOR": "nvim",
     "GIT_EDITOR": "nvim",
-    "ANTHROPIC_BASE_URL": "https://proxy.shopify.ai/vendors/anthropic-claude-code",
-    "ANTHROPIC_CUSTOM_HEADERS": "X-Shopify-Session-Affinity-Header: X-Claude-Code-Session-Id\nShopify-Usage-Tag: [\"claude_code_cli\",\"ctx:default\",\"rtk:enabled\"]",
     "ENABLE_TOOL_SEARCH": "true"
   },
   "includeCoAuthoredBy": true,
