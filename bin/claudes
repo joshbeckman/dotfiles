@@ -1,0 +1,300 @@
+#!/bin/bash
+# claudes — overview + jump for active Claude Code sessions.
+#
+# Reads the registry written by ~/.claude/hooks/session-registry.sh and
+# prints a table of live sessions. With `pick`, uses fzf to select a session
+# and activates its Wezterm pane.
+#
+# Commands:
+#   claudes [list]   — print table (default)
+#   claudes pick     — fzf selector that jumps to the chosen pane
+#   claudes jump ID  — activate pane by id
+#   claudes clean    — drop registry entries older than 1 day
+set -eu
+
+DIR="$HOME/.claude/sessions"
+WEZTERM=/opt/homebrew/bin/wezterm
+
+age_of() {
+    local ts="$1" now then diff
+    [ -z "$ts" ] && { printf '-'; return; }
+    # Pin to BSD /bin/date: PATH in some Shopify world dirs exposes a Nix
+    # `date` (coreutils) that rejects -j/-f, which used to silently fall
+    # through to diff=0 and show every row as "0s".
+    # Force UTC: the Z suffix is literal to BSD date, so without TZ=UTC the
+    # timestamp is read as local time.
+    now=$(/bin/date +%s)
+    then=$(TZ=UTC /bin/date -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null || true)
+    [ -z "$then" ] && { printf '?'; return; }
+    diff=$((now - then))
+    if   [ "$diff" -lt 60 ];    then printf '%ds' "$diff"
+    elif [ "$diff" -lt 3600 ];  then printf '%dm' "$((diff/60))"
+    elif [ "$diff" -lt 86400 ]; then printf '%dh' "$((diff/3600))"
+    else                             printf '%dd' "$((diff/86400))"
+    fi
+}
+
+# Look up Claude Code's own summary record for a session. Claude stores its
+# jsonl under ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl and
+# appends `{"type":"summary","summary":"..."}` records as it summarizes.
+# The latest such record is the session's current name.
+summary_for() {
+    local sid="$1" cwd="$2"
+    [ -z "$sid" ] || [ -z "$cwd" ] && return 0
+    # Claude's projects/ encoding replaces both `/` AND `.` with `-`, so
+    # e.g. github.com/Shopify becomes github-com-Shopify. Only substituting
+    # slashes will miss any path containing a dot.
+    local encoded="$cwd"
+    encoded="${encoded//\//-}"
+    encoded="${encoded//./-}"
+    local jsonl="$HOME/.claude/projects/$encoded/$sid.jsonl"
+    [ -f "$jsonl" ] || return 0
+    # Prefer the user's /rename ("custom-title"), then fall back to the
+    # auto-generated compaction summary. Summary records only appear for
+    # compacted sessions, so live un-renamed sessions won't have either.
+    # `tac` isn't on macOS by default, so read forward and keep the last.
+    local name
+    name=$(grep '"type":"custom-title"' "$jsonl" 2>/dev/null | tail -1 \
+        | jq -r '.customTitle // empty' 2>/dev/null)
+    [ -n "$name" ] && { printf '%s' "$name"; return; }
+    grep '"type":"summary"' "$jsonl" 2>/dev/null | tail -1 \
+        | jq -r '.summary // empty' 2>/dev/null
+}
+
+marker_for() {
+    case "$1" in
+        permission) printf '⚠ perm' ;;
+        question)   printf '? ask'  ;;
+        idle)       printf '… idle' ;;
+        stopped)    printf '✓ done' ;;
+        running)    printf '⚙ run'  ;;
+        *)          printf '%s' "$1" ;;
+    esac
+}
+
+# Truncate to N visible chars and append an ellipsis when clipped. Long
+# branch names and assistant snippets otherwise force every row wide via
+# `column -t`.
+clip() {
+    local s="$1" n="$2"
+    [ ${#s} -le "$n" ] && { printf '%s' "$s"; return; }
+    printf '%s…' "$(printf '%s' "$s" | cut -c1-"$n")"
+}
+
+# Emit one tab-separated row per session. Columns:
+#   marker  where  age  pane  label  session_id
+# WHERE merges dirname+branch into "dir:branch" — a separate BRANCH column
+# was the main source of ugly wide rows (one long branch widens the lot).
+# LABEL is name-first (custom-title → summary), falling back to the latest
+# assistant/permission message so waiting rows still surface their ask.
+# Trailing session_id is used by `pick` to resolve selection back to a pane.
+rows() {
+    [ -d "$DIR" ] || return 0
+    local f
+    for f in "$DIR"/*.json; do
+        [ -f "$f" ] || continue
+        local state dirname branch pane updated last sid cwd name where label
+        state=$(jq -r '.state // "?"' "$f")
+        dirname=$(jq -r '.dirname // "?"' "$f")
+        branch=$(jq -r '.branch // ""' "$f")
+        pane=$(jq -r '.pane_id // "-"' "$f"); [ -z "$pane" ] && pane='-'
+        updated=$(jq -r '.updated_at // ""' "$f")
+        last=$(jq -r '.last_message // ""' "$f")
+        sid=$(jq -r '.session_id // ""' "$f"); [ -z "$sid" ] && sid=$(basename "$f" .json)
+        cwd=$(jq -r '.cwd // ""' "$f")
+        name=$(summary_for "$sid" "$cwd")
+
+        if [ -n "$branch" ]; then
+            where="$dirname:$branch"
+        else
+            where="$dirname"
+        fi
+        where=$(clip "$where" 28)
+
+        # Prefer the durable name; fall back to the in-flight message so
+        # waiting rows still communicate why they're waiting.
+        label="${name:-$last}"
+        [ -z "$label" ] && label='-'
+        label=$(clip "$label" 44)
+
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$(marker_for "$state")" "$where" "$(age_of "$updated")" "$pane" "$label" "$sid"
+    done
+}
+
+# Filter TSV rows on stdin. Accepts the same flags list/pick accept;
+# unknown flags abort with a usage hint.
+#
+# -s/--state   substring-match against the marker column ("⚠ perm" etc.).
+#              Common long forms are normalized to short forms so e.g.
+#              --state permission matches the "perm" marker.
+# -w/--waiting shortcut for -s perm -s ask -s idle (anything needing you).
+# -d/--dir     substring-match against WHERE (dirname:branch).
+# -n/--name    substring-match against NAME column.
+# All matches are case-insensitive. Repeated -s flags OR together.
+filter_rows() {
+    local states=() dir_pat="" name_pat=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -s|--state)
+                local s="$2"
+                case "$s" in
+                    running)              s='run'  ;;
+                    permission)           s='perm' ;;
+                    question|elicitation) s='ask'  ;;
+                    stopped)              s='done' ;;
+                esac
+                states+=("$s"); shift 2 ;;
+            --state=*)
+                local s="${1#*=}"
+                case "$s" in
+                    running)              s='run'  ;;
+                    permission)           s='perm' ;;
+                    question|elicitation) s='ask'  ;;
+                    stopped)              s='done' ;;
+                esac
+                states+=("$s"); shift ;;
+            -w|--waiting)   states+=("perm" "ask" "idle"); shift ;;
+            -d|--dir)       dir_pat="$2"; shift 2 ;;
+            --dir=*)        dir_pat="${1#*=}"; shift ;;
+            -n|--name)      name_pat="$2"; shift 2 ;;
+            --name=*)       name_pat="${1#*=}"; shift ;;
+            --)             shift; break ;;
+            *)              printf 'claudes: unknown flag %s (try --help)\n' "$1" >&2; exit 2 ;;
+        esac
+    done
+
+    local states_re=""
+    [ ${#states[@]} -gt 0 ] && states_re=$(printf '|%s' "${states[@]}") && states_re="${states_re#|}"
+
+    awk -F'\t' \
+        -v states="$states_re" \
+        -v dir_pat="$dir_pat" \
+        -v name_pat="$name_pat" '
+        {
+            if (length(states) > 0) {
+                keep = 0
+                n = split(states, arr, "|")
+                for (i = 1; i <= n; i++) {
+                    if (index(tolower($1), tolower(arr[i])) > 0) { keep = 1; break }
+                }
+                if (!keep) next
+            }
+            if (length(dir_pat) > 0 && index(tolower($2), tolower(dir_pat)) == 0) next
+            if (length(name_pat) > 0 && index(tolower($5), tolower(name_pat)) == 0) next
+            print
+        }
+    '
+}
+
+list_sessions() {
+    local out
+    out=$(rows | filter_rows "$@")
+    if [ -z "$out" ]; then
+        printf 'no matching sessions\n'
+        return
+    fi
+    {
+        printf 'STATE\tWHERE\tAGE\tPANE\tNAME\n'
+        # Drop the trailing session_id column; keep the 5 display columns.
+        printf '%s\n' "$out" | awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,$5}'
+    } | column -t -s $'\t'
+}
+
+jump_to() {
+    local pane="${1:-}"
+    [ -z "$pane" ] && { printf 'usage: claudes jump <pane_id>\n' >&2; exit 2; }
+    "$WEZTERM" cli activate-pane --pane-id "$pane"
+}
+
+pick() {
+    command -v fzf >/dev/null 2>&1 || { printf 'fzf not installed\n' >&2; exit 1; }
+    local out selected pane
+    out=$(rows | filter_rows "$@")
+    [ -z "$out" ] && { printf 'no matching sessions\n'; exit 0; }
+    # rows emits: marker, where, age, pane, label, session_id.
+    # Build a display column and a trailing pane column for fzf selection.
+    selected=$(
+        printf '%s\n' "$out" \
+            | awk -F'\t' 'BEGIN{OFS="\t"} {printf "%-10s  %-30s  %-5s  %-44s\t%s\n", $1, $2, $3, $5, $4}' \
+            | fzf --delimiter='\t' --with-nth=1 --ansi \
+                  --header='state       where                           age    name' \
+            || true
+    )
+    [ -z "$selected" ] && exit 0
+    pane=$(printf '%s' "$selected" | awk -F'\t' '{print $2}')
+    jump_to "$pane"
+}
+
+clean() {
+    [ -d "$DIR" ] || exit 0
+    # -mtime +1 : files whose mtime is older than 24h — likely dead sessions
+    # that didn't fire SessionEnd (crash, SIGKILL).
+    find "$DIR" -name '*.json' -mtime +1 -delete
+}
+
+usage() {
+    cat <<'EOF'
+claudes — overview of running Claude Code sessions.
+
+USAGE
+  claudes [list] [FILTERS]   show the table of active sessions (default)
+  claudes pick [FILTERS]     fzf-select a session and jump to its Wezterm pane
+  claudes jump <pane_id>     activate the given Wezterm pane directly
+  claudes clean              drop registry entries older than 24h
+  claudes -h | --help        show this help
+
+FILTERS (list, pick)
+  -s, --state STATE    match a state (run|perm|ask|idle|done). May repeat.
+                       Long forms accepted: running, permission, question,
+                       elicitation, stopped.
+  -w, --waiting        shorthand for -s perm -s ask -s idle
+  -d, --dir PATTERN    substring match on WHERE (dirname:branch)
+  -n, --name PATTERN   substring match on NAME
+  All matches are case-insensitive. Filters combine with AND; repeated
+  --state values combine with OR.
+
+EXAMPLES
+  claudes --waiting                    anything that wants your input
+  claudes -s perm                      just permission prompts
+  claudes -d flow                      sessions under /flow
+  claudes pick -w                      fzf through everything waiting
+
+STATES
+  ⚙ run     Claude is working on a response
+  ⚠ perm    waiting on a permission prompt (tab-marked, notified)
+  ? ask     waiting on an elicitation question (tab-marked)
+  … idle    idle-prompt fired — Claude is waiting on you
+  ✓ done    assistant finished its turn; waiting for your next prompt
+
+COLUMNS
+  STATE     current state (see above)
+  WHERE     dirname:branch, or just dirname if no branch (truncated to 28c)
+  AGE       time since last state change; "?" means the timestamp is unparseable
+  PANE      Wezterm pane id — use with `claudes jump`
+  NAME      /rename custom-title → auto summary → last message (truncated to 44c)
+
+DATA
+  Registry  ~/.claude/sessions/<session_id>.json (one file per live session)
+  Written by hooks in ~/.claude/hooks/session-registry.sh
+
+EOF
+}
+
+# Default to `list` when the first arg is absent or looks like a filter.
+# `claudes -w`, `claudes --state perm`, etc. should not require typing `list`.
+# Help flags must be intercepted here, or filter_rows would choke on them.
+CMD="${1:-list}"
+case "$CMD" in
+    -h|--help|help)   usage; exit 0 ;;
+    -*)               CMD=list ;;
+    *)                shift || true ;;
+esac
+
+case "$CMD" in
+    list|ls)          list_sessions "$@" ;;
+    pick|p)           pick "$@" ;;
+    jump|j)           jump_to "${1:-}" ;;
+    clean)            clean ;;
+    *)                usage >&2; exit 2 ;;
+esac

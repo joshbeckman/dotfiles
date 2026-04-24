@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Permission Needed\" -sound Ping -group \"$SID:permission\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh permission; echo \"$INPUT\" | ~/.claude/hooks/attention.sh set_permission"
           }
         ]
       },
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Question\" -sound Ping -group \"$SID:question\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh question; echo \"$INPUT\" | ~/.claude/hooks/attention.sh set_question"
           }
         ]
       },
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); MSG=$(echo \"$INPUT\" | jq -r '.message'); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; terminal-notifier -message \"$MSG\" -title \"Claude ($DIRNAME:$DIR): Waiting\" -group \"$SID:idle\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "~/.claude/hooks/session-registry.sh idle"
           }
         ]
       }
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); CWD=$(echo \"$INPUT\" | jq -r '.cwd'); SID=$(echo \"$INPUT\" | jq -r '.session_id'); DIR=\"$(cd \"$CWD\" && git symbolic-ref --short HEAD 2>/dev/null || dirlabel-bip39 \"$CWD\")\"; DIRNAME=\"$(basename \"$CWD\")\"; PREVIEW=$(echo \"$INPUT\" | jq -r '.last_assistant_message // \"Response complete\"' | tr '\\n\"' ' ' | cut -c1-80); terminal-notifier -message \"$PREVIEW\" -title \"Claude ($DIRNAME:$DIR): Done\" -group \"$SID:stop\" -execute \"/opt/homebrew/bin/wezterm cli activate-pane --pane-id $WEZTERM_PANE\" -activate com.github.wez.wezterm"
+            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh stopped; echo \"$INPUT\" | ~/.claude/hooks/attention.sh clear"
           }
         ]
       }
@@ -77,6 +77,10 @@
             "type": "command",
             "command": "~/.claude/hooks/skills-update.mjs",
             "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-registry.sh start"
           }
         ]
       }
@@ -87,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | jq -r '.session_id'); for g in permission question idle stop; do terminal-notifier -remove \"$SID:$g\" >/dev/null 2>&1 || true; done"
+            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh end; echo \"$INPUT\" | ~/.claude/hooks/attention.sh clear"
           }
         ]
       }
@@ -101,6 +105,15 @@
             "command": "rtk hook claude"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/attention.sh clear"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -109,7 +122,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | jq -r '.session_id'); for g in permission question idle stop; do terminal-notifier -remove \"$SID:$g\" >/dev/null 2>&1 || true; done"
+            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh running; echo \"$INPUT\" | ~/.claude/hooks/attention.sh clear"
           }
         ]
       }

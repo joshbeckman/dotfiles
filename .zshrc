@@ -387,11 +387,11 @@ autoload -Uz compinit && compinit
 # source ~/src/github.com/jdxcode/gh/bash/gl.bash
 # source ~/src/github.com/jdxcode/gh/completions/gl.bash
 
+export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
 
-# wtp — worktree pool manager
-if [ -d "$HOME/src/github.com/shopify-playground/wtp" ]; then
-  export PATH="$HOME/src/github.com/shopify-playground/wtp/bin:$PATH"
-  source "$HOME/src/github.com/shopify-playground/wtp/shell/wtp.zsh"
+# wtp — worktree pool manager (installed via `tec tools install //areas/tools/wtp`)
+if command -v _wtp >/dev/null 2>&1; then
+  eval "$(_wtp init --zsh)"
 fi
 
 . $HOME/.shellrc.load
@@ -423,6 +423,7 @@ export PATH="/Users/joshbeckman/.deno/bin:$PATH"
 [ -f ~/.secrets ] && source ~/.secrets
 
 [[ -f /opt/dev/sh/chruby/chruby.sh ]] && { type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; } }
+source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
 # cloudplatform: add Shopify clusters to your local kubernetes config
 export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}/Users/joshbeckman/.kube/config:/Users/joshbeckman/.kube/config.shopify.cloudplatform
