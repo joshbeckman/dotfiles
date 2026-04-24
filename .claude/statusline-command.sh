@@ -18,6 +18,7 @@ RESET='\033[0m'
 MODEL=$(echo "$input" | jq -r '.model.display_name // "claude"')
 CONTEXT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d'.' -f1)
 COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+TRANSCRIPT=$(echo "$input" | jq -r '.transcript_path // empty')
 
 # Get git branch and dirty state if in repo
 GIT_BRANCH=""
@@ -43,6 +44,20 @@ if [ "$(echo "$COST > 0" | bc -l 2>/dev/null)" = "1" ]; then
     COST_DISPLAY=" ${TEAL}󰄛 \$${COST_FMT}${RESET}"
 fi
 
+# Cache hit rate aggregated across the session transcript
+CACHE_DISPLAY=""
+if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+    CACHE_RATE=$(jq -s '
+        [.[] | select(.message.usage) | .message.usage] as $u |
+        ([$u[] | .cache_read_input_tokens // 0] | add // 0) as $r |
+        ([$u[] | .input_tokens // 0] | add // 0) as $i |
+        ([$u[] | .cache_creation_input_tokens // 0] | add // 0) as $c |
+        ($r + $i + $c) as $total |
+        if $total > 0 then (($r * 100 / $total) | floor) else empty end
+    ' < "$TRANSCRIPT" 2>/dev/null)
+    [ -n "$CACHE_RATE" ] && CACHE_DISPLAY=" ${BLUE}󰃨 ${CACHE_RATE}%${RESET}"
+fi
+
 # Context color based on usage
 if [ "$CONTEXT" -gt 75 ]; then
     CTX_COLOR="${PEACH}"
@@ -53,4 +68,4 @@ else
 fi
 
 # Build the status line
-echo -e "${MAUVE} ${MODEL}${RESET}${GIT_BRANCH}${GIT_DIRTY} ${CTX_COLOR}󰮉 ${CONTEXT}%${RESET}${COST_DISPLAY}\n"
+echo -e "${MAUVE} ${MODEL}${RESET}${GIT_BRANCH}${GIT_DIRTY} ${CTX_COLOR}󰮉 ${CONTEXT}%${RESET}${CACHE_DISPLAY}${COST_DISPLAY}\n"
