@@ -38,6 +38,13 @@ age_of() {
 # jsonl under ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl and
 # appends `{"type":"summary","summary":"..."}` records as it summarizes.
 # The latest such record is the session's current name.
+# When non-empty, enables a per-session summary cache at this path. Each
+# session gets two files: <sid> (the cached name) and <sid>.mtime (the
+# jsonl mtime that produced it). The tail loop sets this to avoid
+# re-grepping multi-MB jsonls every tick; a single invocation leaves it
+# unset so results are always fresh.
+SUMMARY_CACHE_DIR=""
+
 summary_for() {
     local sid="$1" cwd="$2"
     [ -z "$sid" ] || [ -z "$cwd" ] && return 0
@@ -49,6 +56,18 @@ summary_for() {
     encoded="${encoded//./-}"
     local jsonl="$HOME/.claude/projects/$encoded/$sid.jsonl"
     [ -f "$jsonl" ] || return 0
+
+    local mtime="" cache="" cache_mtime=""
+    if [ -n "$SUMMARY_CACHE_DIR" ]; then
+        mtime=$(/usr/bin/stat -f %m "$jsonl" 2>/dev/null || printf 0)
+        cache="$SUMMARY_CACHE_DIR/$sid"
+        cache_mtime="$SUMMARY_CACHE_DIR/$sid.mtime"
+        if [ -f "$cache_mtime" ] && [ "$(cat "$cache_mtime")" = "$mtime" ]; then
+            cat "$cache"
+            return
+        fi
+    fi
+
     # Prefer the user's /rename ("custom-title"), then fall back to the
     # auto-generated compaction summary. Summary records only appear for
     # compacted sessions, so live un-renamed sessions won't have either.
@@ -56,9 +75,14 @@ summary_for() {
     local name
     name=$(grep '"type":"custom-title"' "$jsonl" 2>/dev/null | tail -1 \
         | jq -r '.customTitle // empty' 2>/dev/null)
-    [ -n "$name" ] && { printf '%s' "$name"; return; }
-    grep '"type":"summary"' "$jsonl" 2>/dev/null | tail -1 \
-        | jq -r '.summary // empty' 2>/dev/null
+    [ -z "$name" ] && name=$(grep '"type":"summary"' "$jsonl" 2>/dev/null | tail -1 \
+        | jq -r '.summary // empty' 2>/dev/null)
+
+    if [ -n "$SUMMARY_CACHE_DIR" ]; then
+        printf '%s' "$name" > "$cache"
+        printf '%s' "$mtime" > "$cache_mtime"
+    fi
+    printf '%s' "$name"
 }
 
 marker_for() {
@@ -233,6 +257,49 @@ clean() {
     find "$DIR" -name '*.json' -mtime +1 -delete
 }
 
+# Live-updating list. Default 2s refresh because summary_for greps multi-MB
+# jsonls and I don't want a 1s tick hammering the disk unnecessarily (the
+# cache takes most of the pain out but fresh sessions still miss).
+tail_loop() {
+    local interval=2
+    local -a passthrough=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -i|--interval) interval="$2"; shift 2 ;;
+            --interval=*)  interval="${1#*=}"; shift ;;
+            *)             passthrough+=("$1"); shift ;;
+        esac
+    done
+
+    SUMMARY_CACHE_DIR=$(mktemp -d -t claudes-tail) || {
+        printf 'failed to create cache dir\n' >&2
+        exit 1
+    }
+    # Clean up the cache on any exit path, including Ctrl-C.
+    trap 'rm -rf "$SUMMARY_CACHE_DIR"; printf "\n"; exit 0' INT TERM
+    trap 'rm -rf "$SUMMARY_CACHE_DIR"' EXIT
+
+    # Wipe the screen once up front so the first frame isn't painted over
+    # whatever the user's shell had previously drawn.
+    clear
+
+    while true; do
+        local table
+        if [ ${#passthrough[@]} -gt 0 ]; then
+            table=$(list_sessions "${passthrough[@]}")
+        else
+            table=$(list_sessions)
+        fi
+        # Double-buffer the redraw: compute the full frame first (above),
+        # then home the cursor with \e[H and repaint over the previous
+        # frame. \e[J erases from cursor to end of display, which kills
+        # any rows that belonged to a taller prior frame. No intermediate
+        # blank state, so no flicker even when list_sessions is slow.
+        printf '\e[Hclaudes · tail %ss · ctrl-c to quit\n\n%s\n\e[J' "$interval" "$table"
+        sleep "$interval"
+    done
+}
+
 usage() {
     cat <<'EOF'
 claudes — overview of running Claude Code sessions.
@@ -240,6 +307,8 @@ claudes — overview of running Claude Code sessions.
 USAGE
   claudes [list] [FILTERS]   show the table of active sessions (default)
   claudes pick [FILTERS]     fzf-select a session and jump to its Wezterm pane
+  claudes tail [FILTERS] [-i N]
+  claudes -t / --tail        live-updating list (default 2s, ctrl-c to quit)
   claudes jump <pane_id>     activate the given Wezterm pane directly
   claudes clean              drop registry entries older than 24h
   claudes -h | --help        show this help
@@ -259,6 +328,8 @@ EXAMPLES
   claudes -s perm                      just permission prompts
   claudes -d flow                      sessions under /flow
   claudes pick -w                      fzf through everything waiting
+  claudes -t                           live-updating list
+  claudes -t -w -i 5                   tail everything waiting, refresh 5s
 
 STATES
   ⚙ run     Claude is working on a response
@@ -283,10 +354,12 @@ EOF
 
 # Default to `list` when the first arg is absent or looks like a filter.
 # `claudes -w`, `claudes --state perm`, etc. should not require typing `list`.
-# Help flags must be intercepted here, or filter_rows would choke on them.
+# Help and tail flags must be intercepted here before the generic `-*`
+# branch sends them through to filter_rows (which would reject them).
 CMD="${1:-list}"
 case "$CMD" in
     -h|--help|help)   usage; exit 0 ;;
+    -t|--tail)        CMD=tail; shift ;;
     -*)               CMD=list ;;
     *)                shift || true ;;
 esac
@@ -294,6 +367,7 @@ esac
 case "$CMD" in
     list|ls)          list_sessions "$@" ;;
     pick|p)           pick "$@" ;;
+    tail|t)           tail_loop "$@" ;;
     jump|j)           jump_to "${1:-}" ;;
     clean)            clean ;;
     *)                usage >&2; exit 2 ;;
