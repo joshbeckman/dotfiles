@@ -25,6 +25,7 @@ brew "vim"
 brew "shopify/shopify/ejson" if OS.mac?
 brew "shopify/shopify/shopify-cli" if OS.mac?
 cask "wezterm"
+cask "ghostty"
 cask "keycastr" if OS.mac?
 cask "raycast" if OS.mac?
 cask "shortcat" if OS.mac?

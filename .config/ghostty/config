@@ -1,0 +1,46 @@
+# Ported from wezterm.lua (Apr 2026).
+# Ghostty has no scripting layer, so a few wezterm features can't be
+# carried over: Lua right-status powerline, the project picker, and
+# fuzzy workspace/tab launchers. See note at bottom for the migration.
+
+font-family = Berkeley Mono
+font-size = 16
+
+# Auto-switch with macOS Appearance, mirroring appearance.lua. Ghostty
+# ships no plain "Solarized {Light,Dark}" — `ghostty +list-themes` shows
+# only the iTerm2-prefixed ports, so we use those.
+theme = light:iTerm2 Solarized Light,dark:iTerm2 Solarized Dark
+
+# Lets Option behave as Alt so opt+left / opt+right send ESC+b / ESC+f
+# in the shell. Replaces the two explicit SendString keybinds in wezterm.
+macos-option-as-alt = true
+
+cursor-style = block
+cursor-style-blink = true
+# Ghostty's shell integration otherwise switches the cursor to a bar at
+# the prompt (and back to block while a command runs), which overrides
+# `cursor-style` above. Opting out keeps the block shape always-on.
+# `no-cursor` only disables that one feature; title/path/sudo stay.
+shell-integration-features = no-cursor
+
+# tmux-style leader: CTRL+A, then a follow-up key. The `a>x` syntax is
+# Ghostty's key-sequence form.
+keybind = ctrl+a>backslash=new_split:right
+keybind = ctrl+a>minus=new_split:down
+
+keybind = ctrl+a>h=goto_split:left
+keybind = ctrl+a>l=goto_split:right
+keybind = ctrl+a>j=goto_split:bottom
+keybind = ctrl+a>k=goto_split:top
+
+# Pass CTRL+A through to the shell when doubled (matches wezterm).
+keybind = ctrl+a>ctrl+a=text:\x01
+
+# Lost from wezterm — keeping the list here so the gap is explicit, not
+# silently forgotten:
+#   - Custom right-status powerline w/ gradient (no scriptable status bar).
+#   - LEADER+p project picker (projects.lua) → run via tmux/zellij or fzf.
+#   - LEADER+f workspace launcher        → no Ghostty equivalent; tmux sessions.
+#   - LEADER+l fuzzy tab launcher        → cmd+1..9 tab nav, no fuzzy picker.
+#   - LEADER+r resize key-table          → use cmd+ctrl+arrows (Ghostty default).
+#   - cmd+, → spawn nvim on config       → Ghostty has no spawn-command keybind.
