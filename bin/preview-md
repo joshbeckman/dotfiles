@@ -11,6 +11,9 @@ show_help() {
     echo "Reads markdown from stdin, a file, or a string argument and opens it as HTML in your browser."
     echo "Uses pandoc to convert GitHub Flavored Markdown to HTML."
     echo ""
+    echo "Diagrams: \`\`\`mermaid and \`\`\`dot (or \`\`\`graphviz) fenced blocks render as inline SVG"
+    echo "          via mermaid + viz-js loaded from jsdelivr (requires internet)."
+    echo ""
     echo "Options:"
     echo "  --watch[=SECONDS]   Re-render on an interval (default 10s) until the source file is deleted."
     echo "                      Requires a FILE argument. Browser auto-refreshes via meta refresh."
@@ -46,15 +49,23 @@ timestamp=$(date +%Y%m%d_%H%M%S)
 tmpfile="/tmp/preview-md-${timestamp}-$$.html"
 tmpfile_raw="/tmp/preview-md-raw-${timestamp}-$$.html"
 
-custom_styles='<base target="_blank"><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"><style>body { font-family: "IBM Plex Sans", sans-serif; max-width: 80ch; margin: 2ch auto; padding: 2ch; } body:before, body:after { display:none; } h1, h2, h3, h4, h5, h6 { margin: 3ch 0; } @media (prefers-color-scheme: dark) { html, body { background: #1a1a2e; color: #e0e0e0; } a { color: #6ea8fe; } a:visited { color: #b4a0ff; } code { background: #2a2a3e; } pre { background: #2a2a3e; padding: 1ch; overflow-x: auto; } blockquote { border-left: 3px solid #444; padding-left: 1ch; color: #aaa; } hr { border-color: #444; } table, th, td { border-color: #444; } th { background: #2a2a3e; } } .preview-md-badge { position: fixed; top: 1ch; right: 1ch; padding: 0.3ch 0.8ch; font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: 3px; opacity: 0.85; background: #2ecc71; color: #0a3d0a; z-index: 9999; } @keyframes preview-md-stale { 0% { background: #2ecc71; color: #0a3d0a; } 66% { background: #f1c40f; color: #3a2a00; } 100% { background: #e74c3c; color: #fff; } }</style>'
+custom_styles='<base target="_blank"><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet"><style>body { font-family: "IBM Plex Sans", sans-serif; max-width: 80ch; margin: 2ch auto; padding: 2ch; } body:before, body:after { display:none; } h1, h2, h3, h4, h5, h6 { margin: 3ch 0; } .diagram-rendered { margin: 2ch 0; text-align: center; } .diagram-rendered svg { max-width: 100%; height: auto; } .diagram-error { padding: 1ch; border: 1px solid #e74c3c; color: #e74c3c; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; } @media (prefers-color-scheme: dark) { html, body { background: #1a1a2e; color: #e0e0e0; } a { color: #6ea8fe; } a:visited { color: #b4a0ff; } code { background: #2a2a3e; } pre { background: #2a2a3e; padding: 1ch; overflow-x: auto; } blockquote { border-left: 3px solid #444; padding-left: 1ch; color: #aaa; } hr { border-color: #444; } table, th, td { border-color: #444; } th { background: #2a2a3e; } .diagram-rendered.graphviz { background: #f5f5f5; border-radius: 4px; padding: 1ch; } } .preview-md-badge { position: fixed; top: 1ch; right: 1ch; padding: 0.3ch 0.8ch; font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: 3px; opacity: 0.85; background: #2ecc71; color: #0a3d0a; z-index: 9999; } @keyframes preview-md-stale { 0% { background: #2ecc71; color: #0a3d0a; } 66% { background: #f1c40f; color: #3a2a00; } 100% { background: #e74c3c; color: #fff; } }</style>'
 
-head_inject="$custom_styles"
+# Why a single-line inline ESM <script> rather than separate <script src> tags or multi-line:
+# - pandoc gfm wraps `dot` blocks in <div class="sourceCode"><pre class="sourceCode dot">…spans…</pre></div>
+#   while `mermaid` blocks get <pre class="mermaid"><code>…</code></pre>. Reading textContent on the <pre>
+#   strips highlighting spans, so a single replacer handles both — we don't need mermaid auto-init
+#   or graphviz HTMLWidget, both of which would miss the dot case.
+# - The string is on one line because awk -v in the head-inject step rejects embedded newlines.
+diagram_script='<script type="module">(async () => { const dark = window.matchMedia("(prefers-color-scheme: dark)").matches; const replaceWith = (node, html, kind) => { const w = document.createElement("div"); w.className = "diagram-rendered " + kind; w.innerHTML = html; (node.closest("div.sourceCode") || node.closest("pre") || node).replaceWith(w); }; const showErr = (node, err) => { const p = document.createElement("pre"); p.className = "diagram-error"; p.textContent = String(err && err.message || err); (node.closest("div.sourceCode") || node.closest("pre") || node).replaceWith(p); }; const mNodes = Array.from(document.querySelectorAll("pre.mermaid, pre.sourceCode.mermaid")); if (mNodes.length) { try { const { default: mermaid } = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"); mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "loose" }); let i = 0; for (const n of mNodes) { try { const { svg } = await mermaid.render("mermaid-" + (i++), n.textContent.trim()); replaceWith(n, svg, "mermaid"); } catch (e) { showErr(n, e); } } } catch (e) { console.error("mermaid load failed", e); } } const dNodes = Array.from(document.querySelectorAll("pre.dot, pre.sourceCode.dot, pre.graphviz, pre.sourceCode.graphviz")); if (dNodes.length) { try { const { instance } = await import("https://cdn.jsdelivr.net/npm/@viz-js/viz/lib/viz-standalone.mjs"); const viz = await instance(); for (const n of dNodes) { try { replaceWith(n, viz.renderSVGElement(n.textContent.trim()).outerHTML, "graphviz"); } catch (e) { showErr(n, e); } } } catch (e) { console.error("graphviz load failed", e); } } })();</script>'
+
+head_inject="${custom_styles}${diagram_script}"
 if (( watch_interval > 0 )); then
     if [[ $# -ne 1 || ! -f "$1" ]]; then
         echo "Error: --watch requires a FILE argument that exists." >&2
         exit 1
     fi
-    head_inject="${custom_styles}<meta http-equiv=\"refresh\" content=\"${watch_interval}\">"
+    head_inject="${custom_styles}${diagram_script}<meta http-equiv=\"refresh\" content=\"${watch_interval}\">"
 fi
 
 render() {
