@@ -394,6 +394,11 @@ if command -v _wtp >/dev/null 2>&1; then
   eval "$(_wtp init --zsh)"
 fi
 
+# try — experiment directory manager (https://github.com/tobi/try)
+if command -v try >/dev/null 2>&1; then
+  eval "$(try init)"
+fi
+
 . $HOME/.shellrc.load
 
 [ -f /opt/dev/dev.sh ] && source /opt/dev/dev.sh

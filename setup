@@ -116,3 +116,10 @@ case "$OSTYPE" in
   darwin*)        __setup_mac ;;
   *)              __setup_unsupported ;;
 esac
+
+# rtk — install Claude Code hook + RTK.md (https://github.com/rtk-ai/rtk)
+if command -v rtk &> /dev/null; then
+        echo '  ======  installing rtk Claude Code hook'
+        rtk init -g
+        echo '  ======  installed rtk Claude Code hook'
+fi
