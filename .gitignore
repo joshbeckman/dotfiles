@@ -21,6 +21,9 @@ bin/golint
 .claude/tasks/
 .claude/telemetry/
 .claude/todos/
+.claude/usage-data/
+.claude/.credentials.json
+.claude/.devx-managed-hooks.json
 
 bin/.auto-review-skip
 .secrets

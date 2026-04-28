@@ -20,8 +20,39 @@
       "mcp__josh-beckman-status__get_status",
       "mcp__josh-beckman-status__get_current_time_of_day",
       "Bash(preview-md:*)",
-      "mcp__josh-notes__get_post"
+      "mcp__josh-notes__get_post",
+      "Bash(gh view-md:*)",
+      "mcp__slack-mcp__get_messages",
+      "mcp__slack-mcp__get_unreads",
+      "mcp__slack-mcp__search_channels",
+      "mcp__gworkspace-mcp__read_file",
+      "mcp__gworkspace-mcp__search_drive",
+      "mcp__fellow-mcp__search_meetings",
+      "mcp__vault-mcp__vault_get_user_feed",
+      "Bash(ls:*)",
+      "Bash(gh extension:*)",
+      "mcp__josh-notes__get_proverbs",
+      "Bash(quick:*)",
+      "Bash(pandoc:*)",
+      "WebFetch(domain:arxiv.org)",
+      "Bash(gh api:*)",
+      "Bash(gh pr list:*)",
+      "Bash(cat:*)",
+      "Bash(git status:*)",
+      "Bash(gh issue:*)",
+      "Bash(/Users/joshbeckman/dotfiles/bin/humanity)",
+      "Bash(nvim --headless -c 'Copilot status' -c 'qa!')",
+      "Bash(nvim *)",
+      "Skill(update-config)",
+      "Bash(rtk git *)",
+      "Bash(rtk read *)",
+      "Bash(rtk ls *)",
+      "Bash(rtk wc *)",
+      "Bash(rtk ps *)",
+      "Bash(rtk grep *)"
     ],
+    "deny": [],
+    "defaultMode": "auto",
     "additionalDirectories": [
       "~/Downloads",
       "/tmp"
@@ -132,7 +163,10 @@
     "type": "command",
     "command": "bash ~/.claude/statusline-command.sh"
   },
+  "theme": "light",
+  "preferredNotifChannel": "terminal_bell",
   "feedbackSurveyState": {
     "lastShownTime": 1754147115362
-  }
+  },
+  "skipAutoPermissionPrompt": true
 }
