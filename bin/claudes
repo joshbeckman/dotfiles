@@ -3,7 +3,7 @@
 #
 # Reads the registry written by ~/.claude/hooks/session-registry.sh and
 # prints a table of live sessions. With `pick`, uses fzf to select a session
-# and activates its Wezterm pane.
+# and activates its tmux pane.
 #
 # Commands:
 #   claudes [list]   — print table (default)
@@ -13,7 +13,6 @@
 set -eu
 
 DIR="$HOME/.claude/sessions"
-WEZTERM=/opt/homebrew/bin/wezterm
 
 age_of() {
     local ts="$1" now then diff
@@ -228,7 +227,31 @@ list_sessions() {
 jump_to() {
     local pane="${1:-}"
     [ -z "$pane" ] && { printf 'usage: claudes jump <pane_id>\n' >&2; exit 2; }
-    "$WEZTERM" cli activate-pane --pane-id "$pane"
+    # tmux pane ids are unique across the server (e.g. %23). select-window
+    # and select-pane both accept that form and resolve the session/window.
+    # If the pane has died, display-message exits nonzero and we bail loud.
+    if ! tmux display-message -t "$pane" -p '#{pane_id}' >/dev/null 2>&1; then
+        printf 'pane %s not found (tmux server stale or pane closed)\n' "$pane" >&2
+        exit 1
+    fi
+    if [ -n "${TMUX:-}" ]; then
+        # Switch the current client's session first so the window/pane
+        # selection is visible — select-window alone wouldn't move you off
+        # a different session.
+        local target_session
+        target_session=$(tmux display-message -t "$pane" -p '#S')
+        tmux switch-client -t "$target_session" 2>/dev/null || true
+        tmux select-window -t "$pane"
+        tmux select-pane -t "$pane"
+    else
+        # Outside tmux there's no client to switch. Print the attach hint
+        # rather than silently failing; reattaching from this script would
+        # need to take over the user's terminal, which is too surprising.
+        local target_session
+        target_session=$(tmux display-message -t "$pane" -p '#S')
+        printf 'not in tmux; attach with: tmux attach -t %s\n' "$target_session" >&2
+        exit 2
+    fi
 }
 
 pick() {
@@ -306,10 +329,10 @@ claudes — overview of running Claude Code sessions.
 
 USAGE
   claudes [list] [FILTERS]   show the table of active sessions (default)
-  claudes pick [FILTERS]     fzf-select a session and jump to its Wezterm pane
+  claudes pick [FILTERS]     fzf-select a session and jump to its tmux pane
   claudes tail [FILTERS] [-i N]
   claudes -t / --tail        live-updating list (default 2s, ctrl-c to quit)
-  claudes jump <pane_id>     activate the given Wezterm pane directly
+  claudes jump <pane_id>     activate the given tmux pane directly
   claudes clean              drop registry entries older than 24h
   claudes -h | --help        show this help
 
@@ -342,7 +365,7 @@ COLUMNS
   STATE     current state (see above)
   WHERE     dirname:branch, or just dirname if no branch (truncated to 28c)
   AGE       time since last state change; "?" means the timestamp is unparseable
-  PANE      Wezterm pane id — use with `claudes jump`
+  PANE      tmux pane id (e.g. %23) — use with `claudes jump`
   NAME      /rename custom-title → auto summary → last message (truncated to 44c)
 
 DATA

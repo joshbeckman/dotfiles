@@ -1,0 +1,11 @@
+#!/bin/sh
+# Rename the current tmux window. Analogue of wtrename (wezterm tab rename).
+# Requires being inside tmux: rename-window without -t needs $TMUX to resolve
+# the target, and the wezterm version is implicitly current-tab too.
+
+[ -n "$TMUX" ] || { echo "twrename: not in tmux" >&2; exit 1; }
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+default_name="${SPIN_FQDN:-$(if [ -n "$branch" ]; then echo "$(basename "$PWD"):$branch"; else dirlabel-bip39; fi)}"
+name=${1-$default_name}
+tmux rename-window "$name"

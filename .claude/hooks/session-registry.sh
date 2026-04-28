@@ -44,7 +44,7 @@ case "$EVENT" in
             --arg cwd "$CWD" \
             --arg dirname "$DIRNAME" \
             --arg branch "$BRANCH" \
-            --arg pane "${WEZTERM_PANE:-}" \
+            --arg pane "${TMUX_PANE:-}" \
             --arg ts "$NOW" \
             '{session_id:$sid, cwd:$cwd, dirname:$dirname, branch:$branch,
               pane_id:$pane, state:"running", started_at:$ts, updated_at:$ts}' > "$FILE"
@@ -67,7 +67,7 @@ case "$EVENT" in
                --arg cwd "$CWD" \
                --arg dirname "$DIRNAME" \
                --arg branch "$BRANCH" \
-               --arg pane "${WEZTERM_PANE:-}" \
+               --arg pane "${TMUX_PANE:-}" \
                --arg state "$EVENT" \
                --arg msg "$MSG" \
                --arg ts "$NOW" \

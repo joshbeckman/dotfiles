@@ -2,10 +2,12 @@
 # attention.sh <event>
 # events: set_permission | set_question | clear
 #
-# Quieter replacement for terminal-notifier spam: marks the Wezterm tab
-# containing the current pane with a prefix so it's visible in the tab bar.
-# For permission_prompt only, also fires a single terminal-notifier so you
-# get a nudge when Wezterm isn't focused. elicitation/idle/stop stay silent.
+# Quieter replacement for terminal-notifier spam: marks the tmux window
+# containing the current pane with a prefix so it's visible in the status
+# bar's window list. For permission_prompt only, also fires a single
+# terminal-notifier so you get a nudge when ghostty isn't focused, and a
+# tmux display-message toast for clients attached to the same session.
+# elicitation/idle/stop stay silent.
 set -eu
 
 EVENT="${1:-}"
@@ -17,71 +19,77 @@ SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty')
 MSG=$(printf '%s' "$INPUT" | jq -r '.message // empty' | tr '\n"' '  ' | cut -c1-100)
 DIRNAME=$(basename "${CWD:-claude}")
 
-WEZTERM=/opt/homebrew/bin/wezterm
 BACKUP_DIR="$HOME/.claude/sessions"
 BACKUP_FILE=""
 [ -n "$SID" ] && BACKUP_FILE="$BACKUP_DIR/$SID.tabtitle"
 
-set_title() {
-    # Guard: only meaningful when running inside Wezterm.
-    [ -n "${WEZTERM_PANE:-}" ] || return 0
-    "$WEZTERM" cli set-tab-title --pane-id "$WEZTERM_PANE" "$1" 2>/dev/null || true
+set_window_name() {
+    # Guard: only meaningful when running inside tmux with a known pane.
+    [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+    tmux rename-window -t "$TMUX_PANE" "$1" 2>/dev/null || true
 }
 
-# Remember whatever the tab was showing before we overwrite it. Rationale:
-# setting tab_title to "" reverts to "automatic" mode, which in Wezterm
-# just means "show the pane title". Any zsh prompt fire between set and
-# clear can stomp the pane title down to literally "zsh", so "restore to
-# automatic" loses the original name. Instead we capture the concrete
-# string being shown now (explicit tab_title if any, else pane title) and
-# restore that exact value on clear.
+# Save window name AND automatic-rename setting. tmux rename-window has the
+# side effect of disabling automatic-rename, so without restoring the option
+# we'd lose process-driven names on restore.
 snapshot_title() {
-    [ -n "${WEZTERM_PANE:-}" ] || return 0
+    [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
     [ -z "$BACKUP_FILE" ] && return 0
     # Don't overwrite an existing snapshot: a rapid set_question→set_permission
     # (or double-fire) would otherwise snapshot our own attention mark.
     [ -f "$BACKUP_FILE" ] && return 0
     mkdir -p "$BACKUP_DIR"
-    "$WEZTERM" cli list --format json 2>/dev/null \
-        | jq -r --argjson p "$WEZTERM_PANE" '
-            .[] | select(.pane_id == $p)
-            | (.tab_title // "") as $t
-            | if $t == "" then (.title // "") else $t end
-          ' 2>/dev/null | head -1 > "$BACKUP_FILE"
+    local name auto
+    name=$(tmux display-message -t "$TMUX_PANE" -p '#W' 2>/dev/null || printf '')
+    auto=$(tmux show-window-options -t "$TMUX_PANE" -v automatic-rename 2>/dev/null || printf 'on')
+    printf '%s\n%s\n' "$name" "$auto" > "$BACKUP_FILE"
 }
 
 restore_title() {
-    [ -n "${WEZTERM_PANE:-}" ] || return 0
-    if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
-        set_title "$(cat "$BACKUP_FILE")"
-        rm -f "$BACKUP_FILE"
-    else
-        # No snapshot — nothing to restore. Leaving the current title in
-        # place is safer than stomping it with "" (which could itself
-        # reveal "zsh" if the pane title is stale).
-        :
-    fi
+    [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+    [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ] || return 0
+    local name auto
+    name=$(sed -n '1p' "$BACKUP_FILE")
+    auto=$(sed -n '2p' "$BACKUP_FILE")
+    [ -n "$name" ] && tmux rename-window -t "$TMUX_PANE" "$name" 2>/dev/null || true
+    # Re-enable automatic-rename only if it was on before — flipping it on
+    # for windows the user had explicitly named would clobber their choice.
+    [ "$auto" = "on" ] && tmux set-window-option -t "$TMUX_PANE" automatic-rename on 2>/dev/null || true
+    rm -f "$BACKUP_FILE"
+}
+
+# In-tmux toast. Only displays on clients attached to the pane's session;
+# users on a different tmux session won't see it (terminal-notifier covers
+# that case for the permission event).
+tmux_toast() {
+    [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+    tmux display-message -t "$TMUX_PANE" -d 4000 "$1" 2>/dev/null || true
 }
 
 case "$EVENT" in
     set_permission)
         snapshot_title
-        set_title "⚠ $DIRNAME"
+        set_window_name "⚠ $DIRNAME"
+        tmux_toast "⚠ Claude $DIRNAME: permission needed — $MSG"
         # Single out-of-app nudge, only for permission — the one event worth
         # interrupting focus for. Sound is retained here deliberately.
         if command -v terminal-notifier >/dev/null 2>&1; then
+            # -execute runs via sh; tmux select-window/select-pane both
+            # accept a global pane id like %23 and resolve session+window
+            # automatically. No -c flag because the most-recently-attached
+            # client is the right target for the user-facing tmux.
             terminal-notifier \
                 -message "$MSG" \
                 -title "Claude $DIRNAME: permission needed" \
                 -sound Ping \
                 -group "$SID:permission" \
-                -execute "$WEZTERM cli activate-pane --pane-id ${WEZTERM_PANE:-}" \
-                -activate com.github.wez.wezterm >/dev/null 2>&1 || true
+                -execute "tmux select-window -t ${TMUX_PANE:-} 2>/dev/null; tmux select-pane -t ${TMUX_PANE:-} 2>/dev/null" \
+                -activate com.mitchellh.ghostty >/dev/null 2>&1 || true
         fi
         ;;
     set_question)
         snapshot_title
-        set_title "? $DIRNAME"
+        set_window_name "? $DIRNAME"
         ;;
     clear)
         restore_title

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rename the current tmux session. Analogue of wwrename (wezterm workspace).
+
+[ -n "$TMUX" ] || { echo "tsrename: not in tmux" >&2; exit 1; }
+
+tmux rename-session "$1"
