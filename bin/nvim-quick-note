@@ -1,0 +1,23 @@
+#!/bin/bash
+# Opens neovim then copies content to clipboard on exit
+
+set -e
+
+# Create a temporary markdown file
+TMP_FILE=$(mktemp -t quick-note.XXXXXX).md
+
+# Open neovim on the temporary file
+/opt/homebrew/bin/nvim "$TMP_FILE"
+
+# After nvim exits, copy to clipboard if file has content
+if [ -f "$TMP_FILE" ] && [ -s "$TMP_FILE" ]; then
+    # Copy contents to clipboard
+    pbcopy < "$TMP_FILE"
+    # Send notification
+    if command -v /opt/homebrew/bin/terminal-notifier &> /dev/null; then
+        /opt/homebrew/bin/terminal-notifier -message "Note copied to clipboard" -title "Quick Note" -group "quick-note"
+    fi
+fi
+
+# Remove temporary file
+rm -f "$TMP_FILE"
