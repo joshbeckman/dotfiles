@@ -221,3 +221,5 @@ When writing prose (blog posts, documentation, comments, descriptions, PR bodies
 ## Time and Date Handling
 
 You should use the josh-beckman-status get_current_time_of_day tool for determing what day it is (when doing things with calendars, reporting, etc.)
+
+@RTK.md
