@@ -36,6 +36,11 @@ keybind = ctrl+a>k=goto_split:top
 # Pass CTRL+A through to the shell when doubled (matches wezterm).
 keybind = ctrl+a>ctrl+a=text:\x01
 
+# cmd+shift+a → tmux choose-tree. Sends the tmux prefix (C-s, \x13) followed
+# by C-j (\x0a), which is bound to choose-tree in .tmux.conf. tmux can't see
+# Cmd directly, so Ghostty translates the chord into the prefix sequence.
+keybind = cmd+shift+a=text:\x13\x0a
+
 # Lost from wezterm — keeping the list here so the gap is explicit, not
 # silently forgotten:
 #   - Custom right-status powerline w/ gradient (no scriptable status bar).
