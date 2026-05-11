@@ -17,7 +17,6 @@ brew "perl"
 brew "pinentry-mac" if OS.mac?
 brew "reattach-to-user-namespace"
 brew "ripgrep"
-brew "rtk"
 brew "rust"
 brew "terminal-notifier" if OS.mac?
 brew "tig"
