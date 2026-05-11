@@ -44,12 +44,11 @@
       "Bash(nvim --headless -c 'Copilot status' -c 'qa!')",
       "Bash(nvim *)",
       "Skill(update-config)",
-      "Bash(rtk git *)",
-      "Bash(rtk read *)",
-      "Bash(rtk ls *)",
-      "Bash(rtk wc *)",
-      "Bash(rtk ps *)",
-      "Bash(rtk grep *)"
+      "Bash(read *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(ps *)",
+      "Bash(grep *)"
     ],
     "deny": [],
     "defaultMode": "auto",
@@ -128,15 +127,6 @@
       }
     ],
     "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "rtk hook claude"
-          }
-        ]
-      },
       {
         "matcher": "",
         "hooks": [
