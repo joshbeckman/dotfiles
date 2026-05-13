@@ -46,6 +46,7 @@ fi
 
 # Cache hit rate aggregated across the session transcript
 CACHE_DISPLAY=""
+STALE_DISPLAY=""
 if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     CACHE_RATE=$(jq -s '
         [.[] | select(.message.usage) | .message.usage] as $u |
@@ -56,6 +57,30 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
         if $total > 0 then (($r * 100 / $total) | floor) else empty end
     ' < "$TRANSCRIPT" 2>/dev/null)
     [ -n "$CACHE_RATE" ] && CACHE_DISPLAY=" ${BLUE}󰃨 ${CACHE_RATE}%${RESET}"
+
+    # Relative time since last transcript write — answers "how stale is this chat?"
+    LAST_MTIME=$(stat -f %m "$TRANSCRIPT" 2>/dev/null)
+    if [ -n "$LAST_MTIME" ]; then
+        NOW=$(date +%s)
+        DELTA=$((NOW - LAST_MTIME))
+        if [ "$DELTA" -lt 60 ]; then
+            STALE_TEXT="now"
+            STALE_COLOR="${GREEN}"
+        elif [ "$DELTA" -lt 3600 ]; then
+            STALE_TEXT="$((DELTA / 60))m ago"
+            STALE_COLOR="${GREEN}"
+        elif [ "$DELTA" -lt 86400 ]; then
+            STALE_TEXT="$((DELTA / 3600))h ago"
+            STALE_COLOR="${PEACH}"
+        elif [ "$DELTA" -lt 604800 ]; then
+            STALE_TEXT="$((DELTA / 86400))d ago"
+            STALE_COLOR="${PINK}"
+        else
+            STALE_TEXT="$(date -r "$LAST_MTIME" +%b\ %d)"
+            STALE_COLOR="${PINK}"
+        fi
+        STALE_DISPLAY=" ${STALE_COLOR}󰥔 ${STALE_TEXT}${RESET}"
+    fi
 fi
 
 # Context color based on usage
@@ -68,4 +93,4 @@ else
 fi
 
 # Build the status line
-echo -e "${MAUVE} ${MODEL}${RESET}${GIT_BRANCH}${GIT_DIRTY} ${CTX_COLOR}󰮉 ${CONTEXT}%${RESET}${CACHE_DISPLAY}${COST_DISPLAY}\n"
+echo -e "${MAUVE} ${MODEL}${RESET}${GIT_BRANCH}${GIT_DIRTY} ${CTX_COLOR}󰮉 ${CONTEXT}%${RESET}${CACHE_DISPLAY}${COST_DISPLAY}${STALE_DISPLAY}\n"
