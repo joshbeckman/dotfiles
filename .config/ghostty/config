@@ -41,6 +41,12 @@ keybind = ctrl+a>ctrl+a=text:\x01
 # Cmd directly, so Ghostty translates the chord into the prefix sequence.
 keybind = cmd+shift+a=text:\x13\x0a
 
+# cmd+shift+m → alerted-only choose-tree. Same trick: prefix (C-s, \x13) then
+# `M` (literal capital M), which .tmux.conf binds to choose-tree with a
+# bell/alert filter. Use this to jump straight to whichever session is
+# waiting on you (Claude Code, sudo, etc.).
+keybind = cmd+shift+m=text:\x13M
+
 # Lost from wezterm — keeping the list here so the gap is explicit, not
 # silently forgotten:
 #   - Custom right-status powerline w/ gradient (no scriptable status bar).
