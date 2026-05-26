@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 
 require 'net/http'
-require 'json'
 require 'securerandom'
 
 base_url = 'https://www.joshbeckman.org'
@@ -15,7 +14,17 @@ rescue Net::ReadTimeout
 end
 raise StandardError, 'Proverbs data request failed' unless res.is_a?(Net::HTTPSuccess)
 
-items = JSON.parse(res.body)
+# Avoid `require 'json'` — the user-installed json gem's native extension can be finnicky
+items = res.body.scan(/"((?:[^"\\]|\\.)*)"/).flatten.map do |s|
+  s.gsub(/\\(["\\\/])|\\n|\\t|\\r/) do |m|
+    case m
+    when '\\n' then "\n"
+    when '\\t' then "\t"
+    when '\\r' then "\r"
+    else $1
+    end
+  end
+end
 puts ''
 puts "  #{items[SecureRandom.rand(items.count)]}"
 puts ''
