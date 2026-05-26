@@ -10,6 +10,7 @@ type AttentionEvent = {
 	message?: string;
 	cwd?: string;
 	notify?: boolean;
+	bell?: boolean;
 };
 
 const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "attention");
@@ -52,6 +53,8 @@ function setAttention(event: AttentionEvent) {
 
 	snapshotTitle(pane);
 	tmux(["rename-window", "-t", pane, windowName]);
+	tmux(["select-pane", "-t", pane, "-T", windowName]);
+	if (event.bell !== false) ringBell();
 
 	if (event.message) {
 		tmux(["display-message", "-t", pane, "-d", "4000", event.message.slice(0, 180)]);
@@ -69,8 +72,9 @@ function clearAttention() {
 	const stateFile = statePath(pane);
 	if (!fs.existsSync(stateFile)) return;
 
-	const [name = "", auto = "on"] = fs.readFileSync(stateFile, "utf8").split("\n");
+	const [name = "", auto = "on", paneTitle = ""] = fs.readFileSync(stateFile, "utf8").split("\n");
 	if (name) tmux(["rename-window", "-t", pane, name]);
+	tmux(["select-pane", "-t", pane, "-T", paneTitle]);
 	if (auto === "on") tmux(["set-window-option", "-t", pane, "automatic-rename", "on"]);
 	fs.rmSync(stateFile, { force: true });
 }
@@ -82,11 +86,16 @@ function snapshotTitle(pane: string) {
 	fs.mkdirSync(STATE_DIR, { recursive: true });
 	const name = tmuxOutput(["display-message", "-t", pane, "-p", "#W"]);
 	const auto = tmuxOutput(["show-window-options", "-t", pane, "-v", "automatic-rename"]) || "on";
-	fs.writeFileSync(stateFile, `${name}\n${auto}\n`);
+	const paneTitle = tmuxOutput(["display-message", "-t", pane, "-p", "#{pane_title}"]);
+	fs.writeFileSync(stateFile, `${name}\n${auto}\n${paneTitle}\n`);
 }
 
 function statePath(pane: string): string {
 	return path.join(STATE_DIR, `${pane.replace(/[^A-Za-z0-9_.-]/g, "_")}.tabtitle`);
+}
+
+function ringBell() {
+	process.stdout.write("\u0007");
 }
 
 function tmux(args: string[]) {
