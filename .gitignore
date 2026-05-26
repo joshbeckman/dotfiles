@@ -10,8 +10,13 @@ bin/golint
 .claude/debug/
 .claude/file-history/
 .claude/history.jsonl
+.claude/daemon.log
+.claude/daemon/
+.claude/jobs/
+.claude/mcp-needs-auth-cache.json
 .claude/paste-cache/
 .claude/plans/
+.claude/plugins/
 .claude/policy-limits.json
 .claude/projects/
 .claude/sessions/
@@ -23,7 +28,35 @@ bin/golint
 .claude/todos/
 .claude/usage-data/
 .claude/.credentials.json
+.claude/.devx-managed-env.json
 .claude/.devx-managed-hooks.json
+.claude/.last-cleanup
+.claude/skills-manifest.json
+
+# Work/private agent capabilities kept locally under the shared tree
+.agents/prompts/quick-demo.md
+.agents/skills/binks-pr-review/
+.agents/skills/river-session/
+.agents/skills/talent-shopify/
+.agents/skills/worktree-setup/
+
+# Claude Code local hooks/tools managed outside this public repo
+.claude/hooks/commander-keen/
+.claude/hooks/skills-update.mjs
+
+# Installed tool binaries
+bin/go-outline
+bin/goimports
+bin/gomodifytags
+bin/gopkgs
+bin/goplay
+bin/gopls
+bin/gotests
+bin/impl
+bin/kaf
+bin/observe-issue-check
+bin/rustverb
+bin/staticcheck
 
 bin/.auto-review-skip
 .secrets
