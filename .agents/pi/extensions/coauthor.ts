@@ -1,27 +1,27 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
-const GIT_COAUTHOR_SHIM = String.raw`
-git() {
-	case "\${PI_DISABLE_COAUTHOR:-}:$1" in
-		1:*)
-			command git "$@"
-			return $?
-			;;
-		*:commit|*:c|*:ci|*:cm)
-			email=$(command git config user.email 2>/dev/null || true)
-			case "$email" in
-				*@*)
-					pi_email="\${email%@*}+pi@\${email#*@}"
-					command git "$@" --trailer "Co-authored-by: Josh's Pi Agent <$pi_email>"
-					return $?
-					;;
-			esac
-			;;
-	esac
-	command git "$@"
-}
-`;
+const GIT_COAUTHOR_SHIM = [
+	"git() {",
+	'\tcase "${PI_DISABLE_COAUTHOR:-}:$1" in',
+	"\t\t1:*)",
+	'\t\t\tcommand git "$@"',
+	"\t\t\treturn $?",
+	"\t\t\t;;",
+	"\t\t*:commit|*:c|*:ci|*:cm)",
+	"\t\t\temail=$(command git config user.email 2>/dev/null || true)",
+	'\t\t\tcase "$email" in',
+	"\t\t\t\t*@*)",
+	'\t\t\t\t\tpi_email="${email%@*}+pi@${email#*@}"',
+	'\t\t\t\t\tcommand git "$@" --trailer "Co-authored-by: Josh\'s Pi Agent <$pi_email>"',
+	"\t\t\t\t\treturn $?",
+	"\t\t\t\t\t;;",
+	"\t\t\tesac",
+	"\t\t\t;;",
+	"\tesac",
+	'\tcommand git "$@"',
+	"}",
+].join("\n");
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", (event) => {
