@@ -1,0 +1,229 @@
+## Who I (the user) am
+
+I am Josh Beckman (more info at https://www.joshbeckman.org/about).
+
+My GitHub username is @!`git config github.user` and my email address is !`git config user.email`
+
+My main text editor is !`git config core.editor`.
+
+I make things. Not too much. Mostly for others.
+
+## General Guidelines for Coding Agents
+
+### Autonomy
+
+Proceed by default. Do not ask permission for routine reading, editing, refactoring, test runs, formatting, or local inspection. Ask before actions that are irreversible, destructive, credential-bearing, externally visible, or ambiguous across a public/private boundary.
+
+When uncertain, prefer a reversible local action plus a brief note over pausing for confirmation. Preserve momentum unless the next step could leak private information, destroy work, spend money, notify people, publish content, or mutate production/shared systems.
+
+### Comments in Code
+
+**Code Comment Guidelines**: Write comments that explain **why the code isn't written another way** rather than what it does. Focus on documenting "negative information" - what the code is *not* doing and why certain approaches were rejected. Comments should provide context about constraints, trade-offs, and non-obvious decisions that led to the current implementation. This is especially important for future developers and AI agents who need to understand not just the solution, but the problem space and alternatives that were considered.
+
+**When to Comment**: Generally, avoid comments. Add comments when: (1) you chose one approach over another seemingly valid option, (2) there are non-obvious constraints or requirements driving the implementation, (3) the code might appear inefficient or strange without context, (4) you're working around external limitations, or (5) future maintainers might reasonably ask "why didn't you just...?" The goal is to prevent others from attempting "improvements" that you already considered and rejected for good reasons. Keep comments brief but include the critical context that the code itself cannot convey.
+
+**IMPORTANT**: DO NOT add comments unless they explain why the code ISN'T written another way. Never explain what the code does - only document rejected alternatives and non-obvious constraints.
+
+### Optimization and Refactoring
+
+**[Simplification Protocol](https://www.joshbeckman.org/notes/567022446)**: Optimize my code around reducing state, coupling, complexity and code, in that order. I’m willing to add increased coupling if it makes my code more stateless. I’m willing to make it more complex if it reduces coupling. And I’m willing to duplicate code if it makes the code less complex. Only if it doesn’t increase state, coupling or complexity do I dedupe code.
+
+**Rob Pike's Rules**: Don't optimize without measuring — bottlenecks occur in surprising places. Prefer simple algorithms and simple data structures; fancy ones have big constants and more bugs. Data dominates: if you've chosen the right data structures, the algorithms will be self-evident.
+
+If you can see a better way to do it, strongly consider *keeping your mouth shut* if that way is only 5% better. If you improve by a few percent and distract by 50%, you’re probably not making things better. Save your insights for times where you think your way is 50+% better.
+
+### Debugging & Diagnosis
+
+When diagnosing performance or identifying 'slowest' items, carefully parse the actual metrics/timings rather than inferring from icons or labels. Confirm which items are the targets before proceeding.
+
+## Commits
+
+When making git commits: always create new commits (do not amend) unless explicitly asked. Always ask for the PR URL if needed rather than guessing.
+
+Use **Conventional Commits** format for all commit messages:
+
+**Format:** `<type>[optional scope]: <description>`
+
+**Common Types:**
+- `feat:` New feature (correlates with MINOR in SemVer)
+- `fix:` Bug fix (correlates with PATCH in SemVer)
+- `docs:` Documentation only changes
+- `style:` Code style changes (formatting, semicolons, etc.)
+- `refactor:` Code changes that neither fix bugs nor add features
+- `perf:` Performance improvements
+- `test:` Adding or correcting tests
+- `build:` Changes to build system or dependencies
+- `ci:` CI configuration changes
+- `chore:` Other changes that don't modify src or test files
+- `revert:` Reverts a previous commit
+
+**Breaking Changes:**
+- Add `!` after type/scope: `feat!: send email when product ships`
+- Or add `BREAKING CHANGE:` in footer
+
+**Examples:**
+```
+feat: allow config object to extend other configs
+
+fix(parser): prevent racing of requests
+
+feat(lang): add Polish language
+
+chore!: drop support for Node 6
+
+BREAKING CHANGE: use JavaScript features not available in Node 6.
+```
+
+## GitHub Workflow
+
+This section outlines the exact process for interacting with GitHub, creating PRs, and managing issues.
+
+> [!NOTE]
+> You MUST use `gh view-md` to view GitHub issues and pull-requests
+
+When creating pull requests, ALWAYS assign me (the user) as the assignee using `--assignee @me`.
+
+### Referencing Issues and Pull Requests
+
+When commenting/writing/anything that references an issue or pull request, you MUST use the following full-clarity markkdown format:
+
+```markdown
+[<issue_or_pr_title>](<issue_or_pr_url>)
+```
+
+### Issue and Pull Request Management
+
+1. **Finding and Viewing Issues**:
+
+```bash
+# List all issues in a repo
+gh issue list
+# List issues with specific label
+gh issue list --label "Discovery"
+# Search issues with a query
+gh issue list --search "DiscoveryToggle in:title"
+# Search issues with a query
+gh issue list --search "DiscoveryToggle in:title"
+
+# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `gh extension install joshbeckman/gh-view-md`)
+gh view-md ISSUE_URL
+```
+
+2. **Managing Labels**:
+
+```bash
+# List all labels in a repo
+gh label list
+# Add label to issue
+gh issue edit ISSUE_URL --add-label "Label"
+# Remove label from issue
+gh issue edit ISSUE_URL --remove-label "Label"
+```
+
+3. **Finding and Viewing Pull Requests**:
+
+```bash
+# List all PRs in a repo
+gh pr list
+# List PRs with specific label
+gh pr list --label "Discovery"
+# Search PRs with a query
+gh pr list --search "DiscoveryToggle in:title"
+
+# View a specific PR with the `joshbeckman/gh-view-md` gh CLI extension
+gh view-md PR_URL
+# you can specify the max diff to show with the `--max-diff` option (default is 800 lines)
+gh view-md PR_URL --max-diff 1000
+```
+
+4. **Commenting on Issues and PRs**:
+
+```bash
+# Add a comment to an issue
+# first, write the comment markdown contents to a TMP_FILE
+gh issue comment ISSUE_URL --body-file TMP_FILE
+
+# Add a comment to a PR
+# first, write the comment markdown contents to a TMP_FILE
+gh issue comment PR_URL --body-file TMP_FILE
+```
+Important: Always prepend the comment with a note/disclaimer indicating that it was made with Claude Code, like this:
+```markdown
+> [!NOTE]
+> This comment was generated by Claude Code, an AI assistant. Please review it carefully before taking any action.
+```
+
+5. **Submitting Pull Request Reviews**:
+
+When reviewing PRs, use the following workflow:
+
+```bash
+# For approving reviews
+gh pr review PR_URL --approve --body "REVIEW_CONTENT"
+
+# For requesting changes
+gh pr review PR_URL --request-changes --body "REVIEW_CONTENT"
+
+# For commenting without approval/rejection
+gh pr review PR_URL --comment --body "REVIEW_CONTENT"
+```
+
+Important guidelines for PR reviews:
+- Always include the Claude Code disclaimer at the top of your review
+- Keep reviews tight, focused and constructive
+- When suggesting improvements, be specific and provide examples
+- Consider both the immediate changes and their broader impact
+- For approvals, be brief
+- For change requests, explain what needs to be fixed and why
+
+Example review format:
+```markdown
+> [!NOTE]
+> This review was generated by Claude Code, an AI assistant. Please review it carefully before taking any action.
+
+### Suggestions
+
+1. **Suggestion title**: Detailed explanation... (follow conventional comments format)
+2. **Another suggestion**: Explanation with example...
+
+### Overall Assessment
+
+Your conclusion and recommendation...
+```
+
+## Comments on Pull Requests or Changes
+
+Use **Conventional Comments** format for all PR/change comments to improve clarity and actionability:
+
+**Format:** `<label> [decorations]: <subject>`
+
+**Core Labels:**
+- **praise:** Highlight something positive (aim for at least one per review)
+- **nitpick:** Trivial preference-based requests (non-blocking by nature)
+- **suggestion:** Propose improvements with clear reasoning
+- **issue:** Highlight specific problems (pair with suggestions when possible)
+- **todo:** Small, necessary changes
+- **question:** Potential concerns needing clarification
+- **thought:** Ideas that arise during review (non-blocking, valuable for mentoring)
+- **chore:** Simple process-related tasks (include links to process docs)
+- **note:** Non-blocking items to highlight
+
+**Optional Decorations:**
+- **(non-blocking):** Won't prevent acceptance
+- **(blocking):** Must be resolved before acceptance
+- **(if-minor):** Only resolve if changes are trivial
+
+**Example:**
+```
+**suggestion (security):** Let's use the framework's DOM purifier instead.
+
+Implementing our own could introduce vulnerabilities.
+```
+
+## General Tone and Prose
+
+When writing prose (blog posts, documentation, comments, descriptions, PR bodies, etc.), fetch and follow the writing style guide at **https://www.joshbeckman.org/llms/prompts/tone.txt**. That file is the canonical source of truth for tone, voice, structure, and style.
+
+## Time and Date Handling
+
+You should use the josh-beckman-status get_current_time_of_day tool for determing what day it is (when doing things with calendars, reporting, etc.)

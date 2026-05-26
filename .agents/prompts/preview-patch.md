@@ -1,6 +1,5 @@
 ---
 description: Preview a Commit, Diff, or Patch as HTML
-allowed-tools: Bash(preview-patch:*), Bash(git show:*), Bash(git diff:*)
 ---
 
 Please preview a commit, diff, or patch using the `preview-patch` command.

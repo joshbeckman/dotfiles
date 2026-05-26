@@ -1,6 +1,5 @@
 ---
 description: Open Last Response as GitHub Gist
-allowed-tools: Bash(gh gist:*), Write, Bash(mktemp:*), Bash(rm:*), Bash(open:*)
 ---
 
 Please take your last response and create a GitHub gist with it.

@@ -1,6 +1,5 @@
 ---
 description: Preview Last Response as Markdown
-allowed-tools: Bash(preview-md:*)
 ---
 
 Please take your last response and pass it directly to the `preview-md` command as a string argument for visual preview.

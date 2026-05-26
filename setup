@@ -1,5 +1,7 @@
 #!/bin/zsh
 
+DOTFILES_DIR="${0:A:h}"
+
 # utility functions
 function git_clone_or_update() {
         if [ -d "$2" ]; then
@@ -17,10 +19,43 @@ function append_to_file_if_not_present() {
         fi
 }
 
+function symlink_agent_config() {
+        local source_path="$1"
+        local target_path="$2"
+
+        mkdir -p "$(dirname "$target_path")"
+
+        if [ -L "$target_path" ] || [ -f "$target_path" ]; then
+                rm -f "$target_path"
+        elif [ -d "$target_path" ]; then
+                local backup_path="${target_path}.backup.$(date +%s)"
+                echo "  ======  moving existing $target_path to $backup_path"
+                mv "$target_path" "$backup_path"
+        fi
+
+        ln -s "$source_path" "$target_path"
+}
+
 # symlink up dotfiles
 echo '  ======  installing dotfiles via dfm'
-~/dotfiles/bin/dfm install
+"$DOTFILES_DIR/bin/dfm" install
 echo '  ======  installed dotfiles via dfm'
+
+# shared coding-agent configuration
+if [ ! -e "$HOME/.agents" ] && [ -d "$DOTFILES_DIR/.agents" ]; then
+        ln -s "$DOTFILES_DIR/.agents" "$HOME/.agents"
+fi
+
+if [ -d "$HOME/.agents" ]; then
+        echo '  ======  installing shared coding-agent config'
+        mkdir -p "$HOME/.pi/agent"
+        symlink_agent_config "$HOME/.agents/AGENTS.md" "$HOME/.pi/agent/AGENTS.md"
+        symlink_agent_config "$HOME/.agents/prompts" "$HOME/.pi/agent/prompts"
+        symlink_agent_config "$HOME/.agents/skills" "$HOME/.pi/agent/skills"
+        symlink_agent_config "$HOME/.agents/pi/settings.json" "$HOME/.pi/agent/settings.json"
+        symlink_agent_config "$HOME/.agents/pi/keybindings.json" "$HOME/.pi/agent/keybindings.json"
+        echo '  ======  installed shared coding-agent config'
+fi
 
 # zsh-specific things
 echo '  ======  installing zsh plugins'

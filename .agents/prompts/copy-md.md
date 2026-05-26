@@ -1,6 +1,5 @@
 ---
 description: Copy Last Response as Markdown
-allowed-tools: Bash(cat:*), Bash(echo:*), Bash(pbcopy:*), Bash(*pbcopy*), Bash(*| pbcopy*)
 ---
 
 Please take your last response and copy it to my clipboard as markdown.
