@@ -5,11 +5,11 @@
     "pnpm"
   ],
   "enableInstallTelemetry": false,
+  "theme": "solarized-light",
   "extensions": [
     "~/.agents/pi/extensions"
   ],
   "themes": [
     "~/.agents/pi/themes"
-  ],
-  "lastChangelogVersion": "0.75.3"
+  ]
 }
