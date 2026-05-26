@@ -23,6 +23,19 @@ export default function (pi: ExtensionAPI) {
 		clearAttention();
 	});
 
+	pi.on("agent_start", () => {
+		clearAttention();
+	});
+
+	pi.on("agent_end", (_event, ctx) => {
+		setAttention({
+			marker: "✓",
+			title: "Pi finished",
+			message: "Pi finished and is waiting for input",
+			cwd: ctx.cwd,
+		});
+	});
+
 	pi.on("session_shutdown", () => {
 		clearAttention();
 	});
