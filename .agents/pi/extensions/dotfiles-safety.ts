@@ -25,8 +25,8 @@ const sensitiveContentPatterns: Array<[string, RegExp]> = [
 	["credential-shaped value", /\b(bearer|token|api[_-]?key|cookie|session)[\w.-]*\s*[:=]\s*["']?[A-Za-z0-9_./+:-]{20,}/i],
 ];
 
-const stagingCommands = [
-	/\bgit\s+add\b/,
+const broadStagingCommands = [
+	/\bgit\s+add\s+(-A|--all|\.)\b/,
 	/\bgit\s+ada\b/,
 ];
 
@@ -109,7 +109,7 @@ function findingsForFileMutation(cwd: string, root: string, rawPath: unknown, ra
 function findingsForBash(cwd: string, command: string): Finding[] {
 	const findings: Finding[] = [];
 
-	if (stagingCommands.some((pattern) => pattern.test(command))) {
+	if (broadStagingCommands.some((pattern) => pattern.test(command))) {
 		const diff = gitOutput(cwd, ["diff", "--"]);
 		findings.push(...findingsForContent(diff, "unstaged diff"));
 	}

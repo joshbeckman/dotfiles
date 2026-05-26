@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -60,9 +60,6 @@ function setAttention(event: AttentionEvent) {
 		tmux(["display-message", "-t", pane, "-d", "4000", event.message.slice(0, 180)]);
 	}
 
-	if (event.notify) {
-		notify(event.title || `Pi ${dirname}`, event.message || "Pi needs attention", pane);
-	}
 }
 
 function clearAttention() {
@@ -114,27 +111,3 @@ function tmuxOutput(args: string[]): string {
 	}
 }
 
-function notify(title: string, message: string, pane: string) {
-	const notifier = commandPath("terminal-notifier");
-	if (!notifier) return;
-
-	spawn(notifier, [
-		"-title", title,
-		"-message", message.slice(0, 180),
-		"-sound", "Ping",
-		"-group", `pi:${pane}`,
-		"-execute", `tmux select-window -t ${pane} 2>/dev/null; tmux select-pane -t ${pane} 2>/dev/null`,
-	], { detached: true, stdio: "ignore" }).unref();
-}
-
-function commandPath(command: string): string | undefined {
-	try {
-		return execFileSync("command", ["-v", command], { encoding: "utf8" }).trim();
-	} catch {
-		try {
-			return execFileSync("which", [command], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-		} catch {
-			return undefined;
-		}
-	}
-}
