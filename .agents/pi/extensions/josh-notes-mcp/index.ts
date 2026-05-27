@@ -2,10 +2,38 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const DEFAULT_URL = process.env.PI_JOSH_NOTES_MCP_URL ?? "https://joshbeckman--1818d72637f311f089f39e149126039e.web.val.run/mcp";
-const DEFAULT_ALLOWED_TOOLS = ["search_posts", "get_post", "get_proverbs"];
+
+const TOOL_DEFINITIONS = [
+  {
+    name: "search_posts",
+    description: "Search for posts on Josh's site, filtering by query, tag, dates, author, book, or category.",
+    parameters: Type.Object({
+      query: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number({ default: 3, minimum: 1, maximum: 10 })),
+      excludePostUrls: Type.Optional(Type.Array(Type.String())),
+      tag: Type.Optional(Type.String()),
+      startDate: Type.Optional(Type.String()),
+      endDate: Type.Optional(Type.String()),
+      author_id: Type.Optional(Type.String()),
+      book: Type.Optional(Type.String()),
+      category: Type.Optional(Type.Union([Type.Literal("blog"), Type.Literal("notes"), Type.Literal("exercise"), Type.Literal("replies"), Type.Literal("page")])),
+    }),
+  },
+  {
+    name: "get_post",
+    description: "Get the full content and metadata of a specific Josh post by URL.",
+    parameters: Type.Object({ url: Type.String() }),
+  },
+  {
+    name: "get_proverbs",
+    description: "Retrieve Josh's favorite proverbs.",
+    parameters: Type.Object({ limit: Type.Optional(Type.Number()) }),
+  },
+] as const;
 
 type JsonRpcResponse = { jsonrpc: "2.0"; id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
 type McpTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
+type ToolDefinition = typeof TOOL_DEFINITIONS[number];
 
 class HttpMcpClient {
   private nextId = 1;
@@ -16,11 +44,7 @@ class HttpMcpClient {
   async start(signal?: AbortSignal): Promise<void> {
     if (this.initialized) return this.initialized;
     this.initialized = (async () => {
-      await this.call("initialize", {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "pi-josh-notes-mcp-extension", version: "0.1.0" },
-      }, signal);
+      await this.call("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "pi-josh-notes-mcp-extension", version: "0.2.0" } }, signal);
       try { await this.notify("notifications/initialized", {}, signal); } catch {}
     })();
     return this.initialized;
@@ -50,12 +74,7 @@ class HttpMcpClient {
   }
 
   private async post(payload: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcResponse> {
-    const response = await fetch(this.url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "accept": "application/json, text/event-stream" },
-      body: JSON.stringify(payload),
-      signal,
-    });
+    const response = await fetch(this.url, { method: "POST", headers: { "content-type": "application/json", "accept": "application/json, text/event-stream" }, body: JSON.stringify(payload), signal });
     const text = await response.text();
     if (!response.ok) throw new Error(`Josh Notes MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
     if (!text.trim()) return { jsonrpc: "2.0" };
@@ -79,13 +98,7 @@ function sanitizeToolName(name: string): string {
 function allowedToolNames(): Set<string> | undefined {
   const raw = process.env.PI_JOSH_NOTES_MCP_TOOLS;
   if (raw === "*") return undefined;
-  return new Set((raw ? raw.split(",") : DEFAULT_ALLOWED_TOOLS).map((s) => s.trim()).filter(Boolean));
-}
-
-function schemaFor(tool: McpTool) {
-  const schema = tool.inputSchema;
-  if (schema && schema.type === "object") return schema as never;
-  return Type.Object({}, { additionalProperties: true }) as never;
+  return new Set((raw ? raw.split(",") : TOOL_DEFINITIONS.map((tool) => tool.name)).map((s) => s.trim()).filter(Boolean));
 }
 
 function mcpResultToText(result: unknown): string {
@@ -101,48 +114,49 @@ function mcpResultToText(result: unknown): string {
   return parts.join("\n");
 }
 
-export default async function joshNotesMcpExtension(pi: ExtensionAPI) {
+export default function joshNotesMcpExtension(pi: ExtensionAPI) {
   const client = new HttpMcpClient(DEFAULT_URL);
   const allowed = allowedToolNames();
+  const tools = TOOL_DEFINITIONS.filter((tool) => !allowed || allowed.has(tool.name));
 
   pi.registerCommand("josh-notes-mcp-reload", {
-    description: "Reconnect to Josh Notes MCP and refresh tools",
+    description: "Reconnect to Josh Notes MCP",
     handler: async (_args, ctx) => {
       client.reset();
-      ctx.ui.notify("Josh Notes MCP reconnect requested; run /reload if tools changed", "info");
+      ctx.ui.notify("Josh Notes MCP reconnect requested; the next notes tool call will reconnect", "info");
     },
   });
 
-  let tools: McpTool[] = [];
-  try {
-    tools = (await client.listTools()).filter((tool) => !allowed || allowed.has(tool.name));
-  } catch (error) {
-    pi.registerTool({
-      name: "notes_mcp_status",
-      label: "Josh Notes MCP Status",
-      description: "Report why Josh Notes MCP tools failed to load",
-      parameters: Type.Object({}),
-      async execute() {
-        return { content: [{ type: "text", text: `Josh Notes MCP failed to initialize: ${error instanceof Error ? error.message : String(error)}` }], details: { error: String(error) } };
-      },
-    });
-    return;
-  }
+  for (const tool of tools) registerTool(pi, client, tool);
 
-  for (const tool of tools) {
-    const name = sanitizeToolName(tool.name);
-    pi.registerTool({
-      name,
-      label: `Notes: ${tool.name}`,
-      description: tool.description || `Call Josh Notes MCP tool ${tool.name}`,
-      promptSnippet: `${tool.description || `Call Josh Notes MCP ${tool.name}`} (Josh Notes MCP)`,
-      promptGuidelines: [`Use ${name} when the user asks about Josh's notes, blog posts, proverbs, or personal published writing.`],
-      parameters: schemaFor(tool),
-      async execute(_toolCallId, params, signal, onUpdate) {
-        onUpdate?.({ content: [{ type: "text", text: `Calling Josh Notes MCP ${tool.name}...` }], details: {} });
-        const result = await client.callTool(tool.name, params as Record<string, unknown>, signal);
-        return { content: [{ type: "text", text: mcpResultToText(result) }], details: { mcpTool: tool.name, result } };
-      },
-    });
-  }
+  pi.registerTool({
+    name: "notes_mcp_tools",
+    label: "Josh Notes MCP Tools",
+    description: "List Josh Notes MCP tools registered in Pi",
+    parameters: Type.Object({ live: Type.Optional(Type.Boolean()) }),
+    async execute(_toolCallId, params, signal) {
+      if ((params as { live?: boolean }).live === true) {
+        const liveTools = await client.listTools(signal);
+        return { content: [{ type: "text", text: liveTools.map((tool) => `${sanitizeToolName(tool.name)} — ${tool.description ?? tool.name}`).join("\n") }], details: { live: true, tools: liveTools } };
+      }
+      return { content: [{ type: "text", text: tools.map((tool) => `${sanitizeToolName(tool.name)} — ${tool.description}`).join("\n") }], details: { live: false, tools } };
+    },
+  });
+}
+
+function registerTool(pi: ExtensionAPI, client: HttpMcpClient, tool: ToolDefinition) {
+  const name = sanitizeToolName(tool.name);
+  pi.registerTool({
+    name,
+    label: `Notes: ${tool.name}`,
+    description: `${tool.description} (lazy: connects on first use)`,
+    promptSnippet: `${tool.description} (Josh Notes MCP)`,
+    promptGuidelines: [`Use ${name} when the user asks about Josh's notes, blog posts, proverbs, or personal published writing.`],
+    parameters: tool.parameters as never,
+    async execute(_toolCallId, params, signal, onUpdate) {
+      onUpdate?.({ content: [{ type: "text", text: `Calling Josh Notes MCP ${tool.name}...` }], details: {} });
+      const result = await client.callTool(tool.name, params as Record<string, unknown>, signal);
+      return { content: [{ type: "text", text: mcpResultToText(result) }], details: { mcpTool: tool.name, result } };
+    },
+  });
 }

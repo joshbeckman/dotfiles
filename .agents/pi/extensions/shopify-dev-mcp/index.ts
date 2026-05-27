@@ -5,9 +5,38 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 const DEFAULT_COMMAND = process.env.PI_SHOPIFY_DEV_MCP_COMMAND ?? "pnpx";
 const DEFAULT_ARGS = (process.env.PI_SHOPIFY_DEV_MCP_ARGS ?? "@shopify/dev-mcp@latest").split(" ").filter(Boolean);
 
+const TOOL_DEFINITIONS = [
+  {
+    name: "learn_shopify_api",
+    description: "Mandatory first step before using other Shopify Dev MCP tools. Loads API documentation context and returns a conversationId.",
+    parameters: Type.Object({ api: Type.String(), conversationId: Type.Optional(Type.String()), model: Type.Optional(Type.String()), user_prompt: Type.Optional(Type.String()) }, { additionalProperties: true }),
+  },
+  {
+    name: "search_docs_chunks",
+    description: "Search shopify.dev documentation chunks for relevant docs and examples.",
+    parameters: Type.Object({ conversationId: Type.String(), prompt: Type.String(), max_num_results: Type.Optional(Type.Number()), api_name: Type.Optional(Type.String()) }, { additionalProperties: true }),
+  },
+  {
+    name: "validate_component_codeblocks",
+    description: "Validate generated Shopify component JSX/TSX/web component code blocks against Shopify component APIs.",
+    parameters: Type.Object({ conversationId: Type.String(), api: Type.String(), code: Type.Array(Type.Object({ content: Type.String(), artifactId: Type.Optional(Type.String()), revision: Type.Optional(Type.Number()) }, { additionalProperties: true })), extensionTarget: Type.Optional(Type.String()) }, { additionalProperties: true }),
+  },
+  {
+    name: "validate_graphql_codeblocks",
+    description: "Validate generated Shopify GraphQL operations against the selected Shopify GraphQL schema.",
+    parameters: Type.Object({ conversationId: Type.String(), api: Type.Optional(Type.String()), codeblocks: Type.Array(Type.Object({ content: Type.String(), artifactId: Type.Optional(Type.String()), revision: Type.Optional(Type.Number()) }, { additionalProperties: true })) }, { additionalProperties: true }),
+  },
+  {
+    name: "validate_theme",
+    description: "Validate Liquid/theme files generated or updated inside a Shopify theme directory.",
+    parameters: Type.Object({ conversationId: Type.String(), absoluteThemePath: Type.String(), filesCreatedOrUpdated: Type.Array(Type.Object({ path: Type.String(), artifactId: Type.Optional(Type.String()), revision: Type.Optional(Type.Number()) }, { additionalProperties: true })) }, { additionalProperties: true }),
+  },
+] as const;
+
 type JsonRpcRequest = { jsonrpc: "2.0"; id: number; method: string; params?: unknown };
 type JsonRpcResponse = { jsonrpc: "2.0"; id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
 type McpTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
+type ToolDefinition = typeof TOOL_DEFINITIONS[number];
 
 class StdioMcpClient {
   private child: ChildProcessWithoutNullStreams | undefined;
@@ -43,11 +72,7 @@ class StdioMcpClient {
     });
 
     await this.ready;
-    await this.call("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "pi-shopify-dev-mcp-extension", version: "0.1.0" },
-    }, signal);
+    await this.call("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "pi-shopify-dev-mcp-extension", version: "0.2.0" } }, signal);
     this.notify("notifications/initialized", {});
   }
 
@@ -75,10 +100,7 @@ class StdioMcpClient {
     const request: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
 
     return new Promise((resolve, reject) => {
-      const abort = () => {
-        this.pending.delete(id);
-        reject(new Error(`Shopify Dev MCP ${method} aborted`));
-      };
+      const abort = () => { this.pending.delete(id); reject(new Error(`Shopify Dev MCP ${method} aborted`)); };
       if (signal?.aborted) return abort();
       signal?.addEventListener("abort", abort, { once: true });
       this.pending.set(id, {
@@ -127,12 +149,6 @@ function allowedToolNames(): Set<string> | undefined {
   return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 }
 
-function schemaFor(tool: McpTool) {
-  const schema = tool.inputSchema;
-  if (schema && schema.type === "object") return schema as never;
-  return Type.Object({}, { additionalProperties: true }) as never;
-}
-
 function mcpResultToText(result: unknown): string {
   const r = result as { content?: Array<Record<string, unknown>>; structuredContent?: unknown };
   const parts: string[] = [];
@@ -146,47 +162,48 @@ function mcpResultToText(result: unknown): string {
   return parts.join("\n");
 }
 
-export default async function shopifyDevMcpExtension(pi: ExtensionAPI) {
+export default function shopifyDevMcpExtension(pi: ExtensionAPI) {
   const client = new StdioMcpClient(DEFAULT_COMMAND, DEFAULT_ARGS);
   const allowed = allowedToolNames();
+  const tools = TOOL_DEFINITIONS.filter((tool) => !allowed || allowed.has(tool.name));
 
   pi.registerCommand("shopify-dev-mcp-reload", {
-    description: "Reconnect to Shopify Dev MCP and refresh tools",
+    description: "Reconnect to Shopify Dev MCP",
     handler: async (_args, ctx) => {
       client.stop();
-      ctx.ui.notify("Shopify Dev MCP reconnect requested; run /reload if tools changed", "info");
+      ctx.ui.notify("Shopify Dev MCP reconnect requested; the next Shopify Dev tool call will restart it", "info");
     },
   });
 
-  let tools: McpTool[] = [];
-  try {
-    tools = (await client.listTools()).filter((tool) => !allowed || allowed.has(tool.name));
-  } catch (error) {
-    pi.registerTool({
-      name: "shopify_dev_mcp_status",
-      label: "Shopify Dev MCP Status",
-      description: "Report why Shopify Dev MCP tools failed to load",
-      parameters: Type.Object({}),
-      async execute() {
-        return { content: [{ type: "text", text: `Shopify Dev MCP failed to initialize: ${error instanceof Error ? error.message : String(error)}` }], details: { error: String(error) } };
-      },
-    });
-    return;
-  }
+  for (const tool of tools) registerTool(pi, client, tool);
 
-  for (const tool of tools) {
-    const name = sanitizeToolName(tool.name);
-    pi.registerTool({
-      name,
-      label: `Shopify Dev: ${tool.name}`,
-      description: tool.description || `Call Shopify Dev MCP tool ${tool.name}`,
-      promptSnippet: `${tool.description || `Call Shopify Dev MCP ${tool.name}`} (Shopify Dev MCP)`,
-      parameters: schemaFor(tool),
-      async execute(_toolCallId, params, signal, onUpdate) {
-        onUpdate?.({ content: [{ type: "text", text: `Calling Shopify Dev MCP ${tool.name}...` }], details: {} });
-        const result = await client.callTool(tool.name, params as Record<string, unknown>, signal);
-        return { content: [{ type: "text", text: mcpResultToText(result) }], details: { mcpTool: tool.name, result } };
-      },
-    });
-  }
+  pi.registerTool({
+    name: "shopify_dev_mcp_tools",
+    label: "Shopify Dev MCP Tools",
+    description: "List Shopify Dev MCP tools registered in Pi",
+    parameters: Type.Object({ live: Type.Optional(Type.Boolean()) }),
+    async execute(_toolCallId, params, signal) {
+      if ((params as { live?: boolean }).live === true) {
+        const liveTools = await client.listTools(signal);
+        return { content: [{ type: "text", text: liveTools.map((tool) => `${sanitizeToolName(tool.name)} — ${tool.description ?? tool.name}`).join("\n") }], details: { live: true, tools: liveTools } };
+      }
+      return { content: [{ type: "text", text: tools.map((tool) => `${sanitizeToolName(tool.name)} — ${tool.description}`).join("\n") }], details: { live: false, tools } };
+    },
+  });
+}
+
+function registerTool(pi: ExtensionAPI, client: StdioMcpClient, tool: ToolDefinition) {
+  const name = sanitizeToolName(tool.name);
+  pi.registerTool({
+    name,
+    label: `Shopify Dev: ${tool.name}`,
+    description: `${tool.description} (lazy: starts Shopify Dev MCP on first use)`,
+    promptSnippet: `${tool.description} (Shopify Dev MCP)`,
+    parameters: tool.parameters as never,
+    async execute(_toolCallId, params, signal, onUpdate) {
+      onUpdate?.({ content: [{ type: "text", text: `Starting Shopify Dev MCP and calling ${tool.name}...` }], details: {} });
+      const result = await client.callTool(tool.name, params as Record<string, unknown>, signal);
+      return { content: [{ type: "text", text: mcpResultToText(result) }], details: { mcpTool: tool.name, result } };
+    },
+  });
 }
