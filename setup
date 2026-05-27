@@ -78,6 +78,7 @@ mkdir -p ~/.local/share/nvim/site/pack/git-plugins/start
 # install neovim plugins
 git_clone_or_update https://github.com/dense-analysis/ale.git ~/.local/share/nvim/site/pack/git-plugins/start/ale
 git_clone_or_update https://github.com/tpope/vim-fugitive.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-fugitive
+git_clone_or_update https://github.com/tpope/vim-rhubarb.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-rhubarb
 git_clone_or_update https://github.com/tpope/vim-surround.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-surround
 git_clone_or_update https://github.com/tpope/vim-repeat.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-repeat
 git_clone_or_update https://github.com/airblade/vim-gitgutter.git ~/.local/share/nvim/site/pack/git-plugins/start/vim-gitgutter
