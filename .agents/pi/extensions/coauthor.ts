@@ -6,9 +6,13 @@ const GIT_COMMIT_RE = /\b(?:command\s+)?git\s+(commit|c|ci|cm)\b/;
 const GT_COMMIT_RE = /\bgt\s+(commit\s+create|commit\s+amend|create|modify|cc|ca|c|m)\b/;
 const FALLBACK_EMAIL = "josh+pi@joshbeckman.org";
 
-export function buildTrailer(cwd: string): string {
+type ModelInfo = { name?: string; id?: string; provider?: string };
+
+export function buildTrailer(cwd: string, model?: ModelInfo): string {
 	const email = gitEmail(cwd) || FALLBACK_EMAIL;
-	return `Co-authored-by: Josh's Pi Agent <${piEmail(email)}>`;
+	const modelName = model?.name || model?.id;
+	const agent = modelName ? `AI (Pi/${modelName})` : "AI (Pi)";
+	return `Co-authored-by: ${agent} <${piEmail(email)}>`;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -26,7 +30,7 @@ export default function (pi: ExtensionAPI) {
 		if (isGt && /(?:^|\s)--ai(?:\s|$)/.test(cmd)) return undefined;
 		if (isGit && cmd.includes("--amend") && cmd.includes("--no-edit") && !cmd.includes("-m")) return undefined;
 
-		const trailer = buildTrailer(ctx.cwd);
+		const trailer = buildTrailer(ctx.cwd, ctx.model as ModelInfo | undefined);
 		event.input.command = isGit ? injectGitTrailer(cmd, trailer) : injectGtTrailer(cmd, trailer);
 		return undefined;
 	});
