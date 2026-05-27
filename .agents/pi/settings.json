@@ -11,5 +11,8 @@
   ],
   "themes": [
     "~/.agents/pi/themes"
+  ],
+  "packages": [
+    "https://github.com/shopify-playground/shop-pi-fy"
   ]
 }

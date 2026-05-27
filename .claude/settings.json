@@ -154,10 +154,11 @@
     "command": "bash ~/.claude/statusline-command.sh",
     "refreshInterval": 30
   },
+  "tui": "default",
   "theme": "light",
   "preferredNotifChannel": "terminal_bell",
+  "skipAutoPermissionPrompt": true,
   "feedbackSurveyState": {
     "lastShownTime": 1754147115362
-  },
-  "skipAutoPermissionPrompt": true
+  }
 }

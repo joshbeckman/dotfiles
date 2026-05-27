@@ -44,3 +44,8 @@
 @katiebauchman
 @shopify-build-cli
 @stale-pr-closer
+@binks-code-reviewer
+@chao-duan
+@dersam
+@shopify-river
+@sreya-sun
