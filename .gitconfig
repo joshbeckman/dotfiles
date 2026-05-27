@@ -63,6 +63,54 @@
             git commit -v -e -m \"$MSG\"; \
         else \
             echo 'Failed to generate commit message'; \
+            if [ -s \"$PI_ERR\" ]; then cat \"$PI_ERR\"; fi; \
+            exit 1; \
+        fi; \
+    }; f"
+    pi-commit = "!f() { \
+        DIFF=$(git diff --cached); \
+        if [ -z \"$DIFF\" ]; then \
+            echo 'No staged changes to commit'; \
+            exit 1; \
+        fi; \
+        PI_CMD='pi'; \
+        if ! command -v pi >/dev/null 2>&1; then \
+            echo 'pi command not found'; \
+            exit 1; \
+        fi; \
+        PROMPT=\"Generate a git commit message following Conventional Commits format for these staged changes. Respond with ONLY the commit message text (no markdown, no code blocks, no explanation).\n\nFormat:\n<type>[optional scope]: <description>\n\n<optional body with more details>\n\nRules:\n- Keep the first line (title) under 50 characters if possible\n- Include a blank line between title and body\n- In the body, explain what changed and why (not how)\n- Focus on the motivation and context for the change\n\nStaged changes:\n$DIFF\"; \
+        PROMPT_FILE=$(mktemp); \
+        PI_ERR=$(mktemp); \
+        trap 'rm -f \"$PROMPT_FILE\" \"$PI_ERR\"' EXIT; \
+        printf '%s' \"$PROMPT\" > \"$PROMPT_FILE\"; \
+        PI_PROVIDER_EXT=${PI_COMMIT_PROVIDER_EXT:-$HOME/.pi/agent/extensions/shopify-proxy-provider/index.ts}; \
+        PI_USE_PROXY=0; \
+        if [ -n \"${PI_COMMIT_MODEL:-}\" ]; then \
+            PI_MODEL=\"$PI_COMMIT_MODEL\"; \
+        elif [ -f \"$PI_PROVIDER_EXT\" ] && command -v devx >/dev/null 2>&1; then \
+            PI_CMD='devx pi'; \
+            PI_MODEL='shopify-proxy/anthropic:claude-haiku-4-5'; \
+            PI_USE_PROXY=1; \
+        else \
+            PI_MODEL='anthropic/claude-haiku-4-5'; \
+        fi; \
+        PI_TRAILER_MODEL=$(printf '%s' \"${PI_COMMIT_TRAILER_MODEL:-${PI_MODEL#shopify-proxy/}}\" | tr ':' '/'); \
+        EMAIL=$(git config user.email 2>/dev/null || true); \
+        if [ -n \"$EMAIL\" ] && printf '%s' \"$EMAIL\" | grep -q '@'; then \
+            PI_EMAIL=\"${EMAIL%@*}+pi@${EMAIL#*@}\"; \
+        else \
+            PI_EMAIL='josh+pi@joshbeckman.org'; \
+        fi; \
+        if [ \"$PI_USE_PROXY\" = 1 ]; then \
+            MSG=$($PI_CMD --print --mode text --no-session --no-tools --no-skills --no-prompt-templates --no-context-files --no-extensions -e \"$PI_PROVIDER_EXT\" --model \"$PI_MODEL\" \"@$PROMPT_FILE\" 2>"$PI_ERR" | sed 's/^```.*//g' | sed 's/^```$//g'); \
+        else \
+            MSG=$($PI_CMD --print --mode text --no-session --no-tools --no-skills --no-prompt-templates --no-context-files --no-extensions --model \"$PI_MODEL\" \"@$PROMPT_FILE\" 2>"$PI_ERR" | sed 's/^```.*//g' | sed 's/^```$//g'); \
+        fi; \
+        if [ -n \"$MSG\" ]; then \
+            git commit -v -e -m \"$MSG\" --trailer \"Co-authored-by: AI (Pi/$PI_TRAILER_MODEL) <$PI_EMAIL>\"; \
+        else \
+            echo 'Failed to generate commit message'; \
+            if [ -s \"$PI_ERR\" ]; then cat \"$PI_ERR\"; fi; \
             exit 1; \
         fi; \
     }; f"
