@@ -2,8 +2,6 @@ import { execFileSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
-	pi.on("session_start", (_event, ctx) => updateGitStatus(ctx));
-	pi.on("agent_start", (_event, ctx) => updateGitStatus(ctx));
 	pi.on("agent_end", (_event, ctx) => updateGitStatus(ctx));
 	pi.on("tool_execution_end", (_event, ctx) => updateGitStatus(ctx));
 }

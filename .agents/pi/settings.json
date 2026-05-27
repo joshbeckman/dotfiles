@@ -14,5 +14,6 @@
   ],
   "packages": [
     "https://github.com/shopify-playground/shop-pi-fy"
-  ]
+  ],
+  "lastChangelogVersion": "0.75.5"
 }
