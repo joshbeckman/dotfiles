@@ -45,6 +45,7 @@
     uptags = !git push origin && git push origin --tags
     web = instaweb
     wipe = !git add -A && git commit -qm 'WIPE SAVEPOINT' && git reset HEAD~1 --hard
+    whew = "!f() { git remote prune origin && default_branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##') && if [ -z \"$default_branch\" ] || [ \"$default_branch\" = \"(unknown)\" ]; then default_branch=$(git remote show origin | sed -n 's/.*HEAD branch: //p'); fi && if [ -z \"$default_branch\" ] || [ \"$default_branch\" = \"(unknown)\" ]; then for candidate in main master; do if git show-ref --verify --quiet \"refs/remotes/origin/$candidate\"; then default_branch=$candidate; break; fi; done; fi && if [ -z \"$default_branch\" ] || [ \"$default_branch\" = \"(unknown)\" ]; then echo 'Could not determine origin default branch'; exit 1; fi && branch=$(git symbolic-ref --short HEAD) && if [ \"$branch\" = \"$default_branch\" ]; then git pull origin \"$default_branch\"; else git fetch origin \"$default_branch\" && git rebase \"origin/$default_branch\"; fi; }; f"
     cleanonmain = !git checkout main && gt sync && git remote prune origin
     claude-commit = "!f() { \
         DIFF=$(git diff --cached); \
