@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type AttentionEvent = {
 	marker?: string;
@@ -27,7 +27,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", (_event, ctx) => {
 		setAttention({
 			marker: "✓",
-			title: pi.getSessionName() || "Pi finished",
+			title: finishedTitle(pi, ctx),
 			message: "Pi finished and is waiting for input",
 			cwd: ctx.cwd,
 		});
@@ -74,6 +74,44 @@ function firstLine(text?: string): string | undefined {
 function sessionTitle(name: string | undefined | null, cwd: string): string {
 	const dirname = path.basename(cwd) || "pi";
 	return name ? `π - ${name} - ${dirname}` : `π - ${dirname}`;
+}
+
+function finishedTitle(pi: ExtensionAPI, ctx: ExtensionContext): string {
+	return pi.getSessionName() || latestSubstantiveUserRequest(ctx) || path.basename(ctx.cwd) || "Pi finished";
+}
+
+function latestSubstantiveUserRequest(ctx: ExtensionContext): string | undefined {
+	const branch = ctx.sessionManager.getBranch();
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index] as any;
+		if (entry.type !== "message" || entry.message?.role !== "user") continue;
+		const title = requestTitle(extractText(entry.message.content));
+		if (title && !isContinuation(title)) return title;
+	}
+	return undefined;
+}
+
+function requestTitle(text: string): string | undefined {
+	const line = text
+		.split("\n")
+		.map((part) => part.trim())
+		.find((part) => part && !part.startsWith("```") && !part.startsWith("<"));
+	if (!line) return undefined;
+	return line.replace(/^[-*]\s+/, "").replace(/\s+/g, " ").slice(0, 80);
+}
+
+function extractText(content: unknown): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((item: any) => item.type === "text" && item.text)
+		.map((item: any) => item.text)
+		.join("\n")
+		.trim();
+}
+
+function isContinuation(text: string): boolean {
+	return /^(go on|continue|yes|yes please|yep|ok|okay|sure|do it|sounds good)[.!?\s]*$/i.test(text);
 }
 
 function twrename(cwd: string) {
