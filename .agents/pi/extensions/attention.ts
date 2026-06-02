@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -10,6 +12,8 @@ type AttentionEvent = {
 	notify?: boolean;
 	bell?: boolean;
 };
+
+const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "attention");
 
 export default function (pi: ExtensionAPI) {
 	pi.events.on("attention:set", (event: AttentionEvent) => {
@@ -43,10 +47,10 @@ function setAttention(event: AttentionEvent) {
 	if (!process.env.TMUX || !pane) return;
 
 	const marker = event.marker || "⚠";
-	const windowName = `${marker} ${attentionTitle(event)}`;
+	const paneTitle = `${marker} ${attentionTitle(event)}`;
 
-	tmux(["rename-window", "-t", pane, windowName]);
-	tmux(["select-pane", "-t", pane, "-T", windowName]);
+	snapshotPaneTitle(pane);
+	tmux(["select-pane", "-t", pane, "-T", paneTitle]);
 	if (event.bell !== false) ringBell();
 
 	if (event.message) {
@@ -54,12 +58,16 @@ function setAttention(event: AttentionEvent) {
 	}
 }
 
-function clearAttention(pi: ExtensionAPI, cwd = process.cwd()) {
+function clearAttention(_pi: ExtensionAPI, _cwd = process.cwd()) {
 	const pane = process.env.TMUX_PANE;
 	if (!process.env.TMUX || !pane) return;
 
-	twrename(cwd);
-	tmux(["select-pane", "-t", pane, "-T", sessionTitle(pi.getSessionName(), cwd)]);
+	const stateFile = statePath(pane);
+	if (!fs.existsSync(stateFile)) return;
+
+	const paneTitle = fs.readFileSync(stateFile, "utf8");
+	tmux(["select-pane", "-t", pane, "-T", paneTitle]);
+	fs.rmSync(stateFile, { force: true });
 }
 
 function attentionTitle(event: AttentionEvent): string {
@@ -71,9 +79,16 @@ function firstLine(text?: string): string | undefined {
 	return text?.split("\n").find((line) => line.trim())?.trim();
 }
 
-function sessionTitle(name: string | undefined | null, cwd: string): string {
-	const dirname = path.basename(cwd) || "pi";
-	return name ? `π - ${name} - ${dirname}` : `π - ${dirname}`;
+function snapshotPaneTitle(pane: string) {
+	const stateFile = statePath(pane);
+	if (fs.existsSync(stateFile)) return;
+
+	fs.mkdirSync(STATE_DIR, { recursive: true });
+	fs.writeFileSync(stateFile, tmuxOutput(["display-message", "-t", pane, "-p", "#{pane_title}"]));
+}
+
+function statePath(pane: string): string {
+	return path.join(STATE_DIR, `${pane.replace(/[^A-Za-z0-9_.-]/g, "_")}.panetitle`);
 }
 
 function finishedTitle(pi: ExtensionAPI, ctx: ExtensionContext): string {
@@ -114,14 +129,6 @@ function isContinuation(text: string): boolean {
 	return /^(go on|continue|yes|yes please|yep|ok|okay|sure|do it|sounds good)[.!?\s]*$/i.test(text);
 }
 
-function twrename(cwd: string) {
-	try {
-		execFileSync("twrename", [], { cwd, stdio: "ignore" });
-	} catch {
-		// Best effort: attention marks must never break agent work.
-	}
-}
-
 function ringBell() {
 	process.stdout.write("\u0007");
 }
@@ -131,5 +138,13 @@ function tmux(args: string[]) {
 		execFileSync("tmux", args, { stdio: "ignore" });
 	} catch {
 		// Best effort: attention marks must never break agent work.
+	}
+}
+
+function tmuxOutput(args: string[]): string {
+	try {
+		return execFileSync("tmux", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+	} catch {
+		return "";
 	}
 }
