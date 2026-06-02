@@ -375,8 +375,18 @@ alias l='gls -lAF --color --group-directories-first'
 # Load Git completion
 zstyle ':completion:*:*:git:*' script ~/.zsh/git-completion.bash
 fpath=(~/.zsh $fpath)
+typeset -U path fpath
 
-autoload -Uz compinit && compinit
+autoload -Uz compinit
+zmodload zsh/datetime
+zmodload zsh/stat
+zcompdump_file=${ZDOTDIR:-$HOME}/.zcompdump
+if [[ -f "$zcompdump_file" ]] && zstat -H zcompdump_stat +mtime "$zcompdump_file" 2>/dev/null && (( EPOCHSECONDS - zcompdump_stat[mtime] < 86400 )); then
+  compinit -C
+else
+  compinit
+fi
+unset zcompdump_file zcompdump_stat
 
 # compinit
 # bash completion and gh
@@ -396,7 +406,11 @@ fi
 
 # try — experiment directory manager (https://github.com/tobi/try)
 if command -v try >/dev/null 2>&1; then
-  eval "$(try init)"
+  try () {
+    unfunction try
+    eval "$(command try init)"
+    try "$@"
+  }
 fi
 
 . $HOME/.shellrc.load
@@ -434,4 +448,18 @@ source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}/Users/joshbeckman/.kube/config:/Users/joshbeckman/.kube/config.shopify.cloudplatform
 
 # Added by tec agent
-[[ -x /Users/joshbeckman/.local/state/tec/profiles/base/current/global/init ]] && eval "$(/Users/joshbeckman/.local/state/tec/profiles/base/current/global/init zsh)"
+path=(/Users/joshbeckman/.local/state/nix/profiles/tec/bin /Users/joshbeckman/.local/state/tec/profiles/base/current/global/bin ${path:#/Users/joshbeckman/.local/state/nix/profiles/tec/bin})
+path=(/Users/joshbeckman/.local/state/tec/profiles/base/current/global/bin ${path:#/Users/joshbeckman/.local/state/tec/profiles/base/current/global/bin})
+_tec_init_once () {
+  preexec_functions=("${preexec_functions:#_tec_init_once}")
+  [[ -x /Users/joshbeckman/.local/state/tec/profiles/base/current/global/init ]] && eval "$(/Users/joshbeckman/.local/state/tec/profiles/base/current/global/init zsh)"
+  typeset -U path fpath
+}
+# Tec installs shell hooks for shadowenv; defer them until the first command so
+# opening a shell gets to a prompt quickly instead of paying the hook cost first.
+if [[ -n "${ZSH_EAGER_TEC:-}" ]]; then
+  _tec_init_once
+elif [[ -x /Users/joshbeckman/.local/state/tec/profiles/base/current/global/init ]]; then
+  preexec_functions+=("_tec_init_once")
+fi
+typeset -U path fpath
