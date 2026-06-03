@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="${GW_REPO:-shop/world}"
+
+usage() {
+  cat <<EOF
+Usage: gw <gh-args...>
+
+Wraps gh with --repo ${repo} for repository-scoped commands.
+Set GW_REPO=owner/repo to override the default repository.
+
+Examples:
+  gw pr status
+  gw pr view
+  gw pr checks
+  gw issue list
+  gw issue view 123
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+case "${1:-}" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+esac
+
+cmd="$1"
+shift
+
+has_help_flag() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+current_branch() {
+  git branch --show-current 2>/dev/null || true
+}
+
+pr_selector_defaults_to_branch() {
+  case "${1:-}" in
+    view|checks|diff|comment|edit|review|merge|close|reopen|ready|lock|unlock)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+case "$cmd" in
+  pr)
+    if [[ $# -gt 0 ]] && pr_selector_defaults_to_branch "$1" && ! has_help_flag "$@"; then
+      subcmd="$1"
+      shift
+      case "${1:-}" in
+        ""|-*)
+          branch="$(current_branch)"
+          if [[ -n "$branch" ]]; then
+            exec gh pr --repo "$repo" "$subcmd" "$branch" "$@"
+          fi
+          ;;
+      esac
+      exec gh pr --repo "$repo" "$subcmd" "$@"
+    fi
+    exec gh pr --repo "$repo" "$@"
+    ;;
+  issue|release|run|workflow|label|milestone|browse|project|ruleset|secret|variable|cache)
+    exec gh "$cmd" --repo "$repo" "$@"
+    ;;
+  *)
+    exec gh "$cmd" "$@"
+    ;;
+esac
