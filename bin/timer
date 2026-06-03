@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+show_help() {
+  cat <<'HELP'
+timer - start a timer with a notification message
+
+Usage:
+  timer DURATION [MESSAGE...]
+
+Duration is a compact h/m/s expression:
+  timer 20s stand up
+  timer 30m check the oven
+  timer 1h30m20s leave for the train
+HELP
+}
+
+parse_duration() {
+  local input remaining number unit total
+  input=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  remaining=$input
+  total=0
+
+  if [[ -z "$remaining" ]]; then
+    return 1
+  fi
+
+  while [[ -n "$remaining" ]]; do
+    if [[ "$remaining" =~ ^([0-9]+)([hms])(.*)$ ]]; then
+      number=${BASH_REMATCH[1]}
+      unit=${BASH_REMATCH[2]}
+      remaining=${BASH_REMATCH[3]}
+      case "$unit" in
+        h) total=$((total + number * 3600)) ;;
+        m) total=$((total + number * 60)) ;;
+        s) total=$((total + number)) ;;
+      esac
+    else
+      return 1
+    fi
+  done
+
+  if (( total <= 0 )); then
+    return 1
+  fi
+
+  printf '%s\n' "$total"
+}
+
+set_pane_title() {
+  local title=$1
+  if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+    tmux select-pane -T "$title" 2>/dev/null || true
+  fi
+}
+
+notify() {
+  local message=$1
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    terminal-notifier -title "Timer" -message "$message" -sound default >/dev/null 2>&1 || true
+  fi
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -lt 1 ]]; then
+  show_help
+  [[ $# -lt 1 ]] && exit 1 || exit 0
+fi
+
+duration_arg=$1
+shift
+
+seconds=$(parse_duration "$duration_arg") || {
+  echo "timer: invalid duration: $duration_arg" >&2
+  echo "timer: expected a compact h/m/s expression like 20s, 30m, or 1h30m20s" >&2
+  exit 1
+}
+
+message=${*:-"Timer finished"}
+start_title="⏳ ${duration_arg} ${message}"
+fire_title="⏰ ${message}"
+
+set_pane_title "$start_title"
+printf 'Timer started: %s — %s\n' "$duration_arg" "$message"
+sleep "$seconds"
+set_pane_title "$fire_title"
+printf '\a'
+printf 'Timer finished: %s\n' "$message"
+notify "$message"
