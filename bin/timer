@@ -54,10 +54,20 @@ set_pane_title() {
   fi
 }
 
+notification_title() {
+  local dirlabel
+  if command -v dirlabel-bip39 >/dev/null 2>&1; then
+    dirlabel=$(dirlabel-bip39 2>/dev/null || true)
+  else
+    dirlabel=$("$(dirname "$0")/dirlabel-bip39" 2>/dev/null || true)
+  fi
+  printf 'Timer: %s\n' "${dirlabel:-$(basename "$PWD")}"
+}
+
 notify() {
   local message=$1
   if command -v terminal-notifier >/dev/null 2>&1; then
-    terminal-notifier -title "Timer" -message "$message" -sound default >/dev/null 2>&1 || true
+    terminal-notifier -title "$(notification_title)" -message "$message" -sound default >/dev/null 2>&1 || true
   fi
 }
 
