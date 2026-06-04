@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -6,15 +9,63 @@ const DEFAULT_URL = process.env.PI_JOSH_STATUS_MCP_URL ?? "https://joshbeckman--
 const TOOL_DEFINITIONS = [
   {
     name: "get_status",
-    description: "Get Josh's current status, availability, and location context.",
-    parameters: Type.Object({}, { additionalProperties: true }),
+    description: "Get the latest status of Josh Beckman.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  },
+  {
+    name: "get_age",
+    description: "Get the age of Josh Beckman.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  },
+  {
+    name: "get_about",
+    description: "Get basic information about Josh Beckman.",
+    parameters: Type.Object({}, { additionalProperties: false }),
   },
   {
     name: "get_current_time_of_day",
-    description: "Get Josh's current time of day / date context.",
-    parameters: Type.Object({}, { additionalProperties: true }),
+    description: "Get the current time of day Josh Beckman is experiencing, including timezone, part of day, and season.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  },
+  {
+    name: "compare_time_relative",
+    description: "Get the relative time from now to a given timestamp in Josh Beckman's timezone.",
+    parameters: Type.Object({ timestamp: Type.String({ format: "date-time" }) }, { additionalProperties: false }),
+  },
+  {
+    name: "send_email_to_josh",
+    description: "Send an email to Josh Beckman. The 'subject' is the email subject line to uniquely identify the topic. The 'body' is the email content in plain text (markdown syntax supported). The 'from' field should uniquely identify the sender (either an agent's handle or a human user's username/handle). The optional 'replyTo' field sets the reply-to email address for responses to have Josh respond directly rather than through this MCP server.",
+    parameters: Type.Object({
+      subject: Type.String(),
+      body: Type.String(),
+      from: Type.String({ minLength: 1, maxLength: 39, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$" }),
+      replyTo: Type.Optional(Type.String({ format: "email" })),
+    }, { additionalProperties: false }),
+    sideEffect: true,
+  },
+  {
+    name: "send_push_notification_to_josh",
+    description: "Send a push notification to Josh Beckman. The 'title' is the notification title, and the 'body' is the notification content. The 'from' field should uniquely identify the sender (either an agent's handle or a human user's username/handle).",
+    parameters: Type.Object({
+      title: Type.String({ maxLength: 50 }),
+      body: Type.String({ maxLength: 150 }),
+      from: Type.String({ minLength: 1, maxLength: 39, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$" }),
+      url: Type.Optional(Type.String({ format: "uri" })),
+    }, { additionalProperties: false }),
+    sideEffect: true,
+  },
+  {
+    name: "read_josh_email_responses",
+    description: "Read emails sent from Josh to you. The 'to' field should be the username of the recipient (either an agent's handle or a human user's username/handle). The 'body_contains' and 'subject_contains' fields are optional search strings to filter messages by content and subject.",
+    parameters: Type.Object({
+      to: Type.String({ minLength: 1, maxLength: 39, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$" }),
+      body_contains: Type.Optional(Type.String()),
+      subject_contains: Type.Optional(Type.String()),
+    }, { additionalProperties: false }),
   },
 ] as const;
+
+const DEFAULT_TOOL_NAMES = new Set(TOOL_DEFINITIONS.filter((tool) => !("sideEffect" in tool && tool.sideEffect)).map((tool) => tool.name));
 
 type JsonRpcResponse = { jsonrpc: "2.0"; id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
 type McpTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
@@ -24,7 +75,7 @@ class HttpMcpClient {
   private nextId = 1;
   private initialized: Promise<void> | undefined;
 
-  constructor(private readonly url: string) {}
+  constructor(private readonly url: string, private readonly authorization: string | undefined) {}
 
   async start(signal?: AbortSignal): Promise<void> {
     if (this.initialized) return this.initialized;
@@ -59,7 +110,9 @@ class HttpMcpClient {
   }
 
   private async post(payload: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcResponse> {
-    const response = await fetch(this.url, { method: "POST", headers: { "content-type": "application/json", "accept": "application/json, text/event-stream" }, body: JSON.stringify(payload), signal });
+    const headers: Record<string, string> = { "content-type": "application/json", "accept": "application/json, text/event-stream" };
+    if (this.authorization) headers.authorization = this.authorization;
+    const response = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(payload), signal });
     const text = await response.text();
     if (!response.ok) throw new Error(`Josh Status MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
     if (!text.trim()) return { jsonrpc: "2.0" };
@@ -83,7 +136,22 @@ function sanitizeToolName(name: string): string {
 function allowedToolNames(): Set<string> | undefined {
   const raw = process.env.PI_JOSH_STATUS_MCP_TOOLS;
   if (raw === "*") return undefined;
-  return new Set((raw ? raw.split(",") : TOOL_DEFINITIONS.map((tool) => tool.name)).map((s) => s.trim()).filter(Boolean));
+  return new Set((raw ? raw.split(",") : [...DEFAULT_TOOL_NAMES]).map((s) => s.trim()).filter(Boolean));
+}
+
+function authorizationHeader(): string | undefined {
+  const explicit = process.env.PI_JOSH_STATUS_MCP_AUTHORIZATION;
+  if (explicit) return explicit;
+  const token = process.env.PI_JOSH_STATUS_MCP_TOKEN;
+  if (token) return `Bearer ${token}`;
+
+  try {
+    const claudeConfigPath = join(homedir(), ".claude.json");
+    const config = JSON.parse(readFileSync(claudeConfigPath, "utf8")) as { mcpServers?: Record<string, { headers?: Record<string, string> }> };
+    return config.mcpServers?.["josh-beckman-status"]?.headers?.Authorization;
+  } catch {
+    return undefined;
+  }
 }
 
 function mcpResultToText(result: unknown): string {
@@ -100,7 +168,7 @@ function mcpResultToText(result: unknown): string {
 }
 
 export default function joshStatusMcpExtension(pi: ExtensionAPI) {
-  const client = new HttpMcpClient(DEFAULT_URL);
+  const client = new HttpMcpClient(DEFAULT_URL, authorizationHeader());
   const allowed = allowedToolNames();
   const tools = TOOL_DEFINITIONS.filter((tool) => !allowed || allowed.has(tool.name));
 
@@ -131,12 +199,14 @@ export default function joshStatusMcpExtension(pi: ExtensionAPI) {
 
 function registerTool(pi: ExtensionAPI, client: HttpMcpClient, tool: ToolDefinition) {
   const name = sanitizeToolName(tool.name);
+  const promptGuidelines = [`Use ${name} when determining Josh's current status, availability, location context, or current time/day.`];
+  if ("sideEffect" in tool && tool.sideEffect) promptGuidelines.push(`Ask the user for explicit confirmation before using ${name}; it sends something to Josh outside this chat.`);
   pi.registerTool({
     name,
     label: `Josh Status: ${tool.name}`,
     description: `${tool.description} (lazy: connects on first use)`,
     promptSnippet: `${tool.description} (Josh Status MCP)`,
-    promptGuidelines: [`Use ${name} when determining Josh's current status, availability, location context, or current time/day.`],
+    promptGuidelines,
     parameters: tool.parameters as never,
     async execute(_toolCallId, params, signal, onUpdate) {
       onUpdate?.({ content: [{ type: "text", text: `Calling Josh Status MCP ${tool.name}...` }], details: {} });
