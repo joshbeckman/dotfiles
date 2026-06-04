@@ -18,7 +18,9 @@ When uncertain, prefer a reversible local action plus a brief note over pausing 
 
 ### Notifications
 
-When I ask you to "ping me when", "notify me when", "let me know when", or similar, use this notification ladder:
+When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. If `bin/notify-josh` is available, use it with a succinct but specific title that includes the folder, project, or topic.
+
+If `bin/notify-josh` is not available, use this notification ladder:
 
 1. If running on macOS and the display is active (not sleeping and not on screensaver), notify locally:
    - Send a `terminal-notifier` notification with sound.

@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] TITLE MESSAGE...
+       notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] MESSAGE...
+
+Notify Josh using the local notification ladder when possible, otherwise push.
+
+Options:
+  --push              Force the Josh Status MCP push path.
+  --local             Force the local terminal-notifier path.
+  --from NAME         Sender for push notifications. Default: agent
+  --pane-title TITLE  tmux pane title. Default: 🔔 TITLE
+  -h, --help          Show this help.
+USAGE
+}
+
+dir_label() {
+  if command -v dirlabel-bip39 >/dev/null 2>&1; then
+    dirlabel-bip39 2>/dev/null && return
+  fi
+
+  local script_dir
+  script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+  if [ -x "$script_dir/dirlabel-bip39" ]; then
+    "$script_dir/dirlabel-bip39" 2>/dev/null && return
+  fi
+
+  basename "$PWD"
+}
+
+screen_saver_active() {
+  if pgrep -qx ScreenSaverEngine >/dev/null 2>&1; then
+    return 0
+  fi
+
+  [ "$(uname -s)" = Darwin ] || return 1
+  [ "${NOTIFY_JOSH_SKIP_OSASCRIPT:-}" = 1 ] && return 1
+  osascript -e 'tell application "System Events" to get running of screen saver preferences' 2>/dev/null | grep -qx true
+}
+
+display_active() {
+  [ "${NOTIFY_JOSH_FORCE_LOCAL:-}" = 1 ] && return 0
+  [ "${NOTIFY_JOSH_FORCE_PUSH:-}" = 1 ] && return 1
+  [ "$(uname -s)" = Darwin ] || return 1
+  screen_saver_active && return 1
+
+  local powerstate
+  if powerstate=$(pmset -g powerstate IODisplayWrangler 2>/dev/null); then
+    printf '%s\n' "$powerstate" | grep -Eq 'Current State Description: *(On|Power On|Running)' && return 0
+    printf '%s\n' "$powerstate" | awk '/IODisplayWrangler/ { seen = 1 } seen && /Current State/ { if ($3 + 0 >= 3) found = 1 } END { exit found ? 0 : 1 }' && return 0
+  fi
+
+  ioreg -l -w0 2>/dev/null | grep -Eq '"IOPowerManagement" = \{[^}]*"DevicePowerState"=4[^}]*"CurrentPowerState"=4[^}]*"MaxPowerState"=4'
+}
+
+local_notify() {
+  local title=$1
+  local message=$2
+  local pane_title=$3
+
+  command -v terminal-notifier >/dev/null 2>&1 || return 1
+  terminal-notifier -title "$title" -message "$message" -sound default >/dev/null 2>&1 || return 1
+
+  printf '\a'
+
+  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+    tmux select-pane -T "$pane_title" >/dev/null 2>&1 || true
+  fi
+}
+
+push_notify() {
+  local title=$1
+  local message=$2
+  local from=$3
+
+  NOTIFY_JOSH_TITLE=$title NOTIFY_JOSH_MESSAGE=$message NOTIFY_JOSH_FROM=$from node <<'NODE'
+const { readFileSync } = require("node:fs");
+const { homedir } = require("node:os");
+const { join } = require("node:path");
+
+const url = process.env.PI_JOSH_STATUS_MCP_URL ?? "https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/mcp";
+let authorization = process.env.PI_JOSH_STATUS_MCP_AUTHORIZATION;
+if (!authorization) {
+  try {
+    const config = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf8"));
+    authorization = config.mcpServers?.["josh-beckman-status"]?.headers?.Authorization;
+  } catch {}
+}
+
+if (!authorization) {
+  throw new Error("Missing PI_JOSH_STATUS_MCP_AUTHORIZATION and ~/.claude.json Josh Status MCP authorization");
+}
+
+let id = 1;
+async function call(method, params) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json, text/event-stream",
+      "authorization": authorization,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: id++, method, params }),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Josh Status MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
+  const dataLine = text.split("\n").find((line) => line.startsWith("data:"));
+  const data = dataLine ? JSON.parse(dataLine.slice(5).trim()) : JSON.parse(text);
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+  return data.result;
+}
+
+(async () => {
+  await call("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "notify-josh", version: "0.1.0" } });
+  await call("tools/call", {
+    name: "send_push_notification_to_josh",
+    arguments: {
+      title: process.env.NOTIFY_JOSH_TITLE,
+      body: process.env.NOTIFY_JOSH_MESSAGE,
+      from: process.env.NOTIFY_JOSH_FROM,
+    },
+  });
+})().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+NODE
+}
+
+mode=auto
+from=agent
+pane_title=
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --push)
+      mode=push
+      shift
+      ;;
+    --local)
+      mode=local
+      shift
+      ;;
+    --from)
+      from=${2:?--from requires a value}
+      shift 2
+      ;;
+    --pane-title)
+      pane_title=${2:?--pane-title requires a value}
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+[ $# -gt 0 ] || { usage >&2; exit 64; }
+
+if [ $# -eq 1 ]; then
+  title="Notification: $(dir_label)"
+  message=$1
+else
+  title=$1
+  shift
+  message=$*
+fi
+
+if [ -z "$pane_title" ]; then
+  pane_title="🔔 ${title:0:60}"
+fi
+
+case "$mode" in
+  local)
+    local_notify "$title" "$message" "$pane_title"
+    ;;
+  push)
+    push_notify "$title" "$message" "$from"
+    ;;
+  auto)
+    if display_active && local_notify "$title" "$message" "$pane_title"; then
+      exit 0
+    fi
+    push_notify "$title" "$message" "$from"
+    ;;
+  *)
+    echo "notify-josh: unknown mode: $mode" >&2
+    exit 64
+    ;;
+esac
