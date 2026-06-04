@@ -26,6 +26,8 @@
     co = checkout
     cp = cherry-pick
     diffp = "!git diff | preview-patch"
+    diffu = "!f() { idx=$(mktemp -t git-diffu-index.XXXXXX) || exit; trap 'rm -f \"$idx\"' EXIT; git_index=$(git rev-parse --git-path index) || exit; test -f \"$git_index\" && cp \"$git_index\" \"$idx\" || : >\"$idx\"; GIT_INDEX_FILE=\"$idx\" git add -N . >/dev/null 2>&1; GIT_INDEX_FILE=\"$idx\" git diff \"$@\"; }; f"
+    diffup = "!f() { git diffu \"$@\" | preview-patch; }; f"
     fc = log --all --grep
     fix = "!f() { nvim -p `git diff --name-only | uniq`; }; f" # via https://gist.github.com/jacobvosmaer/3187346
     fup = push --set-upstream origin HEAD
