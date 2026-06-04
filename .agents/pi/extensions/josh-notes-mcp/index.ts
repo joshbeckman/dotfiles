@@ -6,7 +6,7 @@ const DEFAULT_URL = process.env.PI_JOSH_NOTES_MCP_URL ?? "https://joshbeckman--1
 const TOOL_DEFINITIONS = [
   {
     name: "search_posts",
-    description: "Search for posts on Josh's site, filtering by query, tag, dates, author, book, or category.",
+    description: "Search for posts on the site, filtering by various metadata and attributes.",
     parameters: Type.Object({
       query: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Number({ default: 3, minimum: 1, maximum: 10 })),
@@ -17,19 +17,46 @@ const TOOL_DEFINITIONS = [
       author_id: Type.Optional(Type.String()),
       book: Type.Optional(Type.String()),
       category: Type.Optional(Type.Union([Type.Literal("blog"), Type.Literal("notes"), Type.Literal("exercise"), Type.Literal("replies"), Type.Literal("page")])),
-    }),
+    }, { additionalProperties: false }),
   },
   {
     name: "get_post",
-    description: "Get the full content and metadata of a specific Josh post by URL.",
-    parameters: Type.Object({ url: Type.String() }),
+    description: "Get the full content and metadata of a specific post by URL.",
+    parameters: Type.Object({ url: Type.String() }, { additionalProperties: false }),
   },
   {
     name: "get_proverbs",
     description: "Retrieve Josh's favorite proverbs.",
-    parameters: Type.Object({ limit: Type.Optional(Type.Number()) }),
+    parameters: Type.Object({ limit: Type.Optional(Type.Number()) }, { additionalProperties: false }),
+  },
+  {
+    name: "get_sequences",
+    description: "Retrieve post sequences from the site. Sequences are groups of related posts that link, one to the next, forming a chain of thought on a tag.",
+    parameters: Type.Object({ limit: Type.Optional(Type.Number()), tag: Type.Optional(Type.String()) }, { additionalProperties: false }),
+  },
+  {
+    name: "get_sequence",
+    description: "Retrieve a specific post sequence by its ID.",
+    parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
+  },
+  {
+    name: "search_tags",
+    description: "Search for tags used on the site.",
+    parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) }, { additionalProperties: false }),
+  },
+  {
+    name: "get_tag_urls",
+    description: "Get the URLs of provided tags.",
+    parameters: Type.Object({ tags: Type.Array(Type.String()) }, { additionalProperties: false }),
+  },
+  {
+    name: "get_tags",
+    description: "Get a list of all tags used on the site.",
+    parameters: Type.Object({}, { additionalProperties: false }),
   },
 ] as const;
+
+const DEFAULT_TOOL_NAMES = new Set(["search_posts", "get_post", "get_proverbs"]);
 
 type JsonRpcResponse = { jsonrpc: "2.0"; id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
 type McpTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
@@ -98,7 +125,7 @@ function sanitizeToolName(name: string): string {
 function allowedToolNames(): Set<string> | undefined {
   const raw = process.env.PI_JOSH_NOTES_MCP_TOOLS;
   if (raw === "*") return undefined;
-  return new Set((raw ? raw.split(",") : TOOL_DEFINITIONS.map((tool) => tool.name)).map((s) => s.trim()).filter(Boolean));
+  return new Set((raw ? raw.split(",") : [...DEFAULT_TOOL_NAMES]).map((s) => s.trim()).filter(Boolean));
 }
 
 function mcpResultToText(result: unknown): string {
