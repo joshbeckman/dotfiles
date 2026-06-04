@@ -41,6 +41,7 @@
     rearrange = "!git rebase -i $(git merge-base HEAD @{u})"
     rev = merge --no-ff --no-commit
     s = status -sb
+    showp = "!git show | preview-patch"
     st = status
     tree = log --all --graph --decorate --oneline
     up = push origin 
