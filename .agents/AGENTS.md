@@ -16,6 +16,19 @@ Proceed by default. Do not ask permission for routine reading, editing, refactor
 
 When uncertain, prefer a reversible local action plus a brief note over pausing for confirmation. Preserve momentum unless the next step could leak private information, destroy work, spend money, notify people, publish content, or mutate production/shared systems.
 
+### Notifications
+
+When I ask you to "ping me when", "notify me when", "let me know when", or similar, use this notification ladder:
+
+1. If running on macOS and the display is active (not sleeping and not on screensaver), notify locally:
+   - Send a `terminal-notifier` notification with sound.
+   - Use a succinct but specific title that includes the folder, project, or topic.
+   - Ring the terminal bell with `printf '\a'`.
+   - If running inside tmux, set the tmux pane title to a short attention marker.
+2. Otherwise, send me a push notification through the `josh-beckman-status` MCP server.
+
+Prefer local notification when I am likely at the machine; use push when I am away, the display is asleep, or local notification is unavailable.
+
 ### Comments in Code
 
 **Code Comment Guidelines**: Write comments that explain **why the code isn't written another way** rather than what it does. Focus on documenting "negative information" - what the code is *not* doing and why certain approaches were rejected. Comments should provide context about constraints, trade-offs, and non-obvious decisions that led to the current implementation. This is especially important for future developers and AI agents who need to understand not just the solution, but the problem space and alternatives that were considered.
