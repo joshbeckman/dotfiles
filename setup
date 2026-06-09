@@ -69,7 +69,11 @@ echo '  ======  installed zsh plugins'
 echo '  ======  installing tmux plugins'
 mkdir -p ~/.config/tmux
 git_clone_or_update https://github.com/laktak/extrakto ~/.config/tmux/extrakto
+git_clone_or_update https://github.com/tmux-plugins/tmux-resurrect ~/.config/tmux/tmux-resurrect
+git_clone_or_update https://github.com/tmux-plugins/tmux-continuum ~/.config/tmux/tmux-continuum
 append_to_file_if_not_present "run-shell ~/.config/tmux/extrakto/extrakto.tmux" ~/.tmux.conf
+append_to_file_if_not_present "run-shell ~/.config/tmux/tmux-resurrect/resurrect.tmux" ~/.tmux.conf
+append_to_file_if_not_present "run-shell ~/.config/tmux/tmux-continuum/continuum.tmux" ~/.tmux.conf
 echo '  ======  installed tmux plugins'
 
 # neovim-specific things
