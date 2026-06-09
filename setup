@@ -153,6 +153,13 @@ case "$OSTYPE" in
   *)              __setup_unsupported ;;
 esac
 
+# pi — update after config is linked and package managers have had a chance to install it
+if command -v pi &> /dev/null; then
+        echo '  ======  updating pi and pi packages'
+        pi update
+        echo '  ======  updated pi and pi packages'
+fi
+
 # rtk — install Claude Code hook + RTK.md (https://github.com/rtk-ai/rtk)
 if command -v rtk &> /dev/null; then
         echo '  ======  installing rtk Claude Code hook'
