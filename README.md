@@ -41,6 +41,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 - **`.gitconfig`** — aliases, delta pager, merge/diff settings, signing
 - **`.git-templates/`** — custom git template hooks
+- **`.config/gh/config.yml`** — GitHub CLI preferences and aliases
 
 ### Tools
 

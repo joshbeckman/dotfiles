@@ -3,3 +3,4 @@ AGENTS.md skip
 .config skip
 .config/nvim recurse
 .config/ghostty recurse
+.config/gh recurse
