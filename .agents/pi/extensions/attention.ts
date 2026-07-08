@@ -14,6 +14,7 @@ type AttentionEvent = {
 };
 
 const STATE_DIR = path.join(os.homedir(), ".pi", "agent", "attention");
+const FINISHED_MESSAGE = "Pi finished and is waiting for input";
 
 export default function (pi: ExtensionAPI) {
 	pi.events.on("attention:set", (event: AttentionEvent) => {
@@ -32,7 +33,7 @@ export default function (pi: ExtensionAPI) {
 		setAttention({
 			marker: "✓",
 			title: finishedTitle(pi, ctx),
-			message: "Pi finished and is waiting for input",
+			message: finishedMessage(),
 			cwd: ctx.cwd,
 		});
 	});
@@ -93,6 +94,20 @@ function statePath(pane: string): string {
 
 function finishedTitle(pi: ExtensionAPI, ctx: ExtensionContext): string {
 	return pi.getSessionName() || latestSubstantiveUserRequest(ctx) || path.basename(ctx.cwd) || "Pi finished";
+}
+
+function finishedMessage(): string {
+	const origin = tmuxWindowOrigin(process.env.TMUX_PANE);
+	return origin ? `${FINISHED_MESSAGE} (${origin})` : FINISHED_MESSAGE;
+}
+
+function tmuxWindowOrigin(pane?: string): string | undefined {
+	if (!process.env.TMUX || !pane) return undefined;
+
+	const windowLabel = tmuxOutput(["display-message", "-t", pane, "-p", "#{window_index}:#{window_name}"])
+		.replace(/\s+/g, " ")
+		.trim();
+	return windowLabel ? `tmux window ${windowLabel}` : undefined;
 }
 
 function latestSubstantiveUserRequest(ctx: ExtensionContext): string | undefined {
