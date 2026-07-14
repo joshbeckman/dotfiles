@@ -109,7 +109,7 @@ function sourceIfReadable(file: string): string {
 	return `[[ -r ${zshQuote(file)} ]] && source ${zshQuote(file)}`;
 }
 
-function zshTranscriptHooks(marker: string): string {
+export function zshTranscriptHooks(marker: string): string {
 	const quotedMarker = zshQuote(marker);
 	return `
 autoload -Uz add-zsh-hook
@@ -119,6 +119,8 @@ __pi_shell_escape_preexec() {
 __pi_shell_escape_precmd() {
   local code=$?
   print -r -- "${marker}:END:$code"
+  # Deferred shell setup can replace preexec_functions after the first command.
+  add-zsh-hook preexec __pi_shell_escape_preexec
 }
 add-zsh-hook preexec __pi_shell_escape_preexec
 add-zsh-hook precmd __pi_shell_escape_precmd
@@ -143,7 +145,7 @@ function readTranscript(transcriptPath: string, marker: string): string {
 	}
 }
 
-function extractMarkedTranscript(raw: string, marker: string): string {
+export function extractMarkedTranscript(raw: string, marker: string): string {
 	const lines = cleanTranscript(raw).split("\n");
 	const startPrefix = `${marker}:START:`;
 	const endPrefix = `${marker}:END:`;
@@ -185,14 +187,39 @@ function isShellExit(command: string): boolean {
 	return /^(exit|logout)(?:\s|$)/.test(command.trim());
 }
 
-function cleanTranscript(text: string): string {
-	return text
+export function cleanTranscript(text: string): string {
+	return stripAlternateScreen(text)
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/\r\n/g, "\n")
 		.replace(/\r/g, "\n")
 		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
 		.replace(/\n{4,}/g, "\n\n\n")
 		.trim();
+}
+
+function stripAlternateScreen(text: string): string {
+	const modeChange = /\x1b\[\?([0-9;]*)([hl])/g;
+	const alternateModes = new Set(["47", "1047", "1049"]);
+	const activeModes = new Set<string>();
+	let visibleFrom = 0;
+	let output = "";
+	let match: RegExpExecArray | null;
+
+	while ((match = modeChange.exec(text))) {
+		const modes = (match[1] ?? "").split(";").filter((mode) => alternateModes.has(mode));
+		if (modes.length === 0) continue;
+
+		if (match[2] === "h") {
+			if (activeModes.size === 0) output += text.slice(visibleFrom, match.index);
+			for (const mode of modes) activeModes.add(mode);
+		} else {
+			for (const mode of modes) activeModes.delete(mode);
+			if (activeModes.size === 0) visibleFrom = modeChange.lastIndex;
+		}
+	}
+
+	if (activeModes.size === 0) output += text.slice(visibleFrom);
+	return output;
 }
 
 function truncate(text: string, maxChars: number): string {
