@@ -94,7 +94,8 @@ BREAKING CHANGE: use JavaScript features not available in Node 6.
 This section outlines the exact process for interacting with GitHub, creating PRs, and managing issues.
 
 > [!NOTE]
-> You MUST use `gh view-md` to view GitHub issues and pull-requests
+> Use `gw`, not `gh`, for all GitHub commands because it resolves repository context reliably.
+> You MUST use `gw view-md` to view GitHub issues and pull requests.
 
 When creating pull requests, ALWAYS assign me (the user) as the assignee using `--assignee @me`.
 
@@ -106,49 +107,59 @@ When commenting/writing/anything that references an issue or pull request, you M
 [<issue_or_pr_title>](<issue_or_pr_url>)
 ```
 
+### Fast PR Lookups
+
+Use these fast, reliable aliases instead of rebuilding the same queries:
+
+| Command | Use |
+|---|---|
+| `gw pr-checks [PR_URL] [--required]` | Render checks as an actionable Markdown table. |
+| `gw pr-url` | Print the current branch's PR URL. |
+| `gw pr-merged [PR_URL]` | Print the merge timestamp; exit nonzero if the PR is not merged. |
+
 ### Issue and Pull Request Management
 
 1. **Finding and Viewing Issues**:
 
 ```bash
 # List all issues in a repo
-gh issue list
+gw issue list
 # List issues with specific label
-gh issue list --label "Discovery"
+gw issue list --label "Discovery"
 # Search issues with a query
-gh issue list --search "DiscoveryToggle in:title"
+gw issue list --search "DiscoveryToggle in:title"
 # Search issues with a query
-gh issue list --search "DiscoveryToggle in:title"
+gw issue list --search "DiscoveryToggle in:title"
 
-# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `gh extension install joshbeckman/gh-view-md`)
-gh view-md ISSUE_URL
+# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `gw extension install joshbeckman/gh-view-md`)
+gw view-md ISSUE_URL
 ```
 
 2. **Managing Labels**:
 
 ```bash
 # List all labels in a repo
-gh label list
+gw label list
 # Add label to issue
-gh issue edit ISSUE_URL --add-label "Label"
+gw issue edit ISSUE_URL --add-label "Label"
 # Remove label from issue
-gh issue edit ISSUE_URL --remove-label "Label"
+gw issue edit ISSUE_URL --remove-label "Label"
 ```
 
 3. **Finding and Viewing Pull Requests**:
 
 ```bash
 # List all PRs in a repo
-gh pr list
+gw pr list
 # List PRs with specific label
-gh pr list --label "Discovery"
+gw pr list --label "Discovery"
 # Search PRs with a query
-gh pr list --search "DiscoveryToggle in:title"
+gw pr list --search "DiscoveryToggle in:title"
 
 # View a specific PR with the `joshbeckman/gh-view-md` gh CLI extension
-gh view-md PR_URL
+gw view-md PR_URL
 # you can specify the max diff to show with the `--max-diff` option (default is 800 lines)
-gh view-md PR_URL --max-diff 1000
+gw view-md PR_URL --max-diff 1000
 ```
 
 4. **Commenting on Issues and PRs**:
@@ -156,11 +167,11 @@ gh view-md PR_URL --max-diff 1000
 ```bash
 # Add a comment to an issue
 # first, write the comment markdown contents to a TMP_FILE
-gh issue comment ISSUE_URL --body-file TMP_FILE
+gw issue comment ISSUE_URL --body-file TMP_FILE
 
 # Add a comment to a PR
 # first, write the comment markdown contents to a TMP_FILE
-gh issue comment PR_URL --body-file TMP_FILE
+gw issue comment PR_URL --body-file TMP_FILE
 ```
 Important: Always append an AI attribution trailer to the comment instead of prepending a disclaimer. Use the same trailer shape as the commit co-authorship trailer from `.agents/pi/extensions/coauthor.ts`, but omit the email address:
 
@@ -188,13 +199,13 @@ When reviewing PRs, use the following workflow:
 
 ```bash
 # For approving reviews
-gh pr review PR_URL --approve --body "REVIEW_CONTENT"
+gw pr review PR_URL --approve --body "REVIEW_CONTENT"
 
 # For requesting changes
-gh pr review PR_URL --request-changes --body "REVIEW_CONTENT"
+gw pr review PR_URL --request-changes --body "REVIEW_CONTENT"
 
 # For commenting without approval/rejection
-gh pr review PR_URL --comment --body "REVIEW_CONTENT"
+gw pr review PR_URL --comment --body "REVIEW_CONTENT"
 ```
 
 Important guidelines for PR reviews:
