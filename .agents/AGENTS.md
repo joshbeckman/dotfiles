@@ -53,63 +53,13 @@ When diagnosing performance or identifying 'slowest' items, carefully parse the 
 
 ## Commits
 
-When making git commits: always create new commits (do not amend) unless explicitly asked. Always ask for the PR URL if needed rather than guessing.
-
-Use **Conventional Commits** format for all commit messages:
-
-**Format:** `<type>[optional scope]: <description>`
-
-**Common Types:**
-- `feat:` New feature (correlates with MINOR in SemVer)
-- `fix:` Bug fix (correlates with PATCH in SemVer)
-- `docs:` Documentation only changes
-- `style:` Code style changes (formatting, semicolons, etc.)
-- `refactor:` Code changes that neither fix bugs nor add features
-- `perf:` Performance improvements
-- `test:` Adding or correcting tests
-- `build:` Changes to build system or dependencies
-- `ci:` CI configuration changes
-- `chore:` Other changes that don't modify src or test files
-- `revert:` Reverts a previous commit
-
-**Breaking Changes:**
-- Add `!` after type/scope: `feat!: send email when product ships`
-- Or add `BREAKING CHANGE:` in footer
-
-**Examples:**
-```
-feat: allow config object to extend other configs
-
-fix(parser): prevent racing of requests
-
-feat(lang): add Polish language
-
-chore!: drop support for Node 6
-
-BREAKING CHANGE: use JavaScript features not available in Node 6.
-```
+Create new commits; never amend unless explicitly asked. Ask for the PR URL rather than guessing. Use Conventional Commits: `<type>[optional scope]: <description>`.
 
 ## GitHub Workflow
 
-This section outlines the exact process for interacting with GitHub, creating PRs, and managing issues.
-
-> [!NOTE]
-> Use `gw`, not `gh`, for all GitHub commands because it resolves repository context reliably.
-> You MUST use `gw view-md` to view GitHub issues and pull requests.
-
-When creating pull requests, ALWAYS assign me (the user) as the assignee using `--assignee @me`.
-
-### Referencing Issues and Pull Requests
-
-When commenting/writing/anything that references an issue or pull request, you MUST use the following full-clarity markkdown format:
-
-```markdown
-[<issue_or_pr_title>](<issue_or_pr_url>)
-```
+Use `gw`, not `gh`, for GitHub commands. It uses the current repository and branch unless `GW_REPO` overrides them. You MUST use `gw view-md` to read issues and pull requests. Assign new pull requests to me with `--assignee @me`.
 
 ### Fast PR Lookups
-
-Use these fast, reliable aliases instead of rebuilding the same queries:
 
 | Command | Use |
 |---|---|
@@ -117,118 +67,21 @@ Use these fast, reliable aliases instead of rebuilding the same queries:
 | `gw pr-url` | Print the current branch's PR URL. |
 | `gw pr-merged [PR_URL]` | Print the merge timestamp; exit nonzero if the PR is not merged. |
 
-### Issue and Pull Request Management
+Reference every issue or pull request with its title and full URL:
 
-1. **Finding and Viewing Issues**:
-
-```bash
-# List all issues in a repo
-gw issue list
-# List issues with specific label
-gw issue list --label "Discovery"
-# Search issues with a query
-gw issue list --search "DiscoveryToggle in:title"
-# Search issues with a query
-gw issue list --search "DiscoveryToggle in:title"
-
-# View a specific issue with the `joshbeckman/gh-view-md` gh CLI extension (you can install it with `gw extension install joshbeckman/gh-view-md`)
-gw view-md ISSUE_URL
+```markdown
+[<issue_or_pr_title>](<issue_or_pr_url>)
 ```
 
-2. **Managing Labels**:
+Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
 
-```bash
-# List all labels in a repo
-gw label list
-# Add label to issue
-gw issue edit ISSUE_URL --add-label "Label"
-# Remove label from issue
-gw issue edit ISSUE_URL --remove-label "Label"
-```
-
-3. **Finding and Viewing Pull Requests**:
-
-```bash
-# List all PRs in a repo
-gw pr list
-# List PRs with specific label
-gw pr list --label "Discovery"
-# Search PRs with a query
-gw pr list --search "DiscoveryToggle in:title"
-
-# View a specific PR with the `joshbeckman/gh-view-md` gh CLI extension
-gw view-md PR_URL
-# you can specify the max diff to show with the `--max-diff` option (default is 800 lines)
-gw view-md PR_URL --max-diff 1000
-```
-
-4. **Commenting on Issues and PRs**:
-
-```bash
-# Add a comment to an issue
-# first, write the comment markdown contents to a TMP_FILE
-gw issue comment ISSUE_URL --body-file TMP_FILE
-
-# Add a comment to a PR
-# first, write the comment markdown contents to a TMP_FILE
-gw issue comment PR_URL --body-file TMP_FILE
-```
-Important: Always append an AI attribution trailer to the comment instead of prepending a disclaimer. Use the same trailer shape as the commit co-authorship trailer from `.agents/pi/extensions/coauthor.ts`, but omit the email address:
+Append this trailer to every GitHub comment and review after a blank line:
 
 ```markdown
 Generated-by: AI (<agent-harness>/<provider>/<model>)
 ```
 
-Placeholder meanings:
-- `<agent-harness>`: the tool or environment running the agent, such as `Pi`, `Claude Code`, `Codex`, or `Cursor`
-- `<provider>`: the model provider, such as `Anthropic`, `OpenAI`, or `Google`
-- `<model>`: the specific model name or ID, such as `Claude Sonnet 4.5`, `GPT-5`, or `Gemini 2.5 Pro`
-
-Examples:
-```markdown
-Generated-by: AI (Pi/Anthropic/Claude Sonnet 4.5)
-Generated-by: AI (Claude Code/Anthropic/Claude Opus 4.1)
-Generated-by: AI (Codex/OpenAI/GPT-5)
-```
-
-Place the trailer at the very end of the comment body, separated from the comment content by a blank line.
-
-5. **Submitting Pull Request Reviews**:
-
-When reviewing PRs, use the following workflow:
-
-```bash
-# For approving reviews
-gw pr review PR_URL --approve --body "REVIEW_CONTENT"
-
-# For requesting changes
-gw pr review PR_URL --request-changes --body "REVIEW_CONTENT"
-
-# For commenting without approval/rejection
-gw pr review PR_URL --comment --body "REVIEW_CONTENT"
-```
-
-Important guidelines for PR reviews:
-- Always append the AI attribution trailer at the end of your review
-- Keep reviews tight, focused and constructive
-- When suggesting improvements, be specific and provide examples
-- Consider both the immediate changes and their broader impact
-- For approvals, be brief
-- For change requests, explain what needs to be fixed and why
-
-Example review format:
-```markdown
-### Suggestions
-
-1. **Suggestion title**: Detailed explanation... (follow conventional comments format)
-2. **Another suggestion**: Explanation with example...
-
-### Overall Assessment
-
-Your conclusion and recommendation...
-
-Generated-by: AI (<agent-harness>/<provider>/<model>)
-```
+Keep approvals brief. For change requests, identify each blocker and explain why it matters. Use Conventional Comments below.
 
 ## Comments on Pull Requests or Changes
 
@@ -237,7 +90,7 @@ Use **Conventional Comments** format for all PR/change comments to improve clari
 **Format:** `<label> [decorations]: <subject>`
 
 **Core Labels:**
-- **praise:** Highlight something positive (aim for at least one per review)
+- **praise:** Highlight something positive
 - **nitpick:** Trivial preference-based requests (non-blocking by nature)
 - **suggestion:** Propose improvements with clear reasoning
 - **issue:** Highlight specific problems (pair with suggestions when possible)

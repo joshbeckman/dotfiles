@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${GW_REPO:-shop/world}"
+# Let gh interpret remotes; parsing URLs here breaks on renamed repositories and enterprise hosts.
+repo_args=()
+if [[ -n "${GW_REPO:-}" ]]; then
+  repo_args=(--repo "$GW_REPO")
+fi
 
 usage() {
   cat <<EOF
 Usage: gw <gh-args...>
 
-Wraps gh with --repo ${repo} for repository-scoped commands.
-Set GW_REPO=owner/repo to override the default repository.
+Uses gh's current repository, with current-branch selection for PR commands.
+Set GW_REPO=owner/repo to override repository discovery.
 
 Examples:
   gw pr status
@@ -70,16 +74,16 @@ case "$cmd" in
         ""|-*)
           branch="$(current_branch)"
           if [[ -n "$branch" ]]; then
-            exec gh pr --repo "$repo" "$subcmd" "$branch" "$@"
+            exec gh pr "${repo_args[@]}" "$subcmd" "$branch" "$@"
           fi
           ;;
       esac
-      exec gh pr --repo "$repo" "$subcmd" "$@"
+      exec gh pr "${repo_args[@]}" "$subcmd" "$@"
     fi
-    exec gh pr --repo "$repo" "$@"
+    exec gh pr "${repo_args[@]}" "$@"
     ;;
   issue|release|run|workflow|label|milestone|browse|project|ruleset|secret|variable|cache)
-    exec gh "$cmd" --repo "$repo" "$@"
+    exec gh "$cmd" "${repo_args[@]}" "$@"
     ;;
   *)
     exec gh "$cmd" "$@"
