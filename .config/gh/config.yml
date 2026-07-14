@@ -9,6 +9,9 @@ pager:
 # Aliases allow you to create nicknames for gh commands
 aliases:
     co: pr checkout
+    pr-checks: |
+        !printf '| Check | Status | Duration | Workflow |\n| --- | --- | ---: | --- |\n'
+        gw pr checks "$@" --json name,state,workflow,link,startedAt,completedAt --jq 'def duration: if .startedAt == null or .startedAt == "0001-01-01T00:00:00Z" then "—" else ((if .completedAt == null or .completedAt == "0001-01-01T00:00:00Z" then now else (.completedAt | fromdateiso8601) end) - (.startedAt | fromdateiso8601) | floor) as $s | if $s < 60 then "\($s)s" elif $s < 3600 then "\($s / 60 | floor)m \($s % 60)s" else "\($s / 3600 | floor)h \($s % 3600 / 60 | floor)m" end end; .[] | "| [\(.name | gsub("\\|"; "\\\\|"))](\(.link)) | \(.state) | \(duration) | \((.workflow // "") | gsub("\\|"; "\\\\|")) |"'
     pr-url: '!gw pr view --json url -q .url'
     pmerge: '!gw pr comment -b "/merge"'
     pr-merged: |
