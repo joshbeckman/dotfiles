@@ -74,16 +74,16 @@ case "$cmd" in
         ""|-*)
           branch="$(current_branch)"
           if [[ -n "$branch" ]]; then
-            exec gh pr "${repo_args[@]}" "$subcmd" "$branch" "$@"
+            exec gh pr ${repo_args[@]+"${repo_args[@]}"} "$subcmd" "$branch" "$@"
           fi
           ;;
       esac
-      exec gh pr "${repo_args[@]}" "$subcmd" "$@"
+      exec gh pr ${repo_args[@]+"${repo_args[@]}"} "$subcmd" "$@"
     fi
-    exec gh pr "${repo_args[@]}" "$@"
+    exec gh pr ${repo_args[@]+"${repo_args[@]}"} "$@"
     ;;
   issue|release|run|workflow|label|milestone|browse|project|ruleset|secret|variable|cache)
-    exec gh "$cmd" "${repo_args[@]}" "$@"
+    exec gh "$cmd" ${repo_args[@]+"${repo_args[@]}"} "$@"
     ;;
   *)
     exec gh "$cmd" "$@"
