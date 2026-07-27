@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 type ShellContext = Pick<ExtensionCommandContext, "cwd" | "hasUI" | "ui">;
 type ShellResult = { exitCode: number | null; transcript: string; transcriptPath?: string };
+type TmuxShell = { paneId: string; marker: string; statusPath: string; transcriptPath: string };
 
 const MAX_TRANSCRIPT_CHARS = Number(process.env.PI_SHELL_ESCAPE_MAX_TRANSCRIPT_CHARS ?? 50_000);
 
@@ -18,13 +19,26 @@ export default function shellEscape(pi: ExtensionAPI) {
 				return;
 			}
 
-			const result = await runShell(ctx, args.trim());
-			pi.sendMessage({
-				customType: "shell-transcript",
-				content: formatTranscriptMessage(args.trim(), result),
-				display: true,
-				details: result,
-			});
+			const command = args.trim();
+			if (ctx.mode === "tui" && process.env.TMUX && !command) {
+				const shell = openTmuxShellPane(ctx.cwd);
+				if (typeof shell !== "string") {
+					void collectTmuxShell(shell)
+						.then((result) => {
+							sendTranscript(pi, command, result);
+							ctx.ui.notify(
+								`Shell exited with ${result.exitCode ?? "unknown"}`,
+								result.exitCode === 0 ? "info" : "warning",
+							);
+						})
+						.catch((error) => ctx.ui.notify(`Could not collect shell transcript: ${error}`, "warning"));
+					return;
+				}
+				ctx.ui.notify(`Could not open tmux pane: ${shell}`, "warning");
+			}
+
+			const result = await runShell(ctx, command);
+			sendTranscript(pi, command, result);
 			ctx.ui.notify(`Shell exited with ${result.exitCode ?? "unknown"}`, result.exitCode === 0 ? "info" : "warning");
 		},
 	});
@@ -80,6 +94,70 @@ async function runShell(ctx: ShellContext, command: string): Promise<ShellResult
 		done({ exitCode: result.status, transcript, transcriptPath });
 
 		return { render: () => [], invalidate: () => {} };
+	});
+}
+
+function openTmuxShellPane(cwd: string): TmuxShell | string {
+	const shell = process.env.SHELL || "/bin/zsh";
+	const shellName = path.basename(shell);
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-shell-"));
+	const transcriptPath = path.join(tempDir, "transcript.txt");
+	const statusPath = path.join(tempDir, "status");
+	const marker = `__PI_SHELL_ESCAPE_${process.pid}_${Date.now()}__`;
+	const launcherPath = path.join(tempDir, "launch.sh");
+	const env = shellName === "zsh" ? `export ZDOTDIR=${zshQuote(createZshDotdir(tempDir, marker))}\n` : "";
+
+	fs.writeFileSync(
+		launcherPath,
+		`#!/bin/sh\nexport PI_SHELL_ESCAPE=1\n${env}script -q ${zshQuote(transcriptPath)} ${zshQuote(shell)} ${shellArgsForInteractive(shellName).map(zshQuote).join(" ")}\nstatus=$?\nprintf '%s\\n' "$status" > ${zshQuote(statusPath)}\nexit "$status"\n`,
+		{ mode: 0o700 },
+	);
+
+	const args = ["split-window", "-v", "-l", "50%", "-c", cwd, "-P", "-F", "#{pane_id}"];
+	if (process.env.TMUX_PANE) args.push("-t", process.env.TMUX_PANE);
+	args.push(zshQuote(launcherPath));
+
+	const result = spawnSync("tmux", args, { encoding: "utf8" });
+	if (result.error) return result.error.message;
+	if (result.status !== 0) return result.stderr.trim() || `tmux exited with ${result.status}`;
+
+	return { paneId: result.stdout.trim(), marker, statusPath, transcriptPath };
+}
+
+async function collectTmuxShell(shell: TmuxShell): Promise<ShellResult> {
+	while (!fs.existsSync(shell.statusPath) && tmuxPaneExists(shell.paneId)) {
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+
+	const exitCode = Number.parseInt(readFile(shell.statusPath), 10);
+	return {
+		exitCode: Number.isNaN(exitCode) ? null : exitCode,
+		transcript: readTranscript(shell.transcriptPath, shell.marker),
+		transcriptPath: shell.transcriptPath,
+	};
+}
+
+function tmuxPaneExists(paneId: string): boolean {
+	const result = spawnSync("tmux", ["display-message", "-p", "-t", paneId, "#{pane_id}:#{pane_dead}"], {
+		encoding: "utf8",
+	});
+	return result.stdout.trim() === `${paneId}:0`;
+}
+
+function readFile(file: string): string {
+	try {
+		return fs.readFileSync(file, "utf8");
+	} catch {
+		return "";
+	}
+}
+
+function sendTranscript(pi: ExtensionAPI, command: string, result: ShellResult) {
+	pi.sendMessage({
+		customType: "shell-transcript",
+		content: formatTranscriptMessage(command, result),
+		display: true,
+		details: result,
 	});
 }
 
