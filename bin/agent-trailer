@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: agent-trailer [--raw]
+
+Print the GitHub comment trailer identifying the agent that wrote a comment:
+
+  Generated-by: AI (<harness>/<provider>/<model>)
+
+Values come from the running harness's environment, not from the model's
+self-report (models routinely guess their own name wrong).
+
+Options:
+  --raw       Print "<harness>/<provider>/<model>" without the trailer prefix.
+  -h, --help  Show this help.
+USAGE
+}
+
+raw=0
+case "${1:-}" in
+  --raw) raw=1 ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  "") ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
+
+harness=unknown
+provider=unknown
+model=unknown
+
+if [ -n "${PI_MODEL:-}" ] || [ -n "${PI_CODING_AGENT:-}" ]; then
+  harness=pi
+  provider="${PI_PROVIDER:-unknown}"
+  model="${PI_MODEL:-unknown}"
+  if [ -n "${PI_PACKAGE_DIR:-}" ]; then
+    harness="pi-$(basename "$PI_PACKAGE_DIR" | sed 's/^pi-//')"
+  fi
+elif [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]; then
+  harness=claude-code
+  provider=anthropic
+  model="${ANTHROPIC_MODEL:-${CLAUDE_MODEL:-unknown}}"
+elif [ -n "${CURSOR_AGENT:-}" ]; then
+  harness=cursor
+  provider="${CURSOR_PROVIDER:-unknown}"
+  model="${CURSOR_MODEL:-unknown}"
+elif [ -n "${CODEX_HOME:-}" ] || [ -n "${CODEX_SANDBOX:-}" ]; then
+  harness=codex
+  provider=openai
+  model="${CODEX_MODEL:-unknown}"
+elif [ -n "${AIDER_MODEL:-}" ]; then
+  harness=aider
+  provider=unknown
+  model="$AIDER_MODEL"
+fi
+
+# The proxy provider ids carry routing hints ("-250k-prefer-using-this-one")
+# that mean nothing to a PR reader; keep only the vendor prefix.
+provider="${provider%%-*}"
+
+id="$harness/$provider/$model"
+
+if [ "$raw" -eq 1 ]; then
+  printf '%s\n' "$id"
+else
+  printf 'Generated-by: AI (%s)\n' "$id"
+fi

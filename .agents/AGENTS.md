@@ -75,10 +75,16 @@ Reference every issue or pull request with its title and full URL:
 
 Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
 
-Append this trailer to every GitHub comment and review after a blank line:
+Append this trailer to every GitHub comment and review after a blank line. Never write it from memory — models guess their own name wrong. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim:
 
-```markdown
-Generated-by: AI (<agent-harness>/<provider>/<model>)
+```sh
+agent-trailer   # => Generated-by: AI (pi-0.83.0/anthropic/claude-opus-5)
+```
+
+Append it directly when writing the comment file:
+
+```sh
+printf '\n' >> "$TMP_FILE" && agent-trailer >> "$TMP_FILE"
 ```
 
 Keep approvals brief. For change requests, identify each blocker and explain why it matters. Use Conventional Comments below.
