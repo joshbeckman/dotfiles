@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# free-space — reclaim disk space from caches and regenerable data.
+#
+# Dry-run by default: it only measures and prints what it *would* remove.
+# Pass --apply to actually delete. Every target here is either a cache,
+# a redownloadable asset, or trash — nothing here is irreplaceable user data.
+
+usage() {
+  cat <<'USAGE'
+Usage: free-space [--apply] [--yes] [only ...]
+
+Reclaim disk space from caches and regenerable data.
+
+Modes:
+  (default)   Dry run. Measure and report only; delete nothing.
+  --apply     Actually delete the targets.
+  --yes       Skip the confirmation prompt when used with --apply.
+
+Targeted cleanup (optional positional filters; default is all):
+  aerials     macOS dynamic/aerial wallpapers (redownloaded on demand)
+  npm         ~/.npm cache
+  claude      Claude Desktop vm_bundles + caches
+  brew        Homebrew download cache (brew cleanup)
+  cache       ~/.cache tool caches (uv, playwright, etc.)
+  libcache    ~/Library/Caches app caches
+  xcode       Xcode DerivedData + iOS DeviceSupport
+  trash       ~/.Trash
+
+Examples:
+  free-space                 # show everything reclaimable, delete nothing
+  free-space aerials brew    # dry-run just those two
+  free-space --apply         # clean everything (with confirmation)
+  free-space --apply --yes npm cache
+USAGE
+}
+
+APPLY=0
+ASSUME_YES=0
+declare -a FILTERS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply) APPLY=1 ;;
+    --yes|-y) ASSUME_YES=1 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    *) FILTERS+=("$1") ;;
+  esac
+  shift
+done
+
+# Return 0 if this target should run given the positional filters.
+selected() {
+  [ ${#FILTERS[@]} -eq 0 ] && return 0
+  local want
+  for want in "${FILTERS[@]}"; do
+    [ "$want" = "$1" ] && return 0
+  done
+  return 1
+}
+
+TOTAL_KB=0
+
+# One-line explanation per target, shown in the report.
+describe() {
+  case "$1" in
+    aerials)  echo "macOS aerial/dynamic wallpaper videos (redownloaded on demand)" ;;
+    npm)      echo "~/.npm package cache" ;;
+    claude)   echo "Claude Desktop VM images + web caches (regenerable)" ;;
+    brew)     echo "Homebrew download cache (brew cleanup -s)" ;;
+    cache)    echo "~/.cache tool caches (uv, playwright, etc.)" ;;
+    libcache) echo "~/Library/Caches app caches (Homebrew excluded)" ;;
+    xcode)    echo "Xcode DerivedData + iOS DeviceSupport" ;;
+    trash)    echo "~/.Trash" ;;
+    *)        echo "" ;;
+  esac
+}
+
+human() {
+  # Portable size formatter from KB. Avoids relying on numfmt (not on stock macOS).
+  awk -v kb="$1" 'BEGIN{
+    split("KB MB GB TB", u, " "); v=kb; i=1;
+    while (v>=1024 && i<4){v/=1024; i++}
+    printf("%.1f %s", v, u[i]);
+  }'
+}
+
+dir_kb() {
+  # Sum sizes in KB for existing paths; 0 if none exist.
+  local total=0 p sz
+  for p in "$@"; do
+    [ -e "$p" ] || continue
+    sz=$(du -sk "$p" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+    total=$((total + sz))
+  done
+  echo "$total"
+}
+
+# reclaim LABEL PATH...
+# Measures the paths, prints the line, and (if --apply) removes their contents.
+reclaim() {
+  local label="$1"; shift
+  local kb; kb=$(dir_kb "$@")
+  if [ "$kb" -eq 0 ]; then
+    printf '  %-14s %10s  (nothing)\n' "$label" "-"
+    return
+  fi
+  TOTAL_KB=$((TOTAL_KB + kb))
+  if [ "$APPLY" -eq 1 ]; then
+    local p
+    for p in "$@"; do
+      [ -e "$p" ] || continue
+      # Delete the *contents*, not the dir itself, so apps keep their expected paths.
+      find "$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    done
+    printf '  %-14s %10s  freed      %s\n' "$label" "$(human "$kb")" "$(describe "$label")"
+  else
+    printf '  %-14s %10s  would free  %s\n' "$label" "$(human "$kb")" "$(describe "$label")"
+  fi
+}
+
+echo "free-space — $([ "$APPLY" -eq 1 ] && echo APPLY || echo 'DRY RUN (nothing deleted)')"
+echo
+
+if [ "$APPLY" -eq 1 ] && [ "$ASSUME_YES" -eq 0 ]; then
+  printf 'This will permanently delete the caches listed below. Continue? [y/N] '
+  read -r reply
+  case "$reply" in
+    y|Y|yes|YES) ;;
+    *) echo "Aborted."; exit 1 ;;
+  esac
+  echo
+fi
+
+if selected aerials; then
+  # These are Apple's dynamic wallpaper / aerial screensaver videos. macOS
+  # re-downloads them when a wallpaper needs them, so they are safe to drop.
+  reclaim "aerials" "$HOME/Library/Application Support/com.apple.wallpaper/aerials"
+fi
+
+if selected npm; then
+  reclaim "npm" "$HOME/.npm/_cacache"
+fi
+
+if selected claude; then
+  # vm_bundles are large regenerable VM images for Claude Code sandboxing.
+  reclaim "claude" \
+    "$HOME/Library/Application Support/Claude/vm_bundles" \
+    "$HOME/Library/Application Support/Claude/Cache" \
+    "$HOME/Library/Application Support/Claude/Code Cache"
+fi
+
+if selected brew && command -v brew >/dev/null 2>&1; then
+  # brew has its own safe cleanup; report its estimate, run it on --apply.
+  brew_kb=$(dir_kb "$(brew --cache 2>/dev/null)")
+  if [ "${brew_kb:-0}" -gt 0 ]; then
+    TOTAL_KB=$((TOTAL_KB + brew_kb))
+    if [ "$APPLY" -eq 1 ]; then
+      brew cleanup -s >/dev/null 2>&1 || true
+      rm -rf "$(brew --cache 2>/dev/null)"/* 2>/dev/null || true
+      printf '  %-14s %10s  freed      %s\n' "brew" "$(human "$brew_kb")" "$(describe brew)"
+    else
+      printf '  %-14s %10s  would free  %s\n' "brew" "$(human "$brew_kb")" "$(describe brew)"
+    fi
+  fi
+fi
+
+if selected cache; then
+  # ~/.cache holds tool caches (uv, playwright, chrome-devtools, etc.).
+  reclaim "cache" "$HOME/.cache"
+fi
+
+if selected libcache; then
+  # Exclude Homebrew here; the brew target owns that cache, so counting it in
+  # both places would double-report (and fight over the same files).
+  declare -a libcaches=()
+  while IFS= read -r d; do
+    [ "$(basename "$d")" = "Homebrew" ] && continue
+    libcaches+=("$d")
+  done < <(find "$HOME/Library/Caches" -mindepth 1 -maxdepth 1 2>/dev/null)
+  [ ${#libcaches[@]} -gt 0 ] && reclaim "libcache" "${libcaches[@]}"
+fi
+
+if selected xcode; then
+  reclaim "xcode" \
+    "$HOME/Library/Developer/Xcode/DerivedData" \
+    "$HOME/Library/Developer/Xcode/iOS DeviceSupport"
+fi
+
+if selected trash; then
+  reclaim "trash" "$HOME/.Trash"
+fi
+
+echo
+printf '  %-14s %10s  %s\n' "TOTAL" "$(human "$TOTAL_KB")" \
+  "$([ "$APPLY" -eq 1 ] && echo reclaimed || echo reclaimable)"
+
+if [ "$APPLY" -eq 0 ] && [ "$TOTAL_KB" -gt 0 ]; then
+  echo
+  echo "Dry run only. Re-run with --apply to delete."
+fi
