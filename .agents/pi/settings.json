@@ -1,6 +1,6 @@
 {
-  "defaultProvider": "anthropic-250k-prefer-using-this-one",
-  "defaultModel": "claude-opus-5",
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-5.5",
   "npmCommand": [
     "pnpm"
   ],
@@ -13,9 +13,7 @@
     "~/.agents/pi/themes"
   ],
   "packages": [
-    "https://github.com/shopify-playground/shop-pi-fy",
-    "git:github.com/Shopify/pi-tool-gateway-extension"
+    "https://github.com/shopify-playground/shop-pi-fy"
   ],
-  "lastChangelogVersion": "0.83.0",
-  "defaultThinkingLevel": "medium"
+  "lastChangelogVersion": "0.75.5"
 }
