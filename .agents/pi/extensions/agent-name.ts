@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -23,6 +23,7 @@ type NameContext = {
 export default function (pi: ExtensionAPI) {
 	let name: string | undefined;
 	let scratchpad: string | undefined;
+	let touchedAt = 0;
 
 	pi.on("session_start", (_event, ctx: NameContext) => {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -35,12 +36,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", (event) => {
 		if (!name) return;
+		if (scratchpad) touchedAt = keepAlive(scratchpad, touchedAt);
 		const lines = [
 			`Your name for this session is ${name}. Use it when you need to identify yourself — in scratch file names, branch names, tmux titles, notifications, or when the user asks who they are talking to. Do not mention it otherwise.`,
 		];
 		if (scratchpad) {
 			lines.push(
-				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It survives across resumes of this session but not across reboots, so nothing durable belongs there.`,
+				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It survives across resumes of this session, but not across reboots or three days of session inactivity, so nothing durable belongs there.`,
 			);
 		}
 		return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n\n")}` };
@@ -86,6 +88,28 @@ function createScratchpad(name: string, sessionId: string, ctx: NameContext): st
 		return undefined;
 	}
 	return dir;
+}
+
+// macOS tmp_cleaner deletes /tmp files whose atime, mtime, AND ctime are all
+// older than 3 days, so a note written once early in a long-running session
+// would vanish under it. Restamping on activity ties the scratchpad's lifetime
+// to the session's rather than to each file's, which is the semantics we want:
+// it ages out 3 days after the session goes quiet, not 3 days after a write.
+function keepAlive(dir: string, touchedAt: number): number {
+	const now = Date.now();
+	if (now - touchedAt < 6 * 60 * 60 * 1000) return touchedAt; // hourly-ish is ample against a 3-day threshold
+	try {
+		const stamp = new Date(now);
+		utimesSync(dir, stamp, stamp);
+		for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+			try {
+				utimesSync(join(entry.parentPath, entry.name), stamp, stamp);
+			} catch {} // a file the agent deleted mid-walk is not worth failing the turn over
+		}
+	} catch {
+		return touchedAt;
+	}
+	return now;
 }
 
 function gitDescribe(cwd: string): string {
