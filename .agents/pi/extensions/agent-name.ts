@@ -31,6 +31,11 @@ export default function (pi: ExtensionAPI) {
 		// Ephemeral runs (pi -p --no-session) get no scratchpad; one-shot prompts
 		// would otherwise litter /tmp/agent with dirs nobody reads.
 		scratchpad = name && sessionId ? createScratchpad(name, sessionId, ctx) : undefined;
+		// Exported rather than passed per-call: bash-tool children inherit the pi
+		// process env, so agent-trailer and friends can read it without the model
+		// having to remember to pass its own name (which it gets wrong).
+		if (name) process.env.AGENT_NAME = name;
+		if (scratchpad) process.env.AGENT_SCRATCHPAD = scratchpad;
 		if (ctx.hasUI) ctx.ui.setStatus("agent-name", name ? ctx.ui.theme.fg("muted", `󰙃 ${name}`) : undefined);
 	});
 

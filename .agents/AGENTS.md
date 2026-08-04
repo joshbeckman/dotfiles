@@ -86,7 +86,7 @@ Write GitHub comments to a temporary file, then pass it with `gw issue comment I
 Append this trailer to every GitHub comment and review after a blank line. Never write it from memory — models guess their own name wrong. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim:
 
 ```sh
-agent-trailer   # => Generated-by: AI (pi-0.83.0/anthropic/claude-opus-5)
+agent-trailer   # => Generated-by: AI Oriole Limner (pi-0.83.0/anthropic/claude-opus-5)
 ```
 
 Append it directly when writing the comment file:

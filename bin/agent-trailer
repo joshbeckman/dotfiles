@@ -3,34 +3,45 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: agent-trailer [--raw]
+Usage: agent-trailer [--raw] [--name NAME]
 
 Print the GitHub comment trailer identifying the agent that wrote a comment:
 
-  Generated-by: AI (<harness>/<provider>/<model>)
+  Generated-by: AI <session name> (<harness>/<provider>/<model>)
 
-Values come from the running harness's environment, not from the model's
-self-report (models routinely guess their own name wrong).
+The session name is omitted when unknown. Values come from the running
+harness's environment, not from the model's self-report (models routinely
+guess their own name wrong).
 
 Options:
-  --raw       Print "<harness>/<provider>/<model>" without the trailer prefix.
-  -h, --help  Show this help.
+  --raw         Print "<harness>/<provider>/<model>" without the trailer prefix.
+  --name NAME   Session name to use instead of $AGENT_NAME.
+  -h, --help    Show this help.
 USAGE
 }
 
 raw=0
-case "${1:-}" in
-  --raw) raw=1 ;;
-  -h | --help)
-    usage
-    exit 0
-    ;;
-  "") ;;
-  *)
-    usage >&2
-    exit 1
-    ;;
-esac
+name="${AGENT_NAME:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --raw) raw=1 ;;
+    --name)
+      name="${2:-}"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    "") ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 harness=unknown
 provider=unknown
@@ -69,6 +80,8 @@ id="$harness/$provider/$model"
 
 if [ "$raw" -eq 1 ]; then
   printf '%s\n' "$id"
+elif [ -n "$name" ]; then
+  printf 'Generated-by: AI %s (%s)\n' "$name" "$id"
 else
   printf 'Generated-by: AI (%s)\n' "$id"
 fi
