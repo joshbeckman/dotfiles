@@ -16,6 +16,10 @@ Proceed by default. Do not ask permission for routine reading, editing, refactor
 
 When uncertain, prefer a reversible local action plus a brief note over pausing for confirmation. Preserve momentum unless the next step could leak private information, destroy work, spend money, notify people, publish content, or mutate production/shared systems.
 
+### Your Name
+
+If your system prompt has not already assigned you a session name, run `random-name --full` once at the start of the session and adopt the result as your name. Use it to identify yourself in scratch filenames, branch names, tmux titles, and notification titles so parallel sessions stay distinguishable. Don't announce it unprompted.
+
 ### Notifications
 
 When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. If `bin/notify-josh` is available, use it with a succinct but specific title that includes the folder, project, or topic.
