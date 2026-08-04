@@ -1,0 +1,103 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'digest'
+
+# Generate a random single-word name, e.g. "haboob" or "fletcher".
+# Useful for agents naming themselves so sessions are distinguishable.
+#
+# Word lists live in share/names/*.txt (one word per line). Adding a theme is a
+# file, not a code change; the default pool is every theme combined.
+
+NAMES_DIR = File.expand_path('../share/names', __dir__)
+
+# Trades and shipping-forecast areas already read as English surnames, so they
+# carry the last-name slot rather than drawing both halves from one pool.
+SURNAME_THEMES = %w[trades shipping].freeze
+
+def themes
+  Dir.glob(File.join(NAMES_DIR, '*.txt')).sort.to_h { |f| [File.basename(f, '.txt'), f] }
+end
+
+def usage
+  puts <<~TEXT
+    Usage: random-name [-n COUNT] [--theme NAME[,NAME...]] [--title] [--seed STRING]
+
+      -n COUNT          print COUNT distinct names (default 1)
+      --full            first and last name, e.g. "Saffron Fletcher"
+                        (aliases: --fullname, --first-and-last)
+      --theme NAMES     restrict to these comma-separated themes
+      --title           Capitalize output
+      --seed STRING     deterministic output for the same STRING
+      --themes          list available themes and word counts
+      -h, --help        this message
+
+    Themes: #{themes.keys.join(', ')}
+  TEXT
+end
+
+count = 1
+full = false
+title = false
+seed = nil
+wanted = nil
+
+args = ARGV.dup
+until args.empty?
+  case (arg = args.shift)
+  when '-n', '--count' then count = Integer(args.shift.to_s)
+  when '--full', '--fullname', '--first-and-last' then full = true
+  when '--theme' then wanted = args.shift.to_s.split(',')
+  when '--title' then title = true
+  when '--seed' then seed = args.shift
+  when '--themes'
+    themes.each { |name, file| puts format('%-10s %4d', name, File.readlines(file).count) }
+    exit 0
+  when '-h', '--help' then usage; exit 0
+  else
+    warn "random-name: unknown argument #{arg}"
+    usage
+    exit 1
+  end
+end
+
+pool = themes
+if wanted
+  unknown = wanted - pool.keys
+  unless unknown.empty?
+    warn "random-name: unknown theme(s): #{unknown.join(', ')} (have: #{pool.keys.join(', ')})"
+    exit 1
+  end
+  pool = pool.slice(*wanted)
+end
+
+words = pool.values.flat_map { |f| File.readlines(f, chomp: true) }.reject(&:empty?).uniq
+if words.empty?
+  warn "random-name: no words found in #{NAMES_DIR}"
+  exit 1
+end
+
+if !full && count > words.size
+  warn "random-name: only #{words.size} distinct words available"
+  exit 1
+end
+
+# String#hash is salted per process, so it cannot back a stable --seed.
+rng = seed ? Random.new(Digest::MD5.hexdigest(seed).to_i(16)) : Random.new
+
+unless full
+  words.sample(count, random: rng).each { |w| puts title ? w.capitalize : w }
+  exit 0
+end
+
+surnames = pool.slice(*SURNAME_THEMES).values.flat_map { |f| File.readlines(f, chomp: true) }
+surnames = words if surnames.empty? # --theme excluded every surname source
+givens = words - surnames
+givens = words if givens.empty?
+
+count.times do
+  given = givens.sample(random: rng)
+  # When --theme collapses both pools to the same list, reject "Saddler Saddler".
+  surname = (surnames - [given]).sample(random: rng) || given
+  puts [given, surname].map(&:capitalize).join(' ')
+end
