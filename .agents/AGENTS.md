@@ -20,6 +20,10 @@ When uncertain, prefer a reversible local action plus a brief note over pausing 
 
 If your system prompt has not already assigned you a session name, run `random-name --full` once at the start of the session and adopt the result as your name. Use it to identify yourself in scratch filenames, branch names, tmux titles, and notification titles so parallel sessions stay distinguishable. Don't announce it unprompted.
 
+### Scratchpad
+
+If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there: `/tmp` does not survive a reboot, and macOS prunes it after three days.
+
 ### Notifications
 
 When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. If `bin/notify-josh` is available, use it with a succinct but specific title that includes the folder, project, or topic.
