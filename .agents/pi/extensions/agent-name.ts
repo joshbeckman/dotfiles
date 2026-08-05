@@ -38,6 +38,12 @@ export default function (pi: ExtensionAPI) {
 		// having to remember to pass its own name (which it gets wrong).
 		if (name) process.env.AGENT_NAME = name;
 		if (scratchpad) process.env.AGENT_SCRATCHPAD = scratchpad;
+
+		// One write, three surfaces: the session name flows into /resume, into the
+		// terminal and tmux pane title via the titlebar extension's setTitle, and
+		// into attention.ts marks. Labelling panes directly from here duplicated
+		// that and let headless `pi -p` runs steal their parent pane's title.
+		if (name && !pi.getSessionName()) pi.setSessionName(name);
 		if (ctx.hasUI) ctx.ui.setStatus("agent-name", name ? ctx.ui.theme.fg("muted", `󰙃 ${name}`) : undefined);
 
 		// A session sitting idle at the prompt fires no turn events, so the mail

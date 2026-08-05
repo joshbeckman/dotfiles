@@ -15,8 +15,14 @@ export default function (pi: ExtensionAPI) {
 			title: Type.String({ minLength: 1, maxLength: 80, description: "A concise title for the current work" }),
 		}),
 		async execute(_toolCallId, params) {
-			const title = params.title.trim();
-			if (!title) throw new Error("Session title cannot be blank");
+			const topic = params.title.trim();
+			if (!topic) throw new Error("Session title cannot be blank");
+
+			// AGENT_NAME comes from the naming extension via the process env rather
+			// than from the model, which would misremember or re-roll it. Composing
+			// here keeps the model's job to "describe the work".
+			const agent = process.env.AGENT_NAME;
+			const title = agent && !topic.startsWith(agent) ? `${agent} · ${topic}` : topic;
 
 			const previous = pi.getSessionName();
 			if (previous !== title) pi.setSessionName(title);
