@@ -41,8 +41,8 @@ addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
 Env:
   AGENT_MAIL_ROOT  Base dir (default /tmp/agent). Ephemeral: dies on reboot /
                    ~3-day idle. Not for anything that must be received.
-  AGENT_MAIL_STALE_HOURS  Warn on send when the recipient has been idle this
-                   long (default 12).
+  AGENT_MAIL_STALE_HOURS  Report the recipient's idle time on send once it
+                   reaches this many hours (default 12).
 USAGE
 }
 
@@ -121,11 +121,12 @@ cmd_send() {
   # than silently conjuring a dead inbox nobody will ever read.
   [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
 
-  # Warn, don't block: there is no wakeup, so the sender's only defense against
-  # writing to a session that will never run again is knowing how stale it is.
+  # Report, don't predict: an overnight-idle session usually resumes, so state
+  # the age and let the sender judge. Not fatal either way; there is no wakeup,
+  # and the sender's only signal about a quiet recipient is how quiet it is.
   local idle; idle="$(idle_hours "$scratchpad" || echo 0)"
   if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
-    echo "agent-mail: warning: '$to' last active ${idle}h ago; may never read this" >&2
+    echo "agent-mail: '$to' last active ${idle}h ago" >&2
   fi
 
   ensure_maildir "$inbox"
