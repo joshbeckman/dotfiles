@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fuzzy-find a tmux pane by its title and jump to it.
+#
+# choose-tree cannot do this: its `/` search is hardcoded in window-tree.c to
+# match session name, window name, and for panes get_proc_name() -- so every
+# agent pane searches as "node" regardless of the -F display format. Its `-f`
+# filter *is* format-driven, but a filter built by command-prompt %% expansion
+# proved unverifiable from the CLI (capture-pane cannot read a mode overlay),
+# so this does the search in a shell where every step is testable.
+
+usage() {
+  cat <<'USAGE'
+Usage: tmux-find-pane [--list] [QUERY]
+
+Fuzzy-find a tmux pane by pane title (falls back to its running command) and
+switch to it. With --list, print the pane table and exit.
+USAGE
+}
+
+list_panes() {
+  # pane_title is empty or the hostname for plain shells; show the command then.
+  tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{?#{&&:#{pane_title},#{&&:#{!=:#{pane_title},#{host}},#{!=:#{pane_title},#{host_short}}}},#{pane_title},#{pane_current_command}}|#{window_name}' |
+    awk -F'|' '{ printf "%-20s %-60s [%s]\n", $1, substr($2, 1, 60), $3 }'
+}
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  --list)
+    list_panes
+    exit 0
+    ;;
+esac
+
+command -v fzf >/dev/null 2>&1 || { echo "tmux-find-pane: fzf not found" >&2; exit 1; }
+
+# -i, not fzf's smart-case default: an agent name typed as "Simoom" or "SIMOOM"
+# should find the same pane.
+selection=$(list_panes | fzf -i --query="${1:-}" --prompt="pane> " --height=100% --no-sort --exit-0) || exit 0
+[ -n "$selection" ] || exit 0
+
+target=${selection%% *}
+session=${target%%:*}
+window=${target%.*}
+
+# Order matters: switch-client first, or select-window targets the wrong session
+# when the match lives in a session this client is not attached to.
+tmux switch-client -t "$session" 2>/dev/null || true
+tmux select-window -t "$window"
+tmux select-pane -t "$target"
