@@ -41,6 +41,15 @@ GW_REPO=OWNER/REPO gw api repos/OWNER/REPO/issues/NUMBER/sub_issues --paginate
 
 Draft the body from [templates.md](templates.md). Keep the goal legible to someone outside the work. Choose a stable, lowercase kebab-case slug and create `proj:<slug>` in each repository only when first needed.
 
+Give each project label its own color so projects stay distinguishable at a glance in issue lists. List the colors already taken by existing `proj:` labels and pick an unused one:
+
+```sh
+GW_REPO=OWNER/REPO gw api repos/OWNER/REPO/labels --paginate --jq '.[] | select(.name | startswith("proj:")) | "\(.name) #\(.color)"'
+GW_REPO=OWNER/REPO gw label create "proj:<slug>" --color COLOR --description "Project: <root title>"
+```
+
+Reuse the same color for the label across repositories in one project. Do not default to a single house color for every project, and do not recolor existing labels while creating a new one.
+
 Before creating issues, labels, comments, or other externally visible state, show the exact proposed mutation and get confirmation.
 
 ## Create a child issue
