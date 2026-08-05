@@ -53,16 +53,19 @@ resolve_inbox() {
       local handle="${id#humans/}"; handle="${handle%%@*}"
       echo "$MAIL_ROOT/humans/$handle/inbox"; return 0 ;;
   esac
-  # Exact dir first (handles a full <name>-<sessionID>), then prefix-glob
-  # (handles a bare <name>). Names themselves contain hyphens, so we cannot
-  # infer "full ID" by counting hyphens — match the filesystem instead.
-  if [ -d "$MAIL_ROOT/$id/inbox" ]; then
+  # Match on the *scratchpad* existing, not inbox/ — a fresh recipient has a
+  # scratchpad but no inbox until their first mail arrives, so keying off
+  # inbox/ made bare-name first contact impossible (chicken-and-egg).
+  # Exact dir first (full <name>-<sessionID>), then prefix-glob (bare <name>).
+  # Names themselves contain hyphens, so we cannot infer "full ID" by counting
+  # hyphens — match the filesystem instead.
+  if [ -d "$MAIL_ROOT/$id" ]; then
     echo "$MAIL_ROOT/$id/inbox"; return 0
   fi
   local -a hits=()
   local d
-  for d in "$MAIL_ROOT/$id"-*/inbox; do
-    [ -d "$d" ] && hits+=("$d")
+  for d in "$MAIL_ROOT/$id"-*/; do
+    [ -d "$d" ] && hits+=("${d%/}/inbox")
   done
   case ${#hits[@]} in
     1) echo "${hits[0]}"; return 0 ;;
