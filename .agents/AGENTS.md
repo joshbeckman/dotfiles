@@ -22,7 +22,7 @@ If your system prompt has not already assigned you a session name, run `random-n
 
 ### Scratchpad
 
-If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there: `/tmp` does not survive a reboot, and macOS prunes files there once they have gone three days without being read or written.
+If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there. `/tmp` lives on disk, so it survives sleep and even a reboot — but macOS scrubs `/private/tmp` at boot, deleting anything whose last-access time is older than three days. Sleep/wake is safe; the risk is a reboot after a long idle stretch. Reading a file resets its three-day clock, so an actively-used scratchpad effectively never expires — only an abandoned one does.
 
 ### Inter-agent mail
 
