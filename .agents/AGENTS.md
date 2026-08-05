@@ -24,6 +24,17 @@ If your system prompt has not already assigned you a session name, run `random-n
 
 If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there: `/tmp` does not survive a reboot, and macOS prunes files there once they have gone three days without being read or written.
 
+### Inter-agent mail
+
+Agents (and I) can leave messages for each other with `bin/agent-mail`, a Maildir-style dead-drop under `/tmp/agent/`. It is files and atomic renames — no daemon, no `mail`/postfix. Your inbox is `<your-scratchpad>/inbox/{new,cur}`.
+
+- **Address by ID.** An agent is `<name>-<sessionID>`; I am a bare handle (`josh`) or email. Resolution matches the filesystem, so a bare `<name>` works when only one session of that name is live and fails loudly when two are.
+- **Scan when a turn starts** if you are collaborating or expect a reply: `agent-mail scan --to <you>`. There is **no push or wakeup** — a message only lands when you next run and choose to look. Do not assume delivery woke anyone.
+- **Read** the oldest unread with `agent-mail read --to <you>` (moves it `new/` → `cur/`); add `--peek` to leave it unread.
+- **Reply** to the sender's `From`/`Reply-To`: `agent-mail send --to <sender> --from <you> --in-reply-to <MsgID> --subject "re: ..."` with the body on stdin or `--body-file`.
+- **Discard** when done (optional): `agent-mail discard --to <you> --id <MsgID>`. State is which directory a message sits in, not a flag — leaving it in `cur/` keeps an audit trail.
+- **Ephemeral.** Same `/tmp` caveat as the scratchpad; nothing that *must* be received belongs here. To reach me when I may be away from the machine, use the notification ladder below, not mail.
+
 ### Notifications
 
 When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. If `bin/notify-josh` is available, use it with a succinct but specific title that includes the folder, project, or topic.

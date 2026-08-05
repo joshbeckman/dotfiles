@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# agent-mail — dead-drop messaging between agent sessions (and the human)
+# over a Maildir-style tree. No daemon, no lockfiles: delivery is a single
+# atomic rename, so concurrent senders never corrupt a reader's view.
+#
+# Why not the `mail`/postfix stack? Unix mail addresses the OS *user*, not a
+# session; every agent runs as the same user and would share one mbox spool,
+# which needs locking and loses per-session isolation. We keep email's proven
+# *format* (RFC-822 headers) and drop its transport.
+#
+# Why not delete-on-read for state? State lives in *which directory* a message
+# sits in (new/ vs cur/), not in a flag we rewrite — less mutable state, and it
+# leaves an audit trail until an agent explicitly discards.
+
+MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  agent-mail send   --to ID [--from ID] [--reply-to ID] [--subject S] [--in-reply-to MID] [--body-file F]
+  agent-mail scan   [--to ID] [--all]
+  agent-mail read   --to ID [--id MSG] [--peek]
+  agent-mail discard --to ID --id MSG
+  agent-mail addr   ID
+
+An ID is an agent as <name>-<sessionID>, or a human as a bare handle.
+Agent inboxes resolve to <name>-*/inbox; human inboxes to humans/<handle>/inbox.
+
+send   Deliver a message. Body from --body-file or stdin.
+scan   List unread (new/) messages for an inbox, or --all inboxes.
+read   Print the oldest unread message (or --id), moving it new/ -> cur/.
+       --peek prints without marking read.
+discard Delete a message from cur/ or new/.
+addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
+
+Env:
+  AGENT_MAIL_ROOT  Base dir (default /tmp/agent). Ephemeral: dies on reboot /
+                   ~3-day idle. Not for anything that must be received.
+USAGE
+}
+
+die() { echo "agent-mail: $*" >&2; exit 1; }
+
+# Resolve an ID to an inbox base path. Humans: humans/<handle>. Agents:
+# match <name>-* exactly, then fall back to a bare name dir. Ambiguity (two
+# live sessions of one name) fails loudly rather than guessing a recipient.
+resolve_inbox() {
+  local id="$1" match
+  case "$id" in
+    humans/*|*@*)
+      local handle="${id#humans/}"; handle="${handle%%@*}"
+      echo "$MAIL_ROOT/humans/$handle/inbox"; return 0 ;;
+  esac
+  # Exact dir first (handles a full <name>-<sessionID>), then prefix-glob
+  # (handles a bare <name>). Names themselves contain hyphens, so we cannot
+  # infer "full ID" by counting hyphens — match the filesystem instead.
+  if [ -d "$MAIL_ROOT/$id/inbox" ]; then
+    echo "$MAIL_ROOT/$id/inbox"; return 0
+  fi
+  local -a hits=()
+  local d
+  for d in "$MAIL_ROOT/$id"-*/inbox; do
+    [ -d "$d" ] && hits+=("$d")
+  done
+  case ${#hits[@]} in
+    1) echo "${hits[0]}"; return 0 ;;
+    0) echo "$MAIL_ROOT/$id/inbox"; return 0 ;;
+    *) die "ambiguous recipient '$id'; matches: ${hits[*]}" ;;
+  esac
+}
+
+ensure_maildir() {
+  mkdir -p "$1/tmp" "$1/new" "$1/cur"
+}
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Sortable, collision-resistant message id: epoch + pid + random.
+gen_msgid() {
+  echo "$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}${RANDOM}"
+}
+
+cmd_send() {
+  local to="" from="${AGENT_MAIL_FROM:-unknown}" reply_to="" subject="" in_reply_to="" body_file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      --from) from="$2"; shift 2 ;;
+      --reply-to) reply_to="$2"; shift 2 ;;
+      --subject) subject="$2"; shift 2 ;;
+      --in-reply-to) in_reply_to="$2"; shift 2 ;;
+      --body-file) body_file="$2"; shift 2 ;;
+      *) die "send: unknown arg $1" ;;
+    esac
+  done
+  [ -n "$to" ] || die "send: --to required"
+
+  local inbox; inbox="$(resolve_inbox "$to")"
+  # Fail loudly if the recipient scratchpad is gone (reboot/pruned) rather
+  # than silently conjuring a dead inbox nobody will ever read.
+  [ -d "$(dirname "$inbox")" ] || die "recipient '$to' has no scratchpad at $(dirname "$inbox") (rebooted or pruned?)"
+  ensure_maildir "$inbox"
+
+  local msgid; msgid="$(gen_msgid)"
+  local tmp="$inbox/tmp/$msgid.md"
+  local dst="$inbox/new/$msgid.md"
+
+  {
+    echo "From: $from"
+    echo "To: $to"
+    [ -n "$reply_to" ] && echo "Reply-To: $reply_to"
+    echo "Date: $(now_iso)"
+    echo "Message-ID: $msgid"
+    [ -n "$in_reply_to" ] && echo "In-Reply-To: $in_reply_to"
+    echo "Subject: ${subject:-(no subject)}"
+    echo
+    if [ -n "$body_file" ]; then cat "$body_file"; else cat; fi
+  } > "$tmp"
+
+  # Atomic within one filesystem: reader in new/ never sees a partial write.
+  mv "$tmp" "$dst"
+  echo "$msgid"
+}
+
+cmd_scan() {
+  local to="" all=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      --all) all=1; shift ;;
+      *) die "scan: unknown arg $1" ;;
+    esac
+  done
+  local -a inboxes=()
+  if [ "$all" -eq 1 ]; then
+    local d
+    for d in "$MAIL_ROOT"/*/inbox "$MAIL_ROOT"/humans/*/inbox; do
+      [ -d "$d/new" ] && inboxes+=("$d")
+    done
+  else
+    [ -n "$to" ] || die "scan: --to or --all required"
+    inboxes+=("$(resolve_inbox "$to")")
+  fi
+
+  local inbox f found=0
+  for inbox in "${inboxes[@]}"; do
+    [ -d "$inbox/new" ] || continue
+    for f in "$inbox/new"/*.md; do
+      [ -e "$f" ] || continue
+      found=1
+      local from subj
+      from=$(sed -n 's/^From: //p' "$f" | head -1)
+      subj=$(sed -n 's/^Subject: //p' "$f" | head -1)
+      printf '%s\t%s\tfrom:%s\t%s\n' "$inbox" "$(basename "$f" .md)" "$from" "$subj"
+    done
+  done
+  [ "$found" -eq 1 ] || echo "(no unread messages)"
+}
+
+cmd_read() {
+  local to="" id="" peek=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      --id) id="$2"; shift 2 ;;
+      --peek) peek=1; shift ;;
+      *) die "read: unknown arg $1" ;;
+    esac
+  done
+  [ -n "$to" ] || die "read: --to required"
+  local inbox; inbox="$(resolve_inbox "$to")"
+
+  local f=""
+  if [ -n "$id" ]; then
+    [ -e "$inbox/new/$id.md" ] && f="$inbox/new/$id.md"
+    [ -z "$f" ] && [ -e "$inbox/cur/$id.md" ] && f="$inbox/cur/$id.md"
+  else
+    # Oldest unread first; new/ names sort chronologically by construction.
+    for cand in "$inbox/new"/*.md; do
+      [ -e "$cand" ] && { f="$cand"; break; }
+    done
+  fi
+  [ -n "$f" ] || { echo "(no message)" >&2; exit 1; }
+
+  cat "$f"
+
+  if [ "$peek" -eq 0 ] && [ "$(dirname "$f")" = "$inbox/new" ]; then
+    mkdir -p "$inbox/cur"
+    mv "$f" "$inbox/cur/$(basename "$f")"
+  fi
+}
+
+cmd_discard() {
+  local to="" id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      --id) id="$2"; shift 2 ;;
+      *) die "discard: unknown arg $1" ;;
+    esac
+  done
+  [ -n "$to" ] && [ -n "$id" ] || die "discard: --to and --id required"
+  local inbox; inbox="$(resolve_inbox "$to")"
+  rm -f "$inbox/new/$id.md" "$inbox/cur/$id.md"
+}
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+sub="$1"; shift
+case "$sub" in
+  send)    cmd_send "$@" ;;
+  scan)    cmd_scan "$@" ;;
+  read)    cmd_read "$@" ;;
+  discard) cmd_discard "$@" ;;
+  addr)    [ $# -ge 1 ] || die "addr: ID required"; resolve_inbox "$1" ;;
+  -h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
