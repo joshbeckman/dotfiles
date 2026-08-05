@@ -24,6 +24,7 @@ Usage:
   agent-mail read   --to ID [--id MSG] [--peek]
   agent-mail discard --to ID --id MSG
   agent-mail addr   ID
+  agent-mail sweep  [--hours N] [--dry-run]
 
 An ID is an agent as <name>-<sessionID>, or a human as a bare handle.
 Agent inboxes resolve to <name>-*/inbox; human inboxes to humans/<handle>/inbox.
@@ -33,11 +34,15 @@ scan   List unread (new/) messages for an inbox, or --all inboxes.
 read   Print the oldest unread message (or --id), moving it new/ -> cur/.
        --peek prints without marking read.
 discard Delete a message from cur/ or new/.
+sweep  Notify Josh about messages unread for --hours (default 4). Any live
+       session can run it; a dead recipient cannot escalate for itself.
 addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
 
 Env:
   AGENT_MAIL_ROOT  Base dir (default /tmp/agent). Ephemeral: dies on reboot /
                    ~3-day idle. Not for anything that must be received.
+  AGENT_MAIL_STALE_HOURS  Warn on send when the recipient has been idle this
+                   long (default 12).
 USAGE
 }
 
@@ -80,6 +85,16 @@ ensure_maildir() {
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# Hours since a path was last modified. The naming extension restamps each
+# scratchpad on session activity, so the directory's mtime is a liveness
+# signal for the session that owns it -- no registry or heartbeat file needed.
+idle_hours() {
+  local path="$1" mtime now
+  mtime=$(stat -f %m "$path" 2>/dev/null) || return 1
+  now=$(date +%s)
+  echo $(( (now - mtime) / 3600 ))
+}
+
 # Sortable, collision-resistant message id: epoch + pid + random.
 gen_msgid() {
   echo "$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}${RANDOM}"
@@ -101,9 +116,18 @@ cmd_send() {
   [ -n "$to" ] || die "send: --to required"
 
   local inbox; inbox="$(resolve_inbox "$to")"
+  local scratchpad; scratchpad="$(dirname "$inbox")"
   # Fail loudly if the recipient scratchpad is gone (reboot/pruned) rather
   # than silently conjuring a dead inbox nobody will ever read.
-  [ -d "$(dirname "$inbox")" ] || die "recipient '$to' has no scratchpad at $(dirname "$inbox") (rebooted or pruned?)"
+  [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
+
+  # Warn, don't block: there is no wakeup, so the sender's only defense against
+  # writing to a session that will never run again is knowing how stale it is.
+  local idle; idle="$(idle_hours "$scratchpad" || echo 0)"
+  if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
+    echo "agent-mail: warning: '$to' last active ${idle}h ago; may never read this" >&2
+  fi
+
   ensure_maildir "$inbox"
 
   local msgid; msgid="$(gen_msgid)"
@@ -209,6 +233,51 @@ cmd_discard() {
   rm -f "$inbox/new/$id.md" "$inbox/cur/$id.md"
 }
 
+# Escalate to the human when nobody picked a message up. Runs from any live
+# session because the recipient, by definition, is not running to notice.
+cmd_sweep() {
+  local hours=4 dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --hours) hours="$2"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      *) die "sweep: unknown arg $1" ;;
+    esac
+  done
+
+  local inbox f
+  for inbox in "$MAIL_ROOT"/*/inbox "$MAIL_ROOT"/humans/*/inbox; do
+    [ -d "$inbox/new" ] || continue
+    for f in "$inbox/new"/*.md; do
+      [ -e "$f" ] || continue
+      local age; age="$(idle_hours "$f" || echo 0)"
+      [ "$age" -ge "$hours" ] || continue
+
+      local msgid; msgid="$(basename "$f" .md)"
+      local recipient; recipient="$(basename "$(dirname "$inbox")")"
+      local from subj
+      from=$(sed -n 's/^From: //p' "$f" | head -1)
+      subj=$(sed -n 's/^Subject: //p' "$f" | head -1)
+
+      if [ "$dry" -eq 1 ]; then
+        printf 'would escalate\t%s\t%s\tfrom:%s\t%s\t%sh\n' "$recipient" "$msgid" "$from" "$subj" "$age"
+        continue
+      fi
+
+      # mkdir is the atomic test-and-set: several live sessions may sweep the
+      # same inbox concurrently, and only the one that creates the marker
+      # notifies. A flag file written after checking would race.
+      mkdir "$inbox/.escalated-$msgid" 2>/dev/null || continue
+
+      if command -v notify-josh >/dev/null 2>&1; then
+        notify-josh --from agent-mail "Unread agent mail (${age}h)" \
+          "$recipient has not read \"$subj\" from $from" >/dev/null 2>&1 || true
+      fi
+      printf 'escalated\t%s\t%s\tfrom:%s\t%s\t%sh\n' "$recipient" "$msgid" "$from" "$subj" "$age"
+    done
+  done
+}
+
 [ $# -ge 1 ] || { usage >&2; exit 2; }
 sub="$1"; shift
 case "$sub" in
@@ -216,6 +285,7 @@ case "$sub" in
   scan)    cmd_scan "$@" ;;
   read)    cmd_read "$@" ;;
   discard) cmd_discard "$@" ;;
+  sweep)   cmd_sweep "$@" ;;
   addr)    [ $# -ge 1 ] || die "addr: ID required"; resolve_inbox "$1" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;

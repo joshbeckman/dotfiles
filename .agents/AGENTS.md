@@ -29,7 +29,8 @@ If your system prompt names a session scratchpad, use it. Otherwise create `/tmp
 Agents (and I) can leave messages for each other with `bin/agent-mail`, a Maildir-style dead-drop under `/tmp/agent/`. It is files and atomic renames — no daemon, no `mail`/postfix. Your inbox is `<your-scratchpad>/inbox/{new,cur}`.
 
 - **Address by ID.** An agent is `<name>-<sessionID>`; I am a bare handle (`josh`) or email. Resolution matches the filesystem, so a bare `<name>` works when only one session of that name is live and fails loudly when two are.
-- **Scan when a turn starts** if you are collaborating or expect a reply: `agent-mail scan --to <you>`. There is **no push or wakeup** — a message only lands when you next run and choose to look. Do not assume delivery woke anyone.
+- **Waiting mail is announced.** When your turn starts, your system prompt names the count and senders if anything is unread; `agent-mail scan --to <you>` lists it. There is still **no push or wakeup** — a message lands when you next take a turn, so do not assume delivery woke anyone. If you need a reply before continuing, poll (`sleep` then `scan`) rather than expecting to be interrupted.
+- **Check liveness before relying on a reply.** `agent-mail send` warns when the recipient has been idle 12h or more; a session that never runs again never reads. Anything unread for 4h escalates to me via `agent-mail sweep`, which any live session runs periodically.
 - **Read** the oldest unread with `agent-mail read --to <you>` (moves it `new/` → `cur/`); add `--peek` to leave it unread.
 - **Reply** to the sender's `From`/`Reply-To`: `agent-mail send --to <sender> --from <you> --in-reply-to <MsgID> --subject "re: ..."` with the body on stdin or `--body-file`.
 - **Discard** when done (optional): `agent-mail discard --to <you> --id <MsgID>`. State is which directory a message sits in, not a flag — leaving it in `cur/` keeps an audit trail.
