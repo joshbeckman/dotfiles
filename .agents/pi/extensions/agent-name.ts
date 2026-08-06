@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -49,6 +50,8 @@ export default function (pi: ExtensionAPI) {
 		// A session sitting idle at the prompt fires no turn events, so the mail
 		// indicator needs its own clock or it would only ever update on activity —
 		// exactly the case where nobody is reading their inbox.
+		if (ctx.hasUI) armPaneTitleReset();
+
 		if (timer) clearInterval(timer);
 		if (scratchpad && ctx.hasUI) {
 			showUnread(ctx, scratchpad);
@@ -88,6 +91,42 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus("agent-mail", undefined);
 		}
 	});
+}
+
+// A dead agent's name on a live shell pane is a lie, and the pane-border format
+// keeps showing it until something writes a new title. Reset to the hostname
+// rather than an empty string: that is a fresh pane's default, and the
+// choose-tree and pane-border formats already treat title==host as "no title"
+// and fall back to the running command.
+//
+// Callers gate on hasUI. Headless `pi -p` runs inherit TMUX_PANE from whatever
+// interactive session spawned them and would otherwise wipe its title on exit,
+// which is the same hijack that made direct pane labelling a bad idea.
+let paneResetArmed = false;
+
+// On process exit, not session_shutdown: pi's own teardown writes the terminal
+// title after extension shutdown handlers run, so resetting there loses the
+// race. process.on("exit") is the last synchronous word.
+function armPaneTitleReset() {
+	if (paneResetArmed) return;
+	paneResetArmed = true;
+	process.on("exit", resetPaneTitle);
+}
+
+function resetPaneTitle() {
+	const pane = process.env.TMUX_PANE;
+	if (!process.env.TMUX || !pane) return;
+
+	// attention.ts restores its snapshotted title on shutdown too. Dropping the
+	// snapshot first makes its restore a no-op, so the two cannot fight over
+	// ordering: whichever handler runs last, the pane ends up reset.
+	try {
+		rmSync(join(homedir(), ".pi", "agent", "attention", `${pane.replace(/[^A-Za-z0-9_.-]/g, "_")}.panetitle`), { force: true });
+	} catch {}
+
+	try {
+		execFileSync("tmux", ["select-pane", "-t", pane, "-T", hostname()], { stdio: "ignore" });
+	} catch {} // never let a cosmetic reset break shutdown
 }
 
 function unreadSummary(scratchpad: string): string[] {
