@@ -21,6 +21,7 @@ usage() {
 Usage:
   agent-mail send   --to ID [--from ID] [--reply-to ID] [--subject S] [--in-reply-to MID] [--body-file F]
   agent-mail scan   [--to ID] [--all]
+  agent-mail receipt MSGID
   agent-mail read   --to ID [--id MSG] [--peek]
   agent-mail discard --to ID --id MSG
   agent-mail addr   ID
@@ -31,6 +32,8 @@ Agent inboxes resolve to <name>-*/inbox; human inboxes to humans/<handle>/inbox.
 
 send   Deliver a message. Body from --body-file or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
+receipt Say whether a message you sent has been read. Takes the MSGID that
+       `send` printed. Exits 1 if it is in no inbox.
 read   Print the oldest unread message (or --id), moving it new/ -> cur/.
        --peek prints without marking read.
 discard Delete a message from cur/ or new/.
@@ -88,11 +91,32 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # Hours since a path was last modified. The naming extension restamps each
 # scratchpad on session activity, so the directory's mtime is a liveness
 # signal for the session that owns it -- no registry or heartbeat file needed.
+# Only for *directories*: for a message file, use message_age_hours instead.
 idle_hours() {
   local path="$1" mtime now
   mtime=$(stat -f %m "$path" 2>/dev/null) || return 1
   now=$(date +%s)
   echo $(( (now - mtime) / 3600 ))
+}
+
+# Hours since a message was delivered, read from the timestamp already in its
+# msgid rather than from mtime. mtime cannot answer this: the same restamping
+# that keeps a live session's scratchpad from being reaped walks the inbox too,
+# so an unread message could keep looking newly arrived and never escalate.
+# mv preserves mtime, so moving new/ -> cur/ is not what disturbs it.
+message_age_hours() {
+  local path="$1" id ts sent now
+  id=$(basename "$path" .md)
+  ts="${id%%-*}"
+  case "$ts" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+    *) idle_hours "$path"; return ;;  # not msgid-shaped: mtime is all we have
+  esac
+  sent=$(date -j -u -f '%Y%m%dT%H%M%SZ' "$ts" +%s 2>/dev/null) ||
+    sent=$(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s 2>/dev/null) ||
+    { idle_hours "$path"; return; }
+  now=$(date +%s)
+  echo $(( (now - sent) / 3600 ))
 }
 
 # Sortable, collision-resistant message id: epoch + pid + random.
@@ -187,6 +211,34 @@ cmd_scan() {
   [ "$found" -eq 1 ] || echo "(no unread messages)"
 }
 
+# Reports delivery state without adding any: a message in cur/ has been read,
+# one in new/ has not. Deliberately prints no read *time* -- mv preserves mtime
+# and restamping rewrites it, so any timestamp here would be fiction, and
+# recording a real one means the mutable flag file this design does without.
+cmd_receipt() {
+  local id="${1:-}"
+  [ -n "$id" ] || die "receipt: MSGID required"
+  id="$(basename "$id" .md)"
+
+  local inbox recipient state=""
+  for inbox in "$MAIL_ROOT"/*/inbox "$MAIL_ROOT"/humans/*/inbox; do
+    [ -d "$inbox" ] || continue
+    if [ -e "$inbox/cur/$id.md" ]; then state=read
+    elif [ -e "$inbox/new/$id.md" ]; then state=unread
+    else continue
+    fi
+    recipient="$(basename "$(dirname "$inbox")")"
+    local age; age="$(message_age_hours "$inbox/$([ "$state" = read ] && echo cur || echo new)/$id.md" || echo 0)"
+    printf '%s\t%s\tto:%s\tdelivered:%s\t%sh ago\n' "$state" "$id" "$recipient" "${id%%-*}" "$age"
+    return 0
+  done
+
+  # Absence is ambiguous on purpose: discard removes from both new/ and cur/,
+  # so a read-then-discarded message is indistinguishable from one never sent.
+  echo "unknown	$id	not in any inbox (read and discarded, or never delivered)"
+  return 1
+}
+
 cmd_read() {
   local to="" id="" peek=0
   while [ $# -gt 0 ]; do
@@ -251,7 +303,7 @@ cmd_sweep() {
     [ -d "$inbox/new" ] || continue
     for f in "$inbox/new"/*.md; do
       [ -e "$f" ] || continue
-      local age; age="$(idle_hours "$f" || echo 0)"
+      local age; age="$(message_age_hours "$f" || echo 0)"
       [ "$age" -ge "$hours" ] || continue
 
       local msgid; msgid="$(basename "$f" .md)"
@@ -284,6 +336,7 @@ sub="$1"; shift
 case "$sub" in
   send)    cmd_send "$@" ;;
   scan)    cmd_scan "$@" ;;
+  receipt) cmd_receipt "$@" ;;
   read)    cmd_read "$@" ;;
   discard) cmd_discard "$@" ;;
   sweep)   cmd_sweep "$@" ;;
