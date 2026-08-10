@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -27,6 +27,9 @@ export default function (pi: ExtensionAPI) {
 	let touchedAt = 0;
 	let sweptAt = 0;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	// Keyed by filename, which agent-mail never reuses, so a message announced
+	// before a /resume is not re-announced after it.
+	const announced = new Set<string>();
 
 	pi.on("session_start", (_event, ctx: NameContext) => {
 		const sessionId = ctx.sessionManager.getSessionId();
@@ -68,19 +71,19 @@ export default function (pi: ExtensionAPI) {
 		const lines = [
 			`Your name for this session is ${name}. Use it when you need to identify yourself — in scratch file names, branch names, tmux titles, notifications, or when the user asks who they are talking to. Do not mention it otherwise.`,
 		];
-		const unread = scratchpad ? unreadSummary(scratchpad) : [];
-		if (unread.length > 0) {
-			// Senders and count only, never bodies: the point is a flag on the
-			// doorframe, not a knock. Reading stays the agent's decision.
-			const senders = [...new Set(unread)].join(", ");
-			lines.push(`You have ${unread.length} unread message${unread.length === 1 ? "" : "s"} in your inbox (from: ${senders}).`);
-		}
 		if (scratchpad) {
 			lines.push(
 				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It survives across resumes of this session, but not across reboots or three days of session inactivity, so nothing durable belongs there.`,
 			);
 		}
-		return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n\n")}` };
+		// Mail goes in a conversation message, not the system prompt. The system
+		// prompt reads as facts established at session start, so a message that
+		// arrived mid-session showed up there as a paradox: one agent spent its
+		// reasoning deciding whether mail from an agent it had launched *after*
+		// startup could really have been waiting at startup. An injected message
+		// is timestamped and ordered, so arrival during the session is legible.
+		const message = scratchpad ? mailNotice(scratchpad, announced, name) : undefined;
+		return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n\n")}`, ...(message ? { message } : {}) };
 	});
 
 	pi.on("session_shutdown", (_event, ctx: NameContext) => {
@@ -129,20 +132,73 @@ function resetPaneTitle() {
 	} catch {} // never let a cosmetic reset break shutdown
 }
 
-function unreadSummary(scratchpad: string): string[] {
+type Unread = { file: string; from: string; subject: string; at: number };
+
+function unreadSummary(scratchpad: string): Unread[] {
 	try {
 		return readdirSync(join(scratchpad, "inbox", "new"))
 			.filter((f) => f.endsWith(".md"))
 			.map((f) => {
+				const path = join(scratchpad, "inbox", "new", f);
 				try {
-					return /^From: (.*)$/m.exec(readFileSync(join(scratchpad, "inbox", "new", f), "utf8"))?.[1]?.trim() || "unknown";
+					// Headers only. Subjects make the notice triageable without spending
+					// a turn on `agent-mail read`; bodies stay unread until asked for.
+					const text = readFileSync(path, "utf8").split(/\n\s*\n/, 1)[0] ?? "";
+					return {
+						file: f,
+						from: /^From: (.*)$/m.exec(text)?.[1]?.trim() || "unknown",
+						// agent-mail writes a literal "(no subject)" placeholder; treat it as
+						// absent so the notice does not quote it like a real subject line.
+						subject: (/^Subject: (.*)$/m.exec(text)?.[1]?.trim() || "").replace(/^\(no subject\)$/, ""),
+						at: statSync(path).mtimeMs,
+					};
 				} catch {
-					return "unknown"; // read raced a concurrent `agent-mail read` moving it to cur/
+					return { file: f, from: "unknown", subject: "", at: 0 }; // raced a concurrent `agent-mail read` moving it to cur/
 				}
 			});
 	} catch {
 		return []; // no inbox yet: nobody has written to this session
 	}
+}
+
+// Announced once per message, not once per turn: repeating it every turn would
+// train the model to skim past it, and the 4h `agent-mail sweep` escalation to
+// Josh already covers mail that gets ignored.
+function mailNotice(scratchpad: string, announced: Set<string>, name: string) {
+	const fresh = unreadSummary(scratchpad).filter((m) => !announced.has(m.file));
+	if (fresh.length === 0) return undefined;
+	for (const m of fresh) announced.add(m.file);
+
+	// Headers only, never bodies: a flag on the doorframe, not a knock. Reading
+	// stays the agent's decision.
+	const lines = fresh.map(
+		(m) =>
+			`- from ${m.from} · ${m.subject ? `"${m.subject}"` : "(no subject)"} · at ${m.at ? new Date(m.at).toLocaleTimeString() : "unknown time"} (${describeAge(m.at)})`,
+	);
+	const self = scratchpad.split("/").pop() || "you";
+	return {
+		customType: "agent-mail",
+		// Named recipient rather than a disclaimer about who did not send it. A
+		// custom_message sits where the user's turns sit, so an unaddressed notice
+		// reads as Josh forwarding his own mail; "to <name>" settles it in passing.
+		content: [
+			// Name here, inbox id only in the command below, where it is an argument
+			// rather than a label.
+			`agent-mail — ${fresh.length} unread message${fresh.length === 1 ? "" : "s"} to ${name}:`,
+			lines.join("\n"),
+			`Reading and/or reply: \`agent-mail read --to ${self}\`.`,
+		].join("\n"),
+		display: true,
+	};
+}
+
+function describeAge(at: number): string {
+	if (!at) return "age unknown";
+	const mins = Math.round((Date.now() - at) / 60_000);
+	if (mins < 1) return "just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hours = Math.round(mins / 60);
+	return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
 function showUnread(ctx: NameContext, scratchpad: string) {
