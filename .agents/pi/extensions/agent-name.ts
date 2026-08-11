@@ -27,6 +27,9 @@ export default function (pi: ExtensionAPI) {
 	let touchedAt = 0;
 	let sweptAt = 0;
 	let timer: ReturnType<typeof setInterval> | undefined;
+	let activeAt = Date.now();
+	let userAt = Date.now();
+	const wakes: number[] = [];
 	// Keyed by filename, which agent-mail never reuses, so a message announced
 	// before a /resume is not re-announced after it.
 	const announced = new Set<string>();
@@ -61,11 +64,29 @@ export default function (pi: ExtensionAPI) {
 			timer = setInterval(() => {
 				showUnread(ctx, scratchpad as string);
 				sweptAt = sweep(sweptAt);
+				wakeForMail();
 			}, 60_000);
 		}
 	});
 
+	// Any sign of work, not just turn starts: a turn that spends 20 minutes in
+	// tool calls would otherwise look idle and get "woken" mid-stride.
+	pi.on("tool_call", () => {
+		activeAt = Date.now();
+		return undefined;
+	});
+
+	// Josh typing is the only thing that unparks a session. Tracking his input
+	// separately from agent activity is what lets a parked session answer mail
+	// promptly: if a wake counted as presence, every message would have to wait out
+	// another 15 minutes, and the hourly budget would never be the binding limit.
+	pi.on("input", () => {
+		userAt = Date.now();
+		return undefined;
+	});
+
 	pi.on("before_agent_start", (event) => {
+		activeAt = Date.now();
 		if (!name) return;
 		if (scratchpad) touchedAt = keepAlive(scratchpad, touchedAt);
 		const lines = [
@@ -85,6 +106,29 @@ export default function (pi: ExtensionAPI) {
 		const message = scratchpad ? mailNotice(scratchpad, announced, name) : undefined;
 		return { systemPrompt: `${event.systemPrompt}\n\n${lines.join("\n\n")}`, ...(message ? { message } : {}) };
 	});
+
+	// Mail arriving mid-session used to wait for the agent's next turn, which for a
+	// parked session meant waiting for Josh to come back — the one case where the
+	// recipient most needed to act on its own. The wake is deliberately
+	// unsupervised; the budget is what keeps two agents from mailing each other
+	// awake all night.
+	function wakeForMail() {
+		if (!scratchpad || !name) return;
+		if (Date.now() - userAt < 15 * 60_000) return; // Josh is here; mail can wait for his turn
+		if (Date.now() - activeAt < 60_000) return; // a turn is in flight or just ended
+
+		const hourAgo = Date.now() - 60 * 60_000;
+		while (wakes.length > 0 && wakes[0] < hourAgo) wakes.shift();
+		if (wakes.length >= 4) return;
+
+		const message = mailNotice(scratchpad, announced, name, true);
+		if (!message) return;
+		wakes.push(Date.now());
+		activeAt = Date.now(); // the woken turn has not started yet; keep the next tick from firing too
+		// followUp rather than steer: if a turn is somehow still running, mail waits
+		// for its tool calls to finish instead of cutting into them.
+		pi.sendMessage(message, { deliverAs: "followUp", triggerTurn: true });
+	}
 
 	pi.on("session_shutdown", (_event, ctx: NameContext) => {
 		if (timer) clearInterval(timer);
@@ -164,7 +208,7 @@ function unreadSummary(scratchpad: string): Unread[] {
 // Announced once per message, not once per turn: repeating it every turn would
 // train the model to skim past it, and the 4h `agent-mail sweep` escalation to
 // Josh already covers mail that gets ignored.
-function mailNotice(scratchpad: string, announced: Set<string>, name: string) {
+function mailNotice(scratchpad: string, announced: Set<string>, name: string, woken = false) {
 	const fresh = unreadSummary(scratchpad).filter((m) => !announced.has(m.file));
 	if (fresh.length === 0) return undefined;
 	for (const m of fresh) announced.add(m.file);
@@ -187,6 +231,11 @@ function mailNotice(scratchpad: string, announced: Set<string>, name: string) {
 			`agent-mail — ${fresh.length} unread message${fresh.length === 1 ? "" : "s"} to ${name}:`,
 			lines.join("\n"),
 			`Reading and/or reply: \`agent-mail read --to ${self}\`.`,
+			...(woken
+				? [
+						"This message woke an idle session, so Josh is probably not watching. Read it, do what it asks if it is safe to do unattended, reply only if you have something to say, and then stop rather than looking for other work.",
+					]
+				: []),
 		].join("\n"),
 		display: true,
 	};
