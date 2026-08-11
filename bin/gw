@@ -62,8 +62,9 @@ inject_trailer() {
   fi
 
   # An agent that already ran agent-trailer keeps its own line; two trailers
-  # would be worse than none.
-  if printf '%s\n' "$content" | grep -q '^Generated-by:'; then
+  # would be worse than none. Matches the agent form specifically, so a body
+  # crediting a human co-author still gets attributed.
+  if printf '%s\n' "$content" | grep -q '^Co-authored-by: AI'; then
     return 0
   fi
 

@@ -4,20 +4,14 @@ import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
 const GIT_COMMIT_RE = /\b(?:command\s+)?git\s+(commit|c|ci|cm)\b/;
 const GT_COMMIT_RE = /\bgt\s+(commit\s+create|commit\s+amend|create|modify|cc|ca|c|m)\b/;
-const FALLBACK_EMAIL = "josh+pi@joshbeckman.org";
-
-type ModelInfo = { name?: string; id?: string; provider?: string };
-
-// The session name comes from the environment the naming extension exports,
-// never from the model: models guess their own name wrong, and the whole point
-// is that a reader can match a commit to one specific agent session.
-export function buildTrailer(cwd: string, model?: ModelInfo): string {
-	const email = gitEmail(cwd) || FALLBACK_EMAIL;
-	const modelName = model?.name || model?.id;
-	const name = process.env.AGENT_NAME?.trim();
-	const who = name ? `AI ${name}` : "AI";
-	const agent = modelName ? `${who} (Pi/${modelName})` : `${who} (Pi)`;
-	return `Co-authored-by: ${agent} <${piEmail(email)}>`;
+// Delegates to agent-trailer rather than formatting a line here, so a commit
+// and a PR comment name the same agent the same way. Two builders drifted
+// apart once already: "Pi/Claude Opus 5 [250k]" against
+// "pi-0.83.0/anthropic/claude-opus-5" for the same session.
+export function buildTrailer(cwd: string): string | undefined {
+	const result = spawnSync("agent-trailer", ["--email"], { cwd, encoding: "utf8" });
+	if (result.status !== 0) return undefined;
+	return result.stdout.trim() || undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -35,7 +29,8 @@ export default function (pi: ExtensionAPI) {
 		if (isGt && /(?:^|\s)--ai(?:\s|$)/.test(cmd)) return undefined;
 		if (isGit && cmd.includes("--amend") && cmd.includes("--no-edit") && !cmd.includes("-m")) return undefined;
 
-		const trailer = buildTrailer(ctx.cwd, ctx.model as ModelInfo | undefined);
+		const trailer = buildTrailer(ctx.cwd);
+		if (!trailer) return undefined; // no attribution beats a malformed one
 		event.input.command = isGit ? injectGitTrailer(cmd, trailer) : injectGtTrailer(cmd, trailer);
 		return undefined;
 	});
@@ -168,19 +163,6 @@ export function containsUnquoted(text: string, re: RegExp): boolean {
 		if (match[0].length === 0) globalRe.lastIndex += 1;
 	}
 	return false;
-}
-
-function gitEmail(cwd: string): string | undefined {
-	const result = spawnSync("git", ["config", "user.email"], { cwd, encoding: "utf8" });
-	if (result.status !== 0) return undefined;
-	const email = result.stdout.trim();
-	return email.includes("@") ? email : undefined;
-}
-
-function piEmail(email: string): string {
-	const at = email.lastIndexOf("@");
-	if (at === -1) return email;
-	return `${email.slice(0, at)}+pi${email.slice(at)}`;
 }
 
 function shellQuote(value: string): string {

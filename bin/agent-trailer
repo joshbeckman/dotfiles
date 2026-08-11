@@ -3,29 +3,35 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: agent-trailer [--raw] [--name NAME]
+Usage: agent-trailer [--raw] [--email] [--name NAME]
 
-Print the GitHub comment trailer identifying the agent that wrote a comment:
+Print the trailer identifying the agent behind a commit, comment, or document:
 
-  Generated-by: AI <session name> (<harness>/<provider>/<model>)
+  Co-authored-by: AI <session name> (<harness>/<provider>/<model>)
 
-The session name is omitted when unknown. Values come from the running
-harness's environment, not from the model's self-report (models routinely
-guess their own name wrong).
+One key everywhere, so `grep "Co-authored-by: AI"` finds agent work whatever
+surface it landed on. The session name is omitted when unknown. Values come
+from the running harness's environment, not from the model's self-report
+(models routinely guess their own name wrong).
 
 Options:
   --raw         Print "<harness>/<provider>/<model>" without the trailer prefix.
+  --email       Append "<git user.email +pi>". Only GitHub's commit parser
+                needs it; in comments and prose it is an address on display
+                for nothing.
   --name NAME   Session name to use instead of $AGENT_NAME.
   -h, --help    Show this help.
 USAGE
 }
 
 raw=0
+with_email=0
 name="${AGENT_NAME:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --raw) raw=1 ;;
+    --email) with_email=1 ;;
     --name)
       name="${2:-}"
       shift
@@ -80,8 +86,22 @@ id="$harness/$provider/$model"
 
 if [ "$raw" -eq 1 ]; then
   printf '%s\n' "$id"
-elif [ -n "$name" ]; then
-  printf 'Generated-by: AI %s (%s)\n' "$name" "$id"
-else
-  printf 'Generated-by: AI (%s)\n' "$id"
+  exit 0
 fi
+
+who="AI"
+[ -n "$name" ] && who="AI $name"
+
+suffix=""
+if [ "$with_email" -eq 1 ]; then
+  # +pi tags the address so agent commits are filterable and never collide with
+  # Josh's own authorship, while still resolving to a real mailbox.
+  email="$(git config user.email 2>/dev/null || true)"
+  case "$email" in
+    *@*) email="${email%@*}+pi@${email##*@}" ;;
+    *) email="josh+pi@joshbeckman.org" ;;
+  esac
+  suffix=" <$email>"
+fi
+
+printf 'Co-authored-by: %s (%s)%s\n' "$who" "$id" "$suffix"
