@@ -19,7 +19,7 @@ MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
 usage() {
   cat <<'USAGE'
 Usage:
-  agent-mail send   --to ID [--from ID] [--reply-to ID] [--subject S] [--in-reply-to MID] [--body-file F]
+  agent-mail send   --to ID [--from ID] [--reply-to ID] [--subject S] [--in-reply-to MID] [--body TEXT | --body-file F]
   agent-mail scan   [--to ID] [--all]
   agent-mail receipt MSGID
   agent-mail read   --to ID [--id MSG] [--peek]
@@ -30,7 +30,7 @@ Usage:
 An ID is an agent as <name>-<sessionID>, or a human as a bare handle.
 Agent inboxes resolve to <name>-*/inbox; human inboxes to humans/<handle>/inbox.
 
-send   Deliver a message. Body from --body-file or stdin.
+send   Deliver a message. Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
 receipt Say whether a message you sent has been read. Takes the MSGID that
        `send` printed. Exits 1 if it is in no inbox.
@@ -125,7 +125,7 @@ gen_msgid() {
 }
 
 cmd_send() {
-  local to="" from="${AGENT_MAIL_FROM:-unknown}" reply_to="" subject="" in_reply_to="" body_file=""
+  local to="" from="${AGENT_MAIL_FROM:-unknown}" reply_to="" subject="" in_reply_to="" body_file="" body="" have_body=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --to) to="$2"; shift 2 ;;
@@ -134,9 +134,14 @@ cmd_send() {
       --subject) subject="$2"; shift 2 ;;
       --in-reply-to) in_reply_to="$2"; shift 2 ;;
       --body-file) body_file="$2"; shift 2 ;;
+      # Every agent guesses --body first, and the guess costs a turn to correct.
+      # Kept as a peer of --body-file rather than the documented form: a one-line
+      # reply inline is fine, anything longer wants a file it can revise.
+      --body | -m) body="$2"; have_body=1; shift 2 ;;
       *) die "send: unknown arg $1" ;;
     esac
   done
+  [ "$have_body" -eq 1 ] && [ -n "$body_file" ] && die "send: --body and --body-file are mutually exclusive"
   [ -n "$to" ] || die "send: --to required"
 
   local inbox; inbox="$(resolve_inbox "$to")"
@@ -168,7 +173,13 @@ cmd_send() {
     [ -n "$in_reply_to" ] && echo "In-Reply-To: $in_reply_to"
     echo "Subject: ${subject:-(no subject)}"
     echo
-    if [ -n "$body_file" ]; then cat "$body_file"; else cat; fi
+    if [ "$have_body" -eq 1 ]; then
+      printf '%s\n' "$body"
+    elif [ -n "$body_file" ]; then
+      cat "$body_file"
+    else
+      cat
+    fi
   } > "$tmp"
 
   # Atomic within one filesystem: reader in new/ never sees a partial write.

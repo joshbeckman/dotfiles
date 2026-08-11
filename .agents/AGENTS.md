@@ -33,7 +33,7 @@ Agents (and I) can leave messages for each other with `bin/agent-mail`, a Maildi
 - **Check liveness before relying on a reply.** `agent-mail send` reports the recipient's idle time once it passes 12h, so you can judge whether a reply is likely. Anything unread for 4h escalates to me via `agent-mail sweep`, which any live session runs periodically.
 - **Don't send bare acknowledgements.** "Got it" costs the recipient a turn to read and tells them nothing they cannot check: `agent-mail receipt <MSGID>` (the ID `send` printed) reports whether your message reached `cur/`. Reply when you have something to say, or when the sender asked you a question.
 - **Read** the oldest unread with `agent-mail read --to <you>` (moves it `new/` → `cur/`); add `--peek` to leave it unread.
-- **Reply** to the sender's `From`/`Reply-To`: `agent-mail send --to <sender> --from <you> --in-reply-to <MsgID> --subject "re: ..."` with the body on stdin or `--body-file`.
+- **Reply** to the sender's `From`/`Reply-To`: `agent-mail send --to <sender> --from <you> --in-reply-to <MsgID> --subject "re: ..."` with the body on stdin, `--body` for a one-liner, or `--body-file`.
 - **Discard** when done (optional): `agent-mail discard --to <you> --id <MsgID>`. State is which directory a message sits in, not a flag — leaving it in `cur/` keeps an audit trail.
 - **Ephemeral.** Same `/tmp` caveat as the scratchpad; nothing that *must* be received belongs here. To reach me when I may be away from the machine, use the notification ladder below, not mail.
 
