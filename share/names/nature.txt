@@ -50,7 +50,7 @@ otter
 petrel
 pine
 plover
-quarry
+quail
 quill
 rapids
 raven

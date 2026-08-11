@@ -33,11 +33,11 @@ dittany
 fennel
 foxglove
 goldenrod
-henbane
+bergamot
 lungwort
 marshmallow
 nettle
 soapwort
 tarragon
 vervain
-wormwood
+woodruff

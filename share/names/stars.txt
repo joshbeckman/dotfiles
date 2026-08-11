@@ -24,7 +24,7 @@ alnilam
 alnitak
 mintaka
 saiph
-bellatrix
+elnath
 castor
 pollux
 regulus
