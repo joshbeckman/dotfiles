@@ -7,6 +7,72 @@ if [[ -n "${GW_REPO:-}" ]]; then
   repo_args=(--repo "$GW_REPO")
 fi
 
+# Attribution is a property of the write path, not something a model has to
+# remember: an agent that never read AGENTS.md still cannot post prose here
+# without a trailer. Detection is by harness environment, so a human running
+# gw gets byte-identical behaviour to plain gh.
+under_agent() {
+  command -v agent-trailer >/dev/null 2>&1 || return 1
+  [ "$(agent-trailer --raw 2>/dev/null || echo unknown/unknown/unknown)" != "unknown/unknown/unknown" ]
+}
+
+writes_prose() {
+  case "$1 ${2:-}" in
+    "issue comment" | "pr comment" | "pr create" | "issue create" | "pr review" | "pr edit" | "issue edit") return 0 ;;
+  esac
+  return 1
+}
+
+# Rewrites args[] so the body always arrives as a file we control. Handling
+# --body and --body-file through one path avoids quoting a trailer back into an
+# inline argument.
+trailer_tmp=""
+inject_trailer() {
+  local i idx=-1 kind="" value="" content
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[i]}" in
+      --body | -b)
+        kind=inline
+        idx=$i
+        value="${args[i + 1]-}"
+        ;;
+      --body-file | -F)
+        kind=file
+        idx=$i
+        value="${args[i + 1]-}"
+        ;;
+    esac
+  done
+
+  # No body flag means gh builds one itself (--fill) or opens an editor. Both
+  # would fight an injected --body-file, so say so rather than corrupt the call.
+  if [[ $idx -lt 0 ]]; then
+    echo "gw: no --body/--body-file; add the agent-trailer output yourself" >&2
+    return 0
+  fi
+
+  if [[ $kind == file ]]; then
+    if [[ $value == "-" ]]; then
+      content="$(cat)"
+    else
+      content="$(cat "$value")"
+    fi
+  else
+    content="$value"
+  fi
+
+  # An agent that already ran agent-trailer keeps its own line; two trailers
+  # would be worse than none.
+  if printf '%s\n' "$content" | grep -q '^Generated-by:'; then
+    return 0
+  fi
+
+  trailer_tmp="$(mktemp "${TMPDIR:-/tmp}/gw-body.XXXXXX")"
+  printf '%s\n\n%s\n' "$content" "$(agent-trailer)" > "$trailer_tmp"
+  args[idx]="--body-file"
+  args[idx + 1]="$trailer_tmp"
+}
+
 usage() {
   cat <<EOF
 Usage: gw <gh-args...>
@@ -54,6 +120,17 @@ current_branch() {
   git branch --show-current 2>/dev/null || true
 }
 
+# Not exec: the temp body has to outlive gh and be cleaned up afterwards.
+gh_run() {
+  if [[ -n "$trailer_tmp" ]]; then
+    local rc=0
+    gh "$@" || rc=$?
+    rm -f "$trailer_tmp"
+    exit "$rc"
+  fi
+  exec gh "$@"
+}
+
 pr_selector_defaults_to_branch() {
   case "${1:-}" in
     view|checks|diff|comment|edit|review|merge|close|reopen|ready|lock|unlock)
@@ -65,6 +142,12 @@ pr_selector_defaults_to_branch() {
   esac
 }
 
+args=("$@")
+if [[ ${#args[@]} -gt 0 ]] && under_agent && writes_prose "$cmd" "${args[0]}" && ! has_help_flag "${args[@]}"; then
+  inject_trailer
+fi
+set -- "${args[@]}"
+
 case "$cmd" in
   pr)
     if [[ $# -gt 0 ]] && pr_selector_defaults_to_branch "$1" && ! has_help_flag "$@"; then
@@ -74,18 +157,18 @@ case "$cmd" in
         ""|-*)
           branch="$(current_branch)"
           if [[ -n "$branch" ]]; then
-            exec gh pr ${repo_args[@]+"${repo_args[@]}"} "$subcmd" "$branch" "$@"
+            gh_run pr ${repo_args[@]+"${repo_args[@]}"} "$subcmd" "$branch" "$@"
           fi
           ;;
       esac
-      exec gh pr ${repo_args[@]+"${repo_args[@]}"} "$subcmd" "$@"
+      gh_run pr ${repo_args[@]+"${repo_args[@]}"} "$subcmd" "$@"
     fi
-    exec gh pr ${repo_args[@]+"${repo_args[@]}"} "$@"
+    gh_run pr ${repo_args[@]+"${repo_args[@]}"} "$@"
     ;;
   issue|release|run|workflow|label|milestone|browse|project|ruleset|secret|variable|cache)
-    exec gh "$cmd" ${repo_args[@]+"${repo_args[@]}"} "$@"
+    gh_run "$cmd" ${repo_args[@]+"${repo_args[@]}"} "$@"
     ;;
   *)
-    exec gh "$cmd" "$@"
+    gh_run "$cmd" "$@"
     ;;
 esac

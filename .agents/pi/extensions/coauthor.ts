@@ -8,10 +8,15 @@ const FALLBACK_EMAIL = "josh+pi@joshbeckman.org";
 
 type ModelInfo = { name?: string; id?: string; provider?: string };
 
+// The session name comes from the environment the naming extension exports,
+// never from the model: models guess their own name wrong, and the whole point
+// is that a reader can match a commit to one specific agent session.
 export function buildTrailer(cwd: string, model?: ModelInfo): string {
 	const email = gitEmail(cwd) || FALLBACK_EMAIL;
 	const modelName = model?.name || model?.id;
-	const agent = modelName ? `AI (Pi/${modelName})` : "AI (Pi)";
+	const name = process.env.AGENT_NAME?.trim();
+	const who = name ? `AI ${name}` : "AI";
+	const agent = modelName ? `${who} (Pi/${modelName})` : `${who} (Pi)`;
 	return `Co-authored-by: ${agent} <${piEmail(email)}>`;
 }
 

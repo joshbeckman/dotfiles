@@ -96,16 +96,12 @@ Reference every issue or pull request with its title and full URL:
 
 Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
 
-Append this trailer to every GitHub comment and review after a blank line. Never write it from memory — models guess their own name wrong. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim:
+**Attribution is automatic on the paths that matter, and you must not duplicate it.** `gw` appends the trailer to anything you post that carries prose — `pr comment`, `issue comment`, `pr create`, `issue create`, `pr review`, `pr edit`, `issue edit` — and commits get a `Co-authored-by: AI <your name> (Pi/<model>)` line. Both detect the harness from the environment, so neither fires for Josh's own commands. Two trailers are worse than none, so don't add one yourself there. Post through `gw`, not bare `gh`: `gh` attributes nothing.
+
+**Everywhere else, attribute yourself by hand.** Anything you write that a person will read as Josh's — a document, a Slack message, a file you leave behind, a comment posted through any other client — should carry the trailer. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim after a blank line. Never write it from memory; models guess their own name wrong.
 
 ```sh
 agent-trailer   # => Generated-by: AI Oriole Limner (pi-0.83.0/anthropic/claude-opus-5)
-```
-
-Append it directly when writing the comment file:
-
-```sh
-printf '\n' >> "$TMP_FILE" && agent-trailer >> "$TMP_FILE"
 ```
 
 Keep approvals brief. For change requests, identify each blocker and explain why it matters. Use Conventional Comments below.
