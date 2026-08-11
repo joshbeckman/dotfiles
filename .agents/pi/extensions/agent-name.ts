@@ -79,7 +79,7 @@ export default function (pi: ExtensionAPI) {
 	// Josh typing is the only thing that unparks a session. Tracking his input
 	// separately from agent activity is what lets a parked session answer mail
 	// promptly: if a wake counted as presence, every message would have to wait out
-	// another 15 minutes, and the hourly budget would never be the binding limit.
+	// another 10 minutes, and the hourly budget would never be the binding limit.
 	pi.on("input", () => {
 		userAt = Date.now();
 		return undefined;
@@ -114,7 +114,10 @@ export default function (pi: ExtensionAPI) {
 	// awake all night.
 	function wakeForMail() {
 		if (!scratchpad || !name) return;
-		if (Date.now() - userAt < 15 * 60_000) return; // Josh is here; mail can wait for his turn
+		// 10 rather than 15: senders were sitting through a quarter hour to learn
+		// whether anyone was home. Short enough to feel answered, long enough that a
+		// pause for thought is not read as leaving.
+		if (Date.now() - userAt < 10 * 60_000) return; // Josh is here; mail can wait for his turn
 		if (Date.now() - activeAt < 60_000) return; // a turn is in flight or just ended
 
 		const hourAgo = Date.now() - 60 * 60_000;
