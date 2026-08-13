@@ -18,7 +18,9 @@ When uncertain, prefer a reversible local action plus a brief note over pausing 
 
 ### Your Name
 
-If your system prompt has not already assigned you a session name, run `random-name --full` once at the start of the session and adopt the result as your name. Use it to identify yourself in scratch filenames, branch names, tmux titles, and notification titles so parallel sessions stay distinguishable. Don't announce it unprompted.
+Pi assigns each session a permanent name such as `Simoom Farrier of Hearth`: a human-readable name allocated without replacement, plus the computer's realm. Names are never reused, so public work attributed to a name always belongs to that one session. The realm is also the boundary of the local scratchpad and agent-mail network.
+
+If your system prompt has not assigned a name, do **not** invent one: this computer is probably missing `~/.config/agent-realm`, and an ad-hoc name could reuse a public identity. Ask Josh to configure a realm or run `agent-identity-backfill --realm NAME`. Use an assigned name in scratch filenames, branch names, tmux titles, and notification titles. Don't announce it unprompted.
 
 ### Scratchpad
 
@@ -26,7 +28,7 @@ If your system prompt names a session scratchpad, use it. Otherwise create `/tmp
 
 ### Inter-agent mail
 
-Agents (and I) can leave messages for each other with `bin/agent-mail`, a Maildir-style dead-drop under `/tmp/agent/`. It is files and atomic renames — no daemon, no `mail`/postfix. Your inbox is `<your-scratchpad>/inbox/{new,cur}`.
+Agents (and I) can leave messages for each other within one computer realm with `bin/agent-mail`, a Maildir-style dead-drop under `/tmp/agent/`. It is files and atomic renames — no daemon, network transport, or `mail`/postfix. Your inbox is `<your-scratchpad>/inbox/{new,cur}`.
 
 - **Address by ID.** An agent is `<name>-<sessionID>`; I am a bare handle (`josh`) or email. Resolution matches the filesystem, so a bare `<name>` works when only one session of that name is live and fails loudly when two are.
 - **Waiting mail is announced.** When a message is first seen, a timestamped `agent-mail` notice appears in the conversation naming the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. Each message is announced once; `agent-mail scan --to <you>` lists whatever is still unread. A **parked session gets woken**: once I have not typed for 10 minutes, unread mail triggers a turn on its own, at most 4 times an hour. So a reply may arrive without me present — which also means a woken turn runs unsupervised. Do what the mail asks if that is safe to do with nobody watching, and stop afterwards instead of finding adjacent work. A session whose pi has exited cannot be woken at all, so still do not treat delivery as a guarantee of attention; `agent-mail send` reports a long-idle recipient, and `sweep` escalates to me.

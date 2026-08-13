@@ -1,18 +1,23 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Names are derived from the session id rather than drawn fresh, so resuming or
-// reloading a session keeps the same name and the same scratchpad instead of
-// giving the agent amnesia. Both are injected into the system prompt rather than
-// requested via a tool call: the model can't forget to do it, and it costs no turn.
+// Names are allocated once and never reused. Each computer owns a permanent
+// realm ("of Hearth", "of Lantern") and an append-only local claim registry, so
+// computers allocate independently without producing the same public identity.
+// Resuming reads the allocation rather than sampling again; legacy sessions are
+// recovered from their scratchpad or session JSONL and keep their old name.
 //
-// Name and scratchpad live in one extension because the name is the directory
-// slug — splitting them would mean duplicating the derivation or exporting state.
+// Identity is injected into the system prompt rather than requested via a tool
+// call: the model cannot forget or re-roll it, and it costs no turn. Name and
+// scratchpad stay in one extension because the name is the directory slug.
 
 const SCRATCH_ROOT = "/tmp/agent";
+const IDENTITY_ROOT = join(homedir(), ".pi", "agent", "identities");
+const REALM_FILE = join(homedir(), ".config", "agent-realm");
 
 type NameContext = {
 	cwd: string;
@@ -23,6 +28,7 @@ type NameContext = {
 
 export default function (pi: ExtensionAPI) {
 	let name: string | undefined;
+	let realm: string | undefined;
 	let scratchpad: string | undefined;
 	let touchedAt = 0;
 	let sweptAt = 0;
@@ -36,22 +42,27 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx: NameContext) => {
 		const sessionId = ctx.sessionManager.getSessionId();
-		name = generateName(sessionId);
-		// Ephemeral runs (pi -p --no-session) get no scratchpad; one-shot prompts
-		// would otherwise litter /tmp/agent with dirs nobody reads.
+		realm = readRealm();
+		// Ephemeral runs (pi -p --no-session) get no identity or scratchpad;
+		// one-shot prompts would otherwise consume names nobody can resume.
+		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, ctx.sessionManager.getSessionFile()) ?? (realm ? allocateName(sessionId, realm) : undefined) : undefined;
 		scratchpad = name && sessionId ? createScratchpad(name, sessionId, ctx) : undefined;
 		// Exported rather than passed per-call: bash-tool children inherit the pi
 		// process env, so agent-trailer and friends can read it without the model
 		// having to remember to pass its own name (which it gets wrong).
 		if (name) process.env.AGENT_NAME = name;
+		else delete process.env.AGENT_NAME;
+		if (realm) process.env.AGENT_REALM = realm;
+		else delete process.env.AGENT_REALM;
 		if (scratchpad) process.env.AGENT_SCRATCHPAD = scratchpad;
+		else delete process.env.AGENT_SCRATCHPAD;
 
 		// One write, three surfaces: the session name flows into /resume, into the
 		// terminal and tmux pane title via the titlebar extension's setTitle, and
 		// into attention.ts marks. Labelling panes directly from here duplicated
 		// that and let headless `pi -p` runs steal their parent pane's title.
 		if (name && !pi.getSessionName()) pi.setSessionName(name);
-		if (ctx.hasUI) ctx.ui.setStatus("agent-name", name ? ctx.ui.theme.fg("muted", `󰙃 ${name}`) : undefined);
+		if (ctx.hasUI) ctx.ui.setStatus("agent-name", name ? ctx.ui.theme.fg("muted", `󰙃 ${name}`) : sessionId && !realm ? ctx.ui.theme.fg("warning", "⚠ set agent realm") : undefined);
 
 		// A session sitting idle at the prompt fires no turn events, so the mail
 		// indicator needs its own clock or it would only ever update on activity —
@@ -87,7 +98,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", (event) => {
 		activeAt = Date.now();
-		if (!name) return;
+		if (!name) {
+			if (!realm) {
+				return {
+					systemPrompt: `${event.systemPrompt}\n\nThis computer has no agent realm configured, so no durable session identity was allocated. Ask Josh to choose a unique realm and write it to ${REALM_FILE}; do not invent a temporary name, because public agent names are never reused.`,
+				};
+			}
+			return;
+		}
 		if (scratchpad) touchedAt = keepAlive(scratchpad, touchedAt);
 		const lines = [
 			`Your name for this session is ${name}. Use it when you need to identify yourself — in scratch file names, branch names, tmux titles, notifications, or when the user asks who they are talking to. Do not mention it otherwise.`,
@@ -267,14 +285,120 @@ function sweep(sweptAt: number): number {
 	return now;
 }
 
-function generateName(sessionId: string | undefined): string | undefined {
+function readRealm(): string | undefined {
 	try {
-		const args = ["--full"];
-		if (sessionId) args.push("--seed", sessionId);
-		return execFileSync("random-name", args, { encoding: "utf8", timeout: 2000 }).trim() || undefined;
+		const raw = (process.env.AGENT_REALM || readFileSync(REALM_FILE, "utf8")).trim();
+		if (!/^[a-z][a-z-]*$/i.test(raw)) return undefined;
+		return `${raw[0].toUpperCase()}${raw.slice(1).toLowerCase()}`;
 	} catch {
-		return undefined; // random-name lives in dotfiles/bin; absent on machines without it
+		return undefined;
 	}
+}
+
+type Assignment = { sessionId: string; name: string; assignedAt: string };
+
+function sessionKey(sessionId: string): string {
+	// The full hash is only a local filename, never part of the agent's public
+	// identity. Hashing accepts hand-written test ids without letting slashes or
+	// other path characters escape the registry.
+	return createHash("sha256").update(sessionId).digest("hex");
+}
+
+function assignedName(sessionId: string): string | undefined {
+	try {
+		const assignment = JSON.parse(readFileSync(join(IDENTITY_ROOT, "by-session", sessionKey(sessionId)), "utf8")) as Assignment;
+		return assignment.sessionId === sessionId && assignment.name ? assignment.name : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function recoverName(sessionId: string, sessionFile: string | undefined): string | undefined {
+	// Scratchpads are the strongest legacy source: session.md carries the full id
+	// and the original name together. Do not infer identity from directory mtimes
+	// or "newest" paths; that already deleted one live agent's scratchpad.
+	try {
+		for (const entry of readdirSync(SCRATCH_ROOT, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			try {
+				const text = readFileSync(join(SCRATCH_ROOT, entry.name, "session.md"), "utf8");
+				if (!text.split("\n").includes(`- session: ${sessionId}`)) continue;
+				const name = /^# (.+)$/m.exec(text)?.[1]?.trim();
+				if (name) return preserveAssignment(sessionId, name);
+			} catch {} // another process may be creating or pruning an unrelated dir
+		}
+	} catch {}
+
+	// A cleaned scratchpad can still be resumed from its durable Pi JSONL. Named
+	// session titles are "<agent> · <topic>"; walk newest-first so an early title
+	// from before the naming extension cannot win.
+	if (sessionFile) {
+		try {
+			const lines = readFileSync(sessionFile, "utf8").split("\n").reverse();
+			for (const line of lines) {
+				if (!line.includes('"type":"session_info"') || !line.includes(" · ")) continue;
+				try {
+					const event = JSON.parse(line) as { name?: string };
+					const candidate = event.name?.split(" · ", 1)[0]?.trim();
+					if (candidate && /^[A-Z][A-Za-z'-]+ [A-Z][A-Za-z'-]+(?: of [A-Z][A-Za-z'-]+)?$/.test(candidate)) {
+						return preserveAssignment(sessionId, candidate);
+					}
+				} catch {}
+			}
+		} catch {}
+	}
+	return undefined;
+}
+
+function preserveAssignment(sessionId: string, name: string): string {
+	mkdirSync(join(IDENTITY_ROOT, "by-name"), { recursive: true });
+	try {
+		writeFileSync(join(IDENTITY_ROOT, "by-name", nameSlug(name)), `${sessionId}\n`, { flag: "wx" });
+	} catch {} // an old duplicate is history to preserve, not silently rename
+	writeAssignment(sessionId, name);
+	return name;
+}
+
+function allocateName(sessionId: string, realm: string): string | undefined {
+	mkdirSync(join(IDENTITY_ROOT, "by-name"), { recursive: true });
+	for (let attempt = 0; attempt < 1000; attempt += 1) {
+		try {
+			const base = execFileSync("random-name", ["--full", "--seed", `${sessionId}:${attempt}`], { encoding: "utf8", timeout: 2000 }).trim();
+			if (!base) return undefined;
+			const name = `${base} of ${realm}`;
+			const claim = join(IDENTITY_ROOT, "by-name", nameSlug(name));
+			try {
+				writeFileSync(claim, `${sessionId}\n`, { flag: "wx" });
+				writeAssignment(sessionId, name);
+				return name;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+				try {
+					if (readFileSync(claim, "utf8").trim() === sessionId) {
+						writeAssignment(sessionId, name); // recovered a crash between the two writes
+						return name;
+					}
+				} catch {}
+			}
+		} catch {
+			return undefined; // random-name lives in dotfiles/bin; absent on machines without it
+		}
+	}
+	return undefined; // corrupt or exhausted registry; do not reuse an identity
+}
+
+function writeAssignment(sessionId: string, name: string) {
+	const dir = join(IDENTITY_ROOT, "by-session");
+	mkdirSync(dir, { recursive: true });
+	const path = join(dir, sessionKey(sessionId));
+	const tmp = `${path}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+	const assignment: Assignment = { sessionId, name, assignedAt: new Date().toISOString() };
+	writeFileSync(tmp, `${JSON.stringify(assignment)}\n`, { flag: "wx" });
+	renameSync(tmp, path); // same-session races write identical identity atomically
+}
+
+function nameSlug(name: string): string {
+	return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function createScratchpad(name: string, sessionId: string, ctx: NameContext): string | undefined {

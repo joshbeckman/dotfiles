@@ -1,0 +1,111 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'digest'
+require 'fileutils'
+require 'json'
+require 'optparse'
+require 'time'
+
+home = Dir.home
+identity_root = File.join(home, '.pi', 'agent', 'identities')
+realm_file = File.join(home, '.config', 'agent-realm')
+realms_file = File.expand_path('../share/realms.txt', __dir__)
+dry_run = false
+requested_realm = nil
+
+OptionParser.new do |o|
+  o.banner = 'Usage: agent-identity-backfill [--realm NAME] [--dry-run]'
+  o.on('--realm NAME', 'Permanent realm for this computer (must differ across computers)') { |v| requested_realm = v }
+  o.on('--dry-run', 'Report what would change') { dry_run = true }
+  o.on('-h', '--help') { puts o; exit }
+end.parse!
+
+normalize_realm = lambda do |raw|
+  value = raw.to_s.strip
+  abort 'agent-identity-backfill: realm must be one word containing letters or hyphens' unless value.match?(/\A[a-z][a-z-]*\z/i)
+  value.downcase.capitalize
+end
+
+existing_realm = File.exist?(realm_file) ? normalize_realm.call(File.read(realm_file)) : nil
+realm = requested_realm ? normalize_realm.call(requested_realm) : existing_realm
+abort "agent-identity-backfill: choose this computer's realm with --realm NAME" unless realm
+abort "agent-identity-backfill: this computer is already #{existing_realm}, not #{realm}" if existing_realm && existing_realm != realm
+
+if File.exist?(realms_file)
+  allowed = File.readlines(realms_file, chomp: true).reject(&:empty?).map { |v| normalize_realm.call(v) }
+  abort "agent-identity-backfill: unknown realm #{realm} (choose: #{allowed.join(', ')})" unless allowed.include?(realm)
+end
+
+# Session JSONLs survive scratchpad cleanup. Keep the newest named title from
+# each file; scratchpad metadata below overrides it when both exist because it
+# binds the full session id and original name in one small record.
+found = {}
+Dir.glob(File.join(home, '.pi', 'agent', 'sessions', '**', '*.jsonl')).each do |path|
+  session_id = nil
+  name = nil
+  File.foreach(path) do |line|
+    event = JSON.parse(line) rescue next
+    session_id ||= event['id'] if event['type'] == 'session'
+    next unless event['type'] == 'session_info' && event['name']&.include?(' · ')
+
+    candidate = event['name'].split(' · ', 2).first.strip
+    name = candidate if candidate.match?(/\A[A-Z][A-Za-z'-]+ [A-Z][A-Za-z'-]+(?: of [A-Z][A-Za-z'-]+)?\z/)
+  end
+  found[session_id] = name if session_id && name
+end
+
+Dir.glob('/tmp/agent/*/session.md').each do |path|
+  text = File.read(path)
+  session_id = text[/^- session: (.+)$/, 1]
+  name = text[/^# (.+)$/, 1]
+  found[session_id] = name if session_id && name
+rescue Errno::ENOENT
+  # A live agent can create or prune only its own scratchpad while this scans.
+end
+
+puts "realm: #{realm}"
+puts "recoverable assignments: #{found.length}"
+exit if dry_run
+
+FileUtils.mkdir_p(File.dirname(realm_file))
+File.write(realm_file, "#{realm.downcase}\n", mode: 'w') unless existing_realm
+FileUtils.mkdir_p(File.join(identity_root, 'by-name'))
+FileUtils.mkdir_p(File.join(identity_root, 'by-session'))
+
+conflicts = []
+written = 0
+found.sort.each do |session_id, name|
+  slug = name.downcase.gsub(/[^a-z0-9]+/, '-').sub(/\A-/, '').sub(/-\z/, '')
+  claim = File.join(identity_root, 'by-name', slug)
+  begin
+    File.write(claim, "#{session_id}\n", mode: 'wx')
+  rescue Errno::EEXIST
+    owner = File.read(claim).strip rescue '(unreadable)'
+    conflicts << "#{name}: #{owner} and #{session_id}" unless owner == session_id
+  end
+
+  key = Digest::SHA256.hexdigest(session_id)
+  mapping = File.join(identity_root, 'by-session', key)
+  if File.exist?(mapping)
+    prior = JSON.parse(File.read(mapping)) rescue {}
+    if prior['sessionId'] != session_id || prior['name'] != name
+      conflicts << "session #{session_id}: #{prior['name'].inspect} and #{name.inspect}"
+      next
+    end
+  else
+    tmp = "#{mapping}.#{Process.pid}.tmp"
+    File.write(tmp, "#{JSON.generate(sessionId: session_id, name: name, assignedAt: Time.now.utc.iso8601)}\n", mode: 'wx')
+    File.rename(tmp, mapping)
+    written += 1
+  end
+end
+
+puts "assignments added: #{written}"
+if conflicts.empty?
+  puts 'conflicts: 0'
+else
+  warn "conflicts: #{conflicts.length}"
+  conflicts.each { |line| warn "  #{line}" }
+  exit 1
+end
