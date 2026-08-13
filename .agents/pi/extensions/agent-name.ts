@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ const REALM_FILE = join(homedir(), ".config", "agent-realm");
 // /new stays in the same pid, so it must not mistake the current session for its
 // parent and turn unrelated sessions into one family.
 let inheritedSurname = process.env.AGENT_IDENTITY_PID !== String(process.pid) ? normalizeSurname(process.env.AGENT_SURNAME) : undefined;
+const syntheticChildSessionId = inheritedSurname ? `subagent:${randomUUID()}` : undefined;
 
 type NameContext = {
 	cwd: string;
@@ -46,10 +47,11 @@ export default function (pi: ExtensionAPI) {
 	const announced = new Set<string>();
 
 	pi.on("session_start", (_event, ctx: NameContext) => {
-		const sessionId = ctx.sessionManager.getSessionId();
+		// The subagent runner uses --no-session. A child process is still a public
+		// worker worth naming, so give inherited no-session runs a synthetic durable
+		// allocation; ordinary one-shot prompts remain anonymous and consume nothing.
+		const sessionId = ctx.sessionManager.getSessionId() ?? syntheticChildSessionId;
 		realm = readRealm();
-		// Ephemeral runs (pi -p --no-session) get no identity or scratchpad;
-		// one-shot prompts would otherwise consume names nobody can resume.
 		const preferredSurname = inheritedSurname;
 		inheritedSurname = undefined; // applies only to the first session in this child process, never /new
 		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, ctx.sessionManager.getSessionFile()) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
