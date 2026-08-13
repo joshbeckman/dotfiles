@@ -26,6 +26,7 @@ def usage
       -n COUNT          print COUNT distinct names (default 1)
       --full            first and last name, e.g. "Saffron Fletcher"
                         (aliases: --fullname, --first-and-last)
+      --surname NAME    use NAME as the surname (implies --full)
       --theme NAMES     restrict to these comma-separated themes
       --title           Capitalize output
       --seed STRING     deterministic output for the same STRING
@@ -40,6 +41,7 @@ count = 1
 full = false
 title = false
 seed = nil
+surname = nil
 wanted = nil
 
 args = ARGV.dup
@@ -47,6 +49,13 @@ until args.empty?
   case (arg = args.shift)
   when '-n', '--count' then count = Integer(args.shift.to_s)
   when '--full', '--fullname', '--first-and-last' then full = true
+  when '--surname'
+    surname = args.shift.to_s.downcase
+    unless surname.match?(/\A[a-z][a-z'-]*\z/)
+      warn 'random-name: --surname must be one word containing letters, apostrophes, or hyphens'
+      exit 1
+    end
+    full = true
   when '--theme' then wanted = args.shift.to_s.split(',')
   when '--title' then title = true
   when '--seed' then seed = args.shift
@@ -90,9 +99,11 @@ unless full
   exit 0
 end
 
-surnames = pool.slice(*SURNAME_THEMES).values.flat_map { |f| File.readlines(f, chomp: true) }
-surnames = words if surnames.empty? # --theme excluded every surname source
-givens = words - surnames
+surname_words = pool.slice(*SURNAME_THEMES).values.flat_map { |f| File.readlines(f, chomp: true) }
+surname_words = words if surname_words.empty? # --theme excluded every surname source
+surnames = surname ? [surname] : surname_words
+givens = words - surname_words - surnames
+givens = words - surnames if givens.empty?
 givens = words if givens.empty?
 
 count.times do

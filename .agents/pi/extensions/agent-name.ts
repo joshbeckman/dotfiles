@@ -19,6 +19,11 @@ const SCRATCH_ROOT = "/tmp/agent";
 const IDENTITY_ROOT = join(homedir(), ".pi", "agent", "identities");
 const REALM_FILE = join(homedir(), ".config", "agent-realm");
 
+// A child process inherits the parent's surname and pid marker. A hot reload or
+// /new stays in the same pid, so it must not mistake the current session for its
+// parent and turn unrelated sessions into one family.
+let inheritedSurname = process.env.AGENT_IDENTITY_PID !== String(process.pid) ? normalizeSurname(process.env.AGENT_SURNAME) : undefined;
+
 type NameContext = {
 	cwd: string;
 	hasUI: boolean;
@@ -45,13 +50,19 @@ export default function (pi: ExtensionAPI) {
 		realm = readRealm();
 		// Ephemeral runs (pi -p --no-session) get no identity or scratchpad;
 		// one-shot prompts would otherwise consume names nobody can resume.
-		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, ctx.sessionManager.getSessionFile()) ?? (realm ? allocateName(sessionId, realm) : undefined) : undefined;
+		const preferredSurname = inheritedSurname;
+		inheritedSurname = undefined; // applies only to the first session in this child process, never /new
+		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, ctx.sessionManager.getSessionFile()) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
 		scratchpad = name && sessionId ? createScratchpad(name, sessionId, ctx) : undefined;
 		// Exported rather than passed per-call: bash-tool children inherit the pi
 		// process env, so agent-trailer and friends can read it without the model
 		// having to remember to pass its own name (which it gets wrong).
 		if (name) process.env.AGENT_NAME = name;
 		else delete process.env.AGENT_NAME;
+		const surname = nameSurname(name);
+		if (surname) process.env.AGENT_SURNAME = surname;
+		else delete process.env.AGENT_SURNAME;
+		process.env.AGENT_IDENTITY_PID = String(process.pid);
 		if (realm) process.env.AGENT_REALM = realm;
 		else delete process.env.AGENT_REALM;
 		if (scratchpad) process.env.AGENT_SCRATCHPAD = scratchpad;
@@ -359,11 +370,16 @@ function preserveAssignment(sessionId: string, name: string): string {
 	return name;
 }
 
-function allocateName(sessionId: string, realm: string): string | undefined {
+function allocateName(sessionId: string, realm: string, preferredSurname: string | undefined): string | undefined {
 	mkdirSync(join(IDENTITY_ROOT, "by-name"), { recursive: true });
 	for (let attempt = 0; attempt < 1000; attempt += 1) {
 		try {
-			const base = execFileSync("random-name", ["--full", "--seed", `${sessionId}:${attempt}`], { encoding: "utf8", timeout: 2000 }).trim();
+			// A spawned process stays in its parent's project family by default. This
+			// is a preference rather than a smaller hard namespace: after 64 claimed
+			// candidates, fall back to the realm's full pool instead of failing.
+			const args = ["--full", "--seed", `${sessionId}:${attempt}`];
+			if (preferredSurname && attempt < 64) args.push("--surname", preferredSurname);
+			const base = execFileSync("random-name", args, { encoding: "utf8", timeout: 2000 }).trim();
 			if (!base) return undefined;
 			const name = `${base} of ${realm}`;
 			const claim = join(IDENTITY_ROOT, "by-name", nameSlug(name));
@@ -399,6 +415,15 @@ function writeAssignment(sessionId: string, name: string) {
 
 function nameSlug(name: string): string {
 	return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function nameSurname(name: string | undefined): string | undefined {
+	return normalizeSurname(name?.split(/\s+/)[1]);
+}
+
+function normalizeSurname(value: string | undefined): string | undefined {
+	const surname = value?.trim();
+	return surname && /^[A-Za-z][A-Za-z'-]*$/.test(surname) ? surname : undefined;
 }
 
 function createScratchpad(name: string, sessionId: string, ctx: NameContext): string | undefined {

@@ -20,6 +20,8 @@ When uncertain, prefer a reversible local action plus a brief note over pausing 
 
 Pi assigns each session a permanent name such as `Simoom Farrier of Hearth`: a human-readable name allocated without replacement, plus the computer's realm. Names are never reused, so public work attributed to a name always belongs to that one session. The realm is also the boundary of the local scratchpad and agent-mail network.
 
+A child agent process inherits its parent's surname by default: work spawned by `Simoom Farrier of Hearth` is preferentially named `Gienah Farrier of Hearth`. Nested children remain in the family. The preference applies only to the first session in the spawned process, never `/new`, and falls back to the full realm pool if that family is crowded. When deliberately launching an unrelated agent from a parent's shell, clear the hint with `env -u AGENT_SURNAME …`.
+
 If your system prompt has not assigned a name, do **not** invent one: this computer is probably missing `~/.config/agent-realm`, and an ad-hoc name could reuse a public identity. Ask Josh to configure a realm or run `agent-identity-backfill --realm NAME`. Use an assigned name in scratch filenames, branch names, tmux titles, and notification titles. Don't announce it unprompted.
 
 ### Scratchpad
