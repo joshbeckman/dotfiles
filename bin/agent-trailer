@@ -53,12 +53,69 @@ harness=unknown
 provider=unknown
 model=unknown
 
+# PI_MODEL/PI_PROVIDER are injected per bash-tool invocation rather than exported
+# into pi's process environment, so shell escapes, tmux panes, commit hooks and
+# extension subprocesses see only PI_CODING_AGENT. Recover the pair from the
+# session transcript there instead of reporting unknown/unknown.
+pi_session_model() {
+  _sid="${PI_SESSION_ID:-}"
+  if [ -z "$_sid" ] && [ -n "${AGENT_NAME:-}" ]; then
+    _slug="$(printf '%s' "$AGENT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+    _sid="$(cat "$HOME/.pi/agent/identities/by-name/$_slug" 2>/dev/null || true)"
+  fi
+  [ -n "$_sid" ] || return 1
+  _file="${PI_SESSION_FILE:-}"
+  if [ ! -f "$_file" ]; then
+    _file="$(find "$HOME/.pi/agent/sessions" -name "*_$_sid.jsonl" -print -quit 2>/dev/null)"
+  fi
+  [ -f "$_file" ] || return 1
+  # Last model_change wins: the trailer should name the model that is running now,
+  # not whichever one the session happened to start with.
+  _line="$(grep '"type":"model_change"' "$_file" 2>/dev/null | tail -1)"
+  [ -n "$_line" ] || return 1
+  # Extracted independently because the two keys are not emitted in a fixed order.
+  _p="$(printf '%s' "$_line" | sed -n 's/.*"provider":"\([^"]*\)".*/\1/p')"
+  _m="$(printf '%s' "$_line" | sed -n 's/.*"modelId":"\([^"]*\)".*/\1/p')"
+  [ -n "$_p" ] && [ -n "$_m" ] || return 1
+  printf '%s %s\n' "$_p" "$_m"
+}
+
+# getPackageDir() reads PI_PACKAGE_DIR as a Nix/Guix *input* override; pi never
+# exports it, so the version has to come from the installed package itself.
+pi_version() {
+  _bin="$(command -v pi 2>/dev/null)" || return 1
+  _dir="$(dirname "$(readlink "$_bin" 2>/dev/null || printf '%s' "$_bin")")"
+  case "$_dir" in /*) ;; *) _dir="$(cd "$(dirname "$_bin")" && cd "$_dir" && pwd)" ;; esac
+  while [ "$_dir" != "/" ]; do
+    # Keep walking past a package.json that is not pi's own: a project-local
+    # install puts the app's manifest on this path, and reporting its version as
+    # the harness version would be wrong in a way nobody would notice.
+    # piConfig covers rebuilds that rename the binary away from "pi".
+    if [ -f "$_dir/package.json" ] && grep -q '"pi-coding-agent\|"piConfig"' "$_dir/package.json"; then
+      sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_dir/package.json" | head -1
+      return 0
+    fi
+    _dir="$(dirname "$_dir")"
+  done
+  return 1
+}
+
 if [ -n "${PI_MODEL:-}" ] || [ -n "${PI_CODING_AGENT:-}" ]; then
   harness=pi
   provider="${PI_PROVIDER:-unknown}"
   model="${PI_MODEL:-unknown}"
+  if [ "$model" = unknown ] || [ "$provider" = unknown ]; then
+    recovered="$(pi_session_model || true)"
+    if [ -n "$recovered" ]; then
+      provider="${recovered%% *}"
+      model="${recovered##* }"
+    fi
+  fi
   if [ -n "${PI_PACKAGE_DIR:-}" ]; then
     harness="pi-$(basename "$PI_PACKAGE_DIR" | sed 's/^pi-//')"
+  else
+    version="$(pi_version || true)"
+    [ -n "$version" ] && harness="pi-$version"
   fi
 elif [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]; then
   harness=claude-code
