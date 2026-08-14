@@ -47,14 +47,27 @@ export default function (pi: ExtensionAPI) {
 	const announced = new Set<string>();
 
 	pi.on("session_start", (_event, ctx: NameContext) => {
-		// The subagent runner uses --no-session. A child process is still a public
-		// worker worth naming, so give inherited no-session runs a synthetic durable
-		// allocation; ordinary one-shot prompts remain anonymous and consume nothing.
-		const sessionId = ctx.sessionManager.getSessionId() ?? syntheticChildSessionId;
-		realm = readRealm();
+		// A package update can remove the directory inherited by a months-old Pi
+		// process. Leaving the dead override in child env makes every headless spawn
+		// crash before extensions load; without it, Pi uses its bundled resources.
+		if (process.env.PI_PACKAGE_DIR) {
+			try {
+				statSync(process.env.PI_PACKAGE_DIR);
+			} catch {
+				delete process.env.PI_PACKAGE_DIR;
+			}
+		}
+
 		const preferredSurname = inheritedSurname;
 		inheritedSurname = undefined; // applies only to the first session in this child process, never /new
-		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, ctx.sessionManager.getSessionFile()) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		const ephemeral = !ctx.hasUI && !sessionFile;
+		// Pi still creates an in-memory id for --no-session. Identity follows the
+		// process relationship, not that id: inherited subagents are public workers
+		// worth naming; ordinary one-shot prompts remain anonymous and consume none.
+		const sessionId = ephemeral && !preferredSurname ? undefined : ctx.sessionManager.getSessionId() ?? syntheticChildSessionId;
+		realm = readRealm();
+		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, sessionFile) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
 		scratchpad = name && sessionId ? createScratchpad(name, sessionId, ctx) : undefined;
 		// Exported rather than passed per-call: bash-tool children inherit the pi
 		// process env, so agent-trailer and friends can read it without the model
