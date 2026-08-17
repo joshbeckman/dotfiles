@@ -82,7 +82,7 @@ Create new commits; never amend unless explicitly asked. Ask for the PR URL rath
 
 ## GitHub Workflow
 
-Use `gw`, not `gh`, for GitHub commands. It uses the current repository and branch unless `GW_REPO` overrides them. You MUST use `gw view-md` to read issues and pull requests. Assign new pull requests to me with `--assignee @me`.
+Use `gw`, not `gh`, for GitHub commands. In repositories managed through `gs`, use `gsw`, not bare `gs`, for PR and stack workflows. Both wrappers pass human and read-only commands through while preventing agent prose from losing attribution. `gw` uses the current repository and branch unless `GW_REPO` overrides it. You MUST use `gw view-md` to read issues and pull requests. Assign new pull requests to me with `--assignee @me`.
 
 ### Fast PR Lookups
 
@@ -100,7 +100,7 @@ Reference every issue or pull request with its title and full URL:
 
 Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
 
-**Attribution is automatic on the paths that matter, and you must not duplicate it.** `gw` appends the trailer to anything you post that carries prose — `pr comment`, `issue comment`, `pr create`, `issue create`, `pr review`, `pr edit`, `issue edit` — and commits get the same line with an email, which is the one place GitHub parses it. Both detect the harness from the environment, so neither fires for Josh's own commands. Two trailers are worse than none, so don't add one yourself there. Post through `gw`, not bare `gh`: `gh` attributes nothing.
+**Attribution is automatic on the paths that matter, and you must not duplicate it.** `gw` appends the trailer to anything you post that carries prose — `pr comment`, `issue comment`, `pr create`, `issue create`, `pr review`, `pr edit`, `issue edit`. `gsw` does the same for `submit`, `pr create`, `pr comment`, `pr review`, and `pr edit`; it warns on `submit --stack` because one wrapper-level body cannot cover several generated PRs. Commits get the same line with an email, which is the one place GitHub parses it. All paths detect the harness from the environment, so they do not fire for Josh's own commands. Two trailers are worse than none, so don't add one yourself there. Post through `gw`/`gsw`, not bare `gh`/`gs`: the bare clients attribute nothing.
 
 **Everywhere else, attribute yourself by hand.** Anything you write that a person will read as Josh's — a document, a Slack message, a file you leave behind, a comment posted through any other client — should carry the trailer. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim after a blank line. Never write it from memory; models guess their own name wrong.
 

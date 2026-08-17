@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: gsw <gs-args...>
+
+Run gs with automatic agent attribution on prose-bearing PR writes. Human and
+read-only calls pass through unchanged.
+
+Examples:
+  gsw submit --body-file /tmp/pr.md
+  gsw pr comment 123 --body "Found the failing boundary."
+  gsw pr review 123 --approve --body-file /tmp/review.md
+USAGE
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+case "${1:-}" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+esac
+
+command -v gs >/dev/null 2>&1 || { echo "gsw: gs not found" >&2; exit 127; }
+
+under_agent() {
+  command -v agent-trailer >/dev/null 2>&1 || return 1
+  [[ "$(agent-trailer --raw 2>/dev/null || echo unknown/unknown/unknown)" != "unknown/unknown/unknown" ]]
+}
+
+has_help_flag() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in -h|--help) return 0 ;; esac
+  done
+  return 1
+}
+
+has_flag() {
+  local wanted="$1" arg
+  shift
+  for arg in "$@"; do
+    [[ "$arg" == "$wanted" ]] && return 0
+  done
+  return 1
+}
+
+writes_prose() {
+  [[ "$1" == submit ]] && return 0
+  case "$1 ${2:-}" in
+    "pr create" | "pr comment" | "pr review" | "pr edit") return 0 ;;
+  esac
+  return 1
+}
+
+trailer_tmp=""
+inject_trailer() {
+  local i idx=-1 kind="" value="" joined=0 content already=0
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[i]}" in
+      --body|-b)
+        kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0
+        ;;
+      --body-file|-F)
+        kind=file; idx=$i; value="${args[i + 1]-}"; joined=0
+        ;;
+      --body=*)
+        kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1
+        ;;
+      --body-file=*)
+        kind=file; idx=$i; value="${args[i]#--body-file=}"; joined=1
+        ;;
+    esac
+  done
+
+  # Some verbs legitimately write no prose (an approval or label edit), while
+  # submit may only be updating an existing PR. Do not invent a body that could
+  # change gs semantics merely to force attribution.
+  [[ $idx -ge 0 ]] || return 0
+
+  if [[ $kind == file ]]; then
+    if [[ $value == "-" ]]; then content="$(cat)"; else content="$(cat "$value")"; fi
+  else
+    content="$value"
+  fi
+
+  if printf '%s\n' "$content" | grep -q '^Co-authored-by: AI'; then already=1; fi
+  # stdin was consumed while checking it, so even an already-attributed body has
+  # to be materialized before gs can read it. Files and inline args can pass
+  # through untouched when they already carry the trailer.
+  if [[ $already -eq 1 && ! ( $kind == file && $value == "-" ) ]]; then return 0; fi
+
+  trailer_tmp="$(mktemp "${TMPDIR:-/tmp}/gsw-body.XXXXXX")"
+  trap 'rm -f "$trailer_tmp"' EXIT HUP INT TERM
+  if [[ $already -eq 1 ]]; then
+    printf '%s\n' "$content" > "$trailer_tmp"
+  else
+    printf '%s\n\n%s\n' "$content" "$(agent-trailer)" > "$trailer_tmp"
+  fi
+  if [[ $joined -eq 1 ]]; then
+    args[idx]="--body-file=$trailer_tmp"
+  else
+    args[idx]="--body-file"
+    args[idx + 1]="$trailer_tmp"
+  fi
+}
+
+cmd="$1"
+subcmd="${2:-}"
+args=("$@")
+
+if under_agent && ! has_help_flag "$@"; then
+  if [[ $cmd == submit ]] && has_flag --stack "$@" && ! has_flag --dry-run "$@" && ! has_flag --push-only "$@"; then
+    echo "gsw: agent stack submission can create multiple PR bodies; verify attribution on each new PR" >&2
+  fi
+  if writes_prose "$cmd" "$subcmd"; then inject_trailer; fi
+fi
+
+if [[ -n "$trailer_tmp" ]]; then
+  rc=0
+  gs "${args[@]}" || rc=$?
+  rm -f "$trailer_tmp"
+  exit "$rc"
+fi
+
+exec gs "${args[@]}"
