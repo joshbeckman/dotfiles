@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, uti
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { memoryPressureLevel, shouldSuppressMailWake, type MemoryPressureLevel } from "./resource-pressure.js";
 
 // Names are allocated once and never reused. Each computer owns a permanent
 // realm ("of Hearth", "of Lantern") and an append-only local claim registry, so
@@ -163,12 +164,17 @@ export default function (pi: ExtensionAPI) {
 		// pause for thought is not read as leaving.
 		if (Date.now() - userAt < 10 * 60_000) return; // Josh is here; mail can wait for his turn
 		if (Date.now() - activeAt < 60_000) return; // a turn is in flight or just ended
+		// Warning pressure still wakes the likely owner so it can inspect or stop
+		// its own work. At critical pressure, mail stays unread rather than adding
+		// another unsupervised turn; existing turns remain untouched.
+		const pressure = memoryPressureLevel();
+		if (shouldSuppressMailWake(pressure)) return;
 
 		const hourAgo = Date.now() - 60 * 60_000;
 		while (wakes.length > 0 && wakes[0] < hourAgo) wakes.shift();
 		if (wakes.length >= 4) return;
 
-		const message = mailNotice(scratchpad, announced, name, true);
+		const message = mailNotice(scratchpad, announced, name, true, pressure);
 		if (!message) return;
 		wakes.push(Date.now());
 		activeAt = Date.now(); // the woken turn has not started yet; keep the next tick from firing too
@@ -255,7 +261,13 @@ function unreadSummary(scratchpad: string): Unread[] {
 // Announced once per message, not once per turn: repeating it every turn would
 // train the model to skim past it, and the 4h `agent-mail sweep` escalation to
 // Josh already covers mail that gets ignored.
-function mailNotice(scratchpad: string, announced: Set<string>, name: string, woken = false) {
+function mailNotice(
+	scratchpad: string,
+	announced: Set<string>,
+	name: string,
+	woken = false,
+	pressure?: MemoryPressureLevel,
+) {
 	const fresh = unreadSummary(scratchpad).filter((m) => !announced.has(m.file));
 	if (fresh.length === 0) return undefined;
 	for (const m of fresh) announced.add(m.file);
@@ -278,6 +290,9 @@ function mailNotice(scratchpad: string, announced: Set<string>, name: string, wo
 			`agent-mail — ${fresh.length} unread message${fresh.length === 1 ? "" : "s"} to ${name}:`,
 			lines.join("\n"),
 			`Reading and/or reply: \`agent-mail read --to ${self}\`.`,
+			...(woken && pressure === 2
+				? ["System memory pressure is warning (2). Before starting more work, check whether this session owns processes that can be stopped or reduced."]
+				: []),
 			...(woken
 				? [
 						"This message woke an idle session, so Josh is probably not watching. Read it, do what it asks if it is safe to do unattended, reply only if you have something to say, and then stop rather than looking for other work.",
