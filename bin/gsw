@@ -61,7 +61,7 @@ writes_prose() {
 
 trailer_tmp=""
 inject_trailer() {
-  local i idx=-1 kind="" value="" joined=0 content already=0
+  local i idx=-1 kind="" value="" joined=0 content already=0 trailer
   for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
       --body|-b)
@@ -90,7 +90,11 @@ inject_trailer() {
     content="$value"
   fi
 
-  if printf '%s\n' "$content" | grep -q '^Co-authored-by: AI'; then already=1; fi
+  # Preserve other agents' attribution and append this editor. Suppress only
+  # the exact current trailer so a rewrite cannot remain credited solely to its
+  # original owner.
+  trailer="$(agent-trailer)"
+  if printf '%s\n' "$content" | grep -Fqx -- "$trailer"; then already=1; fi
   # stdin was consumed while checking it, so even an already-attributed body has
   # to be materialized before gs can read it. Files and inline args can pass
   # through untouched when they already carry the trailer.
@@ -101,7 +105,7 @@ inject_trailer() {
   if [[ $already -eq 1 ]]; then
     printf '%s\n' "$content" > "$trailer_tmp"
   else
-    printf '%s\n\n%s\n' "$content" "$(agent-trailer)" > "$trailer_tmp"
+    printf '%s\n\n%s\n' "$content" "$trailer" > "$trailer_tmp"
   fi
   if [[ $joined -eq 1 ]]; then
     args[idx]="--body-file=$trailer_tmp"

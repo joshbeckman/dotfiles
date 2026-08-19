@@ -41,6 +41,15 @@ Agents (and I) can leave messages for each other within one computer realm with 
 - **Discard** when done (optional): `agent-mail discard --to <you> --id <MsgID>`. State is which directory a message sits in, not a flag — leaving it in `cur/` keeps an audit trail.
 - **Ephemeral.** Same `/tmp` caveat as the scratchpad; nothing that *must* be received belongs here. To reach me when I may be away from the machine, use the notification ladder below, not mail.
 
+### Artifact ownership between agents
+
+A coordinator does not automatically own a worker's artifacts. Treat the agent named in a `Co-authored-by: AI` trailer, handoff, or active branch/worktree as the owner of that in-flight work.
+
+- Before changing another live agent's PR title or body, issue body, plan, handoff, branch/worktree, or other human-facing artifact, send the owner mail describing the proposed change and why. For non-urgent work, let the owner apply it or wait for acknowledgment.
+- Prefer sending requirements, evidence, or a suggested diff over silently rewriting another agent's prose. Tone cleanup is not an exception.
+- If Josh explicitly directs the edit, the owner has exited or is unreachable, or an urgent unblock cannot wait, proceed and mail the owner before or immediately after. Preserve the existing attribution and add your own.
+- Reading, reviewing, commenting on, or merging completed work does not transfer ownership. Integrating a commit that the owner delivered for that purpose is expected and needs no extra permission.
+
 ### Memory-pressure backpressure
 
 On macOS, Pi reads `kern.memorystatus_vm_pressure_level`: `1` is normal, `2` is warning, and `4` is critical. New `subagent` work is deferred at levels `2` and `4`. `bg_run` remains available with a warning at level `2`, but is deferred at level `4`; inspection and cleanup tools remain available. Unsupported platforms keep the previous behavior.
@@ -106,7 +115,7 @@ Reference every issue or pull request with its title and full URL:
 
 Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
 
-**Attribution is automatic on the paths that matter, and you must not duplicate it.** `gw` appends the trailer to anything you post that carries prose — `pr comment`, `issue comment`, `pr create`, `issue create`, `pr review`, `pr edit`, `issue edit`. `gsw` does the same for `submit`, `pr create`, `pr comment`, `pr review`, and `pr edit`; it warns on `submit --stack` because one wrapper-level body cannot cover several generated PRs. Commits get the same line with an email, which is the one place GitHub parses it. All paths detect the harness from the environment, so they do not fire for Josh's own commands. Two trailers are worse than none, so don't add one yourself there. Post through `gw`/`gsw`, not bare `gh`/`gs`: the bare clients attribute nothing.
+**Attribution is automatic on the paths that matter, and you must not duplicate it.** `gw` appends the trailer to anything you post that carries prose — `pr comment`, `issue comment`, `pr create`, `issue create`, `pr review`, `pr edit`, `issue edit`. `gsw` does the same for `submit`, `pr create`, `pr comment`, `pr review`, and `pr edit`; it warns on `submit --stack` because one wrapper-level body cannot cover several generated PRs. Commits get the same line with an email, which is the one place GitHub parses it. All paths detect the harness from the environment, so they do not fire for Josh's own commands. The wrappers suppress an exact duplicate of the current trailer; when another agent already has a trailer, they preserve it and add the current editor's attribution. Post through `gw`/`gsw`, not bare `gh`/`gs`: the bare clients attribute nothing.
 
 **Everywhere else, attribute yourself by hand.** Anything you write that a person will read as Josh's — a document, a Slack message, a file you leave behind, a comment posted through any other client — should carry the trailer. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim after a blank line. Never write it from memory; models guess their own name wrong.
 

@@ -61,15 +61,17 @@ inject_trailer() {
     content="$value"
   fi
 
-  # An agent that already ran agent-trailer keeps its own line; two trailers
-  # would be worse than none. Matches the agent form specifically, so a body
-  # crediting a human co-author still gets attributed.
-  if printf '%s\n' "$content" | grep -q '^Co-authored-by: AI'; then
+  # Suppress only this editor's exact trailer. A different agent's line is
+  # provenance, so keep it and add the current editor rather than crediting the
+  # original owner for a rewrite they did not make.
+  local trailer
+  trailer="$(agent-trailer)"
+  if printf '%s\n' "$content" | grep -Fqx -- "$trailer"; then
     return 0
   fi
 
   trailer_tmp="$(mktemp "${TMPDIR:-/tmp}/gw-body.XXXXXX")"
-  printf '%s\n\n%s\n' "$content" "$(agent-trailer)" > "$trailer_tmp"
+  printf '%s\n\n%s\n' "$content" "$trailer" > "$trailer_tmp"
   args[idx]="--body-file"
   args[idx + 1]="$trailer_tmp"
 }
