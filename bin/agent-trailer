@@ -62,6 +62,13 @@ pi_session_model() {
   if [ -z "$_sid" ] && [ -n "${AGENT_NAME:-}" ]; then
     _slug="$(printf '%s' "$AGENT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
     _sid="$(cat "$HOME/.pi/agent/identities/by-name/$_slug" 2>/dev/null || true)"
+    # Sessions allocated before the realm existed carry a bare two-word
+    # AGENT_NAME, but their registry claims were normalized to the realm-suffixed
+    # form; retry with the suffix so live pre-realm agents still resolve.
+    if [ -z "$_sid" ] && [ -f "$HOME/.config/agent-realm" ]; then
+      _realm="$(tr '[:upper:]' '[:lower:]' < "$HOME/.config/agent-realm" | tr -d '[:space:]')"
+      [ -n "$_realm" ] && _sid="$(cat "$HOME/.pi/agent/identities/by-name/$_slug-of-$_realm" 2>/dev/null || true)"
+    fi
   fi
   [ -n "$_sid" ] || return 1
   _file="${PI_SESSION_FILE:-}"
