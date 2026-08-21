@@ -97,7 +97,7 @@ Create new commits; never amend unless explicitly asked. Ask for the PR URL rath
 
 ## GitHub Workflow
 
-Use `gw`, not `gh`, for GitHub commands. In repositories managed through `gs`, use `gsw`, not bare `gs`, for PR and stack workflows. Both wrappers pass human and read-only commands through while preventing agent prose from losing attribution. `gw` uses the current repository and branch unless `GW_REPO` overrides it. You MUST use `gw view-md` to read issues and pull requests. Assign new pull requests to me with `--assignee @me`.
+Use `gw`, not `gh`, for GitHub commands. In `shop/world`, Meteorite is the standard PR write interface: use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Continue using `gw view-md` to read issues and pull requests, and use `gw` for issue operations and PR check helpers. Both wrappers preserve agent attribution while passing human and read-only commands through. `gw` uses the current repository and branch unless `GW_REPO` overrides it. Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
 
 ### Fast PR Lookups
 
