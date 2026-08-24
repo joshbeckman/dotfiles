@@ -28,6 +28,7 @@ Usage:
   agent-mail sweep  [--hours N] [--dry-run]
 
 An ID is an agent as <name>-<sessionID>, or a human as a bare handle.
+The @+name mention form (and bare @name) is accepted; sigils are stripped.
 Agent inboxes resolve to <name>-*/inbox; human inboxes to humans/<handle>/inbox.
 
 send   Deliver a message. Body from --body/-m, --body-file, or stdin.
@@ -51,11 +52,22 @@ USAGE
 
 die() { echo "agent-mail: $*" >&2; exit 1; }
 
+# Accept the @+name mention form from prose and vim autocomplete. Stripped
+# before any address parsing because "@+name" contains "@" and would otherwise
+# be misread as a human email address downstream.
+normalize_id() {
+  local id="$1"
+  id="${id#@}"
+  id="${id#+}"
+  printf '%s' "$id"
+}
+
 # Resolve an ID to an inbox base path. Humans: humans/<handle>. Agents:
 # match <name>-* exactly, then fall back to a bare name dir. Ambiguity (two
 # live sessions of one name) fails loudly rather than guessing a recipient.
 resolve_inbox() {
-  local id="$1" match
+  local id match
+  id="$(normalize_id "$1")"
   case "$id" in
     humans/*|*@*)
       local handle="${id#humans/}"; handle="${handle%%@*}"
@@ -143,6 +155,10 @@ cmd_send() {
   done
   [ "$have_body" -eq 1 ] && [ -n "$body_file" ] && die "send: --body and --body-file are mutually exclusive"
   [ -n "$to" ] || die "send: --to required"
+  # Headers keep the canonical bare ID so a reply's --to needs no cleanup.
+  to="$(normalize_id "$to")"
+  from="$(normalize_id "$from")"
+  [ -n "$reply_to" ] && reply_to="$(normalize_id "$reply_to")"
 
   local inbox; inbox="$(resolve_inbox "$to")"
   local scratchpad; scratchpad="$(dirname "$inbox")"

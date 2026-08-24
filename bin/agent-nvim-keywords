@@ -1,0 +1,73 @@
+#!/bin/bash
+# agent-nvim-keywords: Add agent handles to nvim keywords.txt as @+<name>
+#
+# Only adds handles not already present. Never removes entries: names are
+# allocated without replacement, so a handle that stops appearing in the
+# registry (another machine's agent, a pruned identity) may still be referenced
+# in prose and should keep completing.
+#
+# The @+ sigil marks an agent as distinct from a human @name and fails
+# GitHub's/Slack's mention grammar, so pasting it anywhere never pings a
+# stranger. The same +<handle> appears as the email subaddress in commit
+# trailers (see agent-trailer --email).
+#
+# Usage:
+#   agent-nvim-keywords              # Append new handles
+#   agent-nvim-keywords --dry-run    # Preview without writing
+
+set -euo pipefail
+
+KEYWORDS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/keywords.txt"
+IDENTITIES_DIR="${AGENT_IDENTITIES_DIR:-$HOME/.pi/agent/identities/by-name}"
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run) DRY_RUN=true; shift ;;
+        -h|--help)
+            cat <<EOF
+Usage: $(basename "$0") [--dry-run]
+
+Add agent handles from $IDENTITIES_DIR
+to $KEYWORDS_FILE as @+<name> entries.
+
+Options:
+    --dry-run    Show what would be added without writing
+    -h, --help   Show this help
+EOF
+            exit 0
+            ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [[ ! -d "$IDENTITIES_DIR" ]]; then
+    echo "No identity registry at $IDENTITIES_DIR" >&2
+    exit 0
+fi
+
+discovered=$(ls -1 "$IDENTITIES_DIR" | sort -u)
+
+existing=""
+if [[ -f "$KEYWORDS_FILE" ]]; then
+    # grep exits 1 when the file has no @+ lines yet, which pipefail would
+    # otherwise turn into a script failure on first run.
+    existing=$(grep '^@+' "$KEYWORDS_FILE" | sed 's/^@+//' | sort -u || true)
+fi
+
+new_handles=$(comm -23 <(echo "$discovered") <(echo "$existing") | grep -v '^$' || true)
+
+if [[ -z "$new_handles" ]]; then
+    echo "No new agent handles to add."
+    exit 0
+fi
+
+count=$(echo "$new_handles" | wc -l | tr -d ' ')
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "Would add $count new entries:"
+    echo "$new_handles" | sed 's/^/@+/'
+else
+    echo "$new_handles" | sed 's/^/@+/' >> "$KEYWORDS_FILE"
+    echo "Added $count new entries to $KEYWORDS_FILE"
+fi

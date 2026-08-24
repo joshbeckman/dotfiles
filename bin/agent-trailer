@@ -16,9 +16,10 @@ from the running harness's environment, not from the model's self-report
 
 Options:
   --raw         Print "<harness>/<provider>/<model>" without the trailer prefix.
-  --email       Append "<git user.email +pi>". Only GitHub's commit parser
-                needs it; in comments and prose it is an address on display
-                for nothing.
+  --email       Append "<git user.email +<handle>>", where the handle is the
+                kebab-cased session name (falling back to +pi when unnamed).
+                Only GitHub's commit parser needs it; in comments and prose it
+                is an address on display for nothing.
   --name NAME   Session name to use instead of $AGENT_NAME.
   -h, --help    Show this help.
 USAGE
@@ -158,12 +159,19 @@ who="AI"
 
 suffix=""
 if [ "$with_email" -eq 1 ]; then
-  # +pi tags the address so agent commits are filterable and never collide with
-  # Josh's own authorship, while still resolving to a real mailbox.
+  # The +<handle> subaddress names the specific agent in the one field GitHub
+  # parses, matches the @+<handle> mention convention, and still routes to
+  # Josh's real mailbox. A generic +pi could not distinguish agents; a separate
+  # per-agent account could not resolve to a mailbox anyone reads.
+  tag=pi
+  if [ -n "$name" ]; then
+    slug="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+    [ -n "$slug" ] && tag="$slug"
+  fi
   email="$(git config user.email 2>/dev/null || true)"
   case "$email" in
-    *@*) email="${email%@*}+pi@${email##*@}" ;;
-    *) email="josh+pi@joshbeckman.org" ;;
+    *@*) email="${email%@*}+$tag@${email##*@}" ;;
+    *) email="josh+$tag@joshbeckman.org" ;;
   esac
   suffix=" <$email>"
 fi
