@@ -103,7 +103,8 @@ echo '  ======  installed neovim plugins'
 echo '  ======  generating nvim completion keywords'
 touch "$DOTFILES_DIR/.config/nvim/keywords.txt"
 if command -v gh &> /dev/null; then
-        "$DOTFILES_DIR/bin/gh-nvim-username-keywords" || echo 'gh keyword generation failed (auth?); continuing'
+        "$DOTFILES_DIR/bin/gh-nvim-username-keywords" || echo 'gh username keyword generation failed (auth?); continuing'
+        "$DOTFILES_DIR/bin/gh-nvim-labels-keywords" || echo 'gh label keyword generation failed (auth?); continuing'
 fi
 "$DOTFILES_DIR/bin/agent-nvim-keywords" || true
 echo '  ======  generated nvim completion keywords'

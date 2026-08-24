@@ -1,0 +1,121 @@
+#!/bin/bash
+# gh-nvim-labels-keywords: Add recently-used GitHub labels to nvim keywords.txt as #<label>
+#
+# Only adds labels not already present. Never removes entries.
+#
+# Sources: labels on recent issues and PRs you authored or were assigned in the
+# target repos. Recency comes from the list ordering plus --limit, not from a
+# date filter: the goal is "labels I actually touch," not the repo's whole
+# label taxonomy, which for a monorepo is thousands of zone labels.
+#
+# Labels containing spaces or colons are skipped: they can never match a vim
+# keyword, so a dictionary entry would be dead weight.
+#
+# Usage:
+#   gh-nvim-labels-keywords                          # Use defaults
+#   gh-nvim-labels-keywords --repo Shopify/other     # Add a repo (repeatable)
+#   gh-nvim-labels-keywords --limit 50               # Override list limit
+#   gh-nvim-labels-keywords --dry-run --verbose      # Preview with progress
+
+set -euo pipefail
+
+KEYWORDS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/keywords.txt"
+VERBOSE=${VERBOSE:-false}
+DRY_RUN=false
+
+DEFAULT_REPOS=("shop/world")
+DEFAULT_LIMIT=30
+
+REPOS=()
+LIMIT=""
+
+log() {
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "[info] $*" >&2
+    fi
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run) DRY_RUN=true; shift ;;
+        --verbose|-v) VERBOSE=true; shift ;;
+        --repo) REPOS+=("$2"); shift 2 ;;
+        --limit) LIMIT="$2"; shift 2 ;;
+        -h|--help)
+            cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Add labels from your recent GitHub issue/PR activity to nvim keywords.txt
+as #<label> entries.
+
+Options:
+    --repo OWNER/NAME Add a repo to query (repeatable, adds to defaults)
+    --limit N         Override issue/PR list limit (default: $DEFAULT_LIMIT)
+    --dry-run         Show what would be added without writing
+    --verbose, -v     Show progress
+    -h, --help        Show this help
+
+Defaults:
+    Repos: ${DEFAULT_REPOS[*]}
+EOF
+            exit 0
+            ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+REPOS=("${DEFAULT_REPOS[@]}" "${REPOS[@]+"${REPOS[@]}"}")
+LIMIT="${LIMIT:-$DEFAULT_LIMIT}"
+
+collect_labels() {
+    {
+        for repo in "${REPOS[@]}"; do
+            log "Fetching PR labels from: $repo"
+            gh pr list --repo "$repo" --author @me --state all --limit "$LIMIT" \
+                --json labels --jq '.[].labels[].name' 2>/dev/null || true
+            log "Fetching issue labels from: $repo"
+            gh issue list --repo "$repo" --author @me --state all --limit "$LIMIT" \
+                --json labels --jq '.[].labels[].name' 2>/dev/null || true
+            gh issue list --repo "$repo" --assignee @me --state all --limit "$LIMIT" \
+                --json labels --jq '.[].labels[].name' 2>/dev/null || true
+        done
+    # Leading slashes are allowed for monorepo zone labels (//areas/...).
+    # Completion can only insert the alnum segments of those (iskeyword has no
+    # /), but the full label still appears for search and reference.
+    } | grep -E '^[A-Za-z0-9/][A-Za-z0-9/_.-]*$' | sort -fu || true
+}
+
+main() {
+    log "Collecting labels..."
+
+    local existing=""
+    if [[ -f "$KEYWORDS_FILE" ]]; then
+        # grep exits 1 when the file has no # lines yet, which pipefail would
+        # otherwise turn into a script failure on first run.
+        existing=$(grep '^#' "$KEYWORDS_FILE" | sed 's/^#//' | sort -fu || true)
+    fi
+
+    local discovered
+    discovered=$(collect_labels)
+
+    local new_labels
+    new_labels=$(comm -23 <(echo "$discovered") <(echo "$existing") | grep -v '^$' || true)
+
+    if [[ -z "$new_labels" ]]; then
+        echo "No new labels to add."
+        exit 0
+    fi
+
+    local count
+    count=$(echo "$new_labels" | wc -l | tr -d ' ')
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Would add $count new entries:"
+        echo "$new_labels" | sed 's/^/#/'
+    else
+        echo "$new_labels" | sed 's/^/#/' >> "$KEYWORDS_FILE"
+        echo "Added $count new entries to $KEYWORDS_FILE"
+    fi
+}
+
+main
