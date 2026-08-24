@@ -96,6 +96,18 @@ git_clone_or_update https://github.com/junegunn/fzf.vim.git ~/.local/share/nvim/
 # git_clone_or_update https://github.com/folke/zen-mode.nvim.git ~/.local/share/nvim/site/pack/git-plugins/start/zen-mode.nvim
 echo '  ======  installed neovim plugins'
 
+# nvim completion keywords are generated rather than versioned: the file is a
+# roster of collaborators plus machine-local agent handles, which is both
+# public-repo-unfriendly and stale on any other machine. init.vim references
+# the file unconditionally, so it must at least exist.
+echo '  ======  generating nvim completion keywords'
+touch "$DOTFILES_DIR/.config/nvim/keywords.txt"
+if command -v gh &> /dev/null; then
+        "$DOTFILES_DIR/bin/gh-nvim-username-keywords" || echo 'gh keyword generation failed (auth?); continuing'
+fi
+"$DOTFILES_DIR/bin/agent-nvim-keywords" || true
+echo '  ======  generated nvim completion keywords'
+
 __setup_ubuntu(){
         if [ "$(dpkg --print-architecture)" = "amd64" ]; then
                 echo "Ubuntu detected"
