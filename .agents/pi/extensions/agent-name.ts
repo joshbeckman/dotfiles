@@ -103,6 +103,13 @@ export default function (pi: ExtensionAPI) {
 				showUnread(ctx, scratchpad as string);
 				sweptAt = sweep(sweptAt);
 				wakeForMail();
+				// A session parked >3 days waiting on Josh never fires
+				// before_agent_start, so activity-based restamping alone let
+				// tmp_cleaner reap the pads of still-open sessions. The timer is the
+				// liveness signal we want: it runs iff the pi process is alive, so
+				// pads of exited sessions still age out. keepAlive self-throttles to
+				// every 6h, so the 60s cadence costs nothing.
+				touchedAt = keepAlive(scratchpad as string, touchedAt);
 			}, 60_000);
 		}
 	});
@@ -139,7 +146,7 @@ export default function (pi: ExtensionAPI) {
 		];
 		if (scratchpad) {
 			lines.push(
-				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It survives across resumes of this session, but not across reboots or three days of session inactivity, so nothing durable belongs there.`,
+				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It survives across resumes of this session and is kept alive while this pi process runs, but macOS reaps it three days after the process exits (and a reboot can take it sooner), so nothing durable belongs there.`,
 			);
 		}
 		// Mail goes in a conversation message, not the system prompt. The system
@@ -485,9 +492,11 @@ function createScratchpad(name: string, sessionId: string, ctx: NameContext): st
 
 // macOS tmp_cleaner deletes /tmp files whose atime, mtime, AND ctime are all
 // older than 3 days, so a note written once early in a long-running session
-// would vanish under it. Restamping on activity ties the scratchpad's lifetime
-// to the session's rather than to each file's, which is the semantics we want:
-// it ages out 3 days after the session goes quiet, not 3 days after a write.
+// would vanish under it. Restamping ties the scratchpad's lifetime to the
+// session *process* rather than to each file or to turn activity: a parked
+// session waiting days for Josh keeps its pad, and it ages out 3 days after
+// the pi process exits. utimes cannot set ctime directly, but calling it
+// updates ctime as a side effect, so one stamp refreshes all three clocks.
 function keepAlive(dir: string, touchedAt: number): number {
 	const now = Date.now();
 	if (now - touchedAt < 6 * 60 * 60 * 1000) return touchedAt; // hourly-ish is ample against a 3-day threshold

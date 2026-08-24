@@ -26,7 +26,7 @@ If your system prompt has not assigned a name, do **not** invent one: this compu
 
 ### Scratchpad
 
-If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there. `/tmp` lives on disk, so it survives sleep and even a reboot — but macOS scrubs `/private/tmp` at boot, deleting anything whose last-access time is older than three days. Sleep/wake is safe; the risk is a reboot after a long idle stretch. Reading a file resets its three-day clock, so an actively-used scratchpad effectively never expires — only an abandoned one does.
+If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there. `/tmp` lives on disk, so it survives sleep and even a reboot — but macOS's `tmp_cleaner` runs periodically (not only at boot) and deletes anything whose atime, mtime, and ctime are all older than three days. Pi sessions restamp their scratchpad on a timer while the process is alive, so an open session keeps its pad even when parked for days; the pad ages out three days after the pi process exits. A scratchpad created by hand (no pi process, or a non-pi harness) has no keepalive, so an idle one can vanish in three days.
 
 ### Inter-agent mail
 
