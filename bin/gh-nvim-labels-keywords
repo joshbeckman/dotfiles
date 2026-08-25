@@ -23,8 +23,20 @@ KEYWORDS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/keywords.txt"
 VERBOSE=${VERBOSE:-false}
 DRY_RUN=false
 
-DEFAULT_REPOS=("shop/world")
 DEFAULT_LIMIT=30
+DEFAULT_REPO_COUNT=3
+
+# Defaults are discovered, not hardcoded: this file is synced across machines
+# whose GitHub hosts and orgs differ, so any literal repo is wrong somewhere.
+# PushEvents arrive newest-first, so first-seen order is most-recent order.
+# The events API only covers ~90 days, which suits "repos I actually touch".
+discover_repos() {
+    local login
+    login=$(gh api user --jq .login 2>/dev/null) || return 0
+    gh api "users/$login/events?per_page=100" \
+        --jq '.[] | select(.type=="PushEvent") | .repo.name' 2>/dev/null |
+        awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
+}
 
 REPOS=()
 LIMIT=""
@@ -56,7 +68,8 @@ Options:
     -h, --help        Show this help
 
 Defaults:
-    Repos: ${DEFAULT_REPOS[*]}
+    Repos: your $DEFAULT_REPO_COUNT most recently pushed-to repos (discovered
+    from your GitHub event stream at runtime)
 EOF
             exit 0
             ;;
@@ -64,8 +77,15 @@ EOF
     esac
 done
 
-REPOS=("${DEFAULT_REPOS[@]}" "${REPOS[@]+"${REPOS[@]}"}")
+while IFS= read -r repo; do
+    [[ -n "$repo" ]] && REPOS+=("$repo")
+done < <(discover_repos)
+if [[ ${#REPOS[@]} -eq 0 ]]; then
+    echo "No repos discovered from recent activity and none passed via --repo." >&2
+    exit 1
+fi
 LIMIT="${LIMIT:-$DEFAULT_LIMIT}"
+log "Repos: ${REPOS[*]}"
 
 collect_labels() {
     {

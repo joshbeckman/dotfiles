@@ -20,10 +20,29 @@ KEYWORDS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/keywords.txt"
 VERBOSE=${VERBOSE:-false}
 DRY_RUN=false
 
-# Defaults - can be extended via arguments
-DEFAULT_TEAMS=("shop/flow")
-DEFAULT_REPOS=("shop/world")
 DEFAULT_PR_LIMIT=30
+DEFAULT_REPO_COUNT=3
+
+# Defaults are discovered, not hardcoded: this file is synced across machines
+# whose GitHub hosts and orgs differ, so any literal repo or team is wrong
+# somewhere. PushEvents arrive newest-first, so first-seen order is
+# most-recent order. The events API only covers ~90 days, which suits
+# "people I actually work with".
+discover_repos() {
+    local login
+    login=$(gh api user --jq .login 2>/dev/null) || return 0
+    gh api "users/$login/events?per_page=100" \
+        --jq '.[] | select(.type=="PushEvent") | .repo.name' 2>/dev/null |
+        awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
+}
+
+# GitHub exposes no "when was I added to this team" -- team ids are
+# creation-ordered, so the highest id is the most recently created team you
+# belong to, the closest queryable stand-in for "latest team addition".
+discover_team() {
+    gh api user/teams \
+        --jq 'sort_by(.id) | last | "\(.organization.login)/\(.slug)"' 2>/dev/null || true
+}
 
 TEAMS=()
 REPOS=()
@@ -79,9 +98,9 @@ Options:
     --verbose, -v     Show progress
     -h, --help        Show this help
 
-Defaults:
-    Teams: ${DEFAULT_TEAMS[*]}
-    Repos: ${DEFAULT_REPOS[*]}
+Defaults (discovered at runtime):
+    Teams: your most recently created team membership
+    Repos: your $DEFAULT_REPO_COUNT most recently pushed-to repos
 EOF
             exit 0
             ;;
@@ -89,15 +108,25 @@ EOF
     esac
 done
 
-# Merge defaults with any provided arguments
-TEAMS=("${DEFAULT_TEAMS[@]}" "${TEAMS[@]+"${TEAMS[@]}"}")
-REPOS=("${DEFAULT_REPOS[@]}" "${REPOS[@]+"${REPOS[@]}"}")
+# Discovered defaults merge with any provided arguments
+team=$(discover_team)
+[[ -n "$team" ]] && TEAMS+=("$team")
+while IFS= read -r repo; do
+    [[ -n "$repo" ]] && REPOS+=("$repo")
+done < <(discover_repos)
+if [[ ${#TEAMS[@]} -eq 0 && ${#REPOS[@]} -eq 0 ]]; then
+    echo "Nothing discovered from GitHub and no --team/--repo passed." >&2
+    exit 1
+fi
 PR_LIMIT="${PR_LIMIT:-$DEFAULT_PR_LIMIT}"
+log "Teams: ${TEAMS[*]+"${TEAMS[*]}"}  Repos: ${REPOS[*]+"${REPOS[*]}"}"
 
 collect_usernames() {
     {
-        # Team members
-        for team in "${TEAMS[@]}"; do
+        # Team members. The [@]+ guard matters: /bin/bash on macOS is 3.2,
+        # where expanding an empty array under set -u is a fatal error, and
+        # discovery (unlike the old hardcoded defaults) can leave this empty.
+        for team in "${TEAMS[@]+"${TEAMS[@]}"}"; do
             log "Fetching members from team: $team"
             local org="${team%%/*}"
             local slug="${team##*/}"
@@ -105,7 +134,7 @@ collect_usernames() {
         done
 
         # PR reviewers, authors, and commenters
-        for repo in "${REPOS[@]}"; do
+        for repo in "${REPOS[@]+"${REPOS[@]}"}"; do
             log "Fetching PR activity from: $repo"
             gh pr list --repo "$repo" --author @me --state all --limit "$PR_LIMIT" \
                 --json reviews,comments --jq '.[].reviews[].author.login, .[].comments[].author.login' 2>/dev/null || true
