@@ -28,14 +28,18 @@ DEFAULT_REPO_COUNT=3
 
 # Defaults are discovered, not hardcoded: this file is synced across machines
 # whose GitHub hosts and orgs differ, so any literal repo is wrong somewhere.
-# PushEvents arrive newest-first, so first-seen order is most-recent order.
-# The events API only covers ~90 days, which suits "repos I actually touch".
+# PR/issue authorship is the signal rather than PushEvents because server-side
+# merge tools (gitstream) push without generating PushEvents under the user,
+# which silently dropped the repos whose labels matter most.
 discover_repos() {
-    local login
-    login=$(gh api user --jq .login 2>/dev/null) || return 0
-    gh api "users/$login/events?per_page=100" \
-        --jq '.[] | select(.type=="PushEvent") | .repo.name' 2>/dev/null |
-        awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
+    {
+        gh search prs --author=@me --sort=updated --limit 25 \
+            --json repository,updatedAt \
+            --jq '.[] | "\(.updatedAt)\t\(.repository.nameWithOwner)"' 2>/dev/null
+        gh search issues --author=@me --sort=updated --limit 25 \
+            --json repository,updatedAt \
+            --jq '.[] | "\(.updatedAt)\t\(.repository.nameWithOwner)"' 2>/dev/null
+    } | sort -r | cut -f2 | awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
 }
 
 REPOS=()
