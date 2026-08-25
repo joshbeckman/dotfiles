@@ -2,9 +2,7 @@
 
 I am Josh Beckman (more info at https://www.joshbeckman.org/about).
 
-My GitHub username is @!`git config github.user` and my email address is !`git config user.email`
-
-My main text editor is !`git config core.editor`.
+Find my GitHub username with `git config github.user`, my email address with `git config user.email`, and my main text editor with `git config core.editor`.
 
 I make things. Not too much. Mostly for others.
 
@@ -34,7 +32,7 @@ Agents (and I) can leave messages for each other within one computer realm with 
 
 - **Address by ID.** An agent is `<name>-<sessionID>`; I am a bare handle (`josh`) or email. Resolution matches the filesystem, so a bare `<name>` works when only one session of that name is live and fails loudly when two are.
 - **Handles.** In prose, `@name` is a human/account and `@+name` is an agent/session (`@+simoom-farrier-of-hearth`). The `+` fails GitHub's and Slack's mention grammar, so an agent handle never pings a stranger, and the same `+<handle>` is the email subaddress in commit trailers. The canonical written form is the realm-suffixed slug from the identity registry — the same string as the registry claim, the keywords-dictionary entry, and the commit-trailer subaddress, so one grep covers every surface. `agent-mail` accepts the sigiled forms in `--to`/`--from`.
-- **Waiting mail is announced.** When a message is first seen, a timestamped `agent-mail` notice appears in the conversation naming the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. Each message is announced once; `agent-mail scan --to <you>` lists whatever is still unread. A **parked session gets woken**: once I have not typed for 10 minutes, unread mail triggers a turn on its own, at most 4 times an hour. At macOS memory-pressure warning level `2`, the wake still runs and tells the agent to inspect its own processes; at critical level `4`, mail stays unread until pressure falls. So a reply may arrive without me present — which also means a woken turn runs unsupervised. Do what the mail asks if that is safe to do with nobody watching, and stop afterwards instead of finding adjacent work. A session whose pi has exited cannot be woken at all, so still do not treat delivery as a guarantee of attention; `agent-mail send` reports a long-idle recipient, and `sweep` escalates to me.
+- **Waiting mail is announced.** When a message is first seen, a timestamped `agent-mail` notice appears in the conversation naming the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. Each message is announced once; `agent-mail scan --to <you>` lists whatever is still unread. A **parked session gets woken**: once I have not typed for 10 minutes, unread mail triggers a turn on its own, at most 4 times an hour. Wakes respect the memory-pressure backpressure below. So a reply may arrive without me present — which also means a woken turn runs unsupervised. Do what the mail asks if that is safe to do with nobody watching, and stop afterwards instead of finding adjacent work. A session whose pi has exited cannot be woken at all, so still do not treat delivery as a guarantee of attention; `agent-mail send` reports a long-idle recipient, and `sweep` escalates to me.
 - **Check liveness before relying on a reply.** `agent-mail send` reports the recipient's idle time once it passes 12h, so you can judge whether a reply is likely. Anything unread for 4h escalates to me via `agent-mail sweep`, which any live session runs periodically.
 - **Don't send bare acknowledgements.** "Got it" costs the recipient a turn to read and tells them nothing they cannot check: `agent-mail receipt <MSGID>` (the ID `send` printed) reports whether your message reached `cur/`. Reply when you have something to say, or when the sender asked you a question.
 - **Read** the oldest unread with `agent-mail read --to <you>` (moves it `new/` → `cur/`); add `--peek` to leave it unread.
@@ -53,32 +51,17 @@ A coordinator does not automatically own a worker's artifacts. Treat the agent n
 
 ### Memory-pressure backpressure
 
-On macOS, Pi reads `kern.memorystatus_vm_pressure_level`: `1` is normal, `2` is warning, and `4` is critical. New `subagent` work is deferred at levels `2` and `4`. `bg_run` remains available with a warning at level `2`, but is deferred at level `4`; inspection and cleanup tools remain available. Unsupported platforms keep the previous behavior.
+On macOS, Pi reads `kern.memorystatus_vm_pressure_level` (`1` normal, `2` warning, `4` critical). New `subagent` work is deferred at `2` and `4`; `bg_run` warns at `2` and is deferred at `4`; mail wakeups run at `2` (told to inspect their own processes) and are held at `4`; inspection and cleanup tools always remain available. Other platforms have no gating.
 
 Do not bypass a pressure block by launching equivalent child agents or background work through Bash. Continue locally, inspect existing work, stop expendable processes, or retry after pressure returns to `1`.
 
 ### Notifications
 
-When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. If `bin/notify-josh` is available, use it with a succinct but specific title that includes the folder, project, or topic.
-
-If `bin/notify-josh` is not available, use this notification ladder:
-
-1. If running on macOS and the display is active (not sleeping and not on screensaver), notify locally:
-   - Send a `terminal-notifier` notification with sound.
-   - Use a succinct but specific title that includes the folder, project, or topic.
-   - Ring the terminal bell with `printf '\a'`.
-   - If running inside tmux, set the tmux pane title to a short attention marker.
-2. Otherwise, send me a push notification through the `josh-beckman-status` MCP server.
-
-Prefer local notification when I am likely at the machine; use push when I am away, the display is asleep, or local notification is unavailable.
+When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. Use `bin/notify-josh` with a succinct but specific title that includes the folder, project, or topic. It implements the whole delivery ladder itself — local notification with sound, bell, and tmux marker when the display is awake, push when I am away — so do not re-implement any of that; pass `--push` or `--local` only when you know better than its detection. If it is somehow absent, send a push through the `josh-beckman-status` MCP server.
 
 ### Comments in Code
 
-**Code Comment Guidelines**: Write comments that explain **why the code isn't written another way** rather than what it does. Focus on documenting "negative information" - what the code is *not* doing and why certain approaches were rejected. Comments should provide context about constraints, trade-offs, and non-obvious decisions that led to the current implementation. This is especially important for future developers and AI agents who need to understand not just the solution, but the problem space and alternatives that were considered.
-
-**When to Comment**: Generally, avoid comments. Add comments when: (1) you chose one approach over another seemingly valid option, (2) there are non-obvious constraints or requirements driving the implementation, (3) the code might appear inefficient or strange without context, (4) you're working around external limitations, or (5) future maintainers might reasonably ask "why didn't you just...?" The goal is to prevent others from attempting "improvements" that you already considered and rejected for good reasons. Keep comments brief but include the critical context that the code itself cannot convey.
-
-**IMPORTANT**: DO NOT add comments unless they explain why the code ISN'T written another way. Never explain what the code does - only document rejected alternatives and non-obvious constraints.
+Comments document rejected alternatives and non-obvious constraints — **why the code isn't written another way** — never what the code does. Generally, avoid comments. Add one when: (1) you chose one approach over another seemingly valid option, (2) non-obvious constraints or requirements drive the implementation, (3) the code might appear inefficient or strange without context, (4) you're working around external limitations, or (5) future maintainers might reasonably ask "why didn't you just...?" The goal is to prevent "improvements" that were already considered and rejected. Keep them brief.
 
 ### Optimization and Refactoring
 
@@ -121,7 +104,7 @@ Write GitHub comments to a temporary file, then pass it with `gw issue comment I
 **Everywhere else, attribute yourself by hand.** Anything you write that a person will read as Josh's — a document, a Slack message, a file you leave behind, a comment posted through any other client — should carry the trailer. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim after a blank line. Never write it from memory; models guess their own name wrong.
 
 ```sh
-agent-trailer   # => Co-authored-by: AI Oriole Limner (pi-0.83.0/anthropic/claude-opus-5)
+agent-trailer   # => Co-authored-by: AI <session name> (<harness>/<provider>/<model>)
 ```
 
 One key on every surface, so `grep "Co-authored-by: AI"` turns up agent work in commits, comments, and documents alike.
@@ -163,4 +146,4 @@ When writing prose (blog posts, documentation, comments, descriptions, PR bodies
 
 ## Time and Date Handling
 
-You should use the josh-beckman-status get_current_time_of_day tool for determing what day it is (when doing things with calendars, reporting, etc.)
+You should use the josh-beckman-status get_current_time_of_day tool for determining what day it is (when doing things with calendars, reporting, etc.)
