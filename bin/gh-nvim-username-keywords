@@ -37,14 +37,24 @@ discover_repos() {
             --json repository,updatedAt \
             --jq '.[] | "\(.updatedAt)\t\(.repository.nameWithOwner)"' 2>/dev/null
     } | sort -r | cut -f2 | awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
+    # PushEvents as a second source: direct-push repos (dotfiles, notes) never
+    # appear in PR/issue search. Duplicates against the search results are
+    # removed by the caller's union.
+    local login
+    login=$(gh api user --jq .login 2>/dev/null) || return 0
+    gh api "users/$login/events?per_page=100" \
+        --jq '.[] | select(.type=="PushEvent") | .repo.name' 2>/dev/null |
+        awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
 }
 
-# GitHub exposes no "when was I added to this team" -- team ids are
-# creation-ordered, so the highest id is the most recently created team you
-# belong to, the closest queryable stand-in for "latest team addition".
-discover_team() {
-    gh api user/teams \
-        --jq 'sort_by(.id) | last | "\(.organization.login)/\(.slug)"' 2>/dev/null || true
+# All memberships, minus org-wide mega-teams: a several-thousand-member team
+# (shopifolk, crafters) is an org roster, not a collaborator list, and would
+# flood the dictionary. One paginated call returns members_count, so the
+# filter costs nothing extra.
+TEAM_MEMBER_CAP=100
+discover_teams() {
+    gh api user/teams --paginate \
+        --jq ".[] | select(.members_count <= $TEAM_MEMBER_CAP) | \"\\(.organization.login)/\\(.slug)\"" 2>/dev/null || true
 }
 
 TEAMS=()
@@ -102,8 +112,8 @@ Options:
     -h, --help        Show this help
 
 Defaults (discovered at runtime):
-    Teams: your most recently created team membership
-    Repos: your $DEFAULT_REPO_COUNT most recently pushed-to repos
+    Teams: all memberships with <= $TEAM_MEMBER_CAP members
+    Repos: your recent PR/issue repos plus recent direct-push repos
 EOF
             exit 0
             ;;
@@ -112,11 +122,12 @@ EOF
 done
 
 # Discovered defaults merge with any provided arguments
-team=$(discover_team)
-[[ -n "$team" ]] && TEAMS+=("$team")
+while IFS= read -r team; do
+    [[ -n "$team" ]] && TEAMS+=("$team")
+done < <(discover_teams)
 while IFS= read -r repo; do
     [[ -n "$repo" ]] && REPOS+=("$repo")
-done < <(discover_repos)
+done < <(discover_repos | awk '!seen[$0]++')
 if [[ ${#TEAMS[@]} -eq 0 && ${#REPOS[@]} -eq 0 ]]; then
     echo "Nothing discovered from GitHub and no --team/--repo passed." >&2
     exit 1

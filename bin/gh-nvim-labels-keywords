@@ -40,6 +40,14 @@ discover_repos() {
             --json repository,updatedAt \
             --jq '.[] | "\(.updatedAt)\t\(.repository.nameWithOwner)"' 2>/dev/null
     } | sort -r | cut -f2 | awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
+    # PushEvents as a second source: direct-push repos (dotfiles, notes) never
+    # appear in PR/issue search. Duplicates against the search results are
+    # removed by the caller's union.
+    local login
+    login=$(gh api user --jq .login 2>/dev/null) || return 0
+    gh api "users/$login/events?per_page=100" \
+        --jq '.[] | select(.type=="PushEvent") | .repo.name' 2>/dev/null |
+        awk '!seen[$0]++' | head -n "$DEFAULT_REPO_COUNT" || true
 }
 
 REPOS=()
@@ -72,8 +80,8 @@ Options:
     -h, --help        Show this help
 
 Defaults:
-    Repos: your $DEFAULT_REPO_COUNT most recently pushed-to repos (discovered
-    from your GitHub event stream at runtime)
+    Repos: your recent PR/issue repos plus recent direct-push repos
+    (discovered at runtime)
 EOF
             exit 0
             ;;
@@ -83,7 +91,7 @@ done
 
 while IFS= read -r repo; do
     [[ -n "$repo" ]] && REPOS+=("$repo")
-done < <(discover_repos)
+done < <(discover_repos | awk '!seen[$0]++')
 if [[ ${#REPOS[@]} -eq 0 ]]; then
     echo "No repos discovered from recent activity and none passed via --repo." >&2
     exit 1
