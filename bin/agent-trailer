@@ -7,19 +7,21 @@ Usage: agent-trailer [--raw] [--email] [--name NAME]
 
 Print the trailer identifying the agent behind a commit, comment, or document:
 
-  Co-authored-by: AI <session name> (<harness>/<provider>/<model>)
+  Co-authored-by: AI <session name> (<harness>/<provider>/<model>) <address>
 
-One key everywhere, so `grep "Co-authored-by: AI"` finds agent work whatever
-surface it landed on. The session name is omitted when unknown. Values come
-from the running harness's environment, not from the model's self-report
-(models routinely guess their own name wrong).
+The address slot varies by surface (RFC 0001 section 8): prose gets the
+relative handle (<@+handle>), commits get the +<handle> mailbox form via
+--email. One grammar everywhere, so `grep "Co-authored-by: AI"` finds all
+agent work and `grep '+<handle>'` finds one agent's, on either surface. The
+name and address are omitted when unknown. Values come from the running
+harness's environment, not from the model's self-report (models routinely
+guess their own name wrong).
 
 Options:
   --raw         Print "<harness>/<provider>/<model>" without the trailer prefix.
-  --email       Append "<git user.email +<handle>>", where the handle is the
-                kebab-cased session name (falling back to +pi when unnamed).
-                Only GitHub's commit parser needs it; in comments and prose it
-                is an address on display for nothing.
+  --email       Use "<git user.email with +<handle>>" as the address (falling
+                back to +pi when unnamed) instead of the handle form. Only for
+                commits: it is the one field GitHub parses for coauthor credit.
   --name NAME   Session name to use instead of $AGENT_NAME.
   -h, --help    Show this help.
 USAGE
