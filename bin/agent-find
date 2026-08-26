@@ -94,11 +94,10 @@ while IFS=$'\t' read -r hits file; do
 
     pad="-"
     if [[ -n "$handle" ]]; then
-        # Scratchpad basenames use the pre-realm slug plus sid8; match by suffix
-        # so realm-suffixed registry names still find their pad.
-        for d in "$MAIL_ROOT"/*-"$sid8"; do
-            [[ -d "$d" ]] && pad="$d" && break
-        done
+        # Match handle AND suffix. sid8 is UUIDv7 timestamp bits with zero
+        # entropy, shared by every session started in the same 65.5s window,
+        # so a suffix-only glob returns an arbitrary batch-sibling's pad.
+        [[ -d "$MAIL_ROOT/$handle-$sid8" ]] && pad="$MAIL_ROOT/$handle-$sid8"
     fi
 
     printf '%s\n' "─────"
