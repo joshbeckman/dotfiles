@@ -439,7 +439,11 @@ source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 export PATH="$PATH:/Users/joshbeckman/.local/bin"
 # support for deno
 export PATH="/Users/joshbeckman/.deno/bin:$PATH"
-[ -f ~/.secrets ] && source ~/.secrets
+# Secrets live in the encrypted store managed by `s` (bin/s), not in sourced
+# env files: ambient exports hand every subprocess (including agents) every
+# secret. The Keychain command below is the decryption password source; the
+# command itself is not a secret.
+export S_KEY='!security find-generic-password -s s-secrets -w'
 
 [[ -f /opt/dev/sh/chruby/chruby.sh ]] && { type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; } }
 source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh

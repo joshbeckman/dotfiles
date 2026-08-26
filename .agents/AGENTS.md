@@ -49,6 +49,10 @@ A coordinator does not automatically own a worker's artifacts. Treat the agent n
 - If Josh explicitly directs the edit, the owner has exited or is unreachable, or an urgent unblock cannot wait, proceed and mail the owner before or immediately after. Preserve the existing attribution and add your own.
 - Reading, reviewing, commenting on, or merging completed work does not transfer ownership. Integrating a commit that the owner delivered for that purpose is expected and needs no extra permission.
 
+### Secrets
+
+Secrets live in an encrypted store managed by `s` (on PATH; [tobi/s](https://github.com/tobi/s)). Never ask for a secret's value and never try to print one. Run a command that needs one with `s KEY -- cmd` (the value is injected into that process only and scrubbed from output), make credentialed API calls with `s curl <url>` against configured domains, and list available names with `s list`. `s get`/`s export` refuse without a TTY by design. Store a new secret with `s set NAME`. Run `s --skill` for full usage. Scrubbing is verbatim-only, so do not encode, transform, or split secret values in output.
+
 ### Memory-pressure backpressure
 
 On macOS, Pi reads `kern.memorystatus_vm_pressure_level` (`1` normal, `2` warning, `4` critical). New `subagent` work is deferred at `2` and `4`; `bg_run` warns at `2` and is deferred at `4`; mail wakeups run at `2` (told to inspect their own processes) and are held at `4`; inspection and cleanup tools always remain available. Other platforms have no gating.

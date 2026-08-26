@@ -170,6 +170,25 @@ case "$OSTYPE" in
   *)              __setup_unsupported ;;
 esac
 
+# s — encrypted env store (github.com/tobi/s); prebuilt binary, no toolchain.
+# Fetched here rather than Brewfile because it is not in homebrew.
+if [ ! -x "$DOTFILES_DIR/bin/s" ]; then
+        echo '  ======  installing s (encrypted env store)'
+        s_tag=$(curl -s https://api.github.com/repos/tobi/s/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+        case "$(uname -sm)" in
+                "Darwin arm64") s_target="aarch64-apple-darwin" ;;
+                "Darwin x86_64") s_target="x86_64-apple-darwin" ;;
+                "Linux x86_64") s_target="x86_64-unknown-linux-musl" ;;
+                "Linux aarch64") s_target="aarch64-unknown-linux-musl" ;;
+                *) s_target="" ;;
+        esac
+        if [ -n "$s_tag" ] && [ -n "$s_target" ]; then
+                curl -sL "https://github.com/tobi/s/releases/download/$s_tag/s-$s_tag-$s_target.tar.gz" | tar xz -C "$DOTFILES_DIR/bin" s && chmod +x "$DOTFILES_DIR/bin/s"
+        else
+                echo 'could not determine s release; install manually from github.com/tobi/s'
+        fi
+fi
+
 # pi — update after config is linked and package managers have had a chance to install it
 if command -v pi &> /dev/null; then
         echo '  ======  updating pi and pi packages'

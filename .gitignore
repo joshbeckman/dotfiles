@@ -55,6 +55,7 @@ bin/gotests
 bin/impl
 bin/kaf
 bin/observe-issue-check
+bin/s
 bin/rustverb
 bin/staticcheck
 
