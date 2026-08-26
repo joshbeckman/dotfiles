@@ -15,7 +15,9 @@ fi
 timestamp=$(date +%Y%m%d_%H%M%S)
 tmpfile="/tmp/preview-patch-${timestamp}-$$.html"
 
-trap "sleep 5; rm -f '$tmpfile'" EXIT
+# No cleanup trap: macOS tmp_cleaner reaps untouched /tmp files after ~3 days.
+# Deleting early blocked the prompt for 5s, raced slow browser starts, and
+# broke tab reloads.
 
 remote_url=$(git remote get-url origin 2>/dev/null | sed -E 's/\.git$//; s#git@([^:]+):#https://\1/#')
 

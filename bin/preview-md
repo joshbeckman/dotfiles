@@ -117,7 +117,9 @@ open "$tmpfile"
 if (( watch_interval > 0 )); then
     source_file="$1"
     (
-        trap "rm -f '$tmpfile' '$tmpfile_raw'; kill 0 2>/dev/null; exit 0" TERM INT EXIT
+        # The rendered files are left behind on purpose: the last render stays
+        # viewable after the watcher stops, and tmp_cleaner reaps them in ~3 days.
+        trap "kill 0 2>/dev/null; exit 0" TERM INT EXIT
         while :; do
             sleep "$watch_interval" &
             wait $!
@@ -133,5 +135,6 @@ if (( watch_interval > 0 )); then
     exit 0
 fi
 
-# Non-watch mode: clean up tmpfiles shortly after the browser has opened them.
-trap "sleep 5; rm -f '$tmpfile' '$tmpfile_raw'" EXIT
+# No cleanup trap: macOS tmp_cleaner reaps untouched /tmp files after ~3 days.
+# Deleting early blocked the prompt for 5s, raced slow browser starts, and
+# broke tab reloads.
