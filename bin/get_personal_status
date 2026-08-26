@@ -1,4 +1,7 @@
 #!/bin/sh
+# Token comes from the encrypted `s` store, not a plaintext file. The wrapper
+# supplies the Keychain password source itself so callers that never sourced
+# .zshrc (launchd, cron, detached agents) still work.
 
 VERBOSE=false
 while [ $# -gt 0 ]; do
@@ -14,20 +17,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# require .personal-mcp-read-token file in home directory
-if [ ! -f ~/.personal-mcp-read-token ]; then
-  echo "Error: .personal-mcp-read-token file not found in home directory."
-  exit 1
-fi
-
-# require jq for JSON parsing
-if ! command -v jq &> /dev/null; then
+if ! command -v jq >/dev/null 2>&1; then
   echo "Error: jq is required but not installed."
   exit 1
 fi
 
+: "${S_KEY:=!security find-generic-password -s s-secrets -w}"
+export S_KEY
+
 if [ "$VERBOSE" = true ]; then
-  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api -H "Authorization: Bearer $(head ~/.personal-mcp-read-token | tr -d '\n')" --silent | jq -r '"\(.status)\nUpdated: \(.updated_at)"'
+  filter='"\(.status)\nUpdated: \(.updated_at)"'
 else
-  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api -H "Authorization: Bearer $(head ~/.personal-mcp-read-token | tr -d '\n')" --silent | jq -r '.status'
+  filter='.status'
 fi
+
+exec s PERSONAL_MCP_READ_TOKEN -- sh -c '
+  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/api \
+    -H "Authorization: Bearer $PERSONAL_MCP_READ_TOKEN" --silent | jq -r "$1"
+' sh "$filter"

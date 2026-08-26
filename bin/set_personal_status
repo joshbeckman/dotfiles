@@ -1,14 +1,18 @@
 #!/bin/sh
+# Token comes from the encrypted `s` store, not a plaintext file. The wrapper
+# supplies the Keychain password source itself so callers that never sourced
+# .zshrc (launchd, cron, detached agents) still work.
 
-# require argument
 if [ -z "$1" ]; then
   echo "Usage: $0 <status>"
   exit 1
 fi
-# require .personal-mcp-write-token file in home directory
-if [ ! -f ~/.personal-mcp-write-token ]; then
-  echo "Error: .personal-mcp-write-token file not found in home directory."
-  exit 1
-fi
 
-curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/update -X POST -F "status=\"${*/\"/\\\"}\"" -F "write_password=$(head ~/.personal-mcp-write-token | tr -d '\n')" --silent
+: "${S_KEY:=!security find-generic-password -s s-secrets -w}"
+export S_KEY
+
+exec s PERSONAL_MCP_WRITE_TOKEN -- sh -c '
+  status="$1"
+  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/update \
+    -X POST -F "status=\"$status\"" -F "write_password=$PERSONAL_MCP_WRITE_TOKEN" --silent
+' sh "$*"
