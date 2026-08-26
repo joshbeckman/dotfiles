@@ -21,6 +21,15 @@ tmpfile="/tmp/preview-patch-${timestamp}-$$.html"
 
 remote_url=$(git remote get-url origin 2>/dev/null | sed -E 's/\.git$//; s#git@([^:]+):#https://\1/#')
 
+# Identity is stamped by the tool, not remembered by the model: an agent that
+# renders a preview marks it, a human gets identical output to before.
+agent_footer=""
+if command -v agent-trailer >/dev/null 2>&1 &&
+   [ "$(agent-trailer --raw 2>/dev/null || echo unknown/unknown/unknown)" != "unknown/unknown/unknown" ]; then
+    trailer_esc=$(agent-trailer | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+    agent_footer="<footer class=\"agent-footer\">${trailer_esc} · rendered $(date '+%Y-%m-%d %H:%M')</footer>"
+fi
+
 if [[ $# -ge 1 ]]; then
     diff_input=$(git show "$@")
 else
@@ -108,6 +117,7 @@ pre {
 .hunk { color: #6c71c4; }
 .add { color: #859900; background: rgba(0,0,0,0.03); }
 .del { color: #dc322f; background: rgba(0,0,0,0.03); }
+.agent-footer { margin-top: 3rem; padding-top: 1ch; border-top: 1px solid #93a1a1; color: #93a1a1; font-size: 11px; }
 @media (prefers-color-scheme: dark) {
     body { background: #002b36; color: #839496; }
     .header { border-color: #586e75; }
@@ -120,6 +130,7 @@ pre {
 </head>
 <body>
 ${body_html}
+${agent_footer}
 </body>
 </html>
 HTMLEOF
