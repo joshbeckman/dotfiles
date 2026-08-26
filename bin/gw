@@ -19,6 +19,17 @@ under_agent() {
 writes_prose() {
   case "$1 ${2:-}" in
     "issue comment" | "pr comment" | "pr create" | "issue create" | "pr review" | "pr edit" | "issue edit") return 0 ;;
+    "issue close" | "pr close" | "issue reopen" | "pr reopen") return 0 ;;
+  esac
+  return 1
+}
+
+# close/reopen carry prose in --comment, which has no file variant. --comment
+# must not be rewritten on other verbs: it is a boolean review type on
+# `pr review`.
+takes_comment_flag() {
+  case "$1 ${2:-}" in
+    "issue close" | "pr close" | "issue reopen" | "pr reopen") return 0 ;;
   esac
   return 1
 }
@@ -28,26 +39,29 @@ writes_prose() {
 # inline argument.
 trailer_tmp=""
 inject_trailer() {
-  local i idx=-1 kind="" value="" content
+  local mode="${1:-body}"
+  local i idx=-1 kind="" value="" joined=0 content
   for ((i = 0; i < ${#args[@]}; i++)); do
-    case "${args[i]}" in
-      --body | -b)
-        kind=inline
-        idx=$i
-        value="${args[i + 1]-}"
-        ;;
-      --body-file | -F)
-        kind=file
-        idx=$i
-        value="${args[i + 1]-}"
-        ;;
-    esac
+    if [[ $mode == comment ]]; then
+      case "${args[i]}" in
+        --comment | -c) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --comment=*) kind=inline; idx=$i; value="${args[i]#--comment=}"; joined=1 ;;
+      esac
+    else
+      case "${args[i]}" in
+        --body | -b) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --body=*) kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1 ;;
+        --body-file | -F) kind=file; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --body-file=*) kind=file; idx=$i; value="${args[i]#--body-file=}"; joined=1 ;;
+      esac
+    fi
   done
 
-  # No body flag means gh builds one itself (--fill) or opens an editor. Both
-  # would fight an injected --body-file, so say so rather than corrupt the call.
+  # No prose flag: close/reopen without --comment posts no prose at all, and a
+  # bodyless create/edit means gh builds one itself (--fill) or opens an
+  # editor. Neither should have a flag invented for it.
   if [[ $idx -lt 0 ]]; then
-    echo "gw: no --body/--body-file; add the agent-trailer output yourself" >&2
+    [[ $mode == comment ]] || echo "gw: no --body/--body-file; add the agent-trailer output yourself" >&2
     return 0
   fi
 
@@ -70,10 +84,27 @@ inject_trailer() {
     return 0
   fi
 
+  # --comment has no file variant, so the trailer rides inline; args are passed
+  # as an array straight to exec, so embedded newlines survive without
+  # re-quoting.
+  if [[ $mode == comment ]]; then
+    content="$content"$'\n\n'"$trailer"
+    if [[ $joined -eq 1 ]]; then
+      args[idx]="--comment=$content"
+    else
+      args[idx + 1]="$content"
+    fi
+    return 0
+  fi
+
   trailer_tmp="$(mktemp "${TMPDIR:-/tmp}/gw-body.XXXXXX")"
   printf '%s\n\n%s\n' "$content" "$trailer" > "$trailer_tmp"
-  args[idx]="--body-file"
-  args[idx + 1]="$trailer_tmp"
+  if [[ $joined -eq 1 ]]; then
+    args[idx]="--body-file=$trailer_tmp"
+  else
+    args[idx]="--body-file"
+    args[idx + 1]="$trailer_tmp"
+  fi
 }
 
 usage() {
@@ -147,7 +178,11 @@ pr_selector_defaults_to_branch() {
 
 args=("$@")
 if [[ ${#args[@]} -gt 0 ]] && under_agent && writes_prose "$cmd" "${args[0]}" && ! has_help_flag "${args[@]}"; then
-  inject_trailer
+  if takes_comment_flag "$cmd" "${args[0]}"; then
+    inject_trailer comment
+  else
+    inject_trailer body
+  fi
 fi
 set -- "${args[@]}"
 
