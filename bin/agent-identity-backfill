@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'digest'
+require 'shellwords'
 require 'fileutils'
 require 'json'
 require 'optparse'
@@ -76,7 +77,10 @@ FileUtils.mkdir_p(File.join(identity_root, 'by-session'))
 conflicts = []
 written = 0
 found.sort.each do |session_id, name|
-  slug = name.downcase.gsub(/[^a-z0-9]+/, '-').sub(/\A-/, '').sub(/-\z/, '')
+  # bin/agent-slug is the one slug implementation (RFC 0001 section 4); a Ruby
+  # copy here is how the -of-realm claim divergence happened the first time.
+  slug = `#{File.expand_path('agent-slug', __dir__)} #{name.shellescape}`.strip
+  abort "agent-identity-backfill: agent-slug failed for #{name.inspect}" if slug.empty?
   claim = File.join(identity_root, 'by-name', slug)
   begin
     File.write(claim, "#{session_id}\n", mode: 'wx')

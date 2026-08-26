@@ -1,0 +1,18 @@
+#!/bin/sh
+# agent-slug: the one slug implementation (RFC 0001 section 4).
+#
+# Maps a display name to its handle: lowercase, every run of non-alphanumerics
+# collapsed to one hyphen, trimmed. "Coral Tanner of Lantern" ->
+# "coral-tanner-of-lantern".
+#
+# This exists as a subprocess rather than a function in each tool because the
+# system already produced one real bug from two slug implementations agreeing
+# only most of the time. Callers: agent-name.ts (allocation, scratchpad),
+# agent-trailer (fallback when AGENT_HANDLE is unset), agent-identity-backfill.
+
+if [ $# -gt 0 ]; then
+  printf '%s' "$*"
+else
+  cat
+fi | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//' | tr -d '\n'
+printf '\n'

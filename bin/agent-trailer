@@ -54,6 +54,20 @@ harness=unknown
 provider=unknown
 model=unknown
 
+# AGENT_HANDLE is the allocator's own slug (RFC 0001 section 5); prefer it so
+# this tool never recomputes what the registry already decided. agent-slug is
+# the fallback for sessions predating the export -- the one implementation,
+# not a local copy (section 4).
+agent_handle() {
+  if [ -n "${AGENT_HANDLE:-}" ]; then
+    printf '%s\n' "$AGENT_HANDLE"
+  elif [ -n "${name:-}" ]; then
+    agent-slug "$name" 2>/dev/null || true
+  elif [ -n "${AGENT_NAME:-}" ]; then
+    agent-slug "$AGENT_NAME" 2>/dev/null || true
+  fi
+}
+
 # PI_MODEL/PI_PROVIDER are injected per bash-tool invocation rather than exported
 # into pi's process environment, so shell escapes, tmux panes, commit hooks and
 # extension subprocesses see only PI_CODING_AGENT. Recover the pair from the
@@ -61,7 +75,7 @@ model=unknown
 pi_session_model() {
   _sid="${PI_SESSION_ID:-}"
   if [ -z "$_sid" ] && [ -n "${AGENT_NAME:-}" ]; then
-    _slug="$(printf '%s' "$AGENT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+    _slug="$(agent_handle)"
     _sid="$(cat "$HOME/.pi/agent/identities/by-name/$_slug" 2>/dev/null || true)"
     # Sessions allocated before the realm existed carry a bare two-word
     # AGENT_NAME, but their registry claims were normalized to the realm-suffixed
@@ -165,7 +179,7 @@ if [ "$with_email" -eq 1 ]; then
   # per-agent account could not resolve to a mailbox anyone reads.
   tag=pi
   if [ -n "$name" ]; then
-    slug="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+    slug="$(agent_handle)"
     [ -n "$slug" ] && tag="$slug"
   fi
   email="$(git config user.email 2>/dev/null || true)"

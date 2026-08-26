@@ -75,6 +75,11 @@ export default function (pi: ExtensionAPI) {
 		// having to remember to pass its own name (which it gets wrong).
 		if (name) process.env.AGENT_NAME = name;
 		else delete process.env.AGENT_NAME;
+		// The canonical handle (RFC 0001 section 5) exported alongside the display
+		// form so consumers never recompute the slug; recomputation in each tool is
+		// how the handle diverged from the registry claim once already.
+		if (name) process.env.AGENT_HANDLE = nameSlug(name);
+		else delete process.env.AGENT_HANDLE;
 		const surname = nameSurname(name);
 		if (surname) process.env.AGENT_SURNAME = surname;
 		else delete process.env.AGENT_SURNAME;
@@ -450,7 +455,15 @@ function writeAssignment(sessionId: string, name: string) {
 	renameSync(tmp, path); // same-session races write identical identity atomically
 }
 
+// bin/agent-slug is the one slug implementation (RFC 0001 section 4); this
+// spawns it like allocateName spawns random-name, and degrades the same way
+// when dotfiles bin is absent. The inline regex it replaced already diverged
+// once from the copy in agent-trailer.
 function nameSlug(name: string): string {
+	try {
+		const slug = execFileSync("agent-slug", [name], { encoding: "utf8", timeout: 2000 }).trim();
+		if (slug) return slug;
+	} catch {}
 	return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
@@ -465,8 +478,11 @@ function normalizeSurname(value: string | undefined): string | undefined {
 
 function createScratchpad(name: string, sessionId: string, ctx: NameContext): string | undefined {
 	// The slug alone collides across the ~24k name space; the id suffix keeps two
-	// live sessions from writing over each other's notes.
-	const dir = join(SCRATCH_ROOT, `${name.toLowerCase().replace(/\s+/g, "-")}-${sessionId.slice(0, 8)}`);
+	// live sessions from writing over each other's notes. nameSlug rather than a
+	// local whitespace replace: the two diverged on any non-space punctuation,
+	// and the scratchpad basename is the transport address (RFC 0001 section 4),
+	// so it must be the same handle every other surface computes.
+	const dir = join(SCRATCH_ROOT, `${nameSlug(name)}-${sessionId.slice(0, 8)}`);
 	try {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
