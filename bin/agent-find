@@ -1,0 +1,107 @@
+#!/bin/bash
+# agent-find: locate agent sessions by topic — "which agent worked on X?"
+#
+# Greps session transcripts, ranks by match count, and resolves each hit to
+# its identity, title, scratchpad, and a paste-ready resume command.
+#
+# Usage:
+#   agent-find bfcm
+#   agent-find 'rollout strategy' --limit 3
+
+set -euo pipefail
+
+SESSIONS_DIR="${PI_SESSIONS_DIR:-$HOME/.pi/agent/sessions}"
+IDENTITIES_DIR="${AGENT_IDENTITIES_DIR:-$HOME/.pi/agent/identities/by-name}"
+MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <pattern> [--limit N]
+
+Find agent sessions whose transcript matches <pattern> (case-insensitive
+regex). Prints handle, title, working directory, liveness, scratchpad, and a
+resume command for each, ranked by match count.
+
+Options:
+    --limit N    Maximum sessions to show (default 5)
+    -h, --help   Show this help
+EOF
+}
+
+pattern=""
+limit=5
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --limit) limit="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "Unknown option: $1" >&2; exit 1 ;;
+        *)
+            if [[ -n "$pattern" ]]; then pattern="$pattern $1"; else pattern="$1"; fi
+            shift
+            ;;
+    esac
+done
+[[ -n "$pattern" ]] || { usage >&2; exit 2; }
+
+command -v rg >/dev/null 2>&1 || { echo "agent-find: ripgrep required" >&2; exit 1; }
+[[ -d "$SESSIONS_DIR" ]] || { echo "agent-find: no sessions at $SESSIONS_DIR" >&2; exit 1; }
+
+# Rank first, hydrate later: counting matches is one cheap rg pass, while
+# title/identity/liveness resolution costs several reads per file and is only
+# worth paying for the sessions that make the cut.
+ranked=$(rg -l -i --glob '*.jsonl' -- "$pattern" "$SESSIONS_DIR" 2>/dev/null | while IFS= read -r f; do
+    printf '%s\t%s\n' "$(rg -c -i -- "$pattern" "$f" 2>/dev/null || echo 0)" "$f"
+done | sort -rn | head -n "$limit")
+
+[[ -n "$ranked" ]] || { echo "No sessions match: $pattern"; exit 1; }
+
+# One tmux call for all results; the titlebar extension stamps each live UI
+# session's pane with its display name. Process-table checks fail here: pi's
+# argv is bare and macOS hides other processes' environments.
+pane_titles=$(tmux list-panes -a -F '#{pane_title}' 2>/dev/null || true)
+
+json_field() { # file, key — last occurrence wins (titles are retitled; models switch)
+    rg -o "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | tail -1 | sed "s/\"$2\":\"//; s/\"\$//"
+}
+
+while IFS=$'\t' read -r hits file; do
+    sid=$(basename "$file" .jsonl | sed 's/.*_//')
+    sid8=${sid:0:8}
+    started=$(basename "$file" | cut -c1-10)
+    cwd=$(head -1 "$file" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')
+    title=$(rg -o '"type":"session_info"[^}]*' "$file" 2>/dev/null | tail -1 | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+
+    handle=""
+    claim=$(grep -l "$sid" "$IDENTITIES_DIR"/* 2>/dev/null | head -1) && handle=$(basename "$claim")
+
+    live="parked"
+    if [[ -n "$handle" ]]; then
+        display=$(printf '%s' "$handle" | tr '-' ' ')
+        # Matched against the captured list, not a live pipe: grep -q's early
+        # exit would SIGPIPE tmux, which pipefail reads as "no match".
+        if grep -qi "$display" <<<"$pane_titles"; then
+            live="RUNNING (tmux)"
+        fi
+    fi
+
+    pad="-"
+    if [[ -n "$handle" ]]; then
+        # Scratchpad basenames use the pre-realm slug plus sid8; match by suffix
+        # so realm-suffixed registry names still find their pad.
+        for d in "$MAIL_ROOT"/*-"$sid8"; do
+            [[ -d "$d" ]] && pad="$d" && break
+        done
+    fi
+
+    printf '%s\n' "─────"
+    if [[ -n "$handle" ]]; then
+        printf '%-9s @+%s  [%s]\n' "agent:" "$handle" "$live"
+    else
+        printf '%-9s (pre-registry, unnamed)\n' "agent:"
+    fi
+    printf '%-9s %s\n' "title:" "${title:-"(untitled)"}"
+    printf '%-9s %s  (%s matches, started %s)\n' "session:" "$sid8" "$hits" "$started"
+    printf '%-9s %s\n' "cwd:" "${cwd:-?}"
+    printf '%-9s %s\n' "pad:" "$pad"
+    printf '%-9s cd %s && pi --session %s\n' "resume:" "${cwd:-?}" "$file"
+done <<<"$ranked"
