@@ -188,6 +188,13 @@ if [ "$with_email" -eq 1 ]; then
     *) email="josh+$tag@joshbeckman.org" ;;
   esac
   suffix=" <$email>"
+elif [ -n "$name" ]; then
+  # Prose trailers put the handle where commits put the email: same RFC-822
+  # address slot, so one grep pattern (+<handle>) covers commits and comments.
+  # Angle brackets render literally in GFM (not a tag, not an autolink) and
+  # @+ stays mention-inert.
+  slug="$(agent_handle)"
+  [ -n "$slug" ] && suffix=" <@+$slug>"
 fi
 
 printf 'Co-authored-by: %s (%s)%s\n' "$who" "$id" "$suffix"

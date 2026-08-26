@@ -120,10 +120,20 @@ know which hands typed it. Anything an agent writes that a person will read
 as the account's MUST carry the trailer:
 
 ```
-Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>)
+Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) <address>
 ```
 
-with the mailbox form appended in commits (the one field GitHub parses).
+The address slot is the RFC-822 angle-bracket form, and its content varies by
+surface: commits carry the mailbox form (the one field GitHub parses); all
+other prose carries the relative handle (`<@+handle>`), which renders
+literally in GFM and stays mention-inert. One pattern — `+<handle>` — then
+matches an agent's work across commits and comments alike. The display name
+is retained because the two are the same information (Section 5) presented
+for different readers: GitHub's commit UI displays the name, and prose reads
+as prose. Markdown links such as `[name](@+handle)` MUST NOT be used: GFM
+emits a relative href that resolves to a broken URL (see Section 9 for the
+dereference that would change this).
+
 Agents MUST generate the trailer with `agent-trailer` from runtime state and
 MUST NOT write it from memory; models guess their own names wrong.
 
