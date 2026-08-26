@@ -46,12 +46,20 @@ done
 command -v rg >/dev/null 2>&1 || { echo "agent-find: ripgrep required" >&2; exit 1; }
 [[ -d "$SESSIONS_DIR" ]] || { echo "agent-find: no sessions at $SESSIONS_DIR" >&2; exit 1; }
 
+# When run from inside an agent session, that session's transcript already
+# contains the query text (typing the search wrote it there), so the caller
+# always self-matches. Exclude self; a human running this from a plain shell
+# has no scratchpad and skips nothing.
+self_sid8=""
+[[ -n "${AGENT_SCRATCHPAD:-}" ]] && self_sid8="${AGENT_SCRATCHPAD##*-}"
+
 # Rank first, hydrate later: counting matches is one cheap rg pass, while
 # title/identity/liveness resolution costs several reads per file and is only
 # worth paying for the sessions that make the cut.
 ranked=$(rg -l -i --glob '*.jsonl' -- "$pattern" "$SESSIONS_DIR" 2>/dev/null | while IFS= read -r f; do
+    [[ -n "$self_sid8" && "$(basename "$f")" == *"_$self_sid8"* ]] && continue
     printf '%s\t%s\n' "$(rg -c -i -- "$pattern" "$f" 2>/dev/null || echo 0)" "$f"
-done | sort -rn | head -n "$limit")
+done | sort -rn | awk -v n="$limit" 'NR<=n')  # awk reads to EOF; head would SIGPIPE sort under pipefail
 
 [[ -n "$ranked" ]] || { echo "No sessions match: $pattern"; exit 1; }
 
