@@ -66,6 +66,19 @@ transport   = handle "-" session8          ; agent-mail delivery address
 session8    = 8(%x30-39 / %x61-66)         ; first 8 hex chars of session id
 ```
 
+`session8` is timestamp, not entropy. Session ids are UUIDv7, whose first 48
+bits are the unix millisecond clock; the first 8 hex characters are the top
+32 of those bits, constant for 65.536 seconds. Every session started in the
+same window — exactly the batch-spawned siblings most likely to be confused —
+shares a `session8`. Uniqueness in the transport address comes entirely from
+the handle (Section 3: names are never reused). Tools MUST match on the
+handle and MUST NOT treat `session8` as identifying; it is retained as a
+human-readable start-time cohort marker and a tie to the full session id.
+This was found the expensive way: a suffix-only scratchpad glob returned an
+arbitrary sibling from a nine-session cohort spawned in one window. Hashing
+the full id was considered and rejected: it adds entropy nothing needs and
+destroys the readable timestamp.
+
 The display form (`Coral Tanner of Lantern`) maps to the handle
 (`coral-tanner-of-lantern`) by lowercasing and collapsing every run of
 non-alphanumerics to a single hyphen. Tools MUST use one shared
