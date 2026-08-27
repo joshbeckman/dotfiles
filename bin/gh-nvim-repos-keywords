@@ -1,0 +1,76 @@
+#!/bin/bash
+# gh-nvim-repos-keywords: Add repos from your GitHub activity to nvim keywords.txt
+#
+# Only adds repos not already present. Never removes entries. Entries are bare
+# owner/repo names: no sigil exists for repos, and the slash already keeps
+# them from colliding with usernames, labels, or agent handles.
+#
+# Sources: repos of PRs/issues that involve you (authorship, review, mention;
+# transport-independent) plus PushEvents for direct-push repos that never see
+# a PR.
+#
+# Usage:
+#   gh-nvim-repos-keywords              # Append new repos
+#   gh-nvim-repos-keywords --dry-run    # Preview without writing
+
+set -euo pipefail
+
+KEYWORDS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/keywords.txt"
+DRY_RUN=false
+LIMIT=50
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run) DRY_RUN=true; shift ;;
+        --limit) LIMIT="$2"; shift 2 ;;
+        -h|--help)
+            cat <<EOF
+Usage: $(basename "$0") [--dry-run] [--limit N]
+
+Add owner/repo entries from your recent GitHub involvement to
+$KEYWORDS_FILE.
+
+Options:
+    --limit N    Search results per source (default 50)
+    --dry-run    Show what would be added without writing
+    -h, --help   Show this help
+EOF
+            exit 0
+            ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+collect_repos() {
+    {
+        gh search prs --involves=@me --sort=updated --limit "$LIMIT" \
+            --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null
+        gh search issues --involves=@me --sort=updated --limit "$LIMIT" \
+            --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null
+        login=$(gh api user --jq .login 2>/dev/null) || true
+        [[ -n "${login:-}" ]] && gh api "users/$login/events?per_page=100" \
+            --jq '.[] | select(.type=="PushEvent") | .repo.name' 2>/dev/null
+    } | grep -v '^$' | sort -fu || true
+}
+
+existing=""
+if [[ -f "$KEYWORDS_FILE" ]]; then
+    # Repo entries are the lines containing a slash with no sigil prefix.
+    existing=$(grep -E '^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+$' "$KEYWORDS_FILE" | sort -fu || true)
+fi
+
+new_repos=$(comm -23 <(collect_repos) <(echo "$existing") | grep -v '^$' || true)
+
+if [[ -z "$new_repos" ]]; then
+    echo "No new repos to add."
+    exit 0
+fi
+
+count=$(echo "$new_repos" | wc -l | tr -d ' ')
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "Would add $count new entries:"
+    echo "$new_repos"
+else
+    echo "$new_repos" >> "$KEYWORDS_FILE"
+    echo "Added $count new entries to $KEYWORDS_FILE"
+fi

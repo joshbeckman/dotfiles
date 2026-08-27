@@ -224,6 +224,9 @@ autocmd FileType javascript match OverLength /\%121v.\+/
 autocmd FileType php match OverLength /\%121v.\+/
 autocmd FileType ruby match OverLength /\%121v.\+/
 autocmd FileType ruby set tabstop=8 shiftwidth=2
+" Dotted email keywords (paul.nuschke) complete as one word in prose
+" filetypes; code filetypes keep . as a separator so motions are unaffected.
+autocmd FileType markdown,gitcommit,text setlocal iskeyword+=.
 autocmd FileType ruby,eruby,yaml setlocal iskeyword+=?
 autocmd FileType ruby,eruby,yaml setlocal iskeyword+=!
 au BufRead,BufNewFile *.html.arb set filetype=ruby

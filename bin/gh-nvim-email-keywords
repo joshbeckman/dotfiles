@@ -1,0 +1,91 @@
+#!/bin/bash
+# gh-nvim-email-keywords: Add peers' email local parts to nvim keywords.txt
+#
+# Only adds entries not already present. Never removes entries.
+#
+# The peer set is the @username entries already in keywords.txt (maintained by
+# gh-nvim-username-keywords; @+agent handles are excluded), so this reuses that
+# script's curation instead of re-collecting. Each login resolves to an email
+# through commit metadata — GitHub's profile-email GraphQL fields are usually
+# empty, but commit author emails are public in git itself. Only addresses on
+# your own email domain (from git config user.email) are kept, which drops
+# noreply and bot addresses and keeps the list to actual teammates. Entries
+# are the bare local part (paul.nuschke).
+#
+# Usage:
+#   gh-nvim-email-keywords              # Append new email usernames
+#   gh-nvim-email-keywords --dry-run    # Preview without writing
+
+set -euo pipefail
+
+KEYWORDS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/keywords.txt"
+DRY_RUN=false
+REPO_LIMIT=3
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run) DRY_RUN=true; shift ;;
+        -h|--help)
+            cat <<EOF
+Usage: $(basename "$0") [--dry-run]
+
+Resolve the @username entries in $KEYWORDS_FILE
+to email local parts via commit metadata and append the new ones.
+
+Options:
+    --dry-run    Show what would be added without writing
+    -h, --help   Show this help
+EOF
+            exit 0
+            ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+[[ -f "$KEYWORDS_FILE" ]] || { echo "No keywords file at $KEYWORDS_FILE" >&2; exit 0; }
+
+domain=$(git config user.email 2>/dev/null | sed -n 's/.*@//p')
+[[ -n "$domain" ]] || { echo "No git user.email domain to filter by" >&2; exit 1; }
+
+# Repos to look for commits in: the same activity-derived set as the other
+# scripts, capped small because most peers commit to the first one.
+repos=$(gh search prs --involves=@me --sort=updated --limit 25 \
+    --json repository --jq '.[].repository.nameWithOwner' 2>/dev/null |
+    awk '!seen[$0]++' | head -n "$REPO_LIMIT" || true)
+[[ -n "$repos" ]] || { echo "No repos discovered to resolve emails from" >&2; exit 1; }
+
+logins=$(grep -E '^@[A-Za-z0-9]' "$KEYWORDS_FILE" | grep -v '^@+' | sed 's/^@//' | sort -fu)
+
+existing=$(grep -E '^[a-z0-9]+(\.[a-z0-9-]+)+$' "$KEYWORDS_FILE" | sort -fu || true)
+
+resolve_email() { # login -> local part on our domain, or nothing
+    local login="$1" repo email
+    while IFS= read -r repo; do
+        email=$(gh api "repos/$repo/commits?author=$login&per_page=1" \
+            --jq '.[0].commit.author.email // empty' 2>/dev/null) || continue
+        case "$email" in
+            *@"$domain") printf '%s\n' "${email%@*}"; return 0 ;;
+        esac
+    done <<<"$repos"
+    return 0
+}
+
+discovered=$(while IFS= read -r login; do
+    [[ -n "$login" ]] && resolve_email "$login"
+done <<<"$logins" | sort -fu)
+
+new_entries=$(comm -23 <(echo "$discovered") <(echo "$existing") | grep -v '^$' || true)
+
+if [[ -z "$new_entries" ]]; then
+    echo "No new email usernames to add."
+    exit 0
+fi
+
+count=$(echo "$new_entries" | wc -l | tr -d ' ')
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "Would add $count new entries:"
+    echo "$new_entries"
+else
+    echo "$new_entries" >> "$KEYWORDS_FILE"
+    echo "Added $count new entries to $KEYWORDS_FILE"
+fi
