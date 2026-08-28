@@ -5,3 +5,22 @@ local_hook="$HOME"/.git_template.local/hooks/pre-commit
 if [ -f "$local_hook" ]; then
   . "$local_hook"
 fi
+
+# s: guard against committing secrets. `s init` writes its own one-line hook,
+# which clobbers the local_hook chain above; keeping the scan here instead
+# means both survive.
+#
+# The key source is named here rather than inherited because hooks do not run
+# under an interactive shell: .zshrc exports S_KEY for humans, but an agent's
+# bash tool never sources it, so s fell back to a TTY prompt and aborted every
+# agent commit ("reading password from TTY"). Naming the Keychain item is safe
+# -- the command is not a secret, only a pointer to one. Without this, the hook
+# fails even in repos that have no store at all, because s needs the key before
+# it can discover there is nothing to scan.
+if command -v s >/dev/null 2>&1; then
+  if [ -z "${S_KEY:-}" ] && [ -z "${S_KEY_COMMAND:-}" ] && command -v security >/dev/null 2>&1; then
+    S_KEY_COMMAND='security find-generic-password -s s-secrets -w'
+    export S_KEY_COMMAND
+  fi
+  s scan --staged
+fi
