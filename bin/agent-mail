@@ -397,7 +397,18 @@ case "$sub" in
   read)    cmd_read "$@" ;;
   discard) cmd_discard "$@" ;;
   sweep)   cmd_sweep "$@" ;;
-  addr)    [ $# -ge 1 ] || die "addr: ID required"; resolve_inbox "$1" ;;
+  # resolve_inbox returns a canonical path with status 0 for an unknown ID so
+  # send can report the missing scratchpad with the name in it. addr has no such
+  # second act: printing a plausible path for a recipient that does not exist
+  # reads as "the inbox is there" and sent one agent chasing a pruned-pad theory
+  # for a pad that was only named differently. Honor the documented contract
+  # here rather than in resolve_inbox, which send still needs unchanged.
+  addr)
+    [ $# -ge 1 ] || die "addr: ID required"
+    _inbox="$(resolve_inbox "$1")" || exit 1
+    [ -d "$(dirname "$_inbox")" ] || exit 1
+    printf '%s\n' "$_inbox"
+    ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
