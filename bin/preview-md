@@ -122,7 +122,11 @@ else
 fi
 render
 
-open "$tmpfile"
+if ! open "$tmpfile"; then
+    echo "Error: could not open rendered preview: $tmpfile" >&2
+    exit 1
+fi
+printf 'Opened file://%s\n' "$tmpfile"
 
 if (( watch_interval > 0 )); then
     source_file="$1"
