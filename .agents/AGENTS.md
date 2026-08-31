@@ -101,6 +101,10 @@ Write GitHub comments to a temporary file, then pass it with `gw issue comment I
 
 **Attribution is automatic on the paths that matter, and you must not duplicate it.** `gw` appends the trailer to anything you post that carries prose — `pr comment`, `issue comment`, `pr create`, `issue create`, `pr review`, `pr edit`, `issue edit`. `gsw` does the same for `submit`, `pr create`, `pr comment`, `pr review`, and `pr edit`; it warns on `submit --stack` because one wrapper-level body cannot cover several generated PRs. Commits get the same line with an email, which is the one place GitHub parses it. All paths detect the harness from the environment, so they do not fire for Josh's own commands. The wrappers suppress an exact duplicate of the current trailer; when another agent already has a trailer, they preserve it and add the current editor's attribution. Post through `gw`/`gsw`, not bare `gh`/`gs`: the bare clients attribute nothing.
 
+### Pull request ownership
+
+If you create or inherit a pull request, you own it until the change is deployed and its production result is checked, unless Josh explicitly releases or transfers ownership. Opening a PR is not task completion. Use the `own-pr` skill for the full lifecycle: open as draft; trigger and monitor CI and automated review; address comments and conflicts; propose three high-context reviewers when it is green; request them after Josh marks it ready; monitor the merge queue after Josh enqueues; verify deployment; report production proof; then make the worktree eligible for cleanup. Poll the PR directly rather than relying on Josh to relay notifications. Ownership does not grant permission to mark ready, enqueue, merge, or re-enqueue without Josh's instruction.
+
 **Everywhere else, attribute yourself by hand.** Anything you write that a person will read as Josh's — a document, a Slack message, a file you leave behind, a comment posted through any other client — should carry the trailer. Generate it with `bin/agent-trailer` (in dotfiles `bin/`, on PATH) and paste the output verbatim after a blank line. Never write it from memory; models guess their own name wrong.
 
 ```sh
