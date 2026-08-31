@@ -32,7 +32,11 @@ Create `$AGENT_SCRATCHPAD/prs/<owner>-<repo>-<number>.md` when the PR opens. Upd
 ## Deployment and production evidence
 ```
 
+This checklist is an ephemeral execution log, not a second project tracker. When `run-project` applies, native issue state remains the durable source of project progress; do not copy this checklist into the root issue.
+
 Before winding down, transfer any incomplete PR to another live agent with `agent-mail` and this checklist; a handoff file alone does not transfer ownership.
+
+`own-pr` owns lifecycle state and transitions. Use `pr-description-discipline` for the body, `binks-pr-review` for applicable local preflight, `get-pr-green` for CI/review repair, `get-pr-merged` only after explicit merge authority, and `run-project` for project metadata. None releases lifecycle ownership.
 
 Use the PR surface required by the repository. For GitHub writes, use `gw`; for Meteorite/Gitstream writes, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Continue using `gw view-md` for reads and `gw pr-checks PR_URL --required` for checks as required by the global instructions. Poll the PR itself; do not rely on Josh to relay notifications.
 
