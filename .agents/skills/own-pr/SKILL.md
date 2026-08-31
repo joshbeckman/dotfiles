@@ -10,9 +10,31 @@ Opening a PR starts the ownership loop. It does not finish the task. Unless Josh
 
 ## Record ownership
 
-Keep the PR URL in the session scratchpad so a resumed or replacement session can find it. Before winding down, transfer any incomplete PR to another live agent with `agent-mail` and a handoff; a handoff file alone does not transfer ownership.
+Create `$AGENT_SCRATCHPAD/prs/<owner>-<repo>-<number>.md` when the PR opens. Update it after every state transition and before sleeping or handing off:
 
-Always read the PR with `gw view-md`. Use `gw pr-checks PR_URL --required` for checks and structured `gw pr view` fields for state. Poll the PR itself; do not rely on Josh to relay GitHub notifications.
+```markdown
+# [PR title](full URL)
+
+- Phase: draft | Josh review | human review | merge queue | deployment | proof | complete
+- Head SHA:
+- Last checked:
+- Next check:
+- [ ] Draft opened and Josh assigned
+- [ ] CI and automated reviews passed
+- [ ] Josh reviewed; reviewer preference recorded
+- [ ] Human comments resolved and approvals complete
+- [ ] Merged
+- [ ] Deployed
+- [ ] Production proof sent to Josh
+
+## Reviewer candidates
+## Open comments, failures, or conflicts
+## Deployment and production evidence
+```
+
+Before winding down, transfer any incomplete PR to another live agent with `agent-mail` and this checklist; a handoff file alone does not transfer ownership.
+
+Use the PR surface required by the repository. For GitHub writes, use `gw`; for Meteorite/Gitstream writes, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Continue using `gw view-md` for reads and `gw pr-checks PR_URL --required` for checks as required by the global instructions. Poll the PR itself; do not rely on Josh to relay notifications.
 
 ## 1. Draft and validate
 
@@ -57,13 +79,15 @@ Use the `get-pr-merged` skill when Josh explicitly delegates enqueueing and re-e
 
 After merge:
 
-1. Get the merge commit and continue polling the repository's current deployment-status surface. Do not assume merged means deployed.
-2. If no supported deployment signal can be found, tell Josh what you checked instead of claiming deployment.
-3. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
-4. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
+1. Get the merge commit. Read the private work-environment tooling guidance for the repository's current deployment command and run that command's `--help` before first use; deployment interfaces change.
+2. Poll deployment every 30 minutes. Do not assume merged means deployed.
+3. If the status command is inconclusive and the repository is not served by the deployment system, ask Josh to confirm deployment.
+4. Otherwise determine the affected deployment unit, query its currently deployed commit, and prove the PR merge commit is its ancestor. SHA equality is too strict because later commits may already be deployed.
+5. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
+6. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
 Only then is the PR lifecycle complete and its clean worktree eligible for cleanup, provided no other assigned or open work remains.
 
 ## Polling cadence
 
-Poll active CI or merge queues every 2-5 minutes. Poll human review less often, but keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave a handoff that names the PR, current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.
+Poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often. Keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave the PR checklist with the current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.
