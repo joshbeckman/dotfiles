@@ -83,12 +83,11 @@ Use the `get-pr-merged` skill when Josh explicitly delegates enqueueing and re-e
 
 After merge:
 
-1. Get the merge commit. Read the private work-environment tooling guidance for the repository's current deployment command and run that command's `--help` before first use; deployment interfaces change.
-2. Poll deployment every 30 minutes. Do not assume merged means deployed.
-3. If the status command is inconclusive and the repository is not served by the deployment system, ask Josh to confirm deployment.
-4. Otherwise determine the affected deployment unit, query its currently deployed commit, and prove the PR merge commit is its ancestor. SHA equality is too strict because later commits may already be deployed.
-5. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
-6. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
+1. Get the merge commit.
+2. Use `verify-conveyor-deployment` when available; it is the source of truth for Conveyor commands, help-first checks, unsupported repositories, affected zones, and commit-ancestry fallback. For other deployment systems, use the repository's supported status surface or ask Josh when none exists.
+3. Poll deployment every 30 minutes. Do not assume merged means deployed.
+4. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
+5. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
 Only then is the PR lifecycle complete and its clean worktree eligible for cleanup, provided no other assigned or open work remains.
 
