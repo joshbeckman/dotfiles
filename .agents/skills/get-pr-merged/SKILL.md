@@ -20,8 +20,8 @@ Recent merged PRs showed two common paths:
 
 ## Start
 
-1. Identify the PR URL from arguments, `gh pr status`, or the current branch.
-2. View it with `gh view-md PR_URL --max-diff 1000`. If Ruby gems are broken, run:
+1. Identify the PR URL from arguments, `gw pr status`, or the current branch.
+2. View it with `gw view-md PR_URL --max-diff 1000`. If Ruby gems are broken, run:
 
 ```sh
 ruby --disable=gems ~/.local/share/gh/extensions/gh-view-md/gh-view-md PR_URL --max-diff 1000
@@ -30,7 +30,7 @@ ruby --disable=gems ~/.local/share/gh/extensions/gh-view-md/gh-view-md PR_URL --
 3. Check state and local changes:
 
 ```sh
-gh pr view PR_URL --json state,mergedAt,mergeCommit,url,reviewDecision,mergeStateStatus,statusCheckRollup
+gw pr view PR_URL --json state,mergedAt,mergeCommit,url,reviewDecision,mergeStateStatus,statusCheckRollup
 git status --short
 ```
 
@@ -49,11 +49,14 @@ If any precondition is missing, switch into the `get-pr-green` workflow first. R
 
 ## Enqueue
 
-Post `/merge` as a PR comment using a body file:
+Post `/merge` through the repository's required write surface:
 
 ```sh
-printf '/merge\n\nGenerated-by: AI (Pi/OpenAI/GPT-5.5)\n' > /tmp/merge-comment.md
-gh issue comment PR_URL --body-file /tmp/merge-comment.md
+# Meteorite/Gitstream-managed repository
+gsw pr comment PR_URL --body '/merge'
+
+# Other GitHub repository
+gw issue comment PR_URL --body '/merge'
 ```
 
 Then re-read the timeline. Look for `merge-garden`, `merge-garden[bot]`, `graphite-app`, `graphite-app[bot]`, `github-actions[bot]`, or `test-oversight-service[bot]`.
@@ -65,10 +68,10 @@ Repeat until merged:
 1. Re-read PR state:
 
 ```sh
-gh pr view PR_URL --json state,mergedAt,mergeCommit,headRefName,labels,statusCheckRollup,reviewDecision,mergeStateStatus
+gw pr view PR_URL --json state,mergedAt,mergeCommit,headRefName,labels,statusCheckRollup,reviewDecision,mergeStateStatus
 ```
 
-2. Re-read timeline with `gh view-md`. Bot comments are the source of truth because Graphite edits a single "Merge activity" comment over time.
+2. Re-read timeline with `gw view-md`. Bot comments are the source of truth because Graphite edits a single "Merge activity" comment over time.
 3. Classify the latest queue state and act:
    - **Merged:** stop when `mergedAt` is non-null or the timeline says merged by Graphite or Merge Garden.
    - **Queued or CI running:** keep polling. Do not post `/merge` again.
