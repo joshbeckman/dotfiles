@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+load File.expand_path("../bin/memory-pressure-report", __dir__)
+
+def assert(condition, message)
+  abort "memory-pressure-report test failed: #{message}" unless condition
+end
+
+rows = MemoryPressureReport.parse_ps(<<~PS)
+  9 8 128 01:01 tmux -C -L overmind-client new
+  10 1 1024 01:00 tmux -C -L overmind-example new
+  11 10 2048 00:59 sh worker
+  12 11 4096 00:58 sidekiq
+  20 1 8192 02:00 unrelated
+  30 1 16384 00:10 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  31 1 32768 00:10 hedwig-1.56.0: Waiting
+PS
+
+summary = MemoryPressureReport.tree_summary(10, rows)
+assert(summary[:count] == 3, "descendant process count")
+assert(summary[:rss_kib] == 7168, "descendant RSS total")
+assert(MemoryPressureReport.descendant_pids(10, rows).sort == [10, 11, 12], "recursive descendants")
+assert(MemoryPressureReport.overmind_roots(rows).map(&:pid) == [10], "detached Overmind root detection")
+assert(MemoryPressureReport.family(rows.find { |row| row.pid == 30 }.command) == "Google Chrome", "Chrome grouping")
+assert(MemoryPressureReport.family(rows.find { |row| row.pid == 31 }.command) == "Hedwig", "Hedwig grouping")
+assert(MemoryPressureReport.family(rows.find { |row| row.pid == 12 }.command) == "sidekiq", "executable grouping")
+
+puts "memory-pressure-report tests passed"

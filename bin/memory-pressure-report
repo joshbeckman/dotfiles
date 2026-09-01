@@ -1,0 +1,179 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+require "optparse"
+
+module MemoryPressureReport
+  Row = Struct.new(:pid, :ppid, :rss_kib, :age, :command)
+  module_function
+
+  def capture(*command)
+    stdout, _stderr, status = Open3.capture3(*command)
+    status.success? ? stdout : ""
+  rescue Errno::ENOENT
+    ""
+  end
+
+  def parse_ps(text)
+    text.lines.map do |line|
+      match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/)
+      next unless match
+
+      Row.new(match[1].to_i, match[2].to_i, match[3].to_i, match[4], match[5])
+    end.compact
+  end
+
+  def descendant_pids(root_pid, rows)
+    children = rows.group_by(&:ppid)
+    queue = [root_pid]
+    seen = {}
+    until queue.empty?
+      pid = queue.shift
+      next if seen[pid]
+
+      seen[pid] = true
+      queue.concat(Array(children[pid]).map(&:pid))
+    end
+    seen.keys
+  end
+
+  def tree_summary(root_pid, rows)
+    pids = descendant_pids(root_pid, rows)
+    members = rows.select { |row| pids.include?(row.pid) }
+    { count: members.length, rss_kib: members.sum(&:rss_kib) }
+  end
+
+  def family(command)
+    return "Google Chrome" if command.start_with?("/Applications/Google Chrome")
+    return "Hedwig" if command.match?(/^hedwig(?:-|\s)/)
+
+    executable = command.split(/\s+/, 2).first.to_s
+    name = File.basename(executable)
+    name.empty? ? "unknown" : name
+  end
+
+  def overmind_roots(rows)
+    rows.select { |row| row.ppid == 1 && row.command.match?(%r{(?:^|/)tmux .* -L overmind-}) }
+  end
+
+  def cwd_for(pid)
+    capture("lsof", "-a", "-p", pid.to_s, "-d", "cwd", "-Fn")
+      .lines.find { |line| line.start_with?("n") }.to_s.delete_prefix("n").strip
+  end
+
+  def pressure
+    return [nil, "unavailable (macOS only)"] unless RUBY_PLATFORM.include?("darwin")
+
+    value = capture("/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level").strip
+    state = { "1" => "normal", "2" => "warning", "4" => "critical" }[value]
+    state ? [value.to_i, state] : [nil, "unavailable"]
+  end
+
+  def swap
+    output = capture("/usr/sbin/sysctl", "-n", "vm.swapusage").strip
+    output.empty? ? "unavailable" : output
+  end
+
+  def truncate(text, length)
+    return text if text.length <= length
+
+    "#{text[0, length - 1]}…"
+  end
+
+  def print_table(headers, rows, right_aligned = [])
+    widths = headers.each_index.map do |index|
+      ([headers[index].length] + rows.map { |row| row[index].to_s.length }).max
+    end
+    format_row = lambda do |row|
+      row.each_with_index.map do |value, index|
+        right_aligned.include?(index) ? value.to_s.rjust(widths[index]) : value.to_s.ljust(widths[index])
+      end.join("  ")
+    end
+    puts format_row.call(headers)
+    puts format_row.call(widths.map { |width| "-" * width })
+    rows.each { |row| puts format_row.call(row) }
+  end
+
+  def tmux_panes
+    capture("tmux", "list-panes", "-a", "-F", "\#{pane_pid}\t#S:#I.#P\t\#{pane_title}\t\#{pane_current_path}")
+      .lines.map do |line|
+        pid, pane, title, path = line.chomp.split("\t", 4)
+        next unless pid&.match?(/^\d+$/)
+
+        [pid.to_i, pane, title.to_s, path.to_s]
+      end.compact
+  end
+
+  def run(top_count)
+    rows = parse_ps(capture("ps", "-axo", "pid=,ppid=,rss=,etime=,command="))
+    abort "memory-pressure-report: could not read the process table" if rows.empty?
+
+    level, state = pressure
+    puts "Memory pressure"
+    puts "  level: #{level || "?"} (#{state})"
+    puts "  swap:  #{swap}"
+
+    puts "\nLargest processes"
+    process_rows = rows.sort_by { |row| -row.rss_kib }.first(top_count).map do |row|
+      [format("%.1f", row.rss_kib / 1024.0), row.pid, row.ppid, row.age, truncate(row.command, 88)]
+    end
+    print_table(["RSS MiB", "PID", "PPID", "AGE", "COMMAND"], process_rows, [0, 1, 2])
+
+    puts "\nExecutable families"
+    grouped = rows.group_by { |row| family(row.command) }.map do |name, members|
+      [members.sum(&:rss_kib), members.length, name]
+    end.sort_by { |rss_kib, _count, _name| -rss_kib }.first(top_count)
+    family_rows = grouped.map { |rss_kib, count, name| [format("%.1f", rss_kib / 1024.0), count, name] }
+    print_table(["RSS MiB", "PROCS", "FAMILY"], family_rows, [0, 1])
+
+    roots = overmind_roots(rows).map do |row|
+      summary = tree_summary(row.pid, rows)
+      socket = row.command[/\s-L\s+(\S+)/, 1] || "unknown"
+      [summary[:rss_kib], summary[:count], row.pid, row.age, socket, cwd_for(row.pid)]
+    end.sort_by { |rss_kib, _count, _pid, _age, _socket, _cwd| -rss_kib }
+    unless roots.empty?
+      puts "\nDetached Overmind service trees"
+      root_rows = roots.map do |rss_kib, count, pid, age, socket, cwd|
+        [format("%.1f", rss_kib / 1024.0), count, pid, age, socket, cwd]
+      end
+      print_table(["RSS MiB", "PROCS", "PID", "AGE", "SOCKET", "CWD"], root_rows, [0, 1, 2])
+    end
+
+    panes = tmux_panes.map do |pid, pane, title, path|
+      summary = tree_summary(pid, rows)
+      [summary[:rss_kib], summary[:count], pane, title, path]
+    end.sort_by { |rss_kib, _count, _pane, _title, _path| -rss_kib }.first(top_count)
+    unless panes.empty?
+      puts "\nDefault tmux pane trees"
+      pane_rows = panes.map do |rss_kib, count, pane, title, path|
+        [format("%.1f", rss_kib / 1024.0), count, pane, truncate(title, 48), path]
+      end
+      print_table(["RSS MiB", "PROCS", "PANE", "TITLE", "CWD"], pane_rows, [0, 1])
+    end
+
+    puts "\nThis report is read-only. Stop parent services, not individual workers, and confirm ownership first."
+  end
+end
+
+if $PROGRAM_NAME == __FILE__
+  top_count = 15
+  parser = OptionParser.new do |options|
+    options.banner = "Usage: memory-pressure-report [--top COUNT]"
+    options.on("--top COUNT", Integer, "Rows per ranked section (default: 15)") { |value| top_count = value }
+    options.on("-h", "--help", "Show this help") do
+      puts options
+      exit
+    end
+  end
+  begin
+    parser.parse!
+    raise OptionParser::InvalidArgument, ARGV.join(" ") unless ARGV.empty?
+  rescue OptionParser::ParseError => error
+    warn "memory-pressure-report: #{error.message}"
+    warn parser
+    exit 2
+  end
+  abort "memory-pressure-report: --top must be positive" unless top_count.positive?
+  MemoryPressureReport.run(top_count)
+end
