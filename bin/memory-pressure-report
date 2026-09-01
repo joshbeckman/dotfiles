@@ -81,18 +81,17 @@ module MemoryPressureReport
     "#{text[0, length - 1]}…"
   end
 
+  def markdown_cell(value)
+    value.to_s.gsub("\\", "\\\\").gsub("|", "\\|").gsub(/\s*\n\s*/, " ")
+  end
+
   def print_table(headers, rows, right_aligned = [])
-    widths = headers.each_index.map do |index|
-      ([headers[index].length] + rows.map { |row| row[index].to_s.length }).max
+    puts "| #{headers.map { |header| markdown_cell(header) }.join(" | ")} |"
+    separators = headers.each_index.map { |index| right_aligned.include?(index) ? "---:" : "---" }
+    puts "| #{separators.join(" | ")} |"
+    rows.each do |row|
+      puts "| #{row.map { |value| markdown_cell(value) }.join(" | ")} |"
     end
-    format_row = lambda do |row|
-      row.each_with_index.map do |value, index|
-        right_aligned.include?(index) ? value.to_s.rjust(widths[index]) : value.to_s.ljust(widths[index])
-      end.join("  ")
-    end
-    puts format_row.call(headers)
-    puts format_row.call(widths.map { |width| "-" * width })
-    rows.each { |row| puts format_row.call(row) }
   end
 
   def tmux_panes
@@ -110,17 +109,18 @@ module MemoryPressureReport
     abort "memory-pressure-report: could not read the process table" if rows.empty?
 
     level, state = pressure
-    puts "Memory pressure"
-    puts "  level: #{level || "?"} (#{state})"
-    puts "  swap:  #{swap}"
+    puts "# Memory pressure report"
+    puts
+    puts "- **Level:** #{level || "?"} (#{state})"
+    puts "- **Swap:** #{swap}"
 
-    puts "\nLargest processes"
+    puts "\n## Largest processes"
     process_rows = rows.sort_by { |row| -row.rss_kib }.first(top_count).map do |row|
       [format("%.1f", row.rss_kib / 1024.0), row.pid, row.ppid, row.age, truncate(row.command, 88)]
     end
     print_table(["RSS MiB", "PID", "PPID", "AGE", "COMMAND"], process_rows, [0, 1, 2])
 
-    puts "\nExecutable families"
+    puts "\n## Executable families"
     grouped = rows.group_by { |row| family(row.command) }.map do |name, members|
       [members.sum(&:rss_kib), members.length, name]
     end.sort_by { |rss_kib, _count, _name| -rss_kib }.first(top_count)
@@ -133,7 +133,7 @@ module MemoryPressureReport
       [summary[:rss_kib], summary[:count], row.pid, row.age, socket, cwd_for(row.pid)]
     end.sort_by { |rss_kib, _count, _pid, _age, _socket, _cwd| -rss_kib }
     unless roots.empty?
-      puts "\nDetached Overmind service trees"
+      puts "\n## Detached Overmind service trees"
       root_rows = roots.map do |rss_kib, count, pid, age, socket, cwd|
         [format("%.1f", rss_kib / 1024.0), count, pid, age, socket, cwd]
       end
@@ -145,14 +145,14 @@ module MemoryPressureReport
       [summary[:rss_kib], summary[:count], pane, title, path]
     end.sort_by { |rss_kib, _count, _pane, _title, _path| -rss_kib }.first(top_count)
     unless panes.empty?
-      puts "\nDefault tmux pane trees"
+      puts "\n## Default tmux pane trees"
       pane_rows = panes.map do |rss_kib, count, pane, title, path|
         [format("%.1f", rss_kib / 1024.0), count, pane, truncate(title, 48), path]
       end
       print_table(["RSS MiB", "PROCS", "PANE", "TITLE", "CWD"], pane_rows, [0, 1])
     end
 
-    puts "\nThis report is read-only. Stop parent services, not individual workers, and confirm ownership first."
+    puts "\n> **Note:** This report is read-only. Stop parent services, not individual workers, and confirm ownership first."
   end
 end
 

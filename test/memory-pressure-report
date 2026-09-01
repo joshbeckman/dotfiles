@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "stringio"
+
 load File.expand_path("../bin/memory-pressure-report", __dir__)
 
 def assert(condition, message)
@@ -25,5 +27,13 @@ assert(MemoryPressureReport.overmind_roots(rows).map(&:pid) == [10], "detached O
 assert(MemoryPressureReport.family(rows.find { |row| row.pid == 30 }.command) == "Google Chrome", "Chrome grouping")
 assert(MemoryPressureReport.family(rows.find { |row| row.pid == 31 }.command) == "Hedwig", "Hedwig grouping")
 assert(MemoryPressureReport.family(rows.find { |row| row.pid == 12 }.command) == "sidekiq", "executable grouping")
+
+original_stdout = $stdout
+rendered = StringIO.new
+$stdout = rendered
+MemoryPressureReport.print_table(["NAME", "RSS"], [["worker | critical", "12.0"]], [1])
+$stdout = original_stdout
+assert(rendered.string.include?("| NAME | RSS |\n| --- | ---: |"), "Markdown table structure")
+assert(rendered.string.include?("worker \\| critical"), "Markdown cell escaping")
 
 puts "memory-pressure-report tests passed"

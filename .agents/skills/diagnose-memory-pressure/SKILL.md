@@ -7,10 +7,11 @@ description: Diagnose macOS memory pressure by attributing resident memory to pr
 
 ## Quick start
 
-Run the read-only report:
+Run the read-only Markdown report in the terminal or render it as HTML:
 
 ```sh
 memory-pressure-report
+memory-pressure-report | preview-md
 ```
 
 Use `--top COUNT` to change the number of rows in ranked sections.
