@@ -708,6 +708,20 @@ module AgentPRMonitor
     File.expand_path("~/Library/LaunchAgents/org.joshbeckman.agent-pr-monitor.plist")
   end
 
+  def executable_directory(name)
+    ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).each do |directory|
+      candidate = File.join(directory, name)
+      return directory if File.file?(candidate) && File.executable?(candidate)
+    end
+    nil
+  end
+
+  def launch_environment_path
+    paths = [File.expand_path("~/bin"), executable_directory("gs")]
+    paths.concat(%w[/opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin])
+    paths.compact.uniq.join(File::PATH_SEPARATOR)
+  end
+
   def install
     raise MonitorError, "launchd installation is only supported on macOS" unless RUBY_PLATFORM.include?("darwin")
     system("launchctl", "bootout", "gui/#{Process.uid}", launch_agent_path, out: File::NULL, err: File::NULL) if File.file?(launch_agent_path)
@@ -723,7 +737,7 @@ module AgentPRMonitor
         <key>ProgramArguments</key><array>
           <string>/usr/bin/env</string><string>-i</string>
           <string>HOME=#{Dir.home}</string>
-          <string>PATH=#{File.expand_path("~/bin")}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+          <string>PATH=#{launch_environment_path}</string>
           <string>AGENT_PR_MONITOR_STATE=#{STATE_DIR}</string>
           <string>RUBYOPT=--disable-gems</string>
           <string>/usr/bin/ruby</string><string>--disable-gems</string>

@@ -60,6 +60,13 @@ export FIXTURE="$tmp/before.json"
 export GS_VIEW_FIXTURE="$tmp/gs-view.json"
 export GS_CHECKS_FIXTURE="$tmp/gs-checks.json"
 
+SCRIPT="$root/bin/agent-pr-monitor" EXPECTED_GS_DIR="$tmp/bin" ruby -e '
+  ARGV.replace(["--help"])
+  load ENV.fetch("SCRIPT")
+  paths = AgentPRMonitor.launch_environment_path.split(File::PATH_SEPARATOR)
+  abort "LaunchAgent PATH omitted the resolved gs directory" unless paths.include?(ENV.fetch("EXPECTED_GS_DIR"))
+' >/dev/null
+
 "$root/bin/agent-pr-monitor" own https://github.com/acme/widgets/pull/7 >/dev/null
 "$root/bin/agent-pr-monitor" stop >/dev/null
 checklist="$tmp/scratch/prs/acme-widgets-7.md"
