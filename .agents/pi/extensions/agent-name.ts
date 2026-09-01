@@ -129,7 +129,7 @@ export default function (pi: ExtensionAPI) {
 	// Josh typing is the only thing that unparks a session. Tracking his input
 	// separately from agent activity is what lets a parked session answer mail
 	// promptly: if a wake counted as presence, every message would have to wait out
-	// another 10 minutes, and the hourly budget would never be the binding limit.
+	// another grace period, and the hourly budget would never be the binding limit.
 	pi.on("input", () => {
 		userAt = Date.now();
 		return undefined;
@@ -171,10 +171,10 @@ export default function (pi: ExtensionAPI) {
 	// awake all night.
 	function wakeForMail() {
 		if (!scratchpad || !name) return;
-		// 10 rather than 15: senders were sitting through a quarter hour to learn
-		// whether anyone was home. Short enough to feel answered, long enough that a
-		// pause for thought is not read as leaving.
-		if (Date.now() - userAt < 10 * 60_000) return; // Josh is here; mail can wait for his turn
+		// Two minutes keeps mail-driven automation responsive. activeAt separately
+		// prevents a wake during or immediately after an agent turn, while the hourly
+		// budget limits unattended loops.
+		if (Date.now() - userAt < 2 * 60_000) return; // Josh is here; mail can wait for his turn
 		if (Date.now() - activeAt < 60_000) return; // a turn is in flight or just ended
 		// Warning pressure still wakes the likely owner so it can inspect or stop
 		// its own work. At critical pressure, mail stays unread rather than adding
