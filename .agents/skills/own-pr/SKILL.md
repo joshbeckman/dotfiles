@@ -26,6 +26,7 @@ The monitor records machine-readable state and maintains `$AGENT_SCRATCHPAD/prs/
 - Last checked:
 - Next check:
 - [ ] Draft opened and Josh assigned
+- [ ] PR linked from every issue it solves
 - [ ] CI and automated reviews passed
 - [ ] Josh reviewed; reviewer preference recorded
 - [ ] Human comments resolved and approvals complete
@@ -49,10 +50,12 @@ Use the PR surface required by the repository. For GitHub writes, use `gw`; for 
 ## 1. Draft and validate
 
 1. Open the PR as a draft and assign Josh using the repository's required wrapper.
-2. Trigger required CI and repository-required automated reviews.
-3. Let `agent-pr-monitor` watch checks, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Use the manual polling cadence below only when the monitor is unavailable.
-4. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean. Run `agent-pr-monitor ack PR_URL` after handling a monitor event.
-5. Rebase when the branch conflicts with or is too stale against its base. Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
+2. After the PR has a stable URL, comment on every issue it claims to solve. The comment must say that work has opened and link the PR by its full title and URL, so issue readers can find current and historical implementation work. Write the comment to a scratchpad file and post it with `gw issue comment ISSUE_URL --body-file FILE`. Do not duplicate an existing link, comment on issues listed only as related context, or expose a private PR from a more-public issue. If visibility is unclear, ask Josh first.
+3. When inheriting a PR, read each source issue with `gw view-md`; backfill a missing PR comment before continuing.
+4. Trigger required CI and repository-required automated reviews.
+5. Let `agent-pr-monitor` watch checks, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Use the manual polling cadence below only when the monitor is unavailable.
+6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean. Run `agent-pr-monitor ack PR_URL` after handling a monitor event.
+7. Rebase when the branch conflicts with or is too stale against its base. Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
 
 ## 2. Ask Josh to review
 
