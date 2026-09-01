@@ -191,12 +191,16 @@ if [ "$with_email" -eq 1 ]; then
   esac
   suffix=" <$email>"
 elif [ -n "$name" ]; then
-  # Prose trailers put the handle where commits put the email: same RFC-822
-  # address slot, so one grep pattern (+<handle>) covers commits and comments.
-  # Angle brackets render literally in GFM (not a tag, not an autolink) and
-  # @+ stays mention-inert.
+  # Prose trailers put the handle where commits put the email, so one grep
+  # pattern (+<handle>) covers commits and comments. Deliberately NOT wrapped in
+  # the RFC-822 angle brackets a commit uses: <@...> is Slack's user-mention
+  # syntax and <...> its entity delimiter generally, so bracketing would hand a
+  # token no parser accepts to the one grammar where "<@" means something,
+  # undoing the mention-inertness of RFC 0001 section 7. The brackets bought
+  # nothing anyway -- the grep matches +<handle>, not the delimiters -- and bare
+  # @+ is already self-delimiting.
   slug="$(agent_handle)"
-  [ -n "$slug" ] && suffix=" <@+$slug>"
+  [ -n "$slug" ] && suffix=" @+$slug"
 fi
 
 printf 'Co-authored-by: %s (%s)%s\n' "$who" "$id" "$suffix"
