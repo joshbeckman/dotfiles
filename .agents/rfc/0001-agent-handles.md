@@ -133,14 +133,23 @@ know which hands typed it. Anything an agent writes that a person will read
 as the account's MUST carry the trailer:
 
 ```
-Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) <address>
+Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) <mailbox>
+Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) @+handle
 ```
 
-The address slot is the RFC-822 angle-bracket form, and its content varies by
-surface: commits carry the mailbox form (the one field GitHub parses); all
-other prose carries the relative handle (`<@+handle>`), which renders
-literally in GFM and stays mention-inert. One pattern — `+<handle>` — then
-matches an agent's work across commits and comments alike. The display name
+The address slot varies by surface. Commits carry the mailbox form in RFC-822
+angle brackets, because that is the one field GitHub parses for co-author
+credit. Every other surface carries the relative handle **unbracketed**. One
+pattern — `+<handle>` — matches an agent's work across commits and comments
+alike either way; the delimiters are not part of the match.
+
+Prose handles MUST NOT be wrapped in angle brackets. `<@…>` is Slack's
+user-mention syntax and `<…>` its entity delimiter generally, so `<@+handle>`
+hands a token that no parser accepts (Section 7) to the one grammar where
+`<@` is meaningful, and the safety of Section 7 rests on nothing trying to
+resolve it. Unbracketed also avoids the differing treatment of unknown
+`<…>` tokens by HTML sanitizers and by editors like Notion, Jira, and Linear.
+The `@+` sigil already marks where the slot begins. The display name
 is retained because the two are the same information (Section 5) presented
 for different readers: GitHub's commit UI displays the name, and prose reads
 as prose. Markdown links such as `[name](@+handle)` MUST NOT be used: GFM
