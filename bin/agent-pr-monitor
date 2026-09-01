@@ -1,0 +1,804 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "json"
+require "open3"
+require "optparse"
+require "time"
+
+STATE_DIR = File.expand_path(ENV.fetch("AGENT_PR_MONITOR_STATE", "~/.local/state/agent-pr-monitor"))
+RECORDS_DIR = File.join(STATE_DIR, "prs")
+PID_FILE = File.join(STATE_DIR, "monitor.pid")
+LOCK_FILE = File.join(STATE_DIR, "monitor.lock")
+LOG_FILE = File.join(STATE_DIR, "monitor.log")
+DEFAULT_INTERVAL = 60
+
+class MonitorError < StandardError; end
+
+module AgentPRMonitor
+  module_function
+
+  def usage
+    <<~TEXT
+      Usage:
+        agent-pr-monitor own PR_URL [--owner HANDLE] [--provider github|gitstream] [--cwd DIR]
+        agent-pr-monitor ack PR_URL
+        agent-pr-monitor release PR_URL
+        agent-pr-monitor list
+        agent-pr-monitor check [PR_URL]
+        agent-pr-monitor start | run | stop | status
+        agent-pr-monitor install | uninstall [--purge]
+
+      A single local process polls owned PRs and sends state transitions to their
+      owning agents through agent-mail. State lives in #{STATE_DIR}.
+
+      `own` establishes a baseline without sending mail, writes the owner's
+      scratchpad checklist when available, and starts the monitor. URLs whose
+      path uses /pulls/ are treated as Gitstream; override with --provider when
+      necessary.
+
+      `ack` refreshes the baseline after an agent handles an event. `release`
+      stops monitoring only that PR. `uninstall --purge` removes the launch agent
+      and all monitor state; the own-pr skill remains usable without this tool.
+    TEXT
+  end
+
+  def ensure_dirs
+    FileUtils.mkdir_p(RECORDS_DIR)
+    FileUtils.chmod(0o700, STATE_DIR)
+    FileUtils.chmod(0o700, RECORDS_DIR)
+  end
+
+  def parse_url(url)
+    match = url.match(%r{https?://[^/]+/(?:repos/)?([^/]+)/([^/]+)/(?:pull|pulls)/(\d+)})
+    raise MonitorError, "unsupported PR URL: #{url}" unless match
+
+    owner, repo, number = match.captures
+    {
+      "owner" => owner,
+      "repo" => repo,
+      "number" => number.to_i,
+      "url" => url,
+    }
+  end
+
+  def record_path(identity)
+    safe = [identity.fetch("owner"), identity.fetch("repo"), identity.fetch("number")]
+      .join("-").downcase.gsub(/[^a-z0-9_.-]+/, "-")
+    File.join(RECORDS_DIR, "#{safe}.json")
+  end
+
+  def find_record(url)
+    identity = parse_url(url)
+    path = record_path(identity)
+    raise MonitorError, "PR is not owned: #{identity.fetch("url")}" unless File.file?(path)
+
+    [path, read_json(path)]
+  end
+
+  def read_json(path)
+    JSON.parse(File.read(path))
+  rescue JSON::ParserError => e
+    raise MonitorError, "invalid monitor state #{path}: #{e.message}"
+  end
+
+  def atomic_write(path, object)
+    tmp = "#{path}.tmp-#{Process.pid}"
+    File.write(tmp, JSON.pretty_generate(object) + "\n")
+    File.chmod(0o600, tmp)
+    File.rename(tmp, path)
+  ensure
+    FileUtils.rm_f(tmp) if defined?(tmp)
+  end
+
+  def with_record_lock(path)
+    File.open("#{path}.lock", File::RDWR | File::CREAT, 0o600) do |lock|
+      lock.flock(File::LOCK_EX)
+      yield
+    end
+  end
+
+  def command!(*argv, chdir: nil)
+    stdout, stderr, status = Open3.capture3(*argv, **(chdir ? { chdir: chdir } : {}))
+    return stdout if status.success?
+
+    detail = stderr.strip.empty? ? stdout.strip : stderr.strip
+    raise MonitorError, "#{argv.join(" ")} failed (#{status.exitstatus}): #{detail}"
+  end
+
+  def infer_provider(identity, explicit)
+    return explicit if explicit
+
+    identity.fetch("url").match?(%r{/pulls/\d+}) ? "gitstream" : "github"
+  end
+
+  def fetch_gitstream_checks(number, cwd)
+    stdout, stderr, status = Open3.capture3("gs", "pr", "checks", number, "--json", chdir: cwd)
+    checks = JSON.parse(stdout)
+    return checks if checks.is_a?(Hash) && checks.key?("state")
+
+    raise MonitorError, "gs pr checks returned JSON without check state"
+  rescue JSON::ParserError
+    detail = stderr.strip.empty? ? stdout.strip : stderr.strip
+    raise MonitorError, "gs pr checks #{number} --json failed (#{status.exitstatus}): #{detail}"
+  end
+
+  def fetch_snapshot(record)
+    provider = record.fetch("provider")
+    raw, checks = if provider == "gitstream"
+      cwd = record.fetch("cwd")
+      number = record.fetch("number").to_s
+      [
+        JSON.parse(command!("gs", "pr", "view", number, "--json", "--comments", chdir: cwd)),
+        fetch_gitstream_checks(number, cwd),
+      ]
+    else
+      fields = %w[state isDraft mergeable mergeStateStatus reviewDecision headRefOid updatedAt comments reviews reviewRequests statusCheckRollup mergeCommit mergedAt labels url title]
+      [JSON.parse(command!("gw", "pr", "view", record.fetch("url"), "--json", fields.join(","))), nil]
+    end
+
+    snapshot = normalize_snapshot(raw, checks, provider)
+    previous_mergeable = record.dig("snapshot", "mergeable").to_s
+    if snapshot["mergeable"].to_s.empty? || snapshot["mergeable"] == "UNKNOWN"
+      snapshot["mergeable"] = previous_mergeable unless previous_mergeable.empty? || previous_mergeable == "UNKNOWN"
+    end
+    snapshot["review_threads"] = fetch_github_threads(record) unless provider == "gitstream"
+    snapshot["deployment"] = deployment_snapshot(record, snapshot) if snapshot["state"] == "MERGED"
+    snapshot
+  rescue JSON::ParserError => e
+    raise MonitorError, "invalid #{provider} JSON for #{record.fetch("url")}: #{e.message}"
+  end
+
+  def fetch_github_threads(record)
+    query = <<~GRAPHQL
+      query($owner:String!,$repo:String!,$number:Int!,$endCursor:String) {
+        repository(owner:$owner,name:$repo) {
+          pullRequest(number:$number) {
+            reviewThreads(first:100,after:$endCursor) {
+              nodes { id isResolved comments(last:100) { nodes { id createdAt updatedAt author { login } } } }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    GRAPHQL
+    result = JSON.parse(command!("gw", "api", "graphql", "--paginate", "--slurp", "-f", "query=#{query}", "-f", "owner=#{record.fetch("owner")}", "-f", "repo=#{record.fetch("repo")}", "-F", "number=#{record.fetch("number")}"))
+    pages = result.is_a?(Array) ? result : [result]
+    threads = pages.flat_map { |page| Array(page.dig("data", "repository", "pullRequest", "reviewThreads", "nodes")) }
+    threads.map do |thread|
+      {
+        "id" => thread["id"].to_s,
+        "resolved" => !!thread["isResolved"],
+        "comments" => Array(thread.dig("comments", "nodes")).map do |comment|
+          {
+            "id" => comment["id"].to_s,
+            "author" => comment.dig("author", "login").to_s,
+            "updated_at" => (comment["updatedAt"] || comment["createdAt"]).to_s,
+          }
+        end,
+      }
+    end.sort_by { |thread| thread.fetch("id") }
+  end
+
+  def normalize_snapshot(raw, checks, provider)
+    gitstream = provider == "gitstream"
+    {
+      "title" => raw["title"].to_s,
+      "state" => (gitstream && raw["xGitstreamStateExtended"].to_s == "merged" ? "MERGED" : raw["state"].to_s.upcase),
+      "draft" => !!(gitstream ? raw["draft"] : raw["isDraft"]),
+      "head_sha" => (gitstream ? raw["headSha"] : raw["headRefOid"]).to_s,
+      "mergeable" => (gitstream ? raw["mergeableState"] : raw["mergeStateStatus"]).to_s.upcase,
+      "review_decision" => raw["reviewDecision"].to_s.upcase,
+      "labels" => normalize_names(raw["labels"]),
+      "review_requests" => normalize_logins(gitstream ? raw["requestedReviewers"] : raw["reviewRequests"]),
+      "reviews" => normalize_reviews(raw["reviews"]),
+      "comments" => normalize_comments(raw["comments"]),
+      "checks" => normalize_checks(gitstream ? checks : raw["statusCheckRollup"]),
+      "merged_at" => raw["mergedAt"],
+      "merge_commit" => normalize_merge_commit(raw["mergeCommit"] || raw["mergeCommitSha"]),
+      "url" => (raw["htmlUrl"] || raw["url"]).to_s,
+    }
+  end
+
+  def normalize_names(values)
+    Array(values).map { |item| item.is_a?(Hash) ? item["name"] : item }.compact.map(&:to_s).sort
+  end
+
+  def normalize_logins(values)
+    Array(values).map { |item| item.is_a?(Hash) ? item.dig("login") || item.dig("requestedReviewer", "login") : item }
+      .compact.map(&:to_s).sort
+  end
+
+  def normalize_reviews(values)
+    Array(values).map do |review|
+      {
+        "id" => review["id"].to_s,
+        "state" => review["state"].to_s.upcase,
+        "author" => review.dig("author", "login").to_s,
+        "submitted_at" => review["submittedAt"].to_s,
+      }
+    end.sort_by { |review| [review.fetch("submitted_at"), review.fetch("id")] }
+  end
+
+  def normalize_comments(values)
+    Array(values).map do |comment|
+      {
+        "id" => comment["id"].to_s,
+        "author" => (comment["authorLogin"] || comment.dig("author", "login")).to_s,
+        "created_at" => (comment["createdAt"] || comment["submittedAt"]).to_s,
+        "resolved" => comment.key?("isResolved") ? !!comment["isResolved"] : nil,
+      }
+    end.sort_by { |comment| [comment.fetch("created_at"), comment.fetch("id")] }
+  end
+
+  def normalize_checks(raw)
+    values = if raw.is_a?(Hash)
+      Array(raw["statuses"]) + Array(raw["checkRuns"]) + Array(raw["requiredChecks"])
+    else
+      Array(raw)
+    end
+    values.map do |check|
+      {
+        "name" => (check["name"] || check["context"] || check["workflowName"]).to_s,
+        "state" => (check["conclusion"] || check["state"] || check["status"]).to_s.upcase,
+      }
+    end.reject { |check| check.fetch("name").empty? }.uniq.sort_by { |check| check.fetch("name") }
+  end
+
+  def normalize_merge_commit(value)
+    return "" if value.nil?
+    return value.to_s unless value.is_a?(Hash)
+
+    (value["oid"] || value["sha"]).to_s
+  end
+
+  def deployment_snapshot(record, snapshot)
+    checker = File.expand_path(ENV.fetch("AGENT_PR_DEPLOYMENT_CHECKER", "~/.config/agent-pr-monitor/deployment-check"))
+    return { "status" => "unconfigured", "evidence" => "" } unless File.executable?(checker)
+
+    input = JSON.generate(record.merge("snapshot" => snapshot))
+    stdout, stderr, status = Open3.capture3(checker, stdin_data: input, chdir: record.fetch("cwd"))
+    raise MonitorError, "deployment checker failed (#{status.exitstatus}): #{stderr.strip}" unless status.success?
+
+    result = JSON.parse(stdout)
+    unless %w[pending deployed unknown].include?(result["status"])
+      raise MonitorError, "deployment checker returned invalid status: #{result["status"].inspect}"
+    end
+    { "status" => result.fetch("status"), "evidence" => result["evidence"].to_s }
+  end
+
+  def check_category(checks)
+    states = checks.map { |check| check.fetch("state") }
+    return "none" if states.empty?
+    return "failed" if states.any? { |state| state.match?(/FAIL|ERROR|CANCEL|TIMED_OUT|ACTION_REQUIRED/) }
+    return "pending" if states.any? { |state| state.match?(/PENDING|QUEUED|IN_PROGRESS|EXPECTED|WAITING|REQUESTED/) }
+    return "passed" if states.all? { |state| state.match?(/SUCCESS|PASS|PASSED|COMPLETED|SKIPPED|NEUTRAL/) }
+
+    "attention"
+  end
+
+  def fingerprint(snapshot)
+    Digest::SHA256.hexdigest(JSON.generate(snapshot))
+  end
+
+  def changed_fields(before, after)
+    (before.keys | after.keys).select do |key|
+      next false if key == "mergeable" && [before[key], after[key]].any? { |value| value.to_s.empty? || value == "UNKNOWN" }
+
+      before[key] != after[key]
+    end.sort
+  end
+
+  def cadence(snapshot)
+    return 30 * 60 if snapshot["state"] == "MERGED"
+    return 5 * 60 unless snapshot["draft"]
+    return 5 * 60 unless %w[none passed].include?(check_category(snapshot.fetch("checks")))
+    return 5 * 60 if (snapshot.fetch("labels") & %w[mergeit mg-merge]).any?
+
+    15 * 60
+  end
+
+  def checklist_path(record)
+    scratchpad = record["scratchpad"].to_s
+    return nil if scratchpad.empty? || !Dir.exist?(scratchpad)
+
+    File.join(scratchpad, "prs", "#{record.fetch("owner")}-#{record.fetch("repo")}-#{record.fetch("number")}.md")
+  end
+
+  def markdown_link_text(text)
+    text.to_s.gsub("\\", "\\\\").gsub("[", "\\[").gsub("]", "\\]")
+  end
+
+  def write_checklist(record)
+    path = checklist_path(record)
+    return unless path
+
+    snapshot = record["snapshot"] || {}
+    FileUtils.mkdir_p(File.dirname(path))
+    deployed = snapshot.dig("deployment", "status") == "deployed"
+    managed = <<~MARKDOWN.chomp
+      <!-- agent-pr-monitor:start -->
+      # [#{markdown_link_text(snapshot["title"].to_s.empty? ? "PR #{record.fetch("number")}" : snapshot["title"])}](#{record.fetch("url")})
+
+      - Owner: @+#{record.fetch("agent")}
+      - Provider: #{record.fetch("provider")}
+      - State: #{snapshot["state"] || "unknown"}
+      - Draft: #{snapshot.fetch("draft", "unknown")}
+      - Head SHA: #{snapshot["head_sha"] || "unknown"}
+      - Checks: #{snapshot["checks"] ? check_category(snapshot.fetch("checks")) : "unknown"}
+      - Review decision: #{snapshot["review_decision"].to_s.empty? ? "none" : snapshot["review_decision"]}
+      - Deployment: #{snapshot.dig("deployment", "status") || "not applicable"}
+      - Last checked: #{record["last_checked_at"] || "never"}
+      - Next check: #{record["next_check_at"] || "not scheduled"}
+      - [#{snapshot["state"] == "MERGED" ? "x" : " "}] Merged
+      - [#{deployed ? "x" : " "}] Deployed
+      - [#{record["proof_sent"] ? "x" : " "}] Production proof sent to Josh
+      <!-- agent-pr-monitor:end -->
+    MARKDOWN
+    if File.file?(path)
+      content = File.read(path)
+      content = if content.include?("<!-- agent-pr-monitor:start -->")
+        content.sub(/<!-- agent-pr-monitor:start -->.*?<!-- agent-pr-monitor:end -->/m, managed)
+      else
+        "#{managed}\n\n#{content}"
+      end
+    else
+      content = <<~MARKDOWN
+        #{managed}
+
+        ## Reviewer candidates
+
+        ## Open comments, failures, or conflicts
+
+        ## Deployment and production evidence
+      MARKDOWN
+    end
+    File.write(path, content)
+  end
+
+  def own(url, options)
+    ensure_dirs
+    identity = parse_url(url)
+    provider = infer_provider(identity, options[:provider])
+    raise MonitorError, "provider must be github or gitstream" unless %w[github gitstream].include?(provider)
+
+    agent = options[:owner] || ENV["AGENT_HANDLE"]
+    raise MonitorError, "owner required (--owner or AGENT_HANDLE)" if agent.to_s.empty?
+
+    path = record_path(identity)
+    normalized_agent = agent.sub(/^@/, "").sub(/^\+/, "")
+    already_owned = false
+    record = with_record_lock(path) do
+      existing = File.file?(path) ? read_json(path) : {}
+      if existing["active"]
+        if existing["agent"] != normalized_agent
+          raise MonitorError, "#{identity.fetch("url")} is already owned by @+#{existing.fetch("agent")}; transfer ownership explicitly before re-registering"
+        end
+        already_owned = true
+        existing["cwd"] = File.expand_path(options[:cwd] || Dir.pwd)
+        scratchpad = ENV["AGENT_SCRATCHPAD"].to_s
+        existing["scratchpad"] = scratchpad unless scratchpad.empty?
+        atomic_write(path, existing)
+        existing
+      else
+        current = existing.merge(identity).merge(
+          "agent" => normalized_agent,
+          "provider" => provider,
+          "cwd" => File.expand_path(options[:cwd] || Dir.pwd),
+          "scratchpad" => ENV["AGENT_SCRATCHPAD"].to_s,
+          "owned_at" => Time.now.utc.iso8601,
+          "active" => true,
+          "deployed" => existing.fetch("deployed", false),
+          "proof_sent" => existing.fetch("proof_sent", false),
+        )
+        snapshot = fetch_snapshot(current)
+        current["url"] = snapshot["url"] unless snapshot["url"].to_s.empty?
+        now = Time.now.utc
+        current["snapshot"] = snapshot
+        current["fingerprint"] = fingerprint(snapshot)
+        current["last_checked_at"] = now.iso8601
+        current["next_check_at"] = (now + cadence(snapshot)).iso8601
+        atomic_write(path, current)
+        write_checklist(current)
+        current
+      end
+    end
+    start
+    if already_owned
+      puts "Already owned #{record.fetch("url")} as @+#{record.fetch("agent")}; monitoring continues from the existing baseline."
+    else
+      puts "Owned #{record.fetch("url")} as @+#{record.fetch("agent")} (#{provider}); baseline recorded."
+    end
+  end
+
+  def ack(url)
+    path, = find_record(url)
+    record = with_record_lock(path) do
+      current = read_json(path)
+      snapshot = fetch_snapshot(current)
+      now = Time.now.utc
+      current["snapshot"] = snapshot
+      current["fingerprint"] = fingerprint(snapshot)
+      current["last_checked_at"] = now.iso8601
+      current["next_check_at"] = (now + cadence(snapshot)).iso8601
+      current.delete("last_changed_fields")
+      atomic_write(path, current)
+      write_checklist(current)
+      current
+    end
+    puts "Acknowledged #{record.fetch("url")}; baseline refreshed."
+  end
+
+  def release(url)
+    path, = find_record(url)
+    record = with_record_lock(path) do
+      current = read_json(path)
+      current["active"] = false
+      current["released_at"] = Time.now.utc.iso8601
+      atomic_write(path, current)
+      write_checklist(current)
+      current
+    end
+    puts "Released #{record.fetch("url")} from monitoring."
+  end
+
+  def records
+    ensure_dirs
+    Dir.glob(File.join(RECORDS_DIR, "*.json")).sort.map do |path|
+      [path, read_json(path)]
+    rescue MonitorError => e
+      warn e.message
+      nil
+    end.compact
+  end
+
+  def snapshot_age(timestamp)
+    seconds = [Time.now.utc - Time.parse(timestamp.to_s), 0].max.to_i
+    return "#{seconds}s" if seconds < 120
+    return "#{seconds / 60}m" if seconds < 7_200
+
+    "#{seconds / 3_600}h"
+  rescue ArgumentError
+    "unknown"
+  end
+
+  def list
+    rows = records.map do |_path, record|
+      snapshot = record["snapshot"] || {}
+      checked = record["last_checked_at"] || "never"
+      next_check = record["active"] ? record["next_check_at"] || "unscheduled" : "released"
+      [record["active"] ? "active" : "released", "@+#{record["agent"]}", snapshot["state"] || "?", check_category(snapshot["checks"] || []), "checked=#{checked}(#{snapshot_age(checked)} ago)", "next=#{next_check}", record["url"]]
+    end
+    if rows.empty?
+      puts "No registered PRs."
+      return
+    end
+    rows.each { |row| puts row.join("\t") }
+  end
+
+  def due?(record, force)
+    return false unless record["active"]
+    return true if force
+
+    next_at = Time.parse(record.fetch("next_check_at", Time.at(0).utc.iso8601))
+    next_at <= Time.now.utc
+  rescue ArgumentError
+    true
+  end
+
+  def transition_message(record, before, after, fields)
+    summary = []
+    summary << "state #{before["state"] || "?"} → #{after["state"]}" if fields.include?("state")
+    summary << "draft #{before["draft"]} → #{after["draft"]}" if fields.include?("draft")
+    summary << "checks #{check_category(before["checks"] || [])} → #{check_category(after["checks"] || [])}" if fields.include?("checks")
+    summary << "mergeability #{before["mergeable"] || "?"} → #{after["mergeable"]}" if fields.include?("mergeable")
+    summary << "review decision #{before["review_decision"].to_s.empty? ? "none" : before["review_decision"]} → #{after["review_decision"].to_s.empty? ? "none" : after["review_decision"]}" if fields.include?("review_decision")
+    if fields.include?("comments")
+      delta = after.fetch("comments").size - before.fetch("comments", []).size
+      summary << (delta.positive? ? "#{delta} comment(s) added" : "comment activity changed")
+    end
+    summary << "review activity changed" if fields.include?("reviews")
+    summary << "review thread activity changed" if fields.include?("review_threads")
+    summary << "review requests changed" if fields.include?("review_requests")
+    summary << "labels changed" if fields.include?("labels")
+    summary << "head changed" if fields.include?("head_sha")
+    summary << "merge commit recorded" if fields.include?("merge_commit")
+    summary << "monitor polling recovered" if fields.include?("monitor_recovered")
+    if fields.include?("deployment")
+      before_deployment = before.key?("deployment") ? before.dig("deployment", "status") || "unknown" : "not applicable"
+      after_deployment = after.key?("deployment") ? after.dig("deployment", "status") || "unknown" : "not applicable"
+      summary << "deployment #{before_deployment} → #{after_deployment}"
+    end
+    summary = fields if summary.empty?
+
+    <<~BODY
+      PR monitor detected a state change requiring inspection:
+
+      #{record.fetch("url")}
+      #{after.fetch("title")}
+
+      #{summary.map { |item| "- #{item}" }.join("\n")}
+
+      Read the PR through the repository's supported surface, act on anything actionable, then run:
+
+          agent-pr-monitor ack #{record.fetch("url")}
+
+      Update the PR checklist before returning to idle.
+    BODY
+  end
+
+  def deliver(record, body, fields)
+    subject = "PR changed: #{record.fetch("owner")}/#{record.fetch("repo")}##{record.fetch("number")} (#{fields.join(", ")})"
+    stdout, stderr, status = Open3.capture3("agent-mail", "send", "--to", record.fetch("agent"), "--from", "pr-monitor", "--subject", subject, "--body", body)
+    return stdout.strip if status.success?
+
+    orphan = <<~BODY
+      PR monitor could not reach owner @+#{record.fetch("agent")} for #{record.fetch("url")}.
+
+      Delivery error: #{stderr.strip}
+
+      The PR remains registered and needs a live owner.
+    BODY
+    command!("agent-mail", "send", "--to", "josh", "--from", "pr-monitor", "--subject", "Orphaned PR ownership: #{record.fetch("owner")}/#{record.fetch("repo")}##{record.fetch("number")}", "--body", orphan)
+  end
+
+  def check_record(path, _record, force: false, notify: true)
+    with_record_lock(path) do
+      return unless File.file?(path)
+
+      record = read_json(path)
+      return unless due?(record, force)
+
+      begin
+        before = record["snapshot"] || {}
+        after = fetch_snapshot(record)
+        fields = changed_fields(before, after)
+        fields << "monitor_recovered" if record.fetch("error_count", 0).to_i >= 3
+        now = Time.now.utc
+        if notify && !before.empty? && fields.any?
+          deliver(record, transition_message(record, before, after, fields), fields)
+          record["last_changed_fields"] = fields
+          record["last_notified_at"] = now.iso8601
+        end
+        record["snapshot"] = after
+        record["deployed"] = after.dig("deployment", "status") == "deployed"
+        record["fingerprint"] = fingerprint(after)
+        record["last_checked_at"] = now.iso8601
+        record["next_check_at"] = (now + cadence(after)).iso8601
+        record.delete("last_error")
+        record.delete("error_count")
+        atomic_write(path, record)
+        write_checklist(record)
+      rescue MonitorError => e
+        now = Time.now.utc
+        record["last_error"] = e.message
+        record["error_count"] = record.fetch("error_count", 0).to_i + 1
+        record["last_checked_at"] = now.iso8601
+        record["next_check_at"] = (now + 5 * 60).iso8601
+        atomic_write(path, record)
+        if notify && record["error_count"] == 3
+          body = <<~BODY
+            PR monitoring has failed three consecutive times:
+
+            #{record.fetch("url")}
+            #{e.message}
+
+            Inspect the monitor with `agent-pr-monitor status` and refresh the baseline with:
+
+                agent-pr-monitor ack #{record.fetch("url")}
+          BODY
+          deliver(record, body, ["monitor_error"])
+          record["last_error_notified_at"] = now.iso8601
+          atomic_write(path, record)
+        end
+        warn "#{record["url"]}: #{e.message}"
+      end
+    end
+  end
+
+  def critical_pressure?
+    return false unless RUBY_PLATFORM.include?("darwin")
+
+    command!("sysctl", "-n", "kern.memorystatus_vm_pressure_level").strip == "4"
+  rescue MonitorError
+    false
+  end
+
+  def sweep(url: nil, force: false, notify: true)
+    return if critical_pressure?
+
+    selected = if url
+      [find_record(url)]
+    else
+      records
+    end
+    selected.each { |path, record| check_record(path, record, force: force, notify: notify) }
+  end
+
+  def monitor_pid
+    return unless File.file?(PID_FILE)
+
+    pid = Integer(File.read(PID_FILE).strip)
+    output, status = Open3.capture2("ps", "-p", pid.to_s, "-o", "command=")
+    return unless status.success?
+    return unless output.match?(%r{(?:^|/)agent-pr-monitor(?:\s|$).*\brun\b})
+
+    pid
+  rescue ArgumentError, Errno::ENOENT
+    nil
+  end
+
+  def alive?
+    !monitor_pid.nil?
+  end
+
+  def start
+    ensure_dirs
+    if alive?
+      puts "agent-pr-monitor already running (pid #{File.read(PID_FILE).strip})" if $stdout.tty?
+      return
+    end
+
+    pid = Process.spawn({ "AGENT_PR_MONITOR_STATE" => STATE_DIR }, File.expand_path($PROGRAM_NAME), "run", in: File::NULL, out: [LOG_FILE, "a"], err: [LOG_FILE, "a"], pgroup: true, close_others: true)
+    Process.detach(pid)
+    20.times do
+      break if alive?
+      sleep 0.05
+    end
+    raise MonitorError, "monitor failed to start; see #{LOG_FILE}" unless alive?
+  end
+
+  def run
+    ensure_dirs
+    File.open(LOCK_FILE, File::RDWR | File::CREAT, 0o600) do |lock|
+      exit 0 unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+      File.write(PID_FILE, "#{Process.pid}\n")
+      trap("TERM") { exit 0 }
+      trap("INT") { exit 0 }
+      loop do
+        sweep
+        sleep Integer(ENV.fetch("AGENT_PR_MONITOR_INTERVAL", DEFAULT_INTERVAL.to_s))
+      rescue StandardError => e
+        warn "#{Time.now.utc.iso8601} sweep failed: #{e.class}: #{e.message}"
+        sleep DEFAULT_INTERVAL
+      end
+    ensure
+      FileUtils.rm_f(PID_FILE) if File.file?(PID_FILE) && File.read(PID_FILE).strip == Process.pid.to_s
+    end
+  end
+
+  def launch_agent_owns_state?
+    return false unless File.file?(launch_agent_path)
+
+    File.read(launch_agent_path).include?("<string>AGENT_PR_MONITOR_STATE=#{STATE_DIR}</string>")
+  end
+
+  def stop
+    if launch_agent_owns_state? && RUBY_PLATFORM.include?("darwin")
+      system("launchctl", "bootout", "gui/#{Process.uid}", launch_agent_path, out: File::NULL, err: File::NULL)
+    end
+    pid = monitor_pid
+    unless pid
+      FileUtils.rm_f(PID_FILE)
+      puts "agent-pr-monitor is not running"
+      return
+    end
+    Process.kill("TERM", pid)
+    50.times do
+      break unless alive?
+      sleep 0.1
+    end
+    raise MonitorError, "monitor did not stop (pid #{pid})" if alive?
+    puts "Stopped agent-pr-monitor."
+  end
+
+  def status
+    if alive?
+      puts "running\tpid=#{File.read(PID_FILE).strip}\tstate=#{STATE_DIR}"
+      true
+    else
+      puts "stopped\tstate=#{STATE_DIR}"
+      false
+    end
+  end
+
+  def launch_agent_path
+    File.expand_path("~/Library/LaunchAgents/org.joshbeckman.agent-pr-monitor.plist")
+  end
+
+  def install
+    raise MonitorError, "launchd installation is only supported on macOS" unless RUBY_PLATFORM.include?("darwin")
+    system("launchctl", "bootout", "gui/#{Process.uid}", launch_agent_path, out: File::NULL, err: File::NULL) if File.file?(launch_agent_path)
+    stop if alive?
+    ensure_dirs
+    FileUtils.mkdir_p(File.dirname(launch_agent_path))
+    script = File.expand_path($PROGRAM_NAME)
+    plist = <<~PLIST
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0"><dict>
+        <key>Label</key><string>org.joshbeckman.agent-pr-monitor</string>
+        <key>ProgramArguments</key><array>
+          <string>/usr/bin/env</string><string>-i</string>
+          <string>HOME=#{Dir.home}</string>
+          <string>PATH=#{File.expand_path("~/bin")}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+          <string>AGENT_PR_MONITOR_STATE=#{STATE_DIR}</string>
+          <string>RUBYOPT=--disable-gems</string>
+          <string>/usr/bin/ruby</string><string>--disable-gems</string>
+          <string>#{script}</string><string>run</string>
+        </array>
+        <key>RunAtLoad</key><true/>
+        <key>KeepAlive</key><true/>
+        <key>ThrottleInterval</key><integer>10</integer>
+        <key>StandardOutPath</key><string>#{LOG_FILE}</string>
+        <key>StandardErrorPath</key><string>#{LOG_FILE}</string>
+      </dict></plist>
+    PLIST
+    File.write(launch_agent_path, plist)
+    domain = "gui/#{Process.uid}"
+    system("launchctl", "bootout", domain, launch_agent_path, out: File::NULL, err: File::NULL)
+    command!("launchctl", "bootstrap", domain, launch_agent_path)
+    puts "Installed #{launch_agent_path}"
+  end
+
+  def uninstall(purge: false)
+    if File.file?(launch_agent_path)
+      system("launchctl", "bootout", "gui/#{Process.uid}", launch_agent_path, out: File::NULL, err: File::NULL)
+      FileUtils.rm_f(launch_agent_path)
+    end
+    stop if alive?
+    FileUtils.rm_rf(STATE_DIR) if purge
+    puts purge ? "Uninstalled and removed #{STATE_DIR}" : "Uninstalled; retained #{STATE_DIR}"
+  end
+end
+
+begin
+  command = ARGV.shift
+  case command
+  when "own"
+    options = {}
+    parser = OptionParser.new do |opts|
+      opts.on("--owner HANDLE") { |value| options[:owner] = value }
+      opts.on("--provider PROVIDER") { |value| options[:provider] = value }
+      opts.on("--cwd DIR") { |value| options[:cwd] = value }
+    end
+    parser.parse!(ARGV)
+    raise MonitorError, "own requires PR_URL" unless ARGV.one?
+    AgentPRMonitor.own(ARGV.first, options)
+  when "ack"
+    raise MonitorError, "ack requires PR_URL" unless ARGV.one?
+    AgentPRMonitor.ack(ARGV.first)
+  when "release"
+    raise MonitorError, "release requires PR_URL" unless ARGV.one?
+    AgentPRMonitor.release(ARGV.first)
+  when "list"
+    AgentPRMonitor.list
+  when "check"
+    notify = !ARGV.delete("--no-notify")
+    raise MonitorError, "check accepts at most one PR_URL" if ARGV.size > 1
+    AgentPRMonitor.sweep(url: ARGV.first, force: true, notify: notify)
+  when "start"
+    AgentPRMonitor.start
+  when "run"
+    AgentPRMonitor.run
+  when "stop"
+    AgentPRMonitor.stop
+  when "status"
+    exit(AgentPRMonitor.status ? 0 : 1)
+  when "install"
+    AgentPRMonitor.install
+  when "uninstall"
+    purge = !!ARGV.delete("--purge")
+    raise MonitorError, "uninstall accepts only --purge" unless ARGV.empty?
+    AgentPRMonitor.uninstall(purge: purge)
+  when "-h", "--help", nil
+    puts AgentPRMonitor.usage
+  else
+    raise MonitorError, "unknown command: #{command}\n\n#{AgentPRMonitor.usage}"
+  end
+rescue MonitorError, OptionParser::ParseError => e
+  warn "agent-pr-monitor: #{e.message}"
+  exit 1
+end

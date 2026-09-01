@@ -165,6 +165,34 @@ gh_run() {
   exec gh "$@"
 }
 
+# PR ownership is registered at the write boundary rather than left to model
+# memory. Delay only stdout (normally the final URL); prompts and errors remain
+# on stderr, and a monitor failure cannot turn a successfully-created PR into a
+# retry that creates a duplicate.
+gh_create_and_register() {
+  local output rc=0 url
+  output="$(mktemp "${TMPDIR:-/tmp}/gw-create.XXXXXX")"
+  gh "$@" >"$output" || rc=$?
+  cat "$output"
+  if [[ $rc -eq 0 ]]; then
+    url="$(grep -Eo 'https://github\.com/[^/[:space:]]+/[^/[:space:]]+/pull/[0-9]+' "$output" | tail -1 || true)"
+    if [[ -z "$url" ]]; then
+      url="$(gh pr view ${repo_args[@]+"${repo_args[@]}"} "$(current_branch)" --json url --jq .url 2>/dev/null || true)"
+    fi
+    if [[ -z "$url" ]]; then
+      echo "gw: PR created but no URL was available for ownership monitoring" >&2
+    elif ! command -v agent-pr-monitor >/dev/null 2>&1; then
+      echo "gw: PR created but agent-pr-monitor is unavailable" >&2
+    else
+      agent-pr-monitor own "$url" --provider github --cwd "$PWD" >&2 ||
+        echo "gw: PR created but ownership monitoring failed; run: agent-pr-monitor own $url" >&2
+    fi
+  fi
+  rm -f "$output"
+  [[ -z "$trailer_tmp" ]] || rm -f "$trailer_tmp"
+  exit "$rc"
+}
+
 pr_selector_defaults_to_branch() {
   case "${1:-}" in
     view|checks|diff|comment|edit|review|merge|close|reopen|ready|lock|unlock)
@@ -185,6 +213,10 @@ if [[ ${#args[@]} -gt 0 ]] && under_agent && writes_prose "$cmd" "${args[0]}" &&
   fi
 fi
 set -- "${args[@]}"
+
+if [[ $cmd == pr && ${1:-} == create ]] && under_agent && ! has_help_flag "$@"; then
+  gh_create_and_register pr ${repo_args[@]+"${repo_args[@]}"} "$@"
+fi
 
 case "$cmd" in
   pr)

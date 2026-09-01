@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'AGENT_PR_MONITOR_STATE="$tmp/state" "$root/bin/agent-pr-monitor" stop >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/state" "$tmp/scratch"
+
+cat >"$tmp/bin/gw" <<'SH'
+#!/bin/sh
+if [ "${1:-}" = api ]; then
+  echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+else
+  cat "$FIXTURE"
+fi
+SH
+cat >"$tmp/bin/gs" <<'SH'
+#!/bin/sh
+if [ "${1:-}" = pr ] && [ "${2:-}" = view ]; then
+  cat "$GS_VIEW_FIXTURE"
+elif [ "${1:-}" = pr ] && [ "${2:-}" = checks ]; then
+  cat "$GS_CHECKS_FIXTURE"
+  exit 8
+else
+  exit 1
+fi
+SH
+cat >"$tmp/bin/agent-mail" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$MAIL_LOG"
+echo fake-message-id
+SH
+chmod +x "$tmp/bin/gw" "$tmp/bin/gs" "$tmp/bin/agent-mail"
+
+cat >"$tmp/before.json" <<'JSON'
+{"state":"OPEN","isDraft":true,"mergeStateStatus":"CLEAN","reviewDecision":"","headRefOid":"abc","comments":[],"reviews":[],"reviewRequests":[],"statusCheckRollup":[{"name":"test","status":"IN_PROGRESS"}],"mergeCommit":null,"mergedAt":null,"labels":[],"url":"https://github.com/acme/widgets/pull/7","title":"Test [widgets]"}
+JSON
+cat >"$tmp/after.json" <<'JSON'
+{"state":"OPEN","isDraft":true,"mergeStateStatus":"DIRTY","reviewDecision":"CHANGES_REQUESTED","headRefOid":"abc","comments":[{"id":"c1","author":{"login":"reviewer"},"createdAt":"2026-09-01T00:00:00Z"}],"reviews":[{"id":"r1","state":"CHANGES_REQUESTED","author":{"login":"reviewer"},"submittedAt":"2026-09-01T00:00:00Z"}],"reviewRequests":[],"statusCheckRollup":[{"name":"test","conclusion":"FAILURE"}],"mergeCommit":null,"mergedAt":null,"labels":[],"url":"https://github.com/acme/widgets/pull/7","title":"Test [widgets]"}
+JSON
+cat >"$tmp/ready.json" <<'JSON'
+{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","headRefOid":"abc","comments":[],"reviews":[],"reviewRequests":[],"statusCheckRollup":[{"name":"test","conclusion":"SUCCESS"}],"mergeCommit":null,"mergedAt":null,"labels":[],"url":"https://github.com/acme/widgets/pull/7","title":"Test [widgets]"}
+JSON
+cat >"$tmp/unknown.json" <<'JSON'
+{"state":"OPEN","isDraft":false,"mergeStateStatus":"UNKNOWN","reviewDecision":"APPROVED","headRefOid":"abc","comments":[],"reviews":[],"reviewRequests":[],"statusCheckRollup":[{"name":"test","conclusion":"SUCCESS"}],"mergeCommit":null,"mergedAt":null,"labels":[],"url":"https://github.com/acme/widgets/pull/7","title":"Test [widgets]"}
+JSON
+cat >"$tmp/gs-view.json" <<'JSON'
+{"state":"open","draft":true,"headSha":"def","mergeableState":"blocked","reviews":[],"requestedReviewers":[],"comments":[],"labels":[],"htmlUrl":"https://reviews.example/repos/acme/widgets/pulls/9","title":"Gitstream checks"}
+JSON
+cat >"$tmp/gs-checks.json" <<'JSON'
+{"state":"pending","statuses":[],"checkRuns":[],"requiredChecks":[{"name":"Required CI","state":"pending","present":false}]}
+JSON
+
+export PATH="$tmp/bin:$PATH"
+export AGENT_PR_MONITOR_STATE="$tmp/state"
+export AGENT_HANDLE="test-owner"
+export AGENT_SCRATCHPAD="$tmp/scratch"
+export MAIL_LOG="$tmp/mail.log"
+export FIXTURE="$tmp/before.json"
+export GS_VIEW_FIXTURE="$tmp/gs-view.json"
+export GS_CHECKS_FIXTURE="$tmp/gs-checks.json"
+
+"$root/bin/agent-pr-monitor" own https://github.com/acme/widgets/pull/7 >/dev/null
+"$root/bin/agent-pr-monitor" stop >/dev/null
+checklist="$tmp/scratch/prs/acme-widgets-7.md"
+printf '\nAlice: owns the widget API.\n' >>"$checklist"
+
+export FIXTURE="$tmp/after.json"
+# Wrapper registration is idempotent: it must not adopt an unseen live state
+# as a new baseline before the monitor can report the transition.
+"$root/bin/agent-pr-monitor" own https://github.com/acme/widgets/pull/7 >/dev/null
+"$root/bin/agent-pr-monitor" stop >/dev/null
+"$root/bin/agent-pr-monitor" check https://github.com/acme/widgets/pull/7
+cp "$tmp/mail.log" "$tmp/mail-once.log"
+"$root/bin/agent-pr-monitor" check https://github.com/acme/widgets/pull/7
+cmp "$tmp/mail.log" "$tmp/mail-once.log"
+
+grep -F 'checks pending → failed' "$tmp/mail.log" >/dev/null
+grep -F 'Alice: owns the widget API.' "$checklist" >/dev/null
+grep -F '# [Test \[widgets\]]' "$checklist" >/dev/null
+
+# A ready PR stays on the five-minute cadence so merges are not hidden behind
+# the slower draft-review interval.
+export FIXTURE="$tmp/ready.json"
+"$root/bin/agent-pr-monitor" ack https://github.com/acme/widgets/pull/7 >/dev/null
+ruby -rjson -rtime -e '
+  record = JSON.parse(File.read(Dir[File.join(ARGV.fetch(0), "prs", "*.json")].first))
+  delay = Time.parse(record.fetch("next_check_at")) - Time.parse(record.fetch("last_checked_at"))
+  abort "ready cadence was #{delay}s" unless delay == 300
+' "$tmp/state"
+
+mail_count="$(wc -l <"$tmp/mail.log" | tr -d ' ')"
+export FIXTURE="$tmp/unknown.json"
+"$root/bin/agent-pr-monitor" check https://github.com/acme/widgets/pull/7
+[[ "$(wc -l <"$tmp/mail.log" | tr -d ' ')" == "$mail_count" ]]
+ruby -rjson -e '
+  record = JSON.parse(File.read(Dir[File.join(ARGV.fetch(0), "prs", "*.json")].first))
+  abort "UNKNOWN replaced stable mergeability" unless record.dig("snapshot", "mergeable") == "CLEAN"
+' "$tmp/state"
+
+# Gitstream reports pending or failed checks through a nonzero process status
+# while still emitting the complete state JSON.
+AGENT_HANDLE=gs-owner "$root/bin/agent-pr-monitor" own \
+  https://reviews.example/repos/acme/widgets/pulls/9 --provider gitstream --cwd "$tmp" >/dev/null
+"$root/bin/agent-pr-monitor" stop >/dev/null
+ruby -rjson -e '
+  record = JSON.parse(File.read(Dir[File.join(ARGV.fetch(0), "prs", "*9.json")].first))
+  abort "pending Gitstream checks were not registered" unless record.dig("snapshot", "checks", 0, "state") == "PENDING"
+' "$tmp/state"
+printf 'agent-pr-monitor tests passed\n'

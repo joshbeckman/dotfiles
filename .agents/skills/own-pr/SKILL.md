@@ -10,7 +10,13 @@ Opening a PR starts the ownership loop. It does not finish the task. Unless Josh
 
 ## Record ownership
 
-Create `$AGENT_SCRATCHPAD/prs/<owner>-<repo>-<number>.md` when the PR opens. Update it after every state transition and before sleeping or handing off:
+`gw pr create`, `gsw pr create`, and `gsw submit` automatically register new PRs with `agent-pr-monitor`. For an inherited PR, or if automatic registration warned, run:
+
+```sh
+agent-pr-monitor own PR_URL
+```
+
+The monitor records machine-readable state and maintains `$AGENT_SCRATCHPAD/prs/<owner>-<repo>-<number>.md`. Keep agent-written reviewer and evidence notes below its managed status block. If the monitor is unavailable, create and update the checklist manually after every state transition and before sleeping or handing off:
 
 ```markdown
 # [PR title](full URL)
@@ -44,8 +50,8 @@ Use the PR surface required by the repository. For GitHub writes, use `gw`; for 
 
 1. Open the PR as a draft and assign Josh using the repository's required wrapper.
 2. Trigger required CI and repository-required automated reviews.
-3. Poll checks, the conversation, review threads, and mergeability. A green check summary alone is insufficient.
-4. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean.
+3. Let `agent-pr-monitor` watch checks, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Use the manual polling cadence below only when the monitor is unavailable.
+4. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean. Run `agent-pr-monitor ack PR_URL` after handling a monitor event.
 5. Rebase when the branch conflicts with or is too stale against its base. Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
 
 ## 2. Ask Josh to review
@@ -89,8 +95,10 @@ After merge:
 4. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
 5. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
-Only then is the PR lifecycle complete and its clean worktree eligible for cleanup, provided no other assigned or open work remains.
+Only then is the PR lifecycle complete. Run `agent-pr-monitor release PR_URL`; the clean worktree is then eligible for cleanup, provided no other assigned or open work remains.
 
 ## Polling cadence
 
-Poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often. Keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave the PR checklist with the current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.
+When registered, the shared monitor polls without model turns and sends only state changes through `agent-mail`; do not duplicate it with conversational polling or a per-session background job. Without the monitor, poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often.
+
+Keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave the PR checklist with the current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.

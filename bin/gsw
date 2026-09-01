@@ -118,12 +118,93 @@ inject_trailer() {
 cmd="$1"
 subcmd="${2:-}"
 args=("$@")
+is_agent=0
+under_agent && is_agent=1
 
-if under_agent && ! has_help_flag "$@"; then
+if [[ $is_agent -eq 1 ]] && ! has_help_flag "$@"; then
   if [[ $cmd == submit ]] && has_flag --stack "$@" && ! has_flag --dry-run "$@" && ! has_flag --push-only "$@"; then
     echo "gsw: agent stack submission can create multiple PR bodies; verify attribution on each new PR" >&2
   fi
   if writes_prose "$cmd" "$subcmd"; then inject_trailer; fi
+fi
+
+submitted_stack_urls() {
+  local branch common state numbers number
+  branch="$(git branch --show-current 2>/dev/null || true)"
+  common="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  [[ -n "$branch" && -n "$common" ]] || return 0
+  state="$common/.gs/state.json"
+  [[ -f "$state" ]] || return 0
+  numbers="$(ruby -rjson -e '
+    state = JSON.parse(File.read(ARGV.fetch(0)))
+    current = ARGV.fetch(1)
+    branches = state.fetch("branches", {})
+    selected = []
+    node = current
+    while branches.key?(node)
+      selected << node
+      node = branches.fetch(node)["parent"]
+    end
+    if ARGV.fetch(2) == "true"
+      queue = [current]
+      until queue.empty?
+        parent = queue.shift
+        children = branches.select { |_name, data| data["parent"] == parent }.keys
+        selected.concat(children)
+        queue.concat(children)
+      end
+    end
+    selected.uniq.map { |name| branches.dig(name, "prNumber") }.compact.each { |number| puts number }
+  ' "$state" "$branch" "$(has_flag --stack "${args[@]}" && echo true || echo false)" 2>/dev/null || true)"
+  while IFS= read -r number; do
+    [[ -n "$number" ]] || continue
+    gs pr view "$number" --json 2>/dev/null |
+      ruby -rjson -e 'pr = JSON.parse(STDIN.read); puts(pr["htmlUrl"] || pr["url"]) unless pr["xGitstreamStateExtended"] == "merged"' 2>/dev/null || true
+  done <<<"$numbers"
+}
+
+# Capture newly-created PR URLs at the attributed write boundary. This handles
+# multi-PR stack submissions without asking the model to remember registration.
+gs_run_and_register() {
+  local output rc=0 branch urls url
+  output="$(mktemp "${TMPDIR:-/tmp}/gsw-create.XXXXXX")"
+  gs "${args[@]}" >"$output" || rc=$?
+  cat "$output"
+  if [[ $rc -eq 0 ]]; then
+    urls="$(grep -Eo 'https://[^[:space:][:cntrl:]]+/(repos/)?[^/[:space:]]+/[^/[:space:]]+/(pull|pulls)/[0-9]+' "$output" | sort -u || true)"
+    if [[ $cmd == submit ]] && has_flag --stack "${args[@]}"; then
+      urls="$(printf '%s\n%s\n' "$urls" "$(submitted_stack_urls)" | sed '/^$/d' | sort -u)"
+    fi
+    if [[ -z "$urls" ]]; then
+      branch="$(git branch --show-current 2>/dev/null || true)"
+      if [[ -n "$branch" ]]; then
+        urls="$(gs pr list --head "$branch" --state all --json 2>/dev/null |
+          ruby -rjson -e 'JSON.parse(STDIN.read).each { |pr| puts(pr["htmlUrl"] || pr["url"]) }' 2>/dev/null || true)"
+      fi
+    fi
+    if [[ -z "$urls" ]]; then
+      echo "gsw: PR write succeeded but no URL was available for ownership monitoring" >&2
+    elif ! command -v agent-pr-monitor >/dev/null 2>&1; then
+      echo "gsw: PR write succeeded but agent-pr-monitor is unavailable" >&2
+    else
+      while IFS= read -r url; do
+        [[ -n "$url" ]] || continue
+        agent-pr-monitor own "$url" --provider gitstream --cwd "$PWD" >&2 ||
+          echo "gsw: PR written but ownership monitoring failed; run: agent-pr-monitor own $url --provider gitstream --cwd $PWD" >&2
+      done <<<"$urls"
+    fi
+  fi
+  rm -f "$output"
+  [[ -z "$trailer_tmp" ]] || rm -f "$trailer_tmp"
+  exit "$rc"
+}
+
+if [[ $is_agent -eq 1 ]] && ! has_help_flag "${args[@]}"; then
+  if [[ $cmd == pr && $subcmd == create ]] || {
+    [[ $cmd == submit ]] && ! has_flag --dry-run "${args[@]}" && ! has_flag --push-only "${args[@]}"
+  }; then
+    gs_run_and_register
+  fi
 fi
 
 if [[ -n "$trailer_tmp" ]]; then
