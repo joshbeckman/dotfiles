@@ -593,9 +593,10 @@ module AgentPRMonitor
         record.delete("error_count")
         atomic_write(path, record)
         write_checklist(record)
-      rescue MonitorError => e
+      rescue StandardError => e
         now = Time.now.utc
-        record["last_error"] = e.message
+        error = e.is_a?(MonitorError) ? e.message : "#{e.class}: #{e.message}"
+        record["last_error"] = error
         record["error_count"] = record.fetch("error_count", 0).to_i + 1
         record["last_checked_at"] = now.iso8601
         record["next_check_at"] = (now + 5 * 60).iso8601
@@ -605,7 +606,7 @@ module AgentPRMonitor
             PR monitoring has failed three consecutive times:
 
             #{record.fetch("url")}
-            #{e.message}
+            #{error}
 
             Inspect the monitor with `agent-pr-monitor status` and refresh the baseline with:
 
@@ -615,7 +616,7 @@ module AgentPRMonitor
           record["last_error_notified_at"] = now.iso8601
           atomic_write(path, record)
         end
-        warn "#{record["url"]}: #{e.message}"
+        warn "#{record["url"]}: #{error}"
       end
     end
   end
@@ -636,7 +637,11 @@ module AgentPRMonitor
     else
       records
     end
-    selected.each { |path, record| check_record(path, record, force: force, notify: notify) }
+    selected.each do |path, record|
+      check_record(path, record, force: force, notify: notify)
+    rescue StandardError => e
+      warn "#{record["url"] || path}: unhandled record failure: #{e.class}: #{e.message}"
+    end
   end
 
   def monitor_pid

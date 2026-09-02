@@ -145,4 +145,34 @@ if "$root/bin/agent-pr-monitor" status >/dev/null; then
   exit 1
 fi
 
+# One record with a deleted cwd must record its own failure without preventing
+# later records in the same sweep from refreshing.
+ruby -rjson -e '
+  state = ARGV.fetch(0)
+  bad_path = Dir[File.join(state, "prs", "*9.json")].first
+  bad = JSON.parse(File.read(bad_path))
+  bad["cwd"] = File.join(state, "deleted-worktree")
+  File.write(bad_path, JSON.pretty_generate(bad) + "\n")
+
+  source = JSON.parse(File.read(Dir[File.join(state, "prs", "*7.json")].first))
+  source.update("owner" => "zzzz", "number" => 11, "url" => "https://github.com/zzzz/widgets/pull/11")
+  File.write(File.join(state, "prs", "zzzz-widgets-11.json"), JSON.pretty_generate(source) + "\n")
+  source.update("owner" => "yyyy", "number" => 12, "url" => "https://github.com/yyyy/widgets/pull/12")
+  File.write(File.join(state, "prs", "yyyy-widgets-12.json"), JSON.pretty_generate(source) + "\n")
+' "$tmp/state"
+mkdir "$tmp/state/prs/yyyy-widgets-12.json.lock"
+valid_before="$(ruby -rjson -e 'print JSON.parse(File.read(ARGV.fetch(0))).fetch("last_checked_at")' "$tmp/state/prs/zzzz-widgets-11.json")"
+sleep 1
+"$root/bin/agent-pr-monitor" check --no-notify 2>"$tmp/isolated-error.log"
+ruby -rjson -e '
+  state, before = ARGV
+  bad = JSON.parse(File.read(Dir[File.join(state, "prs", "*9.json")].first))
+  abort "record error was not persisted" unless bad["error_count"] == 1
+  abort "record error omitted exception context" unless bad["last_error"].include?("Errno::ENOENT")
+  good = JSON.parse(File.read(File.join(state, "prs", "zzzz-widgets-11.json")))
+  abort "later record was blocked by an earlier failure" unless good.fetch("last_checked_at") > before
+' "$tmp/state" "$valid_before"
+grep -F 'deleted-worktree' "$tmp/isolated-error.log" >/dev/null
+grep -F 'unhandled record failure: Errno::EISDIR' "$tmp/isolated-error.log" >/dev/null
+
 printf 'agent-pr-monitor tests passed\n'
