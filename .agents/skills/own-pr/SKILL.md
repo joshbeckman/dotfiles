@@ -30,6 +30,7 @@ The monitor records machine-readable state and maintains `$AGENT_SCRATCHPAD/prs/
 - [ ] CI and automated reviews passed
 - [ ] Josh reviewed; reviewer preference recorded
 - [ ] Human comments resolved and approvals complete
+- [ ] Material feedback decisions and revisions confirmed with Josh, if any
 - [ ] Merged
 - [ ] Deployed
 - [ ] Production proof sent to Josh
@@ -75,8 +76,10 @@ Once Josh marks the PR ready or explicitly asks you to do so:
 
 1. Request review from Josh's preferred reviewers; otherwise use the proposed candidates he accepted.
 2. Poll for comments, submitted reviews, new conflicts, and check regressions.
-3. Respond to every thread. Fix and push, or explain why you decline. Resolve addressed threads and re-request review when the platform requires it.
-4. Return to Josh when a decision requires product judgment or reviewers disagree.
+3. Respond to every thread. Proceed autonomously on corrections and mechanical fixes that preserve the approved direction. Fix and push, or explain why you decline. Resolve addressed threads and re-request review when the platform requires it.
+4. Do not silently accept feedback that materially changes behavior, scope, architecture, interfaces, data handling, rollout, user experience, or the PR's accepted risk and tradeoffs. Before editing, message Josh with the feedback link, what would change, the viable options, and your recommendation; wait for his direction.
+5. After a material revision, message Josh with the new head SHA and a concise before/after summary, then ask him to review the revised direction. Do this even when the reviewer request seemed unambiguous or the implementation is already green.
+6. Return to Josh when reviewers disagree or any decision requires product, design, security, operational, or prioritization judgment.
 
 ## 4. Merge queue
 
