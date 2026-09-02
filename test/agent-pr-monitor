@@ -114,4 +114,35 @@ ruby -rjson -e '
   record = JSON.parse(File.read(Dir[File.join(ARGV.fetch(0), "prs", "*9.json")].first))
   abort "pending Gitstream checks were not registered" unless record.dig("snapshot", "checks", 0, "state") == "PENDING"
 ' "$tmp/state"
+
+# Inspection reuses a registered record's cwd without mutating its baseline.
+registered_path="$(find "$tmp/state/prs" -name '*9.json' -print -quit)"
+registered_before="$(shasum -a 256 "$registered_path")"
+inspected="$($root/bin/agent-pr-monitor inspect \
+  https://reviews.example/repos/acme/widgets/pulls/9 --json)"
+jq -e --arg cwd "$tmp" '
+  .registered == true and .provider == "gitstream" and .cwd == $cwd and
+  .snapshot.checks[0].state == "PENDING"
+' <<<"$inspected" >/dev/null
+[[ "$(shasum -a 256 "$registered_path")" == "$registered_before" ]]
+
+# An unregistered URL gets an ephemeral provider snapshot and creates no
+# ownership record or monitor process.
+cat >"$tmp/gs-inspect.json" <<'JSON'
+{"state":"closed","draft":false,"headSha":"ghi","mergeableState":"clean","reviews":[],"requestedReviewers":[],"comments":[],"labels":[{"name":"//example/zone"}],"htmlUrl":"https://reviews.example/repos/acme/widgets/pulls/10","title":"Inspect without ownership","mergedAt":"2026-09-02T00:00:00Z","mergeCommitSha":"merge-10","xGitstreamStateExtended":"merged"}
+JSON
+export GS_VIEW_FIXTURE="$tmp/gs-inspect.json"
+inspected="$($root/bin/agent-pr-monitor inspect \
+  https://reviews.example/repos/acme/widgets/pulls/10 --json --cwd "$tmp")"
+jq -e --arg cwd "$tmp" '
+  .registered == false and .number == 10 and .provider == "gitstream" and
+  .cwd == $cwd and .snapshot.state == "MERGED" and
+  .snapshot.merge_commit == "merge-10" and .snapshot.deployment == null
+' <<<"$inspected" >/dev/null
+[[ ! -e "$tmp/state/prs/acme-widgets-10.json" ]]
+if "$root/bin/agent-pr-monitor" status >/dev/null; then
+  echo "inspect unexpectedly started the monitor" >&2
+  exit 1
+fi
+
 printf 'agent-pr-monitor tests passed\n'

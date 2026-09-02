@@ -24,6 +24,7 @@ module AgentPRMonitor
     <<~TEXT
       Usage:
         agent-pr-monitor own PR_URL [--owner HANDLE] [--provider github|gitstream] [--cwd DIR]
+        agent-pr-monitor inspect PR_URL --json [--provider github|gitstream] [--cwd DIR]
         agent-pr-monitor ack PR_URL
         agent-pr-monitor release PR_URL
         agent-pr-monitor list
@@ -37,7 +38,8 @@ module AgentPRMonitor
       `own` establishes a baseline without sending mail, writes the owner's
       scratchpad checklist when available, and starts the monitor. URLs whose
       path uses /pulls/ are treated as Gitstream; override with --provider when
-      necessary.
+      necessary. `inspect` fetches the same normalized snapshot without writing
+      state, taking ownership, or starting the monitor.
 
       `ack` refreshes the baseline after an agent handles an event. `release`
       stops monitoring only that PR. `uninstall --purge` removes the launch agent
@@ -125,7 +127,7 @@ module AgentPRMonitor
     raise MonitorError, "gs pr checks #{number} --json failed (#{status.exitstatus}): #{detail}"
   end
 
-  def fetch_snapshot(record)
+  def fetch_snapshot(record, include_review_threads: true, include_deployment: true)
     provider = record.fetch("provider")
     raw, checks = if provider == "gitstream"
       cwd = record.fetch("cwd")
@@ -144,8 +146,8 @@ module AgentPRMonitor
     if snapshot["mergeable"].to_s.empty? || snapshot["mergeable"] == "UNKNOWN"
       snapshot["mergeable"] = previous_mergeable unless previous_mergeable.empty? || previous_mergeable == "UNKNOWN"
     end
-    snapshot["review_threads"] = fetch_github_threads(record) unless provider == "gitstream"
-    snapshot["deployment"] = deployment_snapshot(record, snapshot) if snapshot["state"] == "MERGED"
+    snapshot["review_threads"] = fetch_github_threads(record) if include_review_threads && provider != "gitstream"
+    snapshot["deployment"] = deployment_snapshot(record, snapshot) if include_deployment && snapshot["state"] == "MERGED"
     snapshot
   rescue JSON::ParserError => e
     raise MonitorError, "invalid #{provider} JSON for #{record.fetch("url")}: #{e.message}"
@@ -411,6 +413,26 @@ module AgentPRMonitor
     else
       puts "Owned #{record.fetch("url")} as @+#{record.fetch("agent")} (#{provider}); baseline recorded."
     end
+  end
+
+  def inspect_pr(url, options)
+    identity = parse_url(url)
+    path = record_path(identity)
+    registered = File.file?(path)
+    existing = registered ? read_json(path) : {}
+    provider = options[:provider] || existing["provider"] || infer_provider(identity, nil)
+    raise MonitorError, "provider must be github or gitstream" unless %w[github gitstream].include?(provider)
+
+    record = existing.merge(identity).merge(
+      "provider" => provider,
+      "cwd" => File.expand_path(options[:cwd] || existing["cwd"] || Dir.pwd),
+    )
+    snapshot = fetch_snapshot(record, include_review_threads: false, include_deployment: false)
+    record["url"] = snapshot["url"] unless snapshot["url"].to_s.empty?
+    output = record.slice("owner", "repo", "number", "url", "provider", "cwd")
+    output["registered"] = registered
+    output["snapshot"] = snapshot
+    puts JSON.generate(output)
   end
 
   def ack(url)
@@ -781,6 +803,16 @@ begin
     parser.parse!(ARGV)
     raise MonitorError, "own requires PR_URL" unless ARGV.one?
     AgentPRMonitor.own(ARGV.first, options)
+  when "inspect"
+    options = {}
+    parser = OptionParser.new do |opts|
+      opts.on("--json") { options[:json] = true }
+      opts.on("--provider PROVIDER") { |value| options[:provider] = value }
+      opts.on("--cwd DIR") { |value| options[:cwd] = value }
+    end
+    parser.parse!(ARGV)
+    raise MonitorError, "inspect requires PR_URL and --json" unless ARGV.one? && options[:json]
+    AgentPRMonitor.inspect_pr(ARGV.first, options)
   when "ack"
     raise MonitorError, "ack requires PR_URL" unless ARGV.one?
     AgentPRMonitor.ack(ARGV.first)
