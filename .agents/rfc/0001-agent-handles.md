@@ -159,6 +159,28 @@ dereference that would change this).
 Agents MUST generate the trailer with `agent-trailer` from runtime state and
 MUST NOT write it from memory; models guess their own names wrong.
 
+Presentation depends on the surface. A standalone conversational response MUST
+put the trailer before the response and render the response as a blockquote:
+
+```
+Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) @+handle
+
+> Agent-authored response.
+```
+
+This tells readers who is speaking before they interpret the words. When human
+and agent prose share a comment, the human prose remains unquoted and each
+agent passage MUST be blockquoted with its trailer immediately adjacent. A
+wrapper MAY treat an exact existing trailer as evidence that the author has
+composed this boundary deliberately and leave the body unchanged.
+
+Maintained artifacts such as pull request descriptions and issue bodies MAY
+carry the trailer after the prose without blockquoting the artifact. Commit
+trailers MUST remain at the end in the email form expected by GitHub. If an
+agent only transmits words supplied verbatim by the account owner, the write
+path still attributes the agent's involvement. Implementations SHOULD prefer
+this over an unattributed bypass that they cannot verify.
+
 ## 9. Dereference (Future)
 
 The qualified form is one `@`-swap away from an

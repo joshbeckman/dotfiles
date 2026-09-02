@@ -61,6 +61,7 @@ writes_prose() {
 
 trailer_tmp=""
 inject_trailer() {
+  local presentation="${1:-artifact}"
   local i idx=-1 kind="" value="" joined=0 content already=0 trailer
   for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
@@ -104,6 +105,9 @@ inject_trailer() {
   trap 'rm -f "$trailer_tmp"' EXIT HUP INT TERM
   if [[ $already -eq 1 ]]; then
     printf '%s\n' "$content" > "$trailer_tmp"
+  elif [[ $presentation == conversation ]]; then
+    printf '%s\n\n' "$trailer" > "$trailer_tmp"
+    printf '%s\n' "$content" | sed 's/^/> /; s/^> $/>/' >> "$trailer_tmp"
   else
     printf '%s\n\n%s\n' "$content" "$trailer" > "$trailer_tmp"
   fi
@@ -125,7 +129,12 @@ if [[ $is_agent -eq 1 ]] && ! has_help_flag "$@"; then
   if [[ $cmd == submit ]] && has_flag --stack "$@" && ! has_flag --dry-run "$@" && ! has_flag --push-only "$@"; then
     echo "gsw: agent stack submission can create multiple PR bodies; verify attribution on each new PR" >&2
   fi
-  if writes_prose "$cmd" "$subcmd"; then inject_trailer; fi
+  if writes_prose "$cmd" "$subcmd"; then
+    case "$cmd $subcmd" in
+      "pr comment" | "pr review") inject_trailer conversation ;;
+      *) inject_trailer artifact ;;
+    esac
+  fi
 fi
 
 submitted_stack_urls() {

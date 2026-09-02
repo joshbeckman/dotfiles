@@ -24,22 +24,13 @@ writes_prose() {
   return 1
 }
 
-# close/reopen carry prose in --comment, which has no file variant. --comment
-# must not be rewritten on other verbs: it is a boolean review type on
-# `pr review`.
-takes_comment_flag() {
-  case "$1 ${2:-}" in
-    "issue close" | "pr close" | "issue reopen" | "pr reopen") return 0 ;;
-  esac
-  return 1
-}
-
 # Rewrites args[] so the body always arrives as a file we control. Handling
 # --body and --body-file through one path avoids quoting a trailer back into an
 # inline argument.
 trailer_tmp=""
 inject_trailer() {
   local mode="${1:-body}"
+  local presentation="${2:-artifact}"
   local i idx=-1 kind="" value="" joined=0 content
   for ((i = 0; i < ${#args[@]}; i++)); do
     if [[ $mode == comment ]]; then
@@ -84,11 +75,15 @@ inject_trailer() {
     return 0
   fi
 
-  # --comment has no file variant, so the trailer rides inline; args are passed
-  # as an array straight to exec, so embedded newlines survive without
-  # re-quoting.
-  if [[ $mode == comment ]]; then
+  if [[ $presentation == conversation ]]; then
+    content="$trailer"$'\n\n'"$(printf '%s\n' "$content" | sed 's/^/> /; s/^> $/>/')"
+  else
     content="$content"$'\n\n'"$trailer"
+  fi
+
+  # --comment has no file variant, so the attributed body rides inline; args
+  # are passed as an array straight to exec, so embedded newlines survive.
+  if [[ $mode == comment ]]; then
     if [[ $joined -eq 1 ]]; then
       args[idx]="--comment=$content"
     else
@@ -98,7 +93,7 @@ inject_trailer() {
   fi
 
   trailer_tmp="$(mktemp "${TMPDIR:-/tmp}/gw-body.XXXXXX")"
-  printf '%s\n\n%s\n' "$content" "$trailer" > "$trailer_tmp"
+  printf '%s\n' "$content" > "$trailer_tmp"
   if [[ $joined -eq 1 ]]; then
     args[idx]="--body-file=$trailer_tmp"
   else
@@ -206,11 +201,11 @@ pr_selector_defaults_to_branch() {
 
 args=("$@")
 if [[ ${#args[@]} -gt 0 ]] && under_agent && writes_prose "$cmd" "${args[0]}" && ! has_help_flag "${args[@]}"; then
-  if takes_comment_flag "$cmd" "${args[0]}"; then
-    inject_trailer comment
-  else
-    inject_trailer body
-  fi
+  case "$cmd ${args[0]}" in
+    "issue comment" | "pr comment" | "pr review") inject_trailer body conversation ;;
+    "issue close" | "pr close" | "issue reopen" | "pr reopen") inject_trailer comment conversation ;;
+    *) inject_trailer body artifact ;;
+  esac
 fi
 set -- "${args[@]}"
 

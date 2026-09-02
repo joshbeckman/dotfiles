@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+
+cat >"$tmp/bin/agent-trailer" <<'SH'
+#!/bin/sh
+if [ "${1:-}" = --raw ]; then
+  echo pi/test/model
+else
+  echo 'Co-authored-by: AI Test Agent (pi/test/model) @+test-agent'
+fi
+SH
+
+cat >"$tmp/bin/capture-body" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    --body-file|-F)
+      cat "${args[i + 1]}" >"$CAPTURE"
+      exit 0
+      ;;
+    --body-file=*)
+      cat "${args[i]#--body-file=}" >"$CAPTURE"
+      exit 0
+      ;;
+    --body|-b|--comment|-c)
+      printf '%s\n' "${args[i + 1]}" >"$CAPTURE"
+      exit 0
+      ;;
+    --body=*|--comment=*)
+      printf '%s\n' "${args[i]#*=}" >"$CAPTURE"
+      exit 0
+      ;;
+  esac
+done
+: >"$CAPTURE"
+SH
+ln -s capture-body "$tmp/bin/gh"
+ln -s capture-body "$tmp/bin/gs"
+chmod +x "$tmp/bin/agent-trailer" "$tmp/bin/capture-body"
+
+export PATH="$tmp/bin:$PATH"
+export CAPTURE="$tmp/captured"
+trailer='Co-authored-by: AI Test Agent (pi/test/model) @+test-agent'
+
+assert_capture() {
+  local expected="$tmp/expected"
+  printf '%s' "$1" >"$expected"
+  diff -u "$expected" "$CAPTURE"
+}
+
+"$root/bin/gw" issue comment 1 --body $'First line.\n\nSecond line.'
+assert_capture "$trailer
+
+> First line.
+>
+> Second line.
+"
+
+"$root/bin/gw" issue create --title Test --body 'Maintained artifact.'
+assert_capture "Maintained artifact.
+
+$trailer
+"
+
+mixed="Josh's introduction.
+
+> Agent finding.
+
+$trailer
+
+Josh's conclusion."
+"$root/bin/gw" issue comment 1 --body "$mixed"
+assert_capture "$mixed
+"
+
+"$root/bin/gw" issue close 1 --comment 'Closing after verification.'
+assert_capture "$trailer
+
+> Closing after verification.
+"
+
+"$root/bin/gsw" pr comment 1 --body $'Graphite first.\n\nGraphite second.'
+assert_capture "$trailer
+
+> Graphite first.
+>
+> Graphite second.
+"
+
+"$root/bin/gsw" pr edit 1 --body 'Updated description.'
+assert_capture "Updated description.
+
+$trailer
+"
+
+echo 'agent attribution wrapper tests passed'
