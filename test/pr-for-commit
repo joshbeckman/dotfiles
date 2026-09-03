@@ -26,6 +26,7 @@ git -C "$tmp/repo" config prForCommit.trailer Review-Number
 git -C "$tmp/repo" config prForCommit.baseRef main
 
 [[ "$(cd "$tmp/repo" && "$command" "$feature")" == 'https://reviews.example.test/pulls/42' ]]
+[[ "$(cd "$tmp/repo" && PATH="$root/bin:$PATH" git pr-for-commit "$feature")" == 'https://reviews.example.test/pulls/42' ]]
 [[ "$(cd "$tmp/repo" && "$command" "$merge")" == 'https://reviews.example.test/pulls/42' ]]
 if (cd "$tmp/repo" && "$command" "$direct" >"$tmp/out" 2>"$tmp/err"); then
   printf 'expected a direct commit not to resolve through a later merge\n' >&2
