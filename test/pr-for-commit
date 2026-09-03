@@ -21,9 +21,9 @@ feature="$(git -C "$tmp/repo" rev-parse HEAD)"
 git -C "$tmp/repo" checkout -q main
 git -C "$tmp/repo" merge -q --no-ff feature -m $'Merge feature\n\nReview-Number: 42'
 merge="$(git -C "$tmp/repo" rev-parse HEAD)"
-git -C "$tmp/repo" config prForCommit.urlTemplate 'https://reviews.example.test/pulls/{number}'
-git -C "$tmp/repo" config prForCommit.trailer Review-Number
-git -C "$tmp/repo" config prForCommit.baseRef main
+git -C "$tmp/repo" config prLookup.urlTemplate 'https://reviews.example.test/pulls/{number}'
+git -C "$tmp/repo" config prLookup.trailer Review-Number
+git -C "$tmp/repo" config prLookup.baseRef main
 
 [[ "$(cd "$tmp/repo" && "$command" "$feature")" == 'https://reviews.example.test/pulls/42' ]]
 [[ "$(cd "$tmp/repo" && PATH="$root/bin:$PATH" git pr-for-commit "$feature")" == 'https://reviews.example.test/pulls/42' ]]
@@ -39,9 +39,9 @@ cat >"$tmp/bin/gw" <<'EOF'
 printf '%s\n' "${FAKE_GW_URLS:-}"
 EOF
 chmod +x "$tmp/bin/gw"
-git -C "$tmp/repo" config --unset-all prForCommit.urlTemplate
-git -C "$tmp/repo" config --unset-all prForCommit.trailer
-git -C "$tmp/repo" config --unset-all prForCommit.baseRef
+git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
+git -C "$tmp/repo" config --unset-all prLookup.trailer
+git -C "$tmp/repo" config --unset-all prLookup.baseRef
 git -C "$tmp/repo" remote add origin https://github.com/example/project.git
 
 url='https://github.com/example/project/pull/7'

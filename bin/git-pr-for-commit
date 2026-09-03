@@ -20,17 +20,17 @@ esac
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 commit="$(git rev-parse --verify "$1^{commit}" 2>/dev/null)" || die "not a commit: $1"
 
-template="$(git config --get prForCommit.urlTemplate || true)"
-trailer="$(git config --get prForCommit.trailer || true)"
+template="$(git config --get prLookup.urlTemplate || git config --get prForCommit.urlTemplate || true)"
+trailer="$(git config --get prLookup.trailer || git config --get prForCommit.trailer || true)"
 if [[ -n "$template" || -n "$trailer" ]]; then
-  [[ -n "$template" && "$template" == *'{number}'* ]] || die 'prForCommit.urlTemplate must contain {number}'
-  [[ -n "$trailer" ]] || die 'prForCommit.trailer is required with urlTemplate'
+  [[ -n "$template" && "$template" == *'{number}'* ]] || die 'prLookup.urlTemplate must contain {number}'
+  [[ -n "$trailer" ]] || die 'prLookup.trailer is required with urlTemplate'
 
-  base_ref="$(git config --get prForCommit.baseRef || true)"
+  base_ref="$(git config --get prLookup.baseRef || git config --get prForCommit.baseRef || true)"
   if [[ -z "$base_ref" ]]; then
     base_ref="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
   fi
-  [[ -n "$base_ref" ]] || die 'configure prForCommit.baseRef or origin/HEAD'
+  [[ -n "$base_ref" ]] || die 'configure prLookup.baseRef or origin/HEAD'
   git rev-parse --verify "$base_ref^{commit}" >/dev/null 2>&1 || die "base ref does not exist: $base_ref"
 
   candidates=("$commit")

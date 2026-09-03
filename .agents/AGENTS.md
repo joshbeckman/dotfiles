@@ -85,14 +85,6 @@ Every commit must include a body after the subject and blank line. Explain why t
 
 Use `gw`, not `gh`, for GitHub commands. In `shop/world`, Meteorite is the standard PR write interface: use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Continue using `gw view-md` to read issues and pull requests, and use `gw` for issue operations and PR check helpers. Both wrappers preserve agent attribution while passing human and read-only commands through. `gw` uses the current repository and branch unless `GW_REPO` overrides it. Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
 
-### Fast PR Lookups
-
-| Command | Use |
-|---|---|
-| `gw pr-checks [PR_URL] [--required]` | Render checks as an actionable Markdown table. |
-| `gw pr-url` | Print the current branch's PR URL. |
-| `gw pr-merged [PR_URL]` | Print the merge timestamp; exit nonzero if the PR is not merged. |
-
 Reference every issue or pull request with its title and full URL:
 
 ```markdown

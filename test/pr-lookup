@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/repo" "$tmp/bin"
+git -C "$tmp/repo" init -q -b feature
+git -C "$tmp/repo" config prLookup.provider gitstream
+git -C "$tmp/repo" config prLookup.urlTemplate 'https://reviews.example.test/pulls/{number}'
+
+cat >"$tmp/bin/gw" <<'EOF'
+#!/bin/sh
+case "$1" in
+  pr-url) printf 'https://github.com/example/project/pull/7\n' ;;
+  pr-merged) printf '2026-01-02T03:04:05Z\n' ;;
+  pr-checks) printf '| Check | Status | Result |\n| --- | --- | --- |\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+cat >"$tmp/bin/gs" <<'EOF'
+#!/bin/sh
+case "$1 $2" in
+  'pr list') printf '[{"number":42}]\n' ;;
+  'pr view') printf '{"mergedAt":"2026-02-03T04:05:06Z"}\n' ;;
+  'pr checks')
+    if [ "${4:-}" = --json ]; then
+      printf '{"requiredChecks":[{"name":"Required CI","state":"%s","present":true}]}\n' "${FAKE_CHECK_STATE:-success}"
+    else
+      printf 'Required CI  success\n'
+    fi
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$tmp/bin/gw" "$tmp/bin/gs"
+
+run() {
+  (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git "$@")
+}
+
+[[ "$(run pr-url)" == 'https://reviews.example.test/pulls/42' ]]
+[[ "$(run pr-url 41)" == 'https://reviews.example.test/pulls/41' ]]
+[[ "$(run pr-merged 41)" == '2026-02-03T04:05:06Z' ]]
+run pr-checks 41 | grep -Fq 'Required CI  success'
+run pr-checks 41 --required | grep -Fq '| Required CI | success | Required |'
+if FAKE_CHECK_STATE=failure run pr-checks 41 --required >"$tmp/out"; then
+  printf 'expected a failed required check to return nonzero\n' >&2
+  exit 1
+fi
+grep -Fq '| Required CI | failure | Required |' "$tmp/out"
+[[ "$(run pr-url https://github.com/example/project/pull/7)" == 'https://github.com/example/project/pull/7' ]]
+[[ "$(run pr-merged https://github.com/example/project/pull/7)" == '2026-01-02T03:04:05Z' ]]
+run pr-checks https://github.com/example/project/pull/7 --required | grep -Fq '| Check | Status | Result |'
+
+git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
+gitstream_url='https://reviews.example.test/pulls/41'
+[[ "$(run pr-url "$gitstream_url")" == "$gitstream_url" ]]
+[[ "$(run pr-merged "$gitstream_url")" == '2026-02-03T04:05:06Z' ]]
+
+printf 'pr-lookup tests passed\n'

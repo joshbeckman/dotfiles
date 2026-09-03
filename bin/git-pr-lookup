@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="${0##*/git-pr-}"
+case "$mode" in
+  url|checks|merged) ;;
+  *) printf 'git-pr-lookup: invoke as git pr-url, git pr-checks, or git pr-merged\n' >&2; exit 2 ;;
+esac
+
+usage() {
+  case "$mode" in
+    url) printf 'Usage: git pr-url [PR_URL|PR_NUMBER|BRANCH]\n' ;;
+    checks) printf 'Usage: git pr-checks [PR_URL|PR_NUMBER|BRANCH] [--required]\n' ;;
+    merged) printf 'Usage: git pr-merged [PR_URL|PR_NUMBER|BRANCH]\n' ;;
+  esac
+}
+
+die() {
+  printf 'git pr-%s: %s\n' "$mode" "$*" >&2
+  exit 1
+}
+
+for arg in "$@"; do
+  case "$arg" in -h|--help) usage; exit 0 ;; esac
+done
+
+selector=""
+required=false
+for arg in "$@"; do
+  case "$arg" in
+    --required) required=true ;;
+    -*) die "unknown option: $arg" ;;
+    *) [[ -z "$selector" ]] || die 'accepts at most one PR selector'; selector="$arg" ;;
+  esac
+done
+[[ "$mode" == checks || "$required" == false ]] || die '--required is only valid for pr-checks'
+
+provider="$(git config --get prLookup.provider || true)"
+case "$selector" in
+  *'/pull/'*) provider=github ;;
+  *'/pulls/'*) provider=gitstream ;;
+esac
+[[ -n "$provider" ]] || provider=github
+[[ "$provider" == github || "$provider" == gitstream ]] || die "unsupported provider: $provider"
+
+if [[ "$provider" == github ]]; then
+  case "$mode" in
+    url) exec gw pr-url ${selector:+"$selector"} ;;
+    checks)
+      args=()
+      [[ -n "$selector" ]] && args+=("$selector")
+      $required && args+=(--required)
+      exec gw pr-checks "${args[@]}"
+      ;;
+    merged) exec gw pr-merged ${selector:+"$selector"} ;;
+  esac
+fi
+
+command -v gs >/dev/null 2>&1 || die 'gs is required for this repository'
+if [[ "$selector" =~ /pulls/([0-9]+)($|[/?#]) ]]; then
+  number="${BASH_REMATCH[1]}"
+elif [[ "$selector" =~ ^[0-9]+$ ]]; then
+  number="$selector"
+else
+  branch="${selector:-$(git branch --show-current)}"
+  [[ -n "$branch" ]] || die 'cannot infer a branch from detached HEAD'
+  list="$(gs pr list --head "$branch" --state all --limit 2 --json 2>/dev/null)" || die "could not list pull requests for branch: $branch"
+  number="$(printf '%s' "$list" | ruby -rjson -e 'a=JSON.parse(STDIN.read); abort "expected one pull request, found #{a.length}" unless a.length == 1; puts a[0].fetch("number")' 2>&1)" || die "$number"
+fi
+
+template="$(git config --get prLookup.urlTemplate || git config --get prForCommit.urlTemplate || true)"
+if [[ "$template" == *'{number}'* ]]; then
+  url="${template//\{number\}/$number}"
+elif [[ "$selector" == http://* || "$selector" == https://* ]]; then
+  url="$selector"
+else
+  url=""
+fi
+
+case "$mode" in
+  url)
+    [[ -n "$url" ]] || die 'configure prLookup.urlTemplate with a {number} placeholder'
+    printf '%s\n' "$url"
+    ;;
+  merged)
+    raw="$(gs pr view "$number" --json)" || die "could not inspect pull request $number"
+    merged_at="$(printf '%s' "$raw" | ruby -rjson -e 'j=JSON.parse(STDIN.read); puts j["mergedAt"].to_s')"
+    [[ -n "$merged_at" ]] || die 'not merged'
+    printf '%s\n' "$merged_at"
+    ;;
+  checks)
+    if ! $required; then
+      exec gs pr checks "$number"
+    fi
+    raw="$(gs pr checks "$number" --json || true)"
+    set +e
+    printf '%s' "$raw" | ruby -rjson -e '
+      checks = JSON.parse(STDIN.read).fetch("requiredChecks", [])
+      puts "| Check | Status | Result |", "| --- | --- | --- |"
+      checks.each do |check|
+        state = check["state"] || check["conclusion"] || check["status"] || "unknown"
+        result = check["present"] == false ? "Missing" : "Required"
+        puts "| #{check.fetch("name").gsub("|", "\\|")} | #{state} | #{result} |"
+      end
+      exit 1 if checks.any? { |c| c["present"] == false || %w[failure failed error cancelled].include?((c["state"] || c["conclusion"]).to_s.downcase) }
+      exit 8 if checks.any? { |c| %w[pending queued in_progress].include?((c["state"] || c["status"]).to_s.downcase) }
+    '
+    status=$?
+    set -e
+    exit "$status"
+    ;;
+esac
