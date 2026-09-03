@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+launcher="$repo_root/bin/spawn-pi-worktree"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+
+cat >"$tmp/bin/tmux" <<'EOF'
+#!/bin/sh
+case "$1" in
+  has-session) exit 0 ;;
+  list-windows) [ -n "${FAKE_DUPLICATE_TITLE:-}" ] && printf '%s\n' "$FAKE_DUPLICATE_TITLE"; exit 0 ;;
+  *) printf 'unexpected tmux command: %s\n' "$*" >&2; exit 1 ;;
+esac
+EOF
+
+cat >"$tmp/bin/uname" <<'EOF'
+#!/bin/sh
+printf 'Linux\n'
+EOF
+
+cat >"$tmp/login-shell" <<'EOF'
+#!/bin/sh
+[ "$1" = -lic ] || exit 2
+printf '/fake/bin/pi\n'
+EOF
+chmod +x "$tmp/bin/tmux" "$tmp/bin/uname" "$tmp/login-shell"
+
+mkdir "$tmp/repo"
+git -C "$tmp/repo" init -q
+git -C "$tmp/repo" config user.email test@example.com
+git -C "$tmp/repo" config user.name Test
+printf 'fixture\n' >"$tmp/repo/fixture"
+git -C "$tmp/repo" add fixture
+git -C "$tmp/repo" commit -qm fixture
+git -C "$tmp/repo" worktree add -q -b child "$tmp/worktree"
+
+run() {
+  (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/login-shell" "$launcher" "$@")
+}
+
+output="$(run --dry-run --approve --tmux-session test --title child \
+  --cwd "$tmp/worktree" --prompt '- inspect this worktree')"
+worktree_root="$(git -C "$tmp/worktree" rev-parse --show-toplevel)"
+grep -Fq "worktree: $worktree_root" <<<"$output"
+grep -Fq 'branch: child' <<<"$output"
+grep -Fq 'pi: /fake/bin/pi' <<<"$output"
+grep -Fq -- '--approve' <<<"$output"
+grep -Fq -- '--approve\ --\ ' <<<"$output"
+grep -Fq -- 'inspect' <<<"$output"
+
+if run --dry-run --tmux-session test --title missing-prompt --cwd "$tmp/worktree" \
+  >"$tmp/out" 2>"$tmp/err"; then
+  printf 'expected a missing prompt to fail\n' >&2
+  exit 1
+fi
+grep -Fq -- '--prompt is required' "$tmp/err"
+
+if run --dry-run --tmux-session test --title current --cwd "$tmp/repo" --prompt test \
+  >"$tmp/out" 2>"$tmp/err"; then
+  printf 'expected the coordinator worktree to fail\n' >&2
+  exit 1
+fi
+grep -Fq "coordinator's current worktree" "$tmp/err"
+
+if FAKE_DUPLICATE_TITLE=child run --dry-run --tmux-session test --title child \
+  --cwd "$tmp/worktree" --prompt test >"$tmp/out" 2>"$tmp/err"; then
+  printf 'expected a duplicate title to fail\n' >&2
+  exit 1
+fi
+grep -Fq 'tmux window already exists: test:child' "$tmp/err"
+
+if (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/missing-shell" "$launcher" \
+  --dry-run --tmux-session test --title child --cwd "$tmp/worktree" --prompt test \
+  >"$tmp/out" 2>"$tmp/err"); then
+  printf 'expected an invalid login shell to fail\n' >&2
+  exit 1
+fi
+grep -Fq 'login shell is not executable' "$tmp/err"
+
+printf 'spawn-pi-worktree tests passed\n'

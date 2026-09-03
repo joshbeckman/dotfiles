@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  spawn-pi-worktree [--dry-run] [--approve] --tmux-session SESSION \
+    --title TITLE --cwd PATH --prompt TEXT
+
+Starts Pi in an existing git worktree and a new detached tmux window.
+Repository-specific worktree creation and setup must already be complete.
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+shell_join() {
+  local joined="" arg
+  for arg in "$@"; do
+    printf -v joined '%s%q ' "$joined" "$arg"
+  done
+  printf '%s\n' "${joined% }"
+}
+
+dry_run=false
+approve=false
+tmux_session=""
+title=""
+cwd=""
+prompt=""
+
+while (($#)); do
+  case "$1" in
+    --dry-run) dry_run=true; shift ;;
+    --approve) approve=true; shift ;;
+    --tmux-session) (($# >= 2)) || die '--tmux-session requires a value'; tmux_session="$2"; shift 2 ;;
+    --title) (($# >= 2)) || die '--title requires a value'; title="$2"; shift 2 ;;
+    --cwd) (($# >= 2)) || die '--cwd requires a value'; cwd="$2"; shift 2 ;;
+    --prompt) (($# >= 2)) || die '--prompt requires a value'; prompt="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$tmux_session" ]] || die '--tmux-session is required'
+[[ -n "$title" ]] || die '--title is required'
+[[ -n "$cwd" ]] || die '--cwd is required'
+[[ -n "$prompt" ]] || die '--prompt is required'
+[[ "$cwd" = /* ]] || die '--cwd must be an absolute path'
+[[ -d "$cwd" ]] || die "cwd does not exist: $cwd"
+[[ "$title" != *$'\n'* ]] || die '--title must be one line'
+git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "cwd is not a git worktree: $cwd"
+worktree_root="$(git -C "$cwd" rev-parse --show-toplevel)"
+if caller_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" && [[ "$worktree_root" == "$caller_root" ]]; then
+  die "cwd belongs to the coordinator's current worktree: $worktree_root"
+fi
+
+command -v tmux >/dev/null 2>&1 || die 'tmux is not installed'
+tmux has-session -t "$tmux_session" 2>/dev/null || die "tmux session does not exist: $tmux_session"
+if tmux list-windows -t "$tmux_session" -F '#W' | grep -Fxq "$title"; then
+  die "tmux window already exists: $tmux_session:$title"
+fi
+
+if [[ "$(uname -s)" == Darwin ]] && pressure="$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)"; then
+  [[ "$pressure" == 1 ]] || die "macOS memory pressure is $pressure; defer this launch"
+fi
+
+shell="${SHELL:-/bin/sh}"
+[[ -x "$shell" ]] || die "login shell is not executable: $shell"
+pi_path=""
+if ! pi_path="$($shell -lic 'command -v pi' 2>/dev/null | tail -1)" || [[ -z "$pi_path" ]]; then
+  die "pi is not available in the login shell: $shell"
+fi
+
+pi_args=(--name "$title")
+$approve && pi_args+=(--approve)
+pi_args+=(-- "$prompt")
+inner='pi_path=$1; shift; printf "Starting Pi: %s\n" "$pi_path"; "$pi_path" "$@"; status=$?; printf "Pi exited with %s; leaving an interactive shell open.\n" "$status"; exec "${SHELL:-/bin/sh}" -l'
+window_command="$(shell_join /bin/sh -c "$inner" spawn-pi-worktree "$pi_path" "${pi_args[@]}")"
+branch="$(git -C "$cwd" branch --show-current)"
+
+if $dry_run; then
+  printf 'worktree: %s\nbranch: %s\npi: %s\n' "$worktree_root" "${branch:-detached HEAD}" "$pi_path"
+  printf 'tmux new-window -t %q -d -n %q -c %q %q\n' "$tmux_session:" "$title" "$cwd" "$window_command"
+  exit 0
+fi
+
+exec tmux new-window -t "$tmux_session:" -d -n "$title" -c "$cwd" "$window_command"
