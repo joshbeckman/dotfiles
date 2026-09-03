@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: pr-for-commit <commit>
+
+Print the canonical pull-request URL associated with a commit in the current repository.
+EOF
+}
+
+die() {
+  printf 'pr-for-commit: %s\n' "$*" >&2
+  exit 1
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+[[ $# -eq 1 ]] || { usage >&2; exit 2; }
+commit="$(git rev-parse --verify "$1^{commit}" 2>/dev/null)" || die "not a commit: $1"
+
+template="$(git config --get prForCommit.urlTemplate || true)"
+trailer="$(git config --get prForCommit.trailer || true)"
+if [[ -n "$template" || -n "$trailer" ]]; then
+  [[ -n "$template" && "$template" == *'{number}'* ]] || die 'prForCommit.urlTemplate must contain {number}'
+  [[ -n "$trailer" ]] || die 'prForCommit.trailer is required with urlTemplate'
+
+  base_ref="$(git config --get prForCommit.baseRef || true)"
+  if [[ -z "$base_ref" ]]; then
+    base_ref="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$base_ref" ]] || die 'configure prForCommit.baseRef or origin/HEAD'
+  git rev-parse --verify "$base_ref^{commit}" >/dev/null 2>&1 || die "base ref does not exist: $base_ref"
+
+  candidates=("$commit")
+  while IFS= read -r merge; do
+    [[ -n "$merge" ]] || continue
+    if git rev-parse --verify "$merge^1" >/dev/null 2>&1 && git merge-base --is-ancestor "$commit" "$merge^1"; then
+      continue
+    fi
+    candidates+=("$merge")
+  done < <(git rev-list --ancestry-path --merges --reverse "$commit..$base_ref")
+
+  for candidate in "${candidates[@]}"; do
+    number="$(git show -s --format=%B "$candidate" | awk -F ': *' -v key="$trailer" '$1 == key && $2 ~ /^[0-9]+$/ { print $2; exit }')"
+    if [[ -n "$number" ]]; then
+      printf '%s\n' "${template//\{number\}/$number}"
+      exit 0
+    fi
+  done
+fi
+
+remote_url="$(git remote get-url github 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
+case "$remote_url" in
+  git@github.com:*) repo="${remote_url#git@github.com:}" ;;
+  ssh://git@github.com/*) repo="${remote_url#ssh://git@github.com/}" ;;
+  https://github.com/*) repo="${remote_url#https://github.com/}" ;;
+  http://github.com/*) repo="${remote_url#http://github.com/}" ;;
+  *) die 'no configured resolver and no GitHub remote found' ;;
+esac
+repo="${repo%.git}"
+[[ "$repo" == */* && "$repo" != */*/* ]] || die "cannot parse GitHub repository from remote: $remote_url"
+command -v gw >/dev/null 2>&1 || die 'gw is required for GitHub lookup'
+
+urls="$(gw api -H 'Accept: application/vnd.github+json' "repos/$repo/commits/$commit/pulls" --jq '.[].html_url')" ||
+  die 'GitHub associated-pulls lookup failed'
+unique_urls="$(printf '%s\n' "$urls" | grep -E '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$' | sort -u || true)"
+url_count="$(printf '%s\n' "$unique_urls" | grep -c . || true)"
+case "$url_count" in
+  1) printf '%s\n' "$unique_urls" ;;
+  0) die "no pull request found for $commit" ;;
+  *) die "multiple pull requests found for $commit: $(printf '%s' "$unique_urls" | tr '\n' ' ')" ;;
+esac

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+command="$root/bin/pr-for-commit"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+mkdir "$tmp/repo" "$tmp/bin"
+git -C "$tmp/repo" init -q -b main
+git -C "$tmp/repo" config user.email test@example.com
+git -C "$tmp/repo" config user.name Test
+printf 'base\n' >"$tmp/repo/file"
+git -C "$tmp/repo" add file
+git -C "$tmp/repo" commit -qm 'direct commit'
+direct="$(git -C "$tmp/repo" rev-parse HEAD)"
+git -C "$tmp/repo" checkout -qb feature
+printf 'feature\n' >>"$tmp/repo/file"
+git -C "$tmp/repo" commit -qam 'feature commit'
+feature="$(git -C "$tmp/repo" rev-parse HEAD)"
+git -C "$tmp/repo" checkout -q main
+git -C "$tmp/repo" merge -q --no-ff feature -m $'Merge feature\n\nReview-Number: 42'
+merge="$(git -C "$tmp/repo" rev-parse HEAD)"
+git -C "$tmp/repo" config prForCommit.urlTemplate 'https://reviews.example.test/pulls/{number}'
+git -C "$tmp/repo" config prForCommit.trailer Review-Number
+git -C "$tmp/repo" config prForCommit.baseRef main
+
+[[ "$(cd "$tmp/repo" && "$command" "$feature")" == 'https://reviews.example.test/pulls/42' ]]
+[[ "$(cd "$tmp/repo" && "$command" "$merge")" == 'https://reviews.example.test/pulls/42' ]]
+if (cd "$tmp/repo" && "$command" "$direct" >"$tmp/out" 2>"$tmp/err"); then
+  printf 'expected a direct commit not to resolve through a later merge\n' >&2
+  exit 1
+fi
+grep -Fq 'no configured resolver and no GitHub remote found' "$tmp/err"
+
+cat >"$tmp/bin/gw" <<'EOF'
+#!/bin/sh
+printf '%s\n' "${FAKE_GW_URLS:-}"
+EOF
+chmod +x "$tmp/bin/gw"
+git -C "$tmp/repo" config --unset-all prForCommit.urlTemplate
+git -C "$tmp/repo" config --unset-all prForCommit.trailer
+git -C "$tmp/repo" config --unset-all prForCommit.baseRef
+git -C "$tmp/repo" remote add origin https://github.com/example/project.git
+
+url='https://github.com/example/project/pull/7'
+[[ "$(cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS="$url" "$command" "$feature")" == "$url" ]]
+if (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS="$url"$'\n''https://github.com/example/project/pull/8' \
+  "$command" "$feature" >"$tmp/out" 2>"$tmp/err"); then
+  printf 'expected ambiguous GitHub results to fail\n' >&2
+  exit 1
+fi
+grep -Fq 'multiple pull requests found' "$tmp/err"
+
+printf 'pr-for-commit tests passed\n'
