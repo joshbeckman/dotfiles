@@ -1,6 +1,6 @@
 ---
 name: get-pr-merged
-description: Enqueue and monitor a pull request until it merges, including merge-queue failures. Use when the user asks to get a PR merged, re-enqueue a PR, babysit Graphite or Merge Garden, or run a merge loop.
+description: Enqueue and monitor a pull request until it merges, including merge-queue failures. Use when the user asks to get a PR merged, re-enqueue a PR, babysit Merge Garden, or run a merge loop.
 disable-model-invocation: true
 argument-hint: "PR URL or current branch PR"
 ---
@@ -13,20 +13,12 @@ This skill assumes the user has asked to merge the PR. That is permission to pos
 
 ## Observed patterns
 
-Recent merged PRs showed two common paths:
-
-- Graphite accepted `/merge`, hit an unexpected git error, required rebasing and resubmitting, then merged after another `/merge`.
-- Merge Garden accepted `/merge`, added `mergeit` and `mg-merge`, then merged and deleted the branch.
+Recent merged PRs showed Merge Garden accepting `/merge`, adding `mergeit` and `mg-merge`, then merging and deleting the branch.
 
 ## Start
 
 1. Identify the PR URL from arguments, `gw pr status`, or the current branch.
-2. View it with `gw view-md PR_URL --max-diff 1000`. If Ruby gems are broken, run:
-
-```sh
-ruby --disable=gems ~/.local/share/gh/extensions/gh-view-md/gh-view-md PR_URL --max-diff 1000
-```
-
+2. Read the full PR and discussion with `git pr-view PR_URL`.
 3. Check state and local changes:
 
 ```sh
@@ -59,7 +51,7 @@ gsw pr comment PR_URL --body '/merge'
 gw issue comment PR_URL --body '/merge'
 ```
 
-Then re-read the timeline. Look for `merge-garden`, `merge-garden[bot]`, `graphite-app`, `graphite-app[bot]`, `github-actions[bot]`, or `test-oversight-service[bot]`.
+Then re-read the timeline. Look for `merge-garden`, `merge-garden[bot]`, `github-actions[bot]`, or `test-oversight-service[bot]`.
 
 ## Monitor loop
 
@@ -71,12 +63,11 @@ Repeat until merged:
 gw pr view PR_URL --json state,mergedAt,mergeCommit,headRefName,labels,statusCheckRollup,reviewDecision,mergeStateStatus
 ```
 
-2. Re-read timeline with `gw view-md`. Bot comments are the source of truth because Graphite edits a single "Merge activity" comment over time.
+2. Re-read the timeline with `git pr-view PR_URL`. Bot comments are the source of truth for queue transitions.
 3. Classify the latest queue state and act:
-   - **Merged:** stop when `mergedAt` is non-null or the timeline says merged by Graphite or Merge Garden.
+   - **Merged:** stop when `mergedAt` is non-null or the timeline says Merge Garden merged it.
    - **Queued or CI running:** keep polling. Do not post `/merge` again.
    - **Missing approval, failed CI, unresolved review, or stale branch:** use `get-pr-green`, fix the blocker, push, then re-enqueue.
-   - **Graphite unexpected git error:** rebase or restack, push, then post `/merge` again.
    - **Merge-queue draft PR CI failure:** open the draft PR or CI link from the bot comment, fix the original branch, rerun CI, then re-enqueue.
    - **Merge Garden rejection:** follow the bot reason. If labels were removed, fix the blocker before re-enqueueing.
 4. Sleep 2-5 minutes while queued or CI is running; poll sooner after pushing fixes.
