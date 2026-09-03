@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-command="$root/bin/pr-for-commit"
+command="$root/bin/git-pr-for-commit"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
