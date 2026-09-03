@@ -79,6 +79,8 @@ When diagnosing performance or identifying 'slowest' items, carefully parse the 
 
 Create new commits; never amend unless explicitly asked. Ask for the PR URL rather than guessing. Use Conventional Commits: `<type>[optional scope]: <description>`.
 
+Every commit must include a body after the subject and blank line. Explain why the change is needed and any important behavioral or implementation constraints. An attribution trailer does not count as the body.
+
 ## GitHub Workflow
 
 Use `gw`, not `gh`, for GitHub commands. In `shop/world`, Meteorite is the standard PR write interface: use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Continue using `gw view-md` to read issues and pull requests, and use `gw` for issue operations and PR check helpers. Both wrappers preserve agent attribution while passing human and read-only commands through. `gw` uses the current repository and branch unless `GW_REPO` overrides it. Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
