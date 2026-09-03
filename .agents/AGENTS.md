@@ -83,7 +83,7 @@ Every commit must include a body after the subject and blank line. Explain why t
 
 ## GitHub Workflow
 
-Use `gw`, not `gh`, for GitHub commands. In `shop/world`, Meteorite is the standard PR write interface: use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Continue using `gw view-md` to read issues and pull requests, and use `gw` for issue operations and PR check helpers. Both wrappers preserve agent attribution while passing human and read-only commands through. `gw` uses the current repository and branch unless `GW_REPO` overrides it. Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
+Use `gw`, not `gh`, for GitHub commands. In `shop/world`, Meteorite is the standard PR write interface: use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Use the `pr-lookup` skill for pull request reads across providers, `gw view-md` for GitHub issue reads, and `gw` for issue operations. Both wrappers preserve agent attribution while passing human and read-only commands through. `gw` uses the current repository and branch unless `GW_REPO` overrides it. Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
 
 Reference every issue or pull request with its title and full URL:
 

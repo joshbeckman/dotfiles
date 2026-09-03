@@ -15,6 +15,7 @@ case "$1" in
   pr-url) printf 'https://github.com/example/project/pull/7\n' ;;
   pr-merged) printf '2026-01-02T03:04:05Z\n' ;;
   pr-checks) printf '| Check | Status | Result |\n| --- | --- | --- |\n' ;;
+  view-md) printf '# Full GitHub PR\n' ;;
   *) exit 2 ;;
 esac
 EOF
@@ -22,7 +23,13 @@ cat >"$tmp/bin/gs" <<'EOF'
 #!/bin/sh
 case "$1 $2" in
   'pr list') printf '[{"number":42}]\n' ;;
-  'pr view') printf '{"mergedAt":"2026-02-03T04:05:06Z"}\n' ;;
+  'pr view')
+    if [ "${4:-}" = --comments ]; then
+      printf '# Full Gitstream PR\n'
+    else
+      printf '{"mergedAt":"2026-02-03T04:05:06Z"}\n'
+    fi
+    ;;
   'pr checks')
     if [ "${4:-}" = --json ]; then
       printf '{"requiredChecks":[{"name":"Required CI","state":"%s","present":true}]}\n' "${FAKE_CHECK_STATE:-success}"
@@ -41,6 +48,7 @@ run() {
 
 [[ "$(run pr-url)" == 'https://reviews.example.test/pulls/42' ]]
 [[ "$(run pr-url 41)" == 'https://reviews.example.test/pulls/41' ]]
+[[ "$(run pr-view 41)" == '# Full Gitstream PR' ]]
 [[ "$(run pr-merged 41)" == '2026-02-03T04:05:06Z' ]]
 run pr-checks 41 | grep -Fq 'Required CI  success'
 run pr-checks 41 --required | grep -Fq '| Required CI | success | Required |'
@@ -50,6 +58,7 @@ if FAKE_CHECK_STATE=failure run pr-checks 41 --required >"$tmp/out"; then
 fi
 grep -Fq '| Required CI | failure | Required |' "$tmp/out"
 [[ "$(run pr-url https://github.com/example/project/pull/7)" == 'https://github.com/example/project/pull/7' ]]
+[[ "$(run pr-view https://github.com/example/project/pull/7)" == '# Full GitHub PR' ]]
 [[ "$(run pr-merged https://github.com/example/project/pull/7)" == '2026-01-02T03:04:05Z' ]]
 run pr-checks https://github.com/example/project/pull/7 --required | grep -Fq '| Check | Status | Result |'
 

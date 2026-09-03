@@ -46,7 +46,7 @@ Before winding down, transfer any incomplete PR to another live agent with `agen
 
 `own-pr` owns lifecycle state and transitions. Use `pr-description-discipline` for the body, `binks-pr-review` for applicable local preflight, `get-pr-green` for CI/review repair, `get-pr-merged` only after explicit merge authority, and `run-project` for project metadata. None releases lifecycle ownership.
 
-Use the PR surface required by the repository. For GitHub writes, use `gw`; for Meteorite/Gitstream writes, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Load `pr-lookup` for cross-provider URL, commit, checks, and merge-status reads; continue using `gw view-md` for full issue and PR content. Poll the PR itself; do not rely on Josh to relay notifications.
+Use the PR surface required by the repository. For GitHub writes, use `gw`; for Meteorite/Gitstream writes, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Load `pr-lookup` for cross-provider PR content, URL, commit, checks, and merge-status reads; continue using `gw view-md` for GitHub issues. Poll the PR itself; do not rely on Josh to relay notifications.
 
 ## 1. Draft and validate
 

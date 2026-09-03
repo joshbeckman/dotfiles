@@ -3,13 +3,14 @@ set -euo pipefail
 
 mode="${0##*/git-pr-}"
 case "$mode" in
-  url|checks|merged) ;;
-  *) printf 'git-pr-lookup: invoke as git pr-url, git pr-checks, or git pr-merged\n' >&2; exit 2 ;;
+  url|view|checks|merged) ;;
+  *) printf 'git-pr-lookup: invoke as git pr-url, git pr-view, git pr-checks, or git pr-merged\n' >&2; exit 2 ;;
 esac
 
 usage() {
   case "$mode" in
     url) printf 'Usage: git pr-url [PR_URL|PR_NUMBER|BRANCH]\n' ;;
+    view) printf 'Usage: git pr-view [PR_URL|PR_NUMBER|BRANCH]\n' ;;
     checks) printf 'Usage: git pr-checks [PR_URL|PR_NUMBER|BRANCH] [--required]\n' ;;
     merged) printf 'Usage: git pr-merged [PR_URL|PR_NUMBER|BRANCH]\n' ;;
   esac
@@ -46,6 +47,10 @@ esac
 if [[ "$provider" == github ]]; then
   case "$mode" in
     url) exec gw pr-url ${selector:+"$selector"} ;;
+    view)
+      url="$(gw pr-url ${selector:+"$selector"})" || die 'could not resolve the GitHub pull request'
+      exec gw view-md "$url"
+      ;;
     checks)
       args=()
       [[ -n "$selector" ]] && args+=("$selector")
@@ -81,6 +86,9 @@ case "$mode" in
   url)
     [[ -n "$url" ]] || die 'configure prLookup.urlTemplate with a {number} placeholder'
     printf '%s\n' "$url"
+    ;;
+  view)
+    exec gs pr view "$number" --comments
     ;;
   merged)
     raw="$(gs pr view "$number" --json)" || die "could not inspect pull request $number"
