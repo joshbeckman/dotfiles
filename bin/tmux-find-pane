@@ -39,8 +39,9 @@ esac
 command -v fzf >/dev/null 2>&1 || { echo "tmux-find-pane: fzf not found" >&2; exit 1; }
 
 # -i, not fzf's smart-case default: an agent name typed as "Simoom" or "SIMOOM"
-# should find the same pane.
-selection=$(list_panes | fzf -i --query="${1:-}" --prompt="pane> " --height=100% --no-sort --exit-0) || exit 0
+# should find the same pane. Keep fzf's score sorting so a contiguous title
+# match ranks above weaker fuzzy matches that appeared earlier in tmux's list.
+selection=$(list_panes | fzf -i --query="${1:-}" --prompt="pane> " --height=100% --exit-0) || exit 0
 [ -n "$selection" ] || exit 0
 
 target=${selection%% *}
