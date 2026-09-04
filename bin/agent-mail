@@ -27,9 +27,9 @@ Usage:
   agent-mail addr   ID
   agent-mail sweep  [--hours N] [--dry-run]
 
-An ID is an agent as <name>-<sessionID>, or a human as `josh`,
-`humans/<handle>`, or an email address. The @+name mention form (and bare
-@name) is accepted; sigils are stripped. Agent inboxes resolve to
+An ID is an agent as <name>-<sessionID>, or a human as `@josh`,
+`humans/<handle>`, or an email address. The @+name agent form and @name human
+form are accepted; sigils are stripped. Bare `josh` remains accepted. Agent inboxes resolve to
 <name>-*/inbox; human inboxes to humans/<handle>/inbox.
 
 send   Deliver a message. Body from --body/-m, --body-file, or stdin.
@@ -251,7 +251,7 @@ cmd_send() {
   # later; a failed notification stays eligible for that fallback.
   if [ "$human" = josh ] && command -v notify-josh >/dev/null 2>&1; then
     if notify-josh --from agent-mail "Agent mail: ${subject:-(no subject)}" \
-      "From $from. Read with: agent-mail read --to josh" >/dev/null 2>&1; then
+      "From $from. Read with: agent-mail read --to @josh" >/dev/null 2>&1; then
       mkdir "$inbox/.escalated-$msgid" 2>/dev/null || true
     else
       echo "agent-mail: immediate Josh notification failed; unread sweep will retry" >&2

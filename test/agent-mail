@@ -16,18 +16,19 @@ export AGENT_MAIL_ROOT="$tmp/mail"
 export NOTIFY_LOG="$tmp/notifications"
 export PATH="$tmp/bin:$PATH"
 
-msgid="$("$command" send --to josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
+msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
 inbox="$tmp/mail/humans/josh/inbox"
 [[ -f "$inbox/new/$msgid.md" ]]
 [[ -d "$inbox/.escalated-$msgid" ]]
 grep -Fq 'Agent mail: Needs attention' "$NOTIFY_LOG"
-grep -Fq 'From test-agent. Read with: agent-mail read --to josh' "$NOTIFY_LOG"
+grep -Fq 'From test-agent. Read with: agent-mail read --to @josh' "$NOTIFY_LOG"
+[[ "$("$command" addr @josh)" == "$inbox" ]]
 [[ "$("$command" addr josh)" == "$inbox" ]]
-"$command" scan --to josh | grep -Fq "$msgid"
+"$command" scan --to @josh | grep -Fq "$msgid"
 "$command" sweep --hours 0 >/dev/null
 [[ "$(wc -l <"$NOTIFY_LOG" | tr -d ' ')" == 1 ]]
 
-"$command" read --to josh | grep -Fq 'Please review this.'
+"$command" read --to @josh | grep -Fq 'Please review this.'
 [[ -f "$inbox/cur/$msgid.md" ]]
 "$command" receipt "$msgid" | grep -Fq $'read\t'
 
