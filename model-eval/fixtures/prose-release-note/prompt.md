@@ -1,0 +1,1 @@
+Tighten `note.md` into a release update of at most 90 words. Preserve every concrete fact. Lead with the shipped behavior, use active voice, and end with the reader's useful next step. Do not add claims, headings, or implementation details.

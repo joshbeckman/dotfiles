@@ -1,0 +1,7 @@
+{
+  "id": "prose-release-note",
+  "category": "write-edit-prose",
+  "grader": "grader.rb",
+  "allowed_commands": [],
+  "allowed_files": ["note.md"]
+}

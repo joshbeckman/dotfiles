@@ -1,0 +1,7 @@
+{
+  "id": "design-event-cursor",
+  "category": "design-interface",
+  "grader": "grader.rb",
+  "allowed_commands": [],
+  "allowed_files": []
+}

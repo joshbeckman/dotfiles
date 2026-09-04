@@ -1,0 +1,1 @@
+Investigate the duplicate notification in `worker.py` using `incident.log`. Do not edit files. Explain the root cause, cite at least two concrete lines of evidence, reject timeout expiry as the cause, and recommend the smallest safe correction. Keep the answer under 220 words.

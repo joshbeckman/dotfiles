@@ -1,0 +1,7 @@
+{
+  "id": "debug-worker-retry",
+  "category": "investigate-debug",
+  "grader": "grader.rb",
+  "allowed_commands": [],
+  "allowed_files": []
+}

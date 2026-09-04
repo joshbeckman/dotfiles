@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+cat >"$tmp/fake-pi" <<'RUBY'
+#!/usr/bin/env ruby
+require "json"
+
+if ARGV.include?("--version")
+  puts "fake-pi 1.0"
+  exit
+end
+if ARGV.include?("--list-models")
+  puts "fake/model"
+  exit
+end
+
+def emit(value)
+  puts JSON.generate(value)
+  STDOUT.flush
+end
+
+cost = ENV.fetch("FAKE_PI_COST", "0.01").to_f
+mode = ENV.fetch("FAKE_PI_MODE", "success")
+while (line = STDIN.gets)
+  command = JSON.parse(line)
+  case command["type"]
+  when "get_state"
+    emit("id" => command["id"], "type" => "response", "command" => "get_state", "success" => true,
+         "data" => {"model" => {"provider" => "fake", "id" => "model", "cost" => {"input" => 1, "output" => 1, "cacheRead" => 1, "cacheWrite" => 1}}, "thinkingLevel" => "off"})
+  when "prompt"
+    emit("id" => command["id"], "type" => "response", "command" => "prompt", "success" => true)
+    if mode == "timeout"
+      sleep 30
+    else
+      usage = {"input" => 10, "output" => 5, "cacheRead" => 2, "cacheWrite" => 1, "totalTokens" => 18,
+               "cost" => {"input" => cost / 2, "output" => cost / 2, "cacheRead" => 0, "cacheWrite" => 0, "total" => cost}}
+      emit("type" => "agent_start")
+      emit("type" => "turn_start")
+      emit("type" => "message_update", "usage" => usage, "assistantMessageEvent" => {"type" => "text_delta", "contentIndex" => 0, "delta" => "answer"})
+      message = {"role" => "assistant", "content" => [{"type" => "text", "text" => "answer"}], "provider" => "fake", "model" => "model", "usage" => usage, "stopReason" => "stop"}
+      emit("type" => "message_end", "message" => message)
+      emit("type" => "turn_end", "message" => message, "toolResults" => [])
+      emit("type" => "agent_settled")
+    end
+  when "get_session_stats"
+    emit("id" => command["id"], "type" => "response", "command" => "get_session_stats", "success" => true,
+         "data" => {"tokens" => {"input" => 10, "output" => 5, "cacheRead" => 2, "cacheWrite" => 1, "total" => 18}, "cost" => cost})
+  when "abort"
+    emit("type" => "response", "command" => "abort", "success" => true)
+    exit
+  end
+end
+RUBY
+chmod +x "$tmp/fake-pi"
+
+plan="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor)"
+ruby -rjson -e 'p=JSON.parse(STDIN.read); abort unless p["trial_count"] == 1 && p["maximum_if_every_trial_reaches_cap_usd"] == 0.5' <<<"$plan"
+if "$root/bin/pi-model-eval" plan --models fake/model >/dev/null 2>&1; then
+    echo 'model without explicit thinking unexpectedly accepted' >&2
+    exit 1
+fi
+
+assert_grader_passes() {
+    local fixture="$1" workspace="$2" answer="$3"
+    ruby "$root/model-eval/fixtures/$fixture/grader.rb" "$workspace" "$answer" |
+        ruby -rjson -e 'result=JSON.parse(STDIN.read); abort unless result["required_pass"] && result["checks"].all? { |check| !check["required"] || check["passed"] }'
+}
+
+cp -R "$root/model-eval/fixtures/code-range-merge/workspace" "$tmp/code"
+cat >"$tmp/code/ranges.py" <<'PY'
+def merge_ranges(ranges):
+    ordered = sorted([list(item) for item in ranges])
+    for start, end in ordered:
+        if start > end:
+            raise ValueError("invalid range")
+    merged = []
+    for start, end in ordered:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+PY
+: >"$tmp/code-answer"
+assert_grader_passes code-range-merge "$tmp/code" "$tmp/code-answer"
+
+cp -R "$root/model-eval/fixtures/debug-worker-retry/workspace" "$tmp/debug"
+cat >"$tmp/debug-answer" <<'EOF'
+The ledger write happens after send and ack, then fails with connection-reset. Recovery sees ledger missing and queue unacked and retries after 5 seconds. This is not the 300-second timeout. Make delivery idempotent with a durable key, or atomically record intent before sending.
+EOF
+assert_grader_passes debug-worker-retry "$tmp/debug" "$tmp/debug-answer"
+
+cp -R "$root/model-eval/fixtures/design-event-cursor/workspace" "$tmp/design"
+cat >"$tmp/design-answer" <<'EOF'
+Request `GET /events?cursor=<opaque token>&limit=100`. Order strictly by the monotonic event ID. A 200 response returns `{"events": [], "next_cursor": "..."}`. Return 400 `invalid_cursor` for malformed tokens and 410 `cursor_expired` when retention has removed the position. Accept `after_id` for one release, translate it to the cursor path, and mark it deprecated before removal.
+EOF
+assert_grader_passes design-event-cursor "$tmp/design" "$tmp/design-answer"
+
+cp -R "$root/model-eval/fixtures/prose-release-note/workspace" "$tmp/prose"
+cat >"$tmp/prose/note.md" <<'EOF'
+Exports created after September 3 now retry temporary storage errors up to two times. Permanent validation errors still fail immediately, and existing failed exports are not restarted. If an export still fails, download its error report and contact support with the export ID.
+EOF
+: >"$tmp/prose-answer"
+assert_grader_passes prose-release-note "$tmp/prose" "$tmp/prose-answer"
+
+run_dir="$(FAKE_PI_COST=0.01 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --results "$tmp/success")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "completed" && r["tokens"]["cacheRead"] == 2 && r["pricing_status"] == "catalog"' "$result"
+[[ -s "$run_dir/report.md" && -s "${result%/result.json}/events.jsonl" ]]
+
+run_dir="$(FAKE_PI_MODE=timeout "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 0.1 --results "$tmp/timeout")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "timeout" && r["termination_reason"] == "trial_timeout"' "$result"
+
+run_dir="$(FAKE_PI_COST=0.2 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --trial-budget 0.05 --results "$tmp/trial-budget")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "budget_stopped" && r["termination_reason"] == "trial_spend_stop"' "$result"
+
+run_dir="$(FAKE_PI_COST=0.01 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --token-limit 5 --results "$tmp/token-limit")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "limit_stopped" && r["termination_reason"] == "trial_token_stop"' "$result"
+
+run_dir="$(FAKE_PI_COST=0.1 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor,debug-worker-retry --trial-budget 1 --suite-budget 0.05 --results "$tmp/suite-budget")"
+ruby -rjson -e 'files=Dir[File.join(ARGV[0], "trials", "*", "result.json")].sort; states=files.map { |f| JSON.parse(File.read(f))["status"] }; abort unless states == ["completed", "budget_not_started"]' "$run_dir"
+
+run_dir="$("$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --suite-timeout 0 --results "$tmp/suite-timeout")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "timeout_not_started" && r["termination_reason"] == "suite_timeout"' "$result"
+
+jiti="$(find "$HOME/.pi/pkg" -path '*/node_modules/jiti' -type d 2>/dev/null | sort | tail -1)"
+if [[ -n "$jiti" ]] && command -v node >/dev/null; then
+    mkdir "$tmp/boundary"
+    printf x >"$tmp/boundary/file.txt"
+    PI_EVAL_ROOT="$tmp/boundary" PI_EVAL_ALLOWED_COMMANDS='["ruby check.rb"]' JITI_PATH="$jiti" EVAL_ROOT="$root" node <<'NODE'
+const {createJiti} = require(process.env.JITI_PATH);
+(async () => {
+    let handler;
+    const module = await createJiti(process.cwd() + "/test.js").import(process.env.EVAL_ROOT + "/model-eval/evaluation-boundary.ts");
+    module.default({on(name, callback) { if (name === "tool_call") handler = callback; }});
+    if (handler({toolName: "read", input: {path: "file.txt"}})) throw new Error("inside read blocked");
+    if (!handler({toolName: "read", input: {path: "/etc/passwd"}})?.block) throw new Error("absolute read allowed");
+    if (handler({toolName: "bash", input: {command: "ruby check.rb"}})) throw new Error("allowed command blocked");
+    if (!handler({toolName: "bash", input: {command: "curl example.com"}})?.block) throw new Error("unlisted shell allowed");
+})();
+NODE
+fi
+
+printf 'pi-model-eval tests passed\n'

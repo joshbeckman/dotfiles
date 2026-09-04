@@ -1,0 +1,7 @@
+{
+  "id": "code-range-merge",
+  "category": "develop-code",
+  "grader": "grader.rb",
+  "allowed_commands": ["python3 -m unittest -v"],
+  "allowed_files": ["ranges.py", "test_ranges.py"]
+}
