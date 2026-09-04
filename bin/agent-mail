@@ -25,6 +25,10 @@ Usage:
   agent-mail read   --to ID [--id MSG] [--peek]
   agent-mail discard --to ID --id MSG
   agent-mail addr   ID
+  agent-mail inbox  ID
+  agent-mail archive FILE
+  agent-mail reply  FILE
+  agent-mail deliver FILE
   agent-mail sweep  [--hours N] [--dry-run]
 
 An ID is an agent as <name>-<sessionID>, or a human as `@josh`,
@@ -39,15 +43,20 @@ receipt Say whether a message you sent has been read. Takes the MSGID that
 read   Print the oldest unread message (or --id), moving it new/ -> cur/.
        --peek prints without marking read.
 discard Delete a message from cur/ or new/.
+addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
+inbox Open an ID's inbox directory in Neovim.
+archive Move a message from inbox/new to inbox/cur.
+reply  Create a reply draft and print its path.
+deliver Atomically move a reply draft into its recipient's inbox/new.
 sweep  Notify Josh about messages unread for --hours (default 4). Any live
        session can run it; a dead recipient cannot escalate for itself.
-addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
 
 Env:
   AGENT_MAIL_ROOT  Base dir (default /tmp/agent). Ephemeral: dies on reboot /
                    ~3-day idle. Not for anything that must be received.
   AGENT_MAIL_STALE_HOURS  Report the recipient's idle time on send once it
                    reaches this many hours (default 12).
+  AGENT_MAIL_EDITOR Editor used by inbox (default nvim).
 USAGE
 }
 
@@ -95,8 +104,14 @@ human_handle() {
 }
 
 resolve_inbox() {
-  local id match handle
+  local id match handle address
   id="$(normalize_id "$1")"
+  address="$id"
+  case "$id" in
+    humans/*) address="${id#humans/}"; case "$address" in */*) die "invalid recipient ID: $id" ;; esac ;;
+    */*) die "invalid recipient ID: $id" ;;
+  esac
+  case "$address" in ''|*[!A-Za-z0-9._+@-]*) die "invalid recipient ID: $id" ;; esac
   if handle="$(human_handle "$id")"; then
     echo "$MAIL_ROOT/humans/$handle/inbox"
     return 0
@@ -138,6 +153,17 @@ resolve_inbox() {
 
 ensure_maildir() {
   mkdir -p "$1/tmp" "$1/new" "$1/cur"
+}
+
+notify_human_delivery() {
+  local handle="$1" inbox="$2" msgid="$3" from="$4" subject="$5"
+  [ "$handle" = josh ] && command -v notify-josh >/dev/null 2>&1 || return 0
+  if notify-josh --from agent-mail "Agent mail: $subject" \
+    "From $from. Read with: agent-mail read --to @josh" >/dev/null 2>&1; then
+    mkdir "$inbox/.escalated-$msgid" 2>/dev/null || true
+  else
+    echo "agent-mail: immediate Josh notification failed; unread sweep will retry" >&2
+  fi
 }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -249,14 +275,7 @@ cmd_send() {
   # Josh's inbox is also an attention channel. Successful notification marks
   # this delivery so the unread sweep does not send the same alert four hours
   # later; a failed notification stays eligible for that fallback.
-  if [ "$human" = josh ] && command -v notify-josh >/dev/null 2>&1; then
-    if notify-josh --from agent-mail "Agent mail: ${subject:-(no subject)}" \
-      "From $from. Read with: agent-mail read --to @josh" >/dev/null 2>&1; then
-      mkdir "$inbox/.escalated-$msgid" 2>/dev/null || true
-    else
-      echo "agent-mail: immediate Josh notification failed; unread sweep will retry" >&2
-    fi
-  fi
+  notify_human_delivery "$human" "$inbox" "$msgid" "$from" "${subject:-(no subject)}"
 
   echo "$msgid"
 }
@@ -371,6 +390,96 @@ cmd_discard() {
   rm -f "$inbox/new/$id.md" "$inbox/cur/$id.md"
 }
 
+message_path() {
+  local path="$1" dir
+  [ -f "$path" ] || die "message file not found: $path"
+  dir="$(CDPATH= cd -- "$(dirname -- "$path")" && pwd)"
+  case "$dir" in
+    "$MAIL_ROOT"/*/inbox/new|"$MAIL_ROOT"/humans/*/inbox/new|"$MAIL_ROOT"/*/inbox/cur|"$MAIL_ROOT"/humans/*/inbox/cur)
+      printf '%s/%s' "$dir" "$(basename -- "$path")" ;;
+    *) die "not an agent-mail message: $path" ;;
+  esac
+}
+
+cmd_inbox() {
+  local id="${1:-}" handle="" inbox scratchpad
+  [ -n "$id" ] || die "inbox: ID required"
+  [ $# -eq 1 ] || die "inbox: expected one ID"
+  id="$(normalize_id "$id")"
+  inbox="$(resolve_inbox "$id")"
+  handle="$(human_handle "$id" || true)"
+  scratchpad="$(dirname "$inbox")"
+  [ -n "$handle" ] || [ -d "$scratchpad" ] || die "recipient '$id' has no scratchpad at $scratchpad (rebooted or pruned?)"
+  ensure_maildir "$inbox"
+  command -v "${AGENT_MAIL_EDITOR:-nvim}" >/dev/null 2>&1 || die "editor not found: ${AGENT_MAIL_EDITOR:-nvim}"
+  exec "${AGENT_MAIL_EDITOR:-nvim}" "$inbox"
+}
+
+cmd_archive() {
+  local path; path="$(message_path "${1:-}")"
+  [ $# -eq 1 ] || die "archive: expected one message file"
+  [ "$(basename "$(dirname "$path")")" = new ] || die "message is already archived: $path"
+  local inbox dst
+  inbox="$(dirname "$(dirname "$path")")"
+  ensure_maildir "$inbox"
+  dst="$inbox/cur/$(basename "$path")"
+  [ ! -e "$dst" ] || die "archive destination already exists: $dst"
+  mv "$path" "$dst"
+  printf '%s\n' "$dst"
+}
+
+cmd_reply() {
+  local path; path="$(message_path "${1:-}")"
+  [ $# -eq 1 ] || die "reply: expected one message file"
+  local to subject in_reply_to msgid drafts draft
+  to="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
+  [ -n "$to" ] || to="$(sed -n 's/^From: //p' "$path" | head -1)"
+  [ -n "$to" ] || die "reply: message has no From or Reply-To header"
+  subject="$(sed -n 's/^Subject: //p' "$path" | head -1)"
+  case "$subject" in Re:\ *) ;; *) subject="Re: ${subject:-(no subject)}" ;; esac
+  in_reply_to="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
+  msgid="$(gen_msgid)"
+  drafts="$MAIL_ROOT/humans/josh/drafts"
+  mkdir -p "$drafts"
+  draft="$drafts/$msgid.md"
+  {
+    echo "From: josh"
+    echo "To: $(normalize_id "$to")"
+    echo "Date: $(now_iso)"
+    echo "Message-ID: $msgid"
+    [ -n "$in_reply_to" ] && echo "In-Reply-To: $in_reply_to"
+    echo "Subject: $subject"
+    echo
+  } >"$draft"
+  printf '%s\n' "$draft"
+}
+
+cmd_deliver() {
+  local draft="${1:-}" dir
+  [ $# -eq 1 ] || die "deliver: expected one draft file"
+  [ -f "$draft" ] || die "draft file not found: $draft"
+  dir="$(CDPATH= cd -- "$(dirname -- "$draft")" && pwd)"
+  [ "$dir" = "$MAIL_ROOT/humans/josh/drafts" ] || die "not a Josh agent-mail draft: $draft"
+
+  local to from subject msgid inbox scratchpad human dst
+  to="$(sed -n 's/^To: //p' "$draft" | head -1)"
+  from="$(sed -n 's/^From: //p' "$draft" | head -1)"
+  subject="$(sed -n 's/^Subject: //p' "$draft" | head -1)"
+  msgid="$(sed -n 's/^Message-ID: //p' "$draft" | head -1)"
+  [ -n "$to" ] && [ -n "$from" ] && [ -n "$msgid" ] || die "draft is missing To, From, or Message-ID"
+  to="$(normalize_id "$to")"
+  inbox="$(resolve_inbox "$to")"
+  human="$(human_handle "$to" || true)"
+  scratchpad="$(dirname "$inbox")"
+  [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
+  ensure_maildir "$inbox"
+  dst="$inbox/new/$msgid.md"
+  [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
+  mv "$draft" "$dst"
+  notify_human_delivery "$human" "$inbox" "$msgid" "$from" "${subject:-(no subject)}"
+  printf '%s\n' "$dst"
+}
+
 # Escalate to the human when nobody picked a message up. Runs from any live
 # session because the recipient, by definition, is not running to notice.
 cmd_sweep() {
@@ -424,6 +533,10 @@ case "$sub" in
   receipt) cmd_receipt "$@" ;;
   read)    cmd_read "$@" ;;
   discard) cmd_discard "$@" ;;
+  inbox)   cmd_inbox "$@" ;;
+  archive) cmd_archive "$@" ;;
+  reply)   cmd_reply "$@" ;;
+  deliver) cmd_deliver "$@" ;;
   sweep)   cmd_sweep "$@" ;;
   # resolve_inbox returns a canonical path with status 0 for an unknown ID so
   # send can report the missing scratchpad with the name in it. addr has no such

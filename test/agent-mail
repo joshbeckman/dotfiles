@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 command="$root/bin/agent-mail"
+real_nvim="$(command -v nvim || true)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
@@ -11,9 +12,15 @@ cat >"$tmp/bin/notify-josh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$NOTIFY_LOG"
 EOF
-chmod +x "$tmp/bin/notify-josh"
+cat >"$tmp/bin/nvim" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >"$EDITOR_LOG"
+EOF
+chmod +x "$tmp/bin/notify-josh" "$tmp/bin/nvim"
 export AGENT_MAIL_ROOT="$tmp/mail"
 export NOTIFY_LOG="$tmp/notifications"
+export EDITOR_LOG="$tmp/editor"
+export AGENT_MAIL_EDITOR=nvim
 export PATH="$tmp/bin:$PATH"
 
 msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
@@ -29,7 +36,46 @@ grep -Fq 'From test-agent. Read with: agent-mail read --to @josh' "$NOTIFY_LOG"
 [[ "$(wc -l <"$NOTIFY_LOG" | tr -d ' ')" == 1 ]]
 
 "$command" read --to @josh | grep -Fq 'Please review this.'
-[[ -f "$inbox/cur/$msgid.md" ]]
+message="$inbox/cur/$msgid.md"
+[[ -f "$message" ]]
 "$command" receipt "$msgid" | grep -Fq $'read\t'
+
+mkdir -p "$tmp/mail/test-agent-session"
+draft="$("$command" reply "$message")"
+[[ "$draft" == "$tmp/mail/humans/josh/drafts/"*.md ]]
+grep -Fxq 'From: josh' "$draft"
+grep -Fxq 'To: test-agent' "$draft"
+grep -Fxq "In-Reply-To: $msgid" "$draft"
+grep -Fxq 'Subject: Re: Needs attention' "$draft"
+printf 'Reply body.\n' >>"$draft"
+
+delivered="$("$command" deliver "$draft")"
+[[ "$delivered" == "$tmp/mail/test-agent-session/inbox/new/"*.md ]]
+grep -Fq 'Reply body.' "$delivered"
+archived="$("$command" archive "$delivered")"
+[[ "$archived" == "$tmp/mail/test-agent-session/inbox/cur/"*.md ]]
+[[ -f "$archived" ]]
+
+"$command" inbox @+test-agent
+[[ "$(cat "$EDITOR_LOG")" == "$tmp/mail/test-agent-session/inbox" ]]
+if "$command" send --to '../../outside' --body 'no' >/dev/null 2>&1; then
+    echo 'path-like recipient unexpectedly accepted' >&2
+    exit 1
+fi
+
+if [[ -n "$real_nvim" ]]; then
+    check_nvim_command() {
+        local file="$1" name="$2" expected="$3"
+        AGENT_MAIL_ROOT="$tmp/mail" "$real_nvim" --headless -u NONE \
+            --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
+            "+if exists(':$name') != $expected | cquit 1 | endif" +quit
+    }
+    check_nvim_command "$archived" AgentMailReply 2
+    check_nvim_command "$archived" AgentMailArchive 0
+
+    draft="$("$command" reply "$archived")"
+    check_nvim_command "$draft" AgentMailSend 2
+    check_nvim_command "$draft" AgentMailReply 0
+fi
 
 printf 'agent-mail tests passed\n'

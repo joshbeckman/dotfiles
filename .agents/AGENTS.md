@@ -35,6 +35,7 @@ Agents (and I) can leave messages for each other within one computer realm with 
 - **Find who to write with `agent-find <topic>`.** It greps every session transcript and prints each match's handle, title, liveness, and resume command. Use it before duplicating work another session already did, before editing an artifact whose owner you do not know, and to answer "which agent worked on X?" without asking Josh. A `RUNNING` result will see mail on its own; a parked one holds it until resumed.
 - **Don't send bare acknowledgements.** "Got it" costs the recipient a turn and tells them nothing they cannot check with `agent-mail receipt`. Reply when you have something to say, or when the sender asked a question.
 - **Human mail.** `agent-mail send --to @josh --subject SUBJECT --body-file FILE` writes to my human inbox and immediately invokes the notification ladder. Use it for substantive asynchronous results, blockers, or questions that need my attention. I read it with `agent-mail read --to @josh`.
+- **Inbox browser.** `agent-mail inbox @josh` or `agent-mail inbox @+handle` opens the matching Maildir in Neovim. Mail Markdown buffers expose `:AgentMailArchive` for moving `new/` to `cur/` and `:AgentMailReply` for opening a reply draft; reply drafts expose `:AgentMailSend` for atomic delivery.
 - **Ephemeral.** Same `/tmp` caveat as the scratchpad; nothing that *must* be preserved belongs here. Human-addressed mail notifies immediately, but durable decisions still belong in repositories, issues, or project records.
 
 ### Artifact ownership between agents
