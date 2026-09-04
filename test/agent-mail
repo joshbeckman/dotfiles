@@ -65,8 +65,8 @@ fi
 
 if [[ -n "$real_nvim" ]]; then
     check_nvim_command() {
-        local file="$1" name="$2" expected="$3"
-        AGENT_MAIL_ROOT="$tmp/mail" "$real_nvim" --headless -u NONE \
+        local file="$1" name="$2" expected="$3" mail_root="${4:-$tmp/mail}"
+        AGENT_MAIL_ROOT="$mail_root" "$real_nvim" --headless -u NONE \
             --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
             "+if exists(':$name') != $expected | cquit 1 | endif" +quit
     }
@@ -76,6 +76,9 @@ if [[ -n "$real_nvim" ]]; then
     draft="$("$command" reply "$archived")"
     check_nvim_command "$draft" AgentMailSend 2
     check_nvim_command "$draft" AgentMailReply 0
+
+    ln -s "$tmp/mail" "$tmp/mail-link"
+    check_nvim_command "$archived" AgentMailReply 2 "$tmp/mail-link"
 fi
 
 printf 'agent-mail tests passed\n'

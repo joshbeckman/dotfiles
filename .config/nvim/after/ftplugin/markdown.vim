@@ -46,8 +46,8 @@ function! s:AgentMailSend() abort
     endif
 endfunction
 
-let s:agent_mail_root = empty($AGENT_MAIL_ROOT) ? '/tmp/agent' : fnamemodify($AGENT_MAIL_ROOT, ':p')
-let s:agent_mail_path = expand('%:p')
+let s:agent_mail_root = resolve(fnamemodify(empty($AGENT_MAIL_ROOT) ? '/tmp/agent' : $AGENT_MAIL_ROOT, ':p'))
+let s:agent_mail_path = resolve(expand('%:p'))
 if stridx(s:agent_mail_path, substitute(s:agent_mail_root, '/$', '', '') . '/') == 0
     if s:agent_mail_path =~# '/inbox/new/[^/]*\.md$'
         command! -buffer AgentMailArchive call <SID>AgentMailArchive()
