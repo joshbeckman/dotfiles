@@ -34,7 +34,8 @@ Agents (and I) can leave messages for each other within one computer realm with 
 - **Waiting mail is announced.** When a message is first seen, a timestamped notice appears in the conversation naming the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. A **parked session gets woken**: once I have not typed for 2 minutes, unread mail triggers a turn on its own, at most 4 times an hour, respecting the memory-pressure backpressure below. A woken turn runs unsupervised: do what the mail asks if that is safe with nobody watching, then stop rather than finding adjacent work. A session whose pi has exited cannot be woken — `send` warns when the recipient has been idle past 12h, and any live session's periodic `sweep` escalates 4h-unread mail to me — so delivery is never a guarantee of attention.
 - **Find who to write with `agent-find <topic>`.** It greps every session transcript and prints each match's handle, title, liveness, and resume command. Use it before duplicating work another session already did, before editing an artifact whose owner you do not know, and to answer "which agent worked on X?" without asking Josh. A `RUNNING` result will see mail on its own; a parked one holds it until resumed.
 - **Don't send bare acknowledgements.** "Got it" costs the recipient a turn and tells them nothing they cannot check with `agent-mail receipt`. Reply when you have something to say, or when the sender asked a question.
-- **Ephemeral.** Same `/tmp` caveat as the scratchpad; nothing that *must* be received belongs here. To reach me when I may be away from the machine, use the notification ladder below, not mail.
+- **Human mail.** `agent-mail send --to josh --subject SUBJECT --body-file FILE` writes to my human inbox and immediately invokes the notification ladder. Use it for substantive asynchronous results, blockers, or questions that need my attention. I read it with `agent-mail read --to josh`.
+- **Ephemeral.** Same `/tmp` caveat as the scratchpad; nothing that *must* be preserved belongs here. Human-addressed mail notifies immediately, but durable decisions still belong in repositories, issues, or project records.
 
 ### Artifact ownership between agents
 
@@ -57,7 +58,7 @@ Do not bypass a pressure block by launching equivalent child agents or backgroun
 
 ### Notifications
 
-When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. Use `bin/notify-josh` with a succinct but specific title that includes the folder, project, or topic. It implements the whole delivery ladder itself — local notification with sound, bell, and tmux marker when the display is awake, push when I am away — so do not re-implement any of that; pass `--push` or `--local` only when you know better than its detection. If it is somehow absent, send a push through the `josh-beckman-status` MCP server.
+When I ask you to "ping me when", "notify me when", "let me know when", or similar, treat that as permission to send the final notification for that task. Use `agent-mail send --to josh` when the notification has a substantive result, blocker, or question worth retaining in my inbox. For a one-shot alert without a message to retain, use `bin/notify-josh` with a succinct title that includes the folder, project, or topic. Both use the same delivery ladder: local notification with sound, bell, and tmux marker when the display is awake, push when I am away. Pass `--push` or `--local` to `notify-josh` only when you know better than its detection. If the ladder is somehow absent, send a push through the `josh-beckman-status` MCP server.
 
 ### Comments in Code
 

@@ -27,9 +27,10 @@ Usage:
   agent-mail addr   ID
   agent-mail sweep  [--hours N] [--dry-run]
 
-An ID is an agent as <name>-<sessionID>, or a human as a bare handle.
-The @+name mention form (and bare @name) is accepted; sigils are stripped.
-Agent inboxes resolve to <name>-*/inbox; human inboxes to humans/<handle>/inbox.
+An ID is an agent as <name>-<sessionID>, or a human as `josh`,
+`humans/<handle>`, or an email address. The @+name mention form (and bare
+@name) is accepted; sigils are stripped. Agent inboxes resolve to
+<name>-*/inbox; human inboxes to humans/<handle>/inbox.
 
 send   Deliver a message. Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
@@ -81,14 +82,25 @@ sender_id() {
 # Resolve an ID to an inbox base path. Humans: humans/<handle>. Agents:
 # match <name>-* exactly, then fall back to a bare name dir. Ambiguity (two
 # live sessions of one name) fails loudly rather than guessing a recipient.
-resolve_inbox() {
-  local id match
-  id="$(normalize_id "$1")"
+human_handle() {
+  local id="$1" handle
   case "$id" in
-    humans/*|*@*)
-      local handle="${id#humans/}"; handle="${handle%%@*}"
-      echo "$MAIL_ROOT/humans/$handle/inbox"; return 0 ;;
+    josh) printf 'josh'; return 0 ;;
+    humans/*) handle="${id#humans/}" ;;
+    *@*) handle="${id%%@*}" ;;
+    *) [ -d "$MAIL_ROOT/humans/$id" ] || return 1; handle="$id" ;;
   esac
+  [ -n "$handle" ] || return 1
+  printf '%s' "$handle"
+}
+
+resolve_inbox() {
+  local id match handle
+  id="$(normalize_id "$1")"
+  if handle="$(human_handle "$id")"; then
+    echo "$MAIL_ROOT/humans/$handle/inbox"
+    return 0
+  fi
   # Match on the *scratchpad* existing, not inbox/ — a fresh recipient has a
   # scratchpad but no inbox until their first mail arrives, so keying off
   # inbox/ made bare-name first contact impossible (chicken-and-egg).
@@ -191,17 +203,20 @@ cmd_send() {
   [ -n "$reply_to" ] && reply_to="$(normalize_id "$reply_to")"
 
   local inbox; inbox="$(resolve_inbox "$to")"
+  local human=""; human="$(human_handle "$to" || true)"
   local scratchpad; scratchpad="$(dirname "$inbox")"
-  # Fail loudly if the recipient scratchpad is gone (reboot/pruned) rather
-  # than silently conjuring a dead inbox nobody will ever read.
-  [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
+  if [ -z "$human" ]; then
+    # Fail loudly if the recipient scratchpad is gone (reboot/pruned) rather
+    # than silently conjuring a dead inbox nobody will ever read.
+    [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
 
-  # Report, don't predict: an overnight-idle session usually resumes, so state
-  # the age and let the sender judge. Not fatal either way; there is no wakeup,
-  # and the sender's only signal about a quiet recipient is how quiet it is.
-  local idle; idle="$(idle_hours "$scratchpad" || echo 0)"
-  if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
-    echo "agent-mail: '$to' last active ${idle}h ago" >&2
+    # Report, don't predict: an overnight-idle session usually resumes, so state
+    # the age and let the sender judge. Not fatal either way; there is no wakeup,
+    # and the sender's only signal about a quiet recipient is how quiet it is.
+    local idle; idle="$(idle_hours "$scratchpad" || echo 0)"
+    if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
+      echo "agent-mail: '$to' last active ${idle}h ago" >&2
+    fi
   fi
 
   ensure_maildir "$inbox"
@@ -230,6 +245,19 @@ cmd_send() {
 
   # Atomic within one filesystem: reader in new/ never sees a partial write.
   mv "$tmp" "$dst"
+
+  # Josh's inbox is also an attention channel. Successful notification marks
+  # this delivery so the unread sweep does not send the same alert four hours
+  # later; a failed notification stays eligible for that fallback.
+  if [ "$human" = josh ] && command -v notify-josh >/dev/null 2>&1; then
+    if notify-josh --from agent-mail "Agent mail: ${subject:-(no subject)}" \
+      "From $from. Read with: agent-mail read --to josh" >/dev/null 2>&1; then
+      mkdir "$inbox/.escalated-$msgid" 2>/dev/null || true
+    else
+      echo "agent-mail: immediate Josh notification failed; unread sweep will retry" >&2
+    fi
+  fi
+
   echo "$msgid"
 }
 
