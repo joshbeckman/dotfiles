@@ -3,5 +3,6 @@
   "category": "develop-code",
   "grader": "grader.rb",
   "allowed_commands": ["python3 -m unittest -v"],
+  "command_timeout_seconds": 10,
   "allowed_files": ["ranges.py", "test_ranges.py"]
 }

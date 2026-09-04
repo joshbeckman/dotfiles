@@ -3,5 +3,6 @@
   "category": "design-interface",
   "grader": "grader.rb",
   "allowed_commands": [],
+  "command_timeout_seconds": 10,
   "allowed_files": []
 }
