@@ -1,0 +1,8 @@
+{
+  "id": "prose-release-note",
+  "category": "write-edit-prose",
+  "grader": "grader.rb",
+  "allowed_commands": [],
+  "command_timeout_seconds": 10,
+  "allowed_files": ["note.md"]
+}

@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+cat >"$tmp/fake-pi" <<'RUBY'
+#!/usr/bin/env ruby
+require "json"
+
+if ARGV.include?("--version")
+  puts "fake-pi 1.0"
+  exit
+end
+if ARGV.include?("--list-models")
+  puts "fake/model"
+  exit
+end
+
+File.write(ENV["FAKE_PI_PID_FILE"], Process.pid) if ENV["FAKE_PI_PID_FILE"]
+
+def emit(value)
+  puts JSON.generate(value)
+  STDOUT.flush
+end
+
+cost = ENV.fetch("FAKE_PI_COST", "0.01").to_f
+mode = ENV.fetch("FAKE_PI_MODE", "success")
+File.write(ENV["FAKE_PI_ARGV_FILE"], ARGV.join("\n")) if ENV["FAKE_PI_ARGV_FILE"]
+warn ENV["FAKE_PI_STDERR"] if ENV["FAKE_PI_STDERR"]
+while (line = STDIN.gets)
+  command = JSON.parse(line)
+  case command["type"]
+  when "get_state"
+    emit("id" => command["id"], "type" => "response", "command" => "get_state", "success" => true,
+         "data" => {"model" => {"provider" => "fake", "id" => "model", "cost" => {"input" => 1, "output" => 1, "cacheRead" => 1, "cacheWrite" => 1}}, "thinkingLevel" => "off"})
+  when "set_auto_retry", "set_auto_compaction"
+    emit("id" => command["id"], "type" => "response", "command" => command["type"], "success" => true)
+  when "prompt"
+    if mode == "reject"
+      emit("id" => command["id"], "type" => "response", "command" => "prompt", "success" => false, "error" => "authentication unavailable")
+      next
+    end
+    emit("id" => command["id"], "type" => "response", "command" => "prompt", "success" => true)
+    if mode == "timeout" || mode == "ignore_term"
+      Signal.trap("TERM") {} if mode == "ignore_term"
+      sleep 30
+    elsif mode == "malformed" || mode == "non_object_event"
+      puts(mode == "malformed" ? "not-json" : "42")
+      STDOUT.flush
+    else
+      usage = {"input" => 10, "output" => 5, "cacheRead" => 2, "cacheWrite" => 1, "totalTokens" => 18,
+               "cost" => {"input" => cost / 2, "output" => cost / 2, "cacheRead" => 0, "cacheWrite" => 0, "total" => cost}}
+      emit("type" => "extension_ui_request", "message" => "private diagnostic")
+      emit("type" => "agent_start")
+      emit("type" => "turn_start")
+      emit("type" => "message_update", "usage" => usage, "assistantMessageEvent" => {"type" => "text_delta", "contentIndex" => 0, "delta" => "answer"})
+      message = {"role" => "assistant", "content" => [{"type" => "text", "text" => "answer"}], "provider" => "fake", "model" => "model", "usage" => usage, "stopReason" => "stop"}
+      emit("type" => "message_end", "message" => message)
+      emit("type" => "turn_end", "message" => message, "toolResults" => [])
+      emit("type" => "agent_settled")
+    end
+  when "get_session_stats"
+    sleep 3 if mode == "slow_stats"
+    emit("id" => command["id"], "type" => "response", "command" => "get_session_stats", "success" => true,
+         "data" => {"tokens" => {"input" => 10, "output" => 5, "cacheRead" => 2, "cacheWrite" => 1, "total" => 18}, "cost" => cost})
+  when "abort"
+    emit("type" => "response", "command" => "abort", "success" => true)
+    exit
+  end
+end
+RUBY
+chmod +x "$tmp/fake-pi"
+
+plan="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor)"
+ruby -rjson -e 'p=JSON.parse(STDIN.read); abort unless p["trial_count"] == 1 && p["maximum_if_every_trial_reaches_cap_usd"] == 0.5' <<<"$plan"
+if "$root/bin/pi-model-eval" plan --models fake/model >/dev/null 2>&1; then
+    echo 'model without explicit thinking unexpectedly accepted' >&2
+    exit 1
+fi
+
+assert_grader_passes() {
+    local fixture="$1" workspace="$2" answer="$3"
+    ruby "$root/model-eval/fixtures/$fixture/grader.rb" "$workspace" "$answer" |
+        ruby -rjson -e 'result=JSON.parse(STDIN.read); abort unless result["required_pass"] && result["checks"].all? { |check| !check["required"] || check["passed"] }'
+}
+
+assert_grader_fails() {
+    local fixture="$1" workspace="$2" answer="$3"
+    ruby "$root/model-eval/fixtures/$fixture/grader.rb" "$workspace" "$answer" |
+        ruby -rjson -e 'result=JSON.parse(STDIN.read); abort if result["required_pass"]'
+}
+
+: >"$tmp/empty-answer"
+for fixture in code-range-merge debug-worker-retry design-event-cursor prose-release-note; do
+    cp -R "$root/model-eval/fixtures/$fixture/workspace" "$tmp/bad-$fixture"
+    assert_grader_fails "$fixture" "$tmp/bad-$fixture" "$tmp/empty-answer"
+done
+
+cp -R "$root/model-eval/fixtures/code-range-merge/workspace" "$tmp/code"
+cat >"$tmp/code/ranges.py" <<'PY'
+def merge_ranges(ranges):
+    ordered = sorted([list(item) for item in ranges])
+    for start, end in ordered:
+        if start > end:
+            raise ValueError("invalid range")
+    merged = []
+    for start, end in ordered:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+PY
+: >"$tmp/code-answer"
+assert_grader_passes code-range-merge "$tmp/code" "$tmp/code-answer"
+
+cp -R "$root/model-eval/fixtures/debug-worker-retry/workspace" "$tmp/debug"
+cat >"$tmp/debug-answer" <<'EOF'
+The ledger write happens after send and ack, then fails with connection-reset. Recovery sees ledger missing and queue unacked and retries after 5 seconds. This is not the 300-second timeout. Make delivery idempotent with a durable key, or atomically record intent before sending.
+EOF
+assert_grader_passes debug-worker-retry "$tmp/debug" "$tmp/debug-answer"
+cat >"$tmp/debug-wrong-answer" <<'EOF'
+The 300-second timeout expired before recovery and caused the duplicate. Recovery found the ledger missing and queue unacked after 5 seconds; use a durable idempotency key.
+EOF
+assert_grader_fails debug-worker-retry "$tmp/debug" "$tmp/debug-wrong-answer"
+
+cp -R "$root/model-eval/fixtures/design-event-cursor/workspace" "$tmp/design"
+cat >"$tmp/design-answer" <<'EOF'
+Request `GET /events?cursor=<opaque token>&limit=100`. Order strictly by the monotonic event ID. A 200 response returns `{"events": [], "next_cursor": "..."}`. Return 400 `invalid_cursor` for malformed tokens and 410 `cursor_expired` when retention has removed the position. Accept `after_id` for one release, translate it to the cursor path, and mark it deprecated before removal.
+EOF
+assert_grader_passes design-event-cursor "$tmp/design" "$tmp/design-answer"
+
+cp -R "$root/model-eval/fixtures/prose-release-note/workspace" "$tmp/prose"
+cat >"$tmp/prose/note.md" <<'EOF'
+Exports created after September 3 now retry temporary storage errors up to two times. Permanent validation errors still fail immediately, and existing failed exports are not restarted. If an export still fails, download its error report and contact support with the export ID.
+EOF
+: >"$tmp/prose-answer"
+assert_grader_passes prose-release-note "$tmp/prose" "$tmp/prose-answer"
+
+run_dir="$(FAKE_PI_COST=0.01 FAKE_PI_STDERR='sensitive diagnostic should-not-persist' FAKE_PI_ARGV_FILE="$tmp/fake-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --provider-extension "$tmp/fake-pi" --fixtures design-event-cursor --results "$tmp/success")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "completed" && r["tokens"]["cacheRead"] == 2 && r["pricing_status"] == "catalog"' "$result"
+[[ -s "$run_dir/report.md" && -s "${result%/result.json}/events.jsonl" ]]
+grep -qx -- '--no-extensions' "$tmp/fake-argv"
+grep -qx -- '--extension' "$tmp/fake-argv"
+! grep -q 'should-not-persist' "${result%/result.json}/stderr.log"
+! grep -q 'assistantMessageEvent\|"text".*answer\|private diagnostic' "${result%/result.json}/events.jsonl"
+
+run_dir="$(FAKE_PI_MODE=timeout "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 0.1 --results "$tmp/timeout")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "timeout" && r["termination_reason"] == "trial_timeout" && !r.dig("grader", "required_pass")' "$result"
+
+FAKE_PI_MODE=ignore_term FAKE_PI_PID_FILE="$tmp/fake-pid" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 30 --results "$tmp/interrupted" >"$tmp/interrupted.out" 2>"$tmp/interrupted.err" &
+harness_pid=$!
+for _ in {1..100}; do [[ -s "$tmp/fake-pid" ]] && break; sleep 0.02; done
+[[ -s "$tmp/fake-pid" ]]
+kill -TERM "$harness_pid"
+set +e
+wait "$harness_pid"
+interrupt_status=$?
+set -e
+[[ "$interrupt_status" -eq 130 ]]
+! kill -0 "$(cat "$tmp/fake-pid")" 2>/dev/null
+interrupted_result="$(find "$tmp/interrupted" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "interrupted" && r["termination_reason"] == "operator_interrupt"' "$interrupted_result"
+
+run_dir="$(FAKE_PI_MODE=reject "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 5 --results "$tmp/reject")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "infrastructure_error" && r["termination_reason"] == "prompt_rejected" && r["prompt_error"].include?("details omitted") && r["wall_seconds"] < 4' "$result"
+
+run_dir="$(FAKE_PI_MODE=malformed "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --results "$tmp/malformed")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "infrastructure_error" && r["termination_reason"] == "malformed_event"' "$result"
+
+run_dir="$(FAKE_PI_MODE=non_object_event "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --results "$tmp/non-object")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "infrastructure_error" && r["termination_reason"] == "malformed_event" && File.directory?(File.join(File.dirname(ARGV[0]), "workspace"))' "$result"
+
+run_dir="$(FAKE_PI_MODE=slow_stats "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 1 --results "$tmp/slow-stats")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "completed" && r["termination_reason"] == "agent_settled_stats_unavailable" && r["tokens"]["totalTokens"] == 18' "$result"
+
+run_dir="$(FAKE_PI_COST=0.2 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --trial-budget 0.05 --results "$tmp/trial-budget")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "budget_stopped" && r["termination_reason"] == "trial_spend_stop"' "$result"
+
+run_dir="$(FAKE_PI_COST=0.01 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --token-limit 5 --results "$tmp/token-limit")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "limit_stopped" && r["termination_reason"] == "trial_token_stop"' "$result"
+
+run_dir="$(FAKE_PI_ARGV_FILE="$tmp/inherit-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --inherit-extensions --fixtures design-event-cursor --results "$tmp/inherit")"
+! grep -qx -- '--no-extensions' "$tmp/inherit-argv"
+ruby -rjson -e 'm=JSON.parse(File.read(File.join(ARGV[0], "manifest.json"))); abort unless m["inherits_configured_extensions"] == true' "$run_dir"
+
+run_dir="$(FAKE_PI_COST=0.1 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor,debug-worker-retry --trial-budget 1 --suite-budget 0.05 --results "$tmp/suite-budget")"
+ruby -rjson -e 'files=Dir[File.join(ARGV[0], "trials", "*", "result.json")].sort; states=files.map { |f| JSON.parse(File.read(f))["status"] }; abort unless states == ["completed", "budget_not_started"]' "$run_dir"
+
+run_dir="$("$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --suite-timeout 0 --results "$tmp/suite-timeout")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "timeout_not_started" && r["termination_reason"] == "suite_timeout"' "$result"
+
+command -v node >/dev/null || { echo 'node is required to test evaluation-boundary.ts' >&2; exit 1; }
+node --help | grep -q -- '--experimental-strip-types' || { echo 'Node type stripping is required to test evaluation-boundary.ts' >&2; exit 1; }
+mkdir "$tmp/boundary"
+    printf x >"$tmp/boundary/file.txt"
+    ln -s /etc/passwd "$tmp/boundary/link.txt"
+    PI_EVAL_ROOT="$tmp/boundary" PI_EVAL_ALLOWED_COMMANDS='["ruby check.rb"]' PI_EVAL_COMMAND_TIMEOUT=7 EVAL_ROOT="$root" node --experimental-strip-types <<'NODE'
+const {pathToFileURL} = require("node:url");
+(async () => {
+    let handler;
+    const module = await import(pathToFileURL(process.env.EVAL_ROOT + "/model-eval/evaluation-boundary.ts"));
+    module.default({on(name, callback) { if (name === "tool_call") handler = callback; }});
+    if (handler({toolName: "read", input: {path: "file.txt"}})) throw new Error("inside read blocked");
+    if (!handler({toolName: "read", input: {path: "/etc/passwd"}})?.block) throw new Error("absolute read allowed");
+    if (!handler({toolName: "read", input: {path: "../outside.txt"}})?.block) throw new Error("traversal read allowed");
+    if (!handler({toolName: "read", input: {path: "@/etc/passwd"}})?.block) throw new Error("at-prefixed absolute read allowed");
+    if (!handler({toolName: "write", input: {path: "link.txt"}})?.block) throw new Error("symlink write allowed");
+    const shellInput = {command: "ruby check.rb"};
+    if (handler({toolName: "bash", input: shellInput})) throw new Error("allowed command blocked");
+    if (!shellInput.command.startsWith("/usr/bin/env -i ") || shellInput.timeout !== 7) throw new Error("allowed command was not isolated");
+    if (!handler({toolName: "bash", input: {command: "curl example.com"}})?.block) throw new Error("unlisted shell allowed");
+})();
+NODE
+
+printf 'pi-model-eval tests passed\n'

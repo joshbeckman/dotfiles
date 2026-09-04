@@ -1,0 +1,586 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "json"
+require "open3"
+require "optparse"
+require "securerandom"
+require "rbconfig"
+require "time"
+require "timeout"
+require "tmpdir"
+
+ROOT = File.expand_path("..", __dir__)
+FIXTURES = File.join(ROOT, "model-eval", "fixtures")
+EXTENSION = File.join(ROOT, "model-eval", "evaluation-boundary.ts")
+DEFAULT_RESULTS = File.expand_path(ENV.fetch("PI_MODEL_EVAL_RESULTS", "~/.local/share/pi-model-eval/runs"))
+
+class EvalError < StandardError; end
+
+def load_fixtures(ids = nil)
+  fixtures = Dir.glob(File.join(FIXTURES, "*", "manifest.json")).sort.map do |path|
+    manifest = JSON.parse(File.read(path))
+    id = manifest.fetch("id")
+    directory = File.basename(File.dirname(path))
+    raise EvalError, "fixture id must match its directory and contain only letters, digits, '.', '_', or '-': #{id.inspect}" unless id == directory && id.match?(/\A[A-Za-z0-9_.-]+\z/)
+    manifest.merge("path" => File.dirname(path), "version" => fixture_hash(File.dirname(path)))
+  end
+  fixtures.select! { |fixture| ids.include?(fixture.fetch("id")) } if ids
+  missing = ids.to_a - fixtures.map { |fixture| fixture.fetch("id") }
+  raise EvalError, "unknown fixtures: #{missing.join(", ")}" unless missing.empty?
+  fixtures
+end
+
+def fixture_hash(path)
+  digest = Digest::SHA256.new
+  Dir.glob(File.join(path, "**", "*"), File::FNM_DOTMATCH).select { |file| File.file?(file) }.sort.each do |file|
+    digest << file.delete_prefix("#{path}/") << "\0" << File.binread(file) << "\0"
+  end
+  digest.hexdigest
+end
+
+def parse_options(argv)
+  options = {
+    tier: "smoke", repeats: 1, timeout: 120.0, trial_budget: 0.50,
+    token_limit: 200_000, turn_limit: 20, suite_budget: 2.0, suite_timeout: 1_800.0,
+    results: DEFAULT_RESULTS, pi: ENV.fetch("PI_MODEL_EVAL_PI", "pi"), provider_extensions: [], inherit_extensions: false
+  }
+  parser = OptionParser.new do |opts|
+    opts.banner = "Usage: pi-model-eval COMMAND --models PROVIDER/MODEL:THINKING [options]"
+    opts.on("--models LIST", "Comma-separated explicit model selections") { |value| options[:models] = value.split(",").map(&:strip).reject(&:empty?) }
+    opts.on("--fixtures LIST", "Comma-separated fixture IDs") { |value| options[:fixtures] = value.split(",").map(&:strip) }
+    opts.on("--repeats N", Integer) { |value| options[:repeats] = value }
+    opts.on("--timeout SECONDS", Float) { |value| options[:timeout] = value }
+    opts.on("--trial-budget DOLLARS", Float) { |value| options[:trial_budget] = value }
+    opts.on("--token-limit N", Integer) { |value| options[:token_limit] = value }
+    opts.on("--turn-limit N", Integer) { |value| options[:turn_limit] = value }
+    opts.on("--suite-budget DOLLARS", Float) { |value| options[:suite_budget] = value }
+    opts.on("--suite-timeout SECONDS", Float) { |value| options[:suite_timeout] = value }
+    opts.on("--results DIR") { |value| options[:results] = File.expand_path(value) }
+    opts.on("--pi PATH") { |value| options[:pi] = value }
+    opts.on("--provider-extension PATH", "Explicit provider/auth extension required by the selected model (repeatable)") do |value|
+      options[:provider_extensions] << File.expand_path(value)
+    end
+    opts.on("--inherit-extensions", "Load the normal Pi extensions (less isolated, useful for extension-provided auth)") do
+      options[:inherit_extensions] = true
+    end
+    opts.on("-h", "--help") { puts opts; exit }
+  end
+  parser.parse!(argv)
+  [options, parser]
+end
+
+def plan(options)
+  raise EvalError, "--models is required and must be explicit" if options[:models].nil? || options[:models].empty?
+  invalid = options[:models].reject { |model| model.match?(%r{\A[^/]+/.+:(off|minimal|low|medium|high|xhigh|max)\z}) }
+  raise EvalError, "models must use provider/model:thinking: #{invalid.join(", ")}" unless invalid.empty?
+  raise EvalError, "duplicate models are not allowed" unless options[:models].uniq.length == options[:models].length
+  raise EvalError, "--repeats must be at least 1" if options[:repeats] < 1
+  raise EvalError, "trial limits must be positive" unless options[:timeout].positive? && options[:trial_budget].positive? && options[:token_limit].positive? && options[:turn_limit].positive?
+  raise EvalError, "suite limits cannot be negative" if options[:suite_budget].negative? || options[:suite_timeout].negative?
+  raise EvalError, "only the smoke tier exists in v1" unless options[:tier] == "smoke"
+  missing_extensions = options[:provider_extensions].reject { |path| File.exist?(path) }
+  raise EvalError, "provider extensions not found: #{missing_extensions.join(", ")}" unless missing_extensions.empty?
+  fixtures = load_fixtures(options[:fixtures])
+  trials = options[:models].product(fixtures, (1..options[:repeats]).to_a)
+  {
+    "tier" => options[:tier], "models" => options[:models],
+    "fixtures" => fixtures.map { |fixture| fixture.slice("id", "category", "version") },
+    "repeats" => options[:repeats], "trial_count" => trials.length,
+    "trial_timeout_seconds" => options[:timeout], "trial_spend_stop_usd" => options[:trial_budget],
+    "trial_token_stop" => options[:token_limit], "trial_turn_stop" => options[:turn_limit],
+    "suite_spend_stop_usd" => options[:suite_budget], "suite_timeout_seconds" => options[:suite_timeout],
+    "provider_extension_count" => options[:provider_extensions].length,
+    "inherits_configured_extensions" => options[:inherit_extensions],
+    "maximum_if_every_trial_reaches_cap_usd" => trials.length * options[:trial_budget]
+  }
+end
+
+def write_json(path, value)
+  FileUtils.mkdir_p(File.dirname(path))
+  temporary = "#{path}.tmp-#{Process.pid}"
+  File.write(temporary, JSON.pretty_generate(value) + "\n")
+  File.rename(temporary, path)
+end
+
+def safe_copy_workspace(source, destination)
+  entries = Dir.glob(File.join(source, "**", "*"), File::FNM_DOTMATCH)
+  raise EvalError, "fixture workspace contains a symlink" if entries.any? { |path| File.symlink?(path) }
+  FileUtils.cp_r(source, destination)
+end
+
+def workspace_hashes(workspace)
+  Dir.glob(File.join(workspace, "**", "*"), File::FNM_DOTMATCH).select { |path| File.file?(path) }.sort.to_h do |path|
+    [path.delete_prefix("#{workspace}/"), Digest::SHA256.file(path).hexdigest]
+  end
+end
+
+def terminate_process(pid, stdin, grace: 2.0)
+  stdin.puts(JSON.generate("type" => "abort")) rescue nil
+  stdin.flush rescue nil
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + grace
+  sleep 0.05 while process_alive?(pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+  Process.kill("TERM", -pid) rescue nil
+  sleep 0.05 while process_alive?(pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline + 1.0
+  Process.kill("KILL", -pid) rescue nil
+end
+
+def process_alive?(pid)
+  Process.kill(0, pid)
+  true
+rescue Errno::ESRCH
+  false
+end
+
+def assistant_text(message)
+  return "" unless message.is_a?(Hash) && message["role"] == "assistant"
+  Array(message["content"]).select { |part| part["type"] == "text" }.map { |part| part["text"] }.join
+end
+
+def usage_cost(usage)
+  usage.is_a?(Hash) ? usage.dig("cost", "total").to_f : 0.0
+end
+
+def run_grader(fixture, workspace, answer)
+  grader = File.join(fixture.fetch("path"), fixture.fetch("grader"))
+  clean_env = {
+    "HOME" => workspace, "PATH" => ENV.fetch("PATH", "/usr/bin:/bin"), "TMPDIR" => workspace,
+    "PYTHONDONTWRITEBYTECODE" => "1", "LANG" => ENV.fetch("LANG", "C.UTF-8")
+  }
+  stdout_text = String.new
+  stderr_text = String.new
+  exit_status = nil
+  timed_out = false
+  Open3.popen3(clean_env, "ruby", grader, workspace, answer, chdir: workspace, pgroup: true, unsetenv_others: true) do |stdin, stdout, stderr, wait|
+    stdin.close
+    stdout_reader = Thread.new { stdout.read }
+    stderr_reader = Thread.new { stderr.read }
+    unless wait.join(20)
+      timed_out = true
+      Process.kill("TERM", -wait.pid) rescue nil
+      sleep 0.1
+      Process.kill("KILL", -wait.pid) rescue nil if process_alive?(wait.pid)
+    end
+    wait.join
+    stdout_text = stdout_reader.value
+    stderr_text = stderr_reader.value
+    exit_status = wait.value
+  end
+  return { "required_pass" => false, "checks" => [], "grader_error" => "timeout" } if timed_out
+
+  parsed = JSON.parse(stdout_text)
+  parsed["grader_stderr"] = "grader wrote #{stderr_text.bytesize} bytes to stderr (content omitted)" unless stderr_text.empty?
+  parsed["grader_exit"] = exit_status.exitstatus
+  parsed
+rescue JSON::ParserError
+  { "required_pass" => false, "checks" => [], "grader_error" => "invalid JSON" }
+rescue StandardError => error
+  { "required_pass" => false, "checks" => [], "grader_error" => error.class.to_s }
+end
+
+# Preserve protocol shape and timing while omitting model text, tool payloads, extension data, and provider diagnostics.
+def redacted_event(event)
+  kept = event.slice("id", "type", "command", "success", "toolCallId", "toolName", "isError", "reason")
+  message = event["message"]
+  usage = event["usage"] || (message["usage"] if message.is_a?(Hash))
+  kept["usage"] = usage.slice("input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost") if usage.is_a?(Hash)
+  kept["message_role"] = message["role"] if message.is_a?(Hash)
+  kept["error"] = "provider or RPC error (content omitted)" if event["error"]
+  kept
+end
+
+def run_trial(options, fixture, model, repeat, trial_dir)
+  started_wall = Time.now.utc
+  started_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  workspace_parent = Dir.mktmpdir("pi-model-eval-")
+  workspace = File.join(workspace_parent, "workspace")
+  safe_copy_workspace(File.join(fixture.fetch("path"), "workspace"), workspace)
+  baseline_hashes = workspace_hashes(workspace)
+  FileUtils.mkdir_p(trial_dir)
+  events_path = File.join(trial_dir, "events.jsonl")
+  stderr_path = File.join(trial_dir, "stderr.log")
+  answer_path = File.join(trial_dir, "answer.md")
+  event_file = File.open(events_path, "w")
+  stderr_bytes = 0
+
+  env = {
+    "PYTHONDONTWRITEBYTECODE" => "1",
+    "PI_EVAL_ROOT" => workspace,
+    "PI_EVAL_ALLOWED_COMMANDS" => JSON.generate(fixture.fetch("allowed_commands", [])),
+    "PI_EVAL_COMMAND_TIMEOUT" => fixture.fetch("command_timeout_seconds").to_s,
+    "PI_CACHE_RETENTION" => ENV["PI_CACHE_RETENTION"]
+  }.compact
+  prompt = File.read(File.join(fixture.fetch("path"), "prompt.md"))
+  system_prompt = "You are completing one isolated evaluation fixture. Work only inside the current directory. Follow the task exactly and finish with a concise answer."
+  extension_args = options[:provider_extensions].flat_map { |path| ["--extension", path] }
+  extension_mode_args = options[:inherit_extensions] ? [] : ["--no-extensions"]
+  args = [options[:pi], "--mode", "rpc", "--model", model, "--no-session", *extension_mode_args, *extension_args,
+          "--extension", EXTENSION, "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve",
+          "--tools", "read,edit,write,bash", "--system-prompt", system_prompt]
+
+  status_name = "running"
+  terminal_reason = nil
+  final_text = ""
+  finalized_cost = 0.0
+  stream_cost = 0.0
+  finalized_tokens = 0
+  stream_tokens = 0
+  turn_count = 0
+  final_usage = nil
+  state = nil
+  stats = nil
+  prompt_accepted_mono = nil
+  settled_mono = nil
+  turn_started = nil
+  first_event_latency = nil
+  turn_latencies = []
+  tool_starts = {}
+  tool_durations = []
+  malformed = nil
+  prompt_error = nil
+  harness_error = nil
+  pid = nil
+
+  Open3.popen3(env, *args, chdir: workspace, pgroup: true) do |stdin, stdout, stderr, wait|
+    pid = wait.pid
+    begin
+      stdin.sync = true
+    stdin.puts(JSON.generate("id" => "retry", "type" => "set_auto_retry", "enabled" => false))
+    stdin.puts(JSON.generate("id" => "compaction", "type" => "set_auto_compaction", "enabled" => false))
+    stdin.puts(JSON.generate("id" => "state", "type" => "get_state"))
+    stdin.puts(JSON.generate("id" => "prompt", "type" => "prompt", "message" => prompt))
+    buffer = String.new
+    deadline = started_mono + options[:timeout]
+    stats_requested = false
+    stats_deadline = nil
+    done = false
+
+    until done
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      observed_cost = finalized_cost + stream_cost
+      if stats_requested && now >= stats_deadline
+        status_name = "completed"
+        terminal_reason = "agent_settled_stats_unavailable"
+        terminate_process(pid, stdin)
+        break
+      elsif !stats_requested && now >= deadline
+        status_name = "timeout"
+        terminal_reason = "trial_timeout"
+        terminate_process(pid, stdin)
+        break
+      elsif !stats_requested && observed_cost >= options[:trial_budget]
+        status_name = "budget_stopped"
+        terminal_reason = "trial_spend_stop"
+        terminate_process(pid, stdin)
+        break
+      end
+
+      ready = IO.select([stdout, stderr], nil, nil, 0.1)&.first || []
+      ready.each do |io|
+        chunk = io.read_nonblock(16_384, exception: false)
+        next if chunk == :wait_readable
+        if chunk.nil?
+          done = true if io == stdout && !process_alive?(pid)
+          next
+        end
+        if io == stderr
+          stderr_bytes += chunk.bytesize
+          next
+        end
+        buffer << chunk
+        while (index = buffer.index("\n"))
+          line = buffer.slice!(0..index).chomp
+          next if line.empty?
+          observed = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          begin
+            event = JSON.parse(line)
+          rescue JSON::ParserError
+            malformed = "invalid JSON"
+            status_name = "infrastructure_error"
+            terminal_reason = "malformed_event"
+            terminate_process(pid, stdin)
+            done = true
+            break
+          end
+          unless event.is_a?(Hash)
+            malformed = "top-level RPC value was #{event.class}, expected object"
+            status_name = "infrastructure_error"
+            terminal_reason = "malformed_event"
+            terminate_process(pid, stdin)
+            done = true
+            break
+          end
+          event_file.puts(JSON.generate("observed_monotonic_seconds" => observed - started_mono, "event" => redacted_event(event)))
+          event_file.flush
+
+          if event["type"] == "response"
+            state = event["data"] if event["id"] == "state" && event["success"]
+            if event["id"] == "prompt"
+              if event["success"]
+                prompt_accepted_mono = observed
+              else
+                prompt_error = "provider or RPC rejected the prompt (details omitted)"
+                status_name = "infrastructure_error"
+                terminal_reason = "prompt_rejected"
+                terminate_process(pid, stdin)
+                done = true
+                break
+              end
+            end
+            if event["id"] == "stats"
+              stats = event["data"] if event["success"]
+              status_name = "completed"
+              terminal_reason = event["success"] ? "agent_settled" : "agent_settled_stats_unavailable"
+              done = true
+            end
+          elsif event["type"] == "turn_start"
+            turn_started = observed
+            turn_count += 1
+            first_event_latency = nil
+            stream_cost = 0.0
+            stream_tokens = 0
+          elsif event["type"] == "message_update"
+            first_event_latency ||= observed - turn_started if turn_started
+            if event["usage"].is_a?(Hash)
+              stream_cost = usage_cost(event["usage"])
+              stream_tokens = event.dig("usage", "totalTokens").to_i
+            end
+          elsif event["type"] == "message_end"
+            message = event["message"]
+            if message.is_a?(Hash) && message["role"] == "assistant"
+              final_text = assistant_text(message) unless assistant_text(message).empty?
+              final_usage = message["usage"]
+              finalized_cost += usage_cost(message["usage"])
+              finalized_tokens += message.dig("usage", "totalTokens").to_i
+              stream_cost = 0.0
+              stream_tokens = 0
+              if turn_started
+                turn_latencies << { "seconds" => observed - turn_started, "first_event_seconds" => first_event_latency }
+                turn_started = nil
+              end
+            end
+          elsif event["type"] == "tool_execution_start"
+            tool_starts[event["toolCallId"]] = [observed, event["toolName"]]
+          elsif event["type"] == "tool_execution_end" && (tool = tool_starts.delete(event["toolCallId"]))
+            tool_durations << { "tool" => tool[1], "seconds" => observed - tool[0], "error" => event["isError"] }
+          elsif event["type"] == "agent_settled"
+            settled_mono = observed
+            unless stats_requested
+              stdin.puts(JSON.generate("id" => "stats", "type" => "get_session_stats"))
+              stats_requested = true
+              stats_deadline = observed + 2.0
+            end
+          end
+
+          limit_reason = if finalized_cost + stream_cost >= options[:trial_budget]
+                           ["budget_stopped", "trial_spend_stop"]
+                         elsif finalized_tokens + stream_tokens >= options[:token_limit]
+                           ["limit_stopped", "trial_token_stop"]
+                         elsif turn_count > options[:turn_limit]
+                           ["limit_stopped", "trial_turn_stop"]
+                         end
+          if !stats_requested && limit_reason
+            status_name, terminal_reason = limit_reason
+            terminate_process(pid, stdin)
+            done = true
+            break
+          end
+        end
+      end
+      done = true if wait.join(0) && !stats_requested
+    end
+      if status_name == "running"
+        status_name = stats ? "completed" : "infrastructure_error"
+        terminal_reason = stats ? "agent_settled" : "process_exited"
+      end
+    rescue Interrupt
+      status_name = "interrupted"
+      terminal_reason = "operator_interrupt"
+      terminate_process(pid, stdin) if process_alive?(pid)
+    rescue StandardError => error
+      status_name = "infrastructure_error"
+      terminal_reason = "harness_exception"
+      location = Array(error.backtrace).first.to_s.sub(ROOT, ".").sub(Dir.home, "~")
+      harness_error = {"class" => error.class.to_s, "location" => location}
+      terminate_process(pid, stdin) if process_alive?(pid)
+    ensure
+      File.write(stderr_path, stderr_bytes.zero? ? "" : "stderr captured: #{stderr_bytes} bytes; content omitted\n")
+    end
+  end
+
+  File.write(answer_path, final_text)
+  grader = if status_name == "interrupted"
+             {"required_pass" => false, "checks" => [], "grader_error" => "not run after operator interrupt"}
+           else
+             run_grader(fixture, workspace, answer_path)
+           end
+  current_hashes = workspace_hashes(workspace)
+  changed_files = (baseline_hashes.keys | current_hashes.keys).select { |path| baseline_hashes[path] != current_hashes[path] }.sort
+  allowed_files = fixture.fetch("allowed_files", [])
+  grader["checks"] ||= []
+  grader["checks"] << {"name" => "grader execution", "required" => true,
+                        "passed" => !grader.key?("grader_error") && grader["grader_exit"].to_i.zero?}
+  grader["checks"] << {"name" => "allowed file changes", "required" => true,
+                        "passed" => (changed_files - allowed_files).empty?, "detail" => changed_files}
+  grader["required_pass"] = grader["required_pass"] == true && grader["checks"].all? { |check| !check["required"] || check["passed"] }
+  artifacts = File.join(trial_dir, "workspace")
+  FileUtils.cp_r(workspace, artifacts)
+  ended_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  tokens = stats && stats["tokens"] || final_usage&.slice("input", "output", "cacheRead", "cacheWrite", "totalTokens")
+  cost = stats ? stats["cost"] : (finalized_cost + stream_cost)
+  model_data = state && state["model"]
+  catalog_cost = model_data && model_data["cost"]
+  pricing_status = if catalog_cost.nil?
+                     "unavailable"
+                   elsif catalog_cost.values.all? { |value| value.to_f.zero? }
+                     "zero_or_unknown"
+                   else
+                     "catalog"
+                   end
+
+  {
+    "status" => status_name, "termination_reason" => terminal_reason, "malformed_event" => malformed,
+    "prompt_error" => prompt_error, "harness_error" => harness_error,
+    "fixture" => fixture.slice("id", "category", "version"), "requested_model" => model,
+    "provider" => model_data && model_data["provider"], "model" => model_data && model_data["id"],
+    "thinking_level" => state && state["thinkingLevel"], "repeat" => repeat,
+    "started_at" => started_wall.iso8601(3), "wall_seconds" => ended_mono - started_mono,
+    "prompt_accept_seconds" => prompt_accepted_mono && prompt_accepted_mono - started_mono,
+    "settled_seconds" => settled_mono && prompt_accepted_mono && settled_mono - prompt_accepted_mono,
+    "turn_timings" => turn_latencies, "tool_timings" => tool_durations,
+    "tokens" => tokens, "estimated_cost_usd" => pricing_status == "catalog" ? cost : nil,
+    "raw_reported_cost_usd" => cost, "pricing_status" => pricing_status,
+    "trial_spend_stop_usd" => options[:trial_budget], "trial_timeout_seconds" => options[:timeout],
+    "trial_token_stop" => options[:token_limit], "trial_turn_stop" => options[:turn_limit],
+    "cache_retention" => ENV["PI_CACHE_RETENTION"], "changed_files" => changed_files,
+    "artifact_hashes" => current_hashes, "grader" => grader
+  }
+ensure
+  event_file&.close
+  FileUtils.rm_rf(workspace_parent) if workspace_parent
+end
+
+def percentile(values, fraction)
+  return nil if values.empty?
+  sorted = values.sort
+  sorted[((sorted.length - 1) * fraction).round]
+end
+
+def render_report(manifest, results)
+  rows = results.group_by { |result| result["requested_model"] }.map do |model, model_results|
+    completed = model_results.count { |result| result["status"] == "completed" }
+    correct = model_results.count { |result| result["status"] == "completed" && result.dig("grader", "required_pass") }
+    required = model_results.sum { |result| Array(result.dig("grader", "checks")).count { |check| check["required"] } }
+    required_passed = model_results.sum { |result| Array(result.dig("grader", "checks")).count { |check| check["required"] && check["passed"] } }
+    walls = model_results.map { |result| result["wall_seconds"] }.compact
+    turns = model_results.flat_map { |result| Array(result["turn_timings"]).map { |timing| timing["seconds"] } }.compact
+    tokens = if model_results.all? { |result| result["tokens"].is_a?(Hash) }
+               %w[input output cacheRead cacheWrite].map { |key| model_results.sum { |result| result.dig("tokens", key).to_i } }.join("/")
+             else
+               "unknown"
+             end
+    costs = model_results.map { |result| result["estimated_cost_usd"] }
+    cost_display = costs.all? { |cost| !cost.nil? } ? format("$%.4f", costs.sum) : "unknown"
+    stops = model_results.reject { |result| result["status"] == "completed" }.map { |result| result["status"] }.tally.map { |key, count| "#{key}:#{count}" }.join(", ")
+    wall_range = walls.empty? ? "-" : format("%.2f/%.2f-%.2f", percentile(walls, 0.5), walls.min, walls.max)
+    turn_range = turns.empty? ? "-" : format("%.2f/%.2f-%.2f", percentile(turns, 0.5), turns.min, turns.max)
+    [model, "#{correct}/#{model_results.length} (#{completed} complete)", "#{required_passed}/#{required}",
+     wall_range, turn_range, tokens,
+     cost_display, stops.empty? ? "-" : stops]
+  end
+  lines = ["# Pi model evaluation", "", "Run `#{manifest.fetch("run_id")}` used #{manifest.fetch("tier")} fixtures. Metrics stay separate so the report does not hide tradeoffs in one score.", "",
+           "| Model + thinking | Correct repeats | Required checks | Wall median/range (s) | Model-turn median/range (s) | In/out/cache R/cache W | Estimated cost | Stops/errors |",
+           "|---|---:|---:|---:|---:|---:|---:|---|"]
+  rows.each { |row| lines << "| #{row.join(" | ")} |" }
+  lines << "" << "## Trials" << ""
+  results.each do |result|
+    checks = Array(result.dig("grader", "checks"))
+    lines << "- **#{result.dig("fixture", "id")} / #{result["requested_model"]} / repeat #{result["repeat"]}:** #{result["status"]}; #{checks.count { |check| check["passed"] }}/#{checks.length} checks; #{format("%.2fs", result["wall_seconds"])}"
+  end
+  lines.join("\n") + "\n"
+end
+
+def run_suite(options)
+  suite_plan = plan(options)
+  run_id = Time.now.utc.strftime("%Y%m%dT%H%M%SZ") + "-" + SecureRandom.hex(3)
+  run_dir = File.join(options[:results], run_id)
+  FileUtils.mkdir_p(run_dir)
+  fixtures = load_fixtures(options[:fixtures])
+  trials = options[:models].product(fixtures, (1..options[:repeats]).to_a)
+  begin
+    pi_version, pi_status = Open3.capture2e(options[:pi], "--version")
+  rescue Errno::ENOENT
+    raise EvalError, "cannot execute Pi at #{options[:pi].inspect}"
+  end
+  raise EvalError, "Pi version check failed: #{pi_version.lines.first&.strip}" unless pi_status.success?
+  manifest = suite_plan.merge("run_id" => run_id, "created_at" => Time.now.utc.iso8601(3),
+                              "harness_version" => "1", "pi_version" => pi_version.lines.first.to_s.strip,
+                              "os" => RUBY_PLATFORM, "architecture" => RbConfig::CONFIG["host_cpu"], "ruby_version" => RUBY_VERSION,
+                              "repeat_seed" => nil, "order_strategy" => "declared models, then fixture ID",
+                              "execution_order" => trials.map { |model, fixture, repeat| [model, fixture.fetch("id"), repeat] })
+  write_json(File.join(run_dir, "manifest.json"), manifest)
+  results = []
+  observed_suite_cost = 0.0
+  suite_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  trials.each_with_index do |(model, fixture, repeat), index|
+    trial_id = format("%03d-%s-%s-r%d", index + 1, model.gsub(/[^A-Za-z0-9_.-]/, "_"), fixture.fetch("id"), repeat)
+    suite_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - suite_started
+    stop_reason = if observed_suite_cost >= options[:suite_budget]
+                    ["budget_not_started", "suite_spend_stop"]
+                  elsif suite_elapsed >= options[:suite_timeout]
+                    ["timeout_not_started", "suite_timeout"]
+                  end
+    if stop_reason
+      result = { "status" => stop_reason[0], "termination_reason" => stop_reason[1],
+                 "fixture" => fixture.slice("id", "category", "version"), "requested_model" => model, "repeat" => repeat,
+                 "wall_seconds" => 0, "grader" => { "required_pass" => false, "checks" => [] } }
+    else
+      warn "running #{trial_id}"
+      remaining = options[:suite_timeout] - suite_elapsed
+      trial_options = options.merge(timeout: [options[:timeout], remaining].min)
+      begin
+        result = run_trial(trial_options, fixture, model, repeat, File.join(run_dir, "trials", trial_id))
+      rescue StandardError => error
+        result = { "status" => "infrastructure_error", "termination_reason" => "harness_exception",
+                   "error" => error.class.to_s,
+                   "fixture" => fixture.slice("id", "category", "version"), "requested_model" => model, "repeat" => repeat,
+                   "wall_seconds" => 0, "grader" => { "required_pass" => false, "checks" => [] } }
+      end
+      observed_suite_cost += result["raw_reported_cost_usd"].to_f
+    end
+    write_json(File.join(run_dir, "trials", trial_id, "result.json"), result)
+    results << result
+    File.write(File.join(run_dir, "report.md"), render_report(manifest, results))
+    raise Interrupt if result["status"] == "interrupted"
+  end
+  puts run_dir
+end
+
+begin
+  command = ARGV.shift
+  options, parser = parse_options(ARGV)
+  previous_term = Signal.trap("TERM") { raise Interrupt }
+  begin
+    case command
+    when "plan"
+      puts JSON.pretty_generate(plan(options))
+    when "run"
+      run_suite(options)
+    when "models"
+      exec(options[:pi], "--list-models")
+    else
+      warn parser
+      exit(command ? 64 : 0)
+    end
+  ensure
+    Signal.trap("TERM", previous_term)
+  end
+rescue EvalError, OptionParser::ParseError, Errno::ENOENT => error
+  warn "pi-model-eval: #{error.message}"
+  exit 64
+rescue Interrupt
+  warn "pi-model-eval: interrupted; active trial stopped"
+  exit 130
+end
