@@ -98,10 +98,23 @@ if [[ -n "$real_nvim" ]]; then
         '+AgentMailReply' "+if exists(':AgentMailSend') != 2 | cquit 1 | endif" '+qa!'
 
     nvim_message="$inbox/new/nvim-archive.md"
+    nvim_archive_script="$tmp/nvim-archive.vim"
     printf 'From: test-agent\nTo: josh\nSubject: archive in Neovim\n\nbody\n' >"$nvim_message"
+    cat >"$nvim_archive_script" <<EOF
+let g:netrw_liststyle=3
+execute 'Explore ' . fnameescape('$inbox')
+call search('new/')
+execute "normal \\<CR>"
+if search('nvim-archive.md') == 0 | cquit 1 | endif
+execute 'edit ' . fnameescape('$nvim_message')
+AgentMailArchive
+if &filetype !=# 'netrw' | cquit 1 | endif
+if search('nvim-archive.md') != 0 | cquit 1 | endif
+qa!
+EOF
     AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' --cmd 'runtime plugin/netrwPlugin.vim' "$nvim_message" \
-        '+AgentMailArchive' "+if &filetype !=# 'netrw' | cquit 1 | endif" '+qa!'
+        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' --cmd 'runtime plugin/netrwPlugin.vim' \
+        -S "$nvim_archive_script"
     [[ -f "$inbox/cur/nvim-archive.md" ]]
 fi
 

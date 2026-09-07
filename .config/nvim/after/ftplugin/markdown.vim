@@ -24,6 +24,7 @@ function! s:AgentMailArchive() abort
     let message_buffer = bufnr('')
     let inbox = fnamemodify(destination, ':h:h')
     execute 'Explore ' . fnameescape(inbox)
+    execute "normal \<C-L>"
     execute 'bdelete ' . message_buffer
     echo 'Archived to ' . destination
 endfunction
