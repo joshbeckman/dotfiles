@@ -15,6 +15,8 @@ set -euo pipefail
 # leaves an audit trail until an agent explicitly discards.
 
 MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
+mkdir -p "$MAIL_ROOT"
+MAIL_ROOT="$(CDPATH= cd -- "$MAIL_ROOT" && pwd -P)"
 
 usage() {
   cat <<'USAGE'

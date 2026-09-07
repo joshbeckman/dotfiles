@@ -24,7 +24,8 @@ export AGENT_MAIL_EDITOR=nvim
 export PATH="$tmp/bin:$PATH"
 
 msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
-inbox="$tmp/mail/humans/josh/inbox"
+mail_root="$(CDPATH= cd -- "$tmp/mail" && pwd -P)"
+inbox="$mail_root/humans/josh/inbox"
 [[ -f "$inbox/new/$msgid.md" ]]
 [[ -d "$inbox/.escalated-$msgid" ]]
 grep -Fq 'Agent mail: Needs attention' "$NOTIFY_LOG"
@@ -40,9 +41,9 @@ message="$inbox/cur/$msgid.md"
 [[ -f "$message" ]]
 "$command" receipt "$msgid" | grep -Fq $'read\t'
 
-mkdir -p "$tmp/mail/test-agent-session"
+mkdir -p "$mail_root/test-agent-session"
 draft="$("$command" reply "$message")"
-[[ "$draft" == "$tmp/mail/humans/josh/drafts/"*.md ]]
+[[ "$draft" == "$mail_root/humans/josh/drafts/"*.md ]]
 grep -Fxq 'From: josh' "$draft"
 grep -Fxq 'To: test-agent' "$draft"
 grep -Fxq "In-Reply-To: $msgid" "$draft"
@@ -50,18 +51,26 @@ grep -Fxq 'Subject: Re: Needs attention' "$draft"
 printf 'Reply body.\n' >>"$draft"
 
 delivered="$("$command" deliver "$draft")"
-[[ "$delivered" == "$tmp/mail/test-agent-session/inbox/new/"*.md ]]
+[[ "$delivered" == "$mail_root/test-agent-session/inbox/new/"*.md ]]
 grep -Fq 'Reply body.' "$delivered"
 archived="$("$command" archive "$delivered")"
-[[ "$archived" == "$tmp/mail/test-agent-session/inbox/cur/"*.md ]]
+[[ "$archived" == "$mail_root/test-agent-session/inbox/cur/"*.md ]]
 [[ -f "$archived" ]]
 
 "$command" inbox @+test-agent
-[[ "$(cat "$EDITOR_LOG")" == "$tmp/mail/test-agent-session/inbox" ]]
+[[ "$(cat "$EDITOR_LOG")" == "$mail_root/test-agent-session/inbox" ]]
 if "$command" send --to '../../outside' --body 'no' >/dev/null 2>&1; then
     echo 'path-like recipient unexpectedly accepted' >&2
     exit 1
 fi
+
+mkdir -p "$tmp/physical/humans/josh/inbox/new"
+physical_root="$(CDPATH= cd -- "$tmp/physical" && pwd -P)"
+ln -s "$tmp/physical" "$tmp/alias"
+printf 'Subject: alias test\n\nbody\n' >"$physical_root/humans/josh/inbox/new/alias.md"
+alias_archived="$(AGENT_MAIL_ROOT="$tmp/alias" "$command" archive "$physical_root/humans/josh/inbox/new/alias.md")"
+[[ "$alias_archived" == "$physical_root/humans/josh/inbox/cur/alias.md" ]]
+[[ -f "$alias_archived" ]]
 
 if [[ -n "$real_nvim" ]]; then
     check_nvim_command() {
