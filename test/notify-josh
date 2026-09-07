@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/bin"
+
+cat >"$tmp/bin/uname" <<'EOF'
+#!/bin/sh
+printf 'Darwin\n'
+EOF
+cat >"$tmp/bin/pgrep" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat >"$tmp/bin/osascript" <<'EOF'
+#!/bin/sh
+printf 'false\n'
+EOF
+cat >"$tmp/bin/pmset" <<'EOF'
+#!/bin/sh
+printf 'Internal failure: no power state\n'
+EOF
+cat >"$tmp/bin/ioreg" <<'EOF'
+#!/bin/sh
+printf '%s\n' '"IOPowerManagement" = {"DevicePowerState"=4,"CurrentPowerState"=4,"MaxPowerState"=4}'
+i=0
+while [ "$i" -lt 10000 ]; do
+  printf 'padding %s\n' "$i"
+  i=$((i + 1))
+done
+EOF
+cat >"$tmp/bin/terminal-notifier" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >"$LOCAL_LOG"
+EOF
+cat >"$tmp/bin/node" <<'EOF'
+#!/bin/sh
+printf 'push called\n' >"$PUSH_LOG"
+exit 1
+EOF
+cat >"$tmp/bin/tmux" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$tmp/bin"/*
+
+export PATH="$tmp/bin:/usr/bin:/bin"
+export LOCAL_LOG="$tmp/local"
+export PUSH_LOG="$tmp/push"
+export TMUX=
+
+"$root/bin/notify-josh" 'Mail delivered' 'Read your inbox.' >/dev/null
+[[ -s "$LOCAL_LOG" ]]
+[[ ! -e "$PUSH_LOG" ]]
+grep -Fq -- '-title Mail delivered' "$LOCAL_LOG"
+
+printf 'notify-josh tests passed\n'
