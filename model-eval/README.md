@@ -28,15 +28,18 @@ pi-model-eval run \
   --models provider/model-a:high,provider/model-b:high
 ```
 
-The trial subprocess disables discovered extensions for a stable evaluation surface. If a selected model gets its catalog or authentication from an extension, pass that trusted extension explicitly without publishing its path:
+By default, each trial loads the extensions, skills, prompt templates, context files, settings, and authentication from the active Pi configuration. This measures a model in the environment where I actually use it rather than as a bare provider call.
+
+Use another configuration directory to compare setups:
 
 ```sh
 pi-model-eval run \
   --models provider/model:low \
-  --provider-extension ~/.pi/agent/extensions/provider/index.ts
+  --config-dir ~/.pi/agent-experiment \
+  --config-label experiment
 ```
 
-Repeat `--provider-extension` when a provider needs more than one. The run manifest records only the count, not private extension paths. If provider authentication cannot be separated from the normal Pi extension set, `--inherit-extensions` loads that set and records the weaker isolation mode in the manifest. Use it only when needed because those extensions can alter prompts, events, and side effects.
+A run can add `--extension`, `--skill`, or `--prompt-template` paths, or disable discovery with `--no-extensions`, `--no-skills`, `--no-prompt-templates`, and `--no-context-files`. The manifest records the public-safe label, discovery switches, resource counts, and an aggregate fingerprint for settings, direct resources, installed package revisions, and explicit resources. Sensitive settings values and authentication files are excluded. The manifest does not record config paths, resource names, or contents.
 
 Defaults are one repeat per fixture, 120 seconds, 200,000 tokens, 20 turns, and $0.50 per trial, plus $2 or 30 minutes for the suite. Override them with `--repeats`, `--timeout`, `--token-limit`, `--turn-limit`, `--trial-budget`, `--suite-budget`, and `--suite-timeout`.
 
@@ -52,7 +55,7 @@ A timeout or observed spend stop first sends RPC `abort`, then terminates the tr
 
 ## Fixture boundary
 
-Every trial gets a fresh temporary workspace and session. By default, Pi starts without discovered extensions, skills, prompt templates, context files, project approval, or session persistence. The evaluation extension restricts reads and writes to relative, non-symlink paths inside the workspace and permits only exact shell commands named by the fixture. Allowed commands and graders run with a minimal environment so model-written code cannot read credentials inherited from the operator's shell.
+Every trial gets a fresh temporary workspace and session while loading the active Pi configuration. Project approval and session persistence remain disabled. The evaluation extension is added after the configured extensions. It permits read-only access to configured skill files, restricts other reads and all writes to relative, non-symlink paths inside the workspace, and permits only exact shell commands named by the fixture. Allowed commands and graders run with a minimal environment so model-written code cannot read credentials inherited from the operator's shell.
 
 This boundary prevents accidental access during trusted, dependency-free fixtures. It is not a hostile-code sandbox. Fixtures that require arbitrary shell execution, package installation, live services, private data, or network access need a separate design decision.
 

@@ -9,6 +9,9 @@ cat >"$tmp/fake-pi" <<'RUBY'
 #!/usr/bin/env ruby
 require "json"
 
+File.write(ENV["FAKE_PI_ARGV_FILE"], ARGV.join("\n")) if ENV["FAKE_PI_ARGV_FILE"]
+File.write(ENV["FAKE_PI_CONFIG_FILE"], ENV.fetch("PI_CODING_AGENT_DIR", "")) if ENV["FAKE_PI_CONFIG_FILE"]
+
 if ARGV.include?("--version")
   puts "fake-pi 1.0"
   exit
@@ -27,7 +30,6 @@ end
 
 cost = ENV.fetch("FAKE_PI_COST", "0.01").to_f
 mode = ENV.fetch("FAKE_PI_MODE", "success")
-File.write(ENV["FAKE_PI_ARGV_FILE"], ARGV.join("\n")) if ENV["FAKE_PI_ARGV_FILE"]
 warn ENV["FAKE_PI_STDERR"] if ENV["FAKE_PI_STDERR"]
 while (line = STDIN.gets)
   command = JSON.parse(line)
@@ -74,9 +76,30 @@ RUBY
 chmod +x "$tmp/fake-pi"
 
 plan="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor)"
-ruby -rjson -e 'p=JSON.parse(STDIN.read); abort unless p["trial_count"] == 1 && p["maximum_if_every_trial_reaches_cap_usd"] == 0.5' <<<"$plan"
+ruby -rjson -e 'p=JSON.parse(STDIN.read); c=p["configuration"]; abort unless p["trial_count"] == 1 && p["maximum_if_every_trial_reaches_cap_usd"] == 0.5 && c["label"] == "default" && c["fingerprint"].match?(/\A[0-9a-f]{64}\z/) && c["discovery"].values.all?' <<<"$plan"
+mkdir "$tmp/config"
+printf '{"version":1}\n' >"$tmp/config/settings.json"
+configured_plan="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor --config-dir "$tmp/config" --config-label experiment)"
+ruby -rjson -e 'p=JSON.parse(STDIN.read); c=p["configuration"]; abort unless c["source"] == "override" && c["label"] == "experiment" && c["tracked_file_count"] == 1' <<<"$configured_plan"
+first_fingerprint="$(ruby -rjson -e 'puts JSON.parse(STDIN.read).dig("configuration", "fingerprint")' <<<"$configured_plan")"
+printf '{"version":2}\n' >"$tmp/config/settings.json"
+second_fingerprint="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor --config-dir "$tmp/config" | ruby -rjson -e 'puts JSON.parse(STDIN.read).dig("configuration", "fingerprint")')"
+[[ "$first_fingerprint" != "$second_fingerprint" ]]
+printf '{"version":1}\n' >"$tmp/config/settings.json"
+FAKE_PI_ARGV_FILE="$tmp/models-argv" FAKE_PI_CONFIG_FILE="$tmp/models-config" "$root/bin/pi-model-eval" models --pi "$tmp/fake-pi" --config-dir "$tmp/config" --no-skills --extension "$tmp/fake-pi" >/dev/null
+grep -qx -- '--no-skills' "$tmp/models-argv"
+grep -qx -- '--extension' "$tmp/models-argv"
+[[ "$(cat "$tmp/models-config")" == "$tmp/config" ]]
 if "$root/bin/pi-model-eval" plan --models fake/model >/dev/null 2>&1; then
     echo 'model without explicit thinking unexpectedly accepted' >&2
+    exit 1
+fi
+if "$root/bin/pi-model-eval" plan --models fake/model:off --config-label 'not public safe' >/dev/null 2>&1; then
+    echo 'unsafe config label unexpectedly accepted' >&2
+    exit 1
+fi
+if PI_CODING_AGENT_DIR="$tmp/missing-config" "$root/bin/pi-model-eval" plan --models fake/model:off >/dev/null 2>&1; then
+    echo 'missing environment config directory unexpectedly accepted' >&2
     exit 1
 fi
 
@@ -139,12 +162,17 @@ EOF
 : >"$tmp/prose-answer"
 assert_grader_passes prose-release-note "$tmp/prose" "$tmp/prose-answer"
 
-run_dir="$(FAKE_PI_COST=0.01 FAKE_PI_STDERR='sensitive diagnostic should-not-persist' FAKE_PI_ARGV_FILE="$tmp/fake-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --provider-extension "$tmp/fake-pi" --fixtures design-event-cursor --results "$tmp/success")"
+run_dir="$(FAKE_PI_COST=0.01 FAKE_PI_STDERR='sensitive diagnostic should-not-persist' FAKE_PI_ARGV_FILE="$tmp/fake-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --extension "$tmp/fake-pi" --fixtures design-event-cursor --results "$tmp/success")"
 result="$(find "$run_dir/trials" -name result.json -print -quit)"
 ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "completed" && r["tokens"]["cacheRead"] == 2 && r["pricing_status"] == "catalog"' "$result"
 [[ -s "$run_dir/report.md" && -s "${result%/result.json}/events.jsonl" ]]
-grep -qx -- '--no-extensions' "$tmp/fake-argv"
+! grep -qx -- '--no-extensions' "$tmp/fake-argv"
+! grep -qx -- '--no-skills' "$tmp/fake-argv"
+! grep -qx -- '--no-prompt-templates' "$tmp/fake-argv"
+! grep -qx -- '--no-context-files' "$tmp/fake-argv"
 grep -qx -- '--extension' "$tmp/fake-argv"
+grep -qx -- '--append-system-prompt' "$tmp/fake-argv"
+! grep -qx -- '--system-prompt' "$tmp/fake-argv"
 ! grep -q 'should-not-persist' "${result%/result.json}/stderr.log"
 ! grep -q 'assistantMessageEvent\|"text".*answer\|private diagnostic' "${result%/result.json}/events.jsonl"
 
@@ -190,9 +218,11 @@ run_dir="$(FAKE_PI_COST=0.01 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" -
 result="$(find "$run_dir/trials" -name result.json -print -quit)"
 ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "limit_stopped" && r["termination_reason"] == "trial_token_stop"' "$result"
 
-run_dir="$(FAKE_PI_ARGV_FILE="$tmp/inherit-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --inherit-extensions --fixtures design-event-cursor --results "$tmp/inherit")"
-! grep -qx -- '--no-extensions' "$tmp/inherit-argv"
-ruby -rjson -e 'm=JSON.parse(File.read(File.join(ARGV[0], "manifest.json"))); abort unless m["inherits_configured_extensions"] == true' "$run_dir"
+run_dir="$(FAKE_PI_ARGV_FILE="$tmp/isolated-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --config-dir "$tmp/config" --config-label isolated --no-extensions --no-skills --no-prompt-templates --no-context-files --extension "$tmp/fake-pi" --skill "$tmp/fake-pi" --prompt-template "$tmp/fake-pi" --fixtures design-event-cursor --results "$tmp/isolated")"
+for flag in --no-extensions --no-skills --no-prompt-templates --no-context-files --extension --skill --prompt-template; do
+    grep -qx -- "$flag" "$tmp/isolated-argv"
+done
+ruby -rjson -e 'm=JSON.parse(File.read(File.join(ARGV[0], "manifest.json"))); c=m["configuration"]; abort unless c["label"] == "isolated" && c["source"] == "override" && c["discovery"].values.none? && c["explicit"].values.all? { |v| v.length == 1 }' "$run_dir"
 
 run_dir="$(FAKE_PI_COST=0.1 "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor,debug-worker-retry --trial-budget 1 --suite-budget 0.05 --results "$tmp/suite-budget")"
 ruby -rjson -e 'files=Dir[File.join(ARGV[0], "trials", "*", "result.json")].sort; states=files.map { |f| JSON.parse(File.read(f))["status"] }; abort unless states == ["completed", "budget_not_started"]' "$run_dir"
@@ -206,7 +236,10 @@ node --help | grep -q -- '--experimental-strip-types' || { echo 'Node type strip
 mkdir "$tmp/boundary"
     printf x >"$tmp/boundary/file.txt"
     ln -s /etc/passwd "$tmp/boundary/link.txt"
-    PI_EVAL_ROOT="$tmp/boundary" PI_EVAL_ALLOWED_COMMANDS='["ruby check.rb"]' PI_EVAL_COMMAND_TIMEOUT=7 EVAL_ROOT="$root" node --experimental-strip-types <<'NODE'
+    mkdir -p "$tmp/config/skills/example" "$tmp/explicit-skill"
+    printf skill >"$tmp/config/skills/example/SKILL.md"
+    printf explicit >"$tmp/explicit-skill/SKILL.md"
+    PI_EVAL_ROOT="$tmp/boundary" PI_EVAL_CONFIG_ROOT="$tmp/config" PI_EVAL_SKILL_ROOTS="[\"$tmp/explicit-skill\"]" PI_EVAL_ALLOWED_COMMANDS='["ruby check.rb"]' PI_EVAL_COMMAND_TIMEOUT=7 EVAL_ROOT="$root" node --experimental-strip-types <<'NODE'
 const {pathToFileURL} = require("node:url");
 (async () => {
     let handler;
@@ -216,6 +249,9 @@ const {pathToFileURL} = require("node:url");
     if (!handler({toolName: "read", input: {path: "/etc/passwd"}})?.block) throw new Error("absolute read allowed");
     if (!handler({toolName: "read", input: {path: "../outside.txt"}})?.block) throw new Error("traversal read allowed");
     if (!handler({toolName: "read", input: {path: "@/etc/passwd"}})?.block) throw new Error("at-prefixed absolute read allowed");
+    if (handler({toolName: "read", input: {path: process.env.PI_EVAL_CONFIG_ROOT + "/skills/example/SKILL.md"}})) throw new Error("configured skill read blocked");
+    if (handler({toolName: "read", input: {path: JSON.parse(process.env.PI_EVAL_SKILL_ROOTS)[0] + "/SKILL.md"}})) throw new Error("explicit skill read blocked");
+    if (!handler({toolName: "write", input: {path: process.env.PI_EVAL_CONFIG_ROOT + "/skills/example/SKILL.md"}})?.block) throw new Error("configured skill write allowed");
     if (!handler({toolName: "write", input: {path: "link.txt"}})?.block) throw new Error("symlink write allowed");
     const shellInput = {command: "ruby check.rb"};
     if (handler({toolName: "bash", input: shellInput})) throw new Error("allowed command blocked");

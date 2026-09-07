@@ -41,11 +41,95 @@ def fixture_hash(path)
   digest.hexdigest
 end
 
+def path_fingerprint(path)
+  digest = Digest::SHA256.new
+  files = if File.directory?(path)
+            Dir.glob(File.join(path, "**", "*"), File::FNM_DOTMATCH).select do |file|
+              File.file?(file) && !file.split(File::SEPARATOR).any? { |part| ["node_modules", ".git"].include?(part) }
+            end
+          elsif File.file?(path)
+            [path]
+          else
+            []
+          end
+  directory = File.directory?(path)
+  files.sort.each do |file|
+    identity = directory ? file.delete_prefix("#{path}/") : File.basename(file)
+    digest << identity << "\0" << File.binread(file) << "\0"
+  end
+  digest.hexdigest
+end
+
+def effective_config_dir(options)
+  File.expand_path(options[:config_dir] || ENV["PI_CODING_AGENT_DIR"] || "~/.pi/agent")
+end
+
+def redact_sensitive_settings(value, key = nil)
+  return "[omitted]" if key&.match?(/auth|token|secret|password|api.?key|cookie|header|credential/i)
+  return value.to_h { |child_key, child| [child_key, redact_sensitive_settings(child, child_key)] } if value.is_a?(Hash)
+  return value.map { |child| redact_sensitive_settings(child) } if value.is_a?(Array)
+  value
+end
+
+def configuration_snapshot(options)
+  config_dir = effective_config_dir(options)
+  source = options[:config_dir] ? "override" : ENV["PI_CODING_AGENT_DIR"] ? "environment" : "default"
+  patterns = %w[settings.json AGENTS.md extensions/**/* skills/**/* prompts/**/* prompt-templates/**/*
+                git/**/.git/HEAD git/**/.git/refs/**/* git/**/.git/packed-refs]
+  files = patterns.flat_map { |pattern| Dir.glob(File.join(config_dir, pattern), File::FNM_DOTMATCH) }
+                  .select { |path| File.file?(path) && !path.split(File::SEPARATOR).include?("node_modules") }.uniq.sort
+  discovery = {
+    "extensions" => options[:discover_extensions], "skills" => options[:discover_skills],
+    "prompt_templates" => options[:discover_prompt_templates], "context_files" => options[:discover_context_files]
+  }
+  explicit = {
+    "extension_fingerprints" => options[:extensions].map { |path| path_fingerprint(path) },
+    "skill_fingerprints" => options[:skills].map { |path| path_fingerprint(path) },
+    "prompt_template_fingerprints" => options[:prompt_templates].map { |path| path_fingerprint(path) }
+  }
+  digest = Digest::SHA256.new
+  files.each do |file|
+    relative = file.delete_prefix("#{config_dir}/")
+    content = if relative == "settings.json"
+                JSON.generate(redact_sensitive_settings(JSON.parse(File.read(file))))
+              else
+                File.binread(file)
+              end
+    digest << relative << "\0" << content << "\0"
+  rescue JSON::ParserError
+    digest << relative << "\0invalid settings JSON\0"
+  end
+  digest << JSON.generate(discovery) << "\0" << JSON.generate(explicit)
+  {
+    "label" => options[:config_label], "source" => source, "fingerprint" => digest.hexdigest,
+    "tracked_file_count" => files.length, "discovery" => discovery, "explicit" => explicit
+  }
+end
+
+def pi_configuration_args(options)
+  args = []
+  args << "--no-extensions" unless options[:discover_extensions]
+  args << "--no-skills" unless options[:discover_skills]
+  args << "--no-prompt-templates" unless options[:discover_prompt_templates]
+  args << "--no-context-files" unless options[:discover_context_files]
+  options[:extensions].each { |path| args.concat(["--extension", path]) }
+  options[:skills].each { |path| args.concat(["--skill", path]) }
+  options[:prompt_templates].each { |path| args.concat(["--prompt-template", path]) }
+  args
+end
+
+def pi_configuration_env(options)
+  config_dir = options[:config_dir] || ENV["PI_CODING_AGENT_DIR"]
+  config_dir ? {"PI_CODING_AGENT_DIR" => File.expand_path(config_dir)} : {}
+end
+
 def parse_options(argv)
   options = {
     tier: "smoke", repeats: 1, timeout: 120.0, trial_budget: 0.50,
     token_limit: 200_000, turn_limit: 20, suite_budget: 2.0, suite_timeout: 1_800.0,
-    results: DEFAULT_RESULTS, pi: ENV.fetch("PI_MODEL_EVAL_PI", "pi"), provider_extensions: [], inherit_extensions: false
+    results: DEFAULT_RESULTS, pi: ENV.fetch("PI_MODEL_EVAL_PI", "pi"), config_dir: nil, config_label: "default",
+    discover_extensions: true, discover_skills: true, discover_prompt_templates: true, discover_context_files: true,
+    extensions: [], skills: [], prompt_templates: []
   }
   parser = OptionParser.new do |opts|
     opts.banner = "Usage: pi-model-eval COMMAND --models PROVIDER/MODEL:THINKING [options]"
@@ -60,12 +144,17 @@ def parse_options(argv)
     opts.on("--suite-timeout SECONDS", Float) { |value| options[:suite_timeout] = value }
     opts.on("--results DIR") { |value| options[:results] = File.expand_path(value) }
     opts.on("--pi PATH") { |value| options[:pi] = value }
-    opts.on("--provider-extension PATH", "Explicit provider/auth extension required by the selected model (repeatable)") do |value|
-      options[:provider_extensions] << File.expand_path(value)
-    end
-    opts.on("--inherit-extensions", "Load the normal Pi extensions (less isolated, useful for extension-provided auth)") do
-      options[:inherit_extensions] = true
-    end
+    opts.on("--config-dir DIR", "Use another Pi config directory") { |value| options[:config_dir] = File.expand_path(value) }
+    opts.on("--config-label LABEL", "Public-safe label recorded with the config fingerprint") { |value| options[:config_label] = value }
+    opts.on("--extension PATH", "Add an extension to the configured set (repeatable)") { |value| options[:extensions] << File.expand_path(value) }
+    opts.on("--provider-extension PATH", "Alias for --extension") { |value| options[:extensions] << File.expand_path(value) }
+    opts.on("--skill PATH", "Add a skill to the configured set (repeatable)") { |value| options[:skills] << File.expand_path(value) }
+    opts.on("--prompt-template PATH", "Add a prompt template to the configured set (repeatable)") { |value| options[:prompt_templates] << File.expand_path(value) }
+    opts.on("--no-extensions", "Disable configured extension discovery") { options[:discover_extensions] = false }
+    opts.on("--no-skills", "Disable configured skill discovery") { options[:discover_skills] = false }
+    opts.on("--no-prompt-templates", "Disable configured prompt-template discovery") { options[:discover_prompt_templates] = false }
+    opts.on("--no-context-files", "Disable configured context-file discovery") { options[:discover_context_files] = false }
+    opts.on("--inherit-extensions", "Compatibility alias; configured extensions are already enabled by default") { options[:discover_extensions] = true }
     opts.on("-h", "--help") { puts opts; exit }
   end
   parser.parse!(argv)
@@ -81,8 +170,12 @@ def plan(options)
   raise EvalError, "trial limits must be positive" unless options[:timeout].positive? && options[:trial_budget].positive? && options[:token_limit].positive? && options[:turn_limit].positive?
   raise EvalError, "suite limits cannot be negative" if options[:suite_budget].negative? || options[:suite_timeout].negative?
   raise EvalError, "only the smoke tier exists in v1" unless options[:tier] == "smoke"
-  missing_extensions = options[:provider_extensions].reject { |path| File.exist?(path) }
-  raise EvalError, "provider extensions not found: #{missing_extensions.join(", ")}" unless missing_extensions.empty?
+  raise EvalError, "config label may contain only letters, digits, '.', '_', or '-'" unless options[:config_label].match?(/\A[A-Za-z0-9_.-]+\z/)
+  selected_config_dir = options[:config_dir] || ENV["PI_CODING_AGENT_DIR"]
+  raise EvalError, "config directory not found: #{selected_config_dir}" if selected_config_dir && !File.directory?(File.expand_path(selected_config_dir))
+  explicit_resources = options.values_at(:extensions, :skills, :prompt_templates).flatten
+  missing_resources = explicit_resources.reject { |path| File.exist?(path) }
+  raise EvalError, "explicit config resources not found: #{missing_resources.join(", ")}" unless missing_resources.empty?
   fixtures = load_fixtures(options[:fixtures])
   trials = options[:models].product(fixtures, (1..options[:repeats]).to_a)
   {
@@ -92,8 +185,7 @@ def plan(options)
     "trial_timeout_seconds" => options[:timeout], "trial_spend_stop_usd" => options[:trial_budget],
     "trial_token_stop" => options[:token_limit], "trial_turn_stop" => options[:turn_limit],
     "suite_spend_stop_usd" => options[:suite_budget], "suite_timeout_seconds" => options[:suite_timeout],
-    "provider_extension_count" => options[:provider_extensions].length,
-    "inherits_configured_extensions" => options[:inherit_extensions],
+    "configuration" => configuration_snapshot(options),
     "maximum_if_every_trial_reaches_cap_usd" => trials.length * options[:trial_budget]
   }
 end
@@ -210,15 +302,16 @@ def run_trial(options, fixture, model, repeat, trial_dir)
     "PI_EVAL_ROOT" => workspace,
     "PI_EVAL_ALLOWED_COMMANDS" => JSON.generate(fixture.fetch("allowed_commands", [])),
     "PI_EVAL_COMMAND_TIMEOUT" => fixture.fetch("command_timeout_seconds").to_s,
+    "PI_EVAL_CONFIG_ROOT" => effective_config_dir(options),
+    "PI_EVAL_SKILL_ROOTS" => JSON.generate(options[:skills]),
     "PI_CACHE_RETENTION" => ENV["PI_CACHE_RETENTION"]
-  }.compact
+  }.compact.merge(pi_configuration_env(options))
   prompt = File.read(File.join(fixture.fetch("path"), "prompt.md"))
   system_prompt = "You are completing one isolated evaluation fixture. Work only inside the current directory. Follow the task exactly and finish with a concise answer."
-  extension_args = options[:provider_extensions].flat_map { |path| ["--extension", path] }
-  extension_mode_args = options[:inherit_extensions] ? [] : ["--no-extensions"]
-  args = [options[:pi], "--mode", "rpc", "--model", model, "--no-session", *extension_mode_args, *extension_args,
-          "--extension", EXTENSION, "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve",
-          "--tools", "read,edit,write,bash", "--system-prompt", system_prompt]
+  config_args = pi_configuration_args(options)
+  args = [options[:pi], "--mode", "rpc", "--model", model, "--no-session", *config_args,
+          "--extension", EXTENSION, "--no-approve", "--tools", "read,edit,write,bash",
+          "--append-system-prompt", system_prompt]
 
   status_name = "running"
   terminal_reason = nil
@@ -569,7 +662,7 @@ begin
     when "run"
       run_suite(options)
     when "models"
-      exec(options[:pi], "--list-models")
+      exec(pi_configuration_env(options), options[:pi], *pi_configuration_args(options), "--list-models")
     else
       warn parser
       exit(command ? 64 : 0)
