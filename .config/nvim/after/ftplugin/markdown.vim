@@ -52,14 +52,17 @@ endfunction
 endif
 
 let s:agent_mail_root = resolve(fnamemodify(empty($AGENT_MAIL_ROOT) ? '/tmp/agent' : $AGENT_MAIL_ROOT, ':p'))
+let s:human_mail_root = resolve(fnamemodify(empty($AGENT_HUMAN_MAIL_ROOT) ? expand('~/.local/state/agent-mail/humans') : $AGENT_HUMAN_MAIL_ROOT, ':p'))
 let s:agent_mail_path = resolve(expand('%:p'))
-if stridx(s:agent_mail_path, substitute(s:agent_mail_root, '/$', '', '') . '/') == 0
+let s:in_agent_mail = stridx(s:agent_mail_path, substitute(s:agent_mail_root, '/$', '', '') . '/') == 0
+let s:in_human_mail = stridx(s:agent_mail_path, substitute(s:human_mail_root, '/$', '', '') . '/') == 0
+if s:in_agent_mail || s:in_human_mail
     if s:agent_mail_path =~# '/inbox/new/[^/]*\.md$'
         command! -buffer AgentMailArchive call <SID>AgentMailArchive()
         command! -buffer AgentMailReply call <SID>AgentMailReply()
     elseif s:agent_mail_path =~# '/inbox/cur/[^/]*\.md$'
         command! -buffer AgentMailReply call <SID>AgentMailReply()
-    elseif s:agent_mail_path =~# '/humans/josh/drafts/[^/]*\.md$'
+    elseif s:agent_mail_path =~# '/josh/drafts/[^/]*\.md$'
         command! -buffer AgentMailSend call <SID>AgentMailSend()
     endif
 endif

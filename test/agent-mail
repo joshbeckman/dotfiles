@@ -18,6 +18,7 @@ printf '%s\n' "$*" >"$EDITOR_LOG"
 EOF
 chmod +x "$tmp/bin/notify-josh" "$tmp/bin/nvim"
 export AGENT_MAIL_ROOT="$tmp/mail"
+export AGENT_HUMAN_MAIL_ROOT="$tmp/humans"
 export NOTIFY_LOG="$tmp/notifications"
 export EDITOR_LOG="$tmp/editor"
 export AGENT_MAIL_EDITOR=nvim
@@ -25,7 +26,8 @@ export PATH="$tmp/bin:$PATH"
 
 msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
 mail_root="$(CDPATH= cd -- "$tmp/mail" && pwd -P)"
-inbox="$mail_root/humans/josh/inbox"
+human_root="$(CDPATH= cd -- "$tmp/humans" && pwd -P)"
+inbox="$human_root/josh/inbox"
 [[ -f "$inbox/new/$msgid.md" ]]
 [[ -d "$inbox/.escalated-$msgid" ]]
 grep -Fq 'Agent mail: Needs attention' "$NOTIFY_LOG"
@@ -43,7 +45,7 @@ message="$inbox/cur/$msgid.md"
 
 mkdir -p "$mail_root/test-agent-session"
 draft="$("$command" reply "$message")"
-[[ "$draft" == "$mail_root/humans/josh/drafts/"*.md ]]
+[[ "$draft" == "$human_root/josh/drafts/"*.md ]]
 grep -Fxq 'From: josh' "$draft"
 grep -Fxq 'To: test-agent' "$draft"
 grep -Fxq "In-Reply-To: $msgid" "$draft"
@@ -64,21 +66,23 @@ if "$command" send --to '../../outside' --body 'no' >/dev/null 2>&1; then
     exit 1
 fi
 
-mkdir -p "$tmp/physical/humans/josh/inbox/new"
+mkdir -p "$tmp/physical/josh/inbox/new"
 physical_root="$(CDPATH= cd -- "$tmp/physical" && pwd -P)"
 ln -s "$tmp/physical" "$tmp/alias"
-printf 'Subject: alias test\n\nbody\n' >"$physical_root/humans/josh/inbox/new/alias.md"
-alias_archived="$(AGENT_MAIL_ROOT="$tmp/alias" "$command" archive "$physical_root/humans/josh/inbox/new/alias.md")"
-[[ "$alias_archived" == "$physical_root/humans/josh/inbox/cur/alias.md" ]]
+printf 'Subject: alias test\n\nbody\n' >"$physical_root/josh/inbox/new/alias.md"
+alias_archived="$(AGENT_HUMAN_MAIL_ROOT="$tmp/alias" "$command" archive "$physical_root/josh/inbox/new/alias.md")"
+[[ "$alias_archived" == "$physical_root/josh/inbox/cur/alias.md" ]]
 [[ -f "$alias_archived" ]]
 
 if [[ -n "$real_nvim" ]]; then
     check_nvim_command() {
         local file="$1" name="$2" expected="$3" mail_root="${4:-$tmp/mail}"
-        AGENT_MAIL_ROOT="$mail_root" "$real_nvim" --headless -u NONE \
+        AGENT_MAIL_ROOT="$mail_root" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
             --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
             "+if exists(':$name') != $expected | cquit 1 | endif" +quit
     }
+    check_nvim_command "$message" AgentMailReply 2
+    check_nvim_command "$message" AgentMailArchive 0
     check_nvim_command "$archived" AgentMailReply 2
     check_nvim_command "$archived" AgentMailArchive 0
 
@@ -89,7 +93,7 @@ if [[ -n "$real_nvim" ]]; then
     ln -s "$tmp/mail" "$tmp/mail-link"
     check_nvim_command "$archived" AgentMailReply 2 "$tmp/mail-link"
 
-    AGENT_MAIL_ROOT="$tmp/mail" "$real_nvim" --headless -u NONE \
+    AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
         --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$archived" \
         '+AgentMailReply' "+if exists(':AgentMailSend') != 2 | cquit 1 | endif" '+qa!'
 fi

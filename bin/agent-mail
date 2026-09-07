@@ -15,8 +15,10 @@ set -euo pipefail
 # leaves an audit trail until an agent explicitly discards.
 
 MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
-mkdir -p "$MAIL_ROOT"
+HUMAN_MAIL_ROOT="${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}"
+mkdir -p "$MAIL_ROOT" "$HUMAN_MAIL_ROOT"
 MAIL_ROOT="$(CDPATH= cd -- "$MAIL_ROOT" && pwd -P)"
+HUMAN_MAIL_ROOT="$(CDPATH= cd -- "$HUMAN_MAIL_ROOT" && pwd -P)"
 
 usage() {
   cat <<'USAGE'
@@ -35,8 +37,9 @@ Usage:
 
 An ID is an agent as <name>-<sessionID>, or a human as `@josh`,
 `humans/<handle>`, or an email address. The @+name agent form and @name human
-form are accepted; sigils are stripped. Bare `josh` remains accepted. Agent inboxes resolve to
-<name>-*/inbox; human inboxes to humans/<handle>/inbox.
+form are accepted; sigils are stripped. Bare `josh` remains accepted. Agent
+inboxes resolve under AGENT_MAIL_ROOT; human inboxes persist under
+AGENT_HUMAN_MAIL_ROOT.
 
 send   Deliver a message. Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
@@ -56,6 +59,8 @@ sweep  Notify Josh about messages unread for --hours (default 4). Any live
 Env:
   AGENT_MAIL_ROOT  Base dir (default /tmp/agent). Ephemeral: dies on reboot /
                    ~3-day idle. Not for anything that must be received.
+  AGENT_HUMAN_MAIL_ROOT Persistent human inboxes (default
+                   ~/.local/state/agent-mail/humans).
   AGENT_MAIL_STALE_HOURS  Report the recipient's idle time on send once it
                    reaches this many hours (default 12).
   AGENT_MAIL_EDITOR Editor used by inbox (default nvim).
@@ -99,7 +104,7 @@ human_handle() {
     josh) printf 'josh'; return 0 ;;
     humans/*) handle="${id#humans/}" ;;
     *@*) handle="${id%%@*}" ;;
-    *) [ -d "$MAIL_ROOT/humans/$id" ] || return 1; handle="$id" ;;
+    *) [ -d "$HUMAN_MAIL_ROOT/$id" ] || return 1; handle="$id" ;;
   esac
   [ -n "$handle" ] || return 1
   printf '%s' "$handle"
@@ -115,7 +120,7 @@ resolve_inbox() {
   esac
   case "$address" in ''|*[!A-Za-z0-9._+@-]*) die "invalid recipient ID: $id" ;; esac
   if handle="$(human_handle "$id")"; then
-    echo "$MAIL_ROOT/humans/$handle/inbox"
+    echo "$HUMAN_MAIL_ROOT/$handle/inbox"
     return 0
   fi
   # Match on the *scratchpad* existing, not inbox/ — a fresh recipient has a
@@ -294,7 +299,7 @@ cmd_scan() {
   local -a inboxes=()
   if [ "$all" -eq 1 ]; then
     local d
-    for d in "$MAIL_ROOT"/*/inbox "$MAIL_ROOT"/humans/*/inbox; do
+    for d in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
       [ -d "$d/new" ] && inboxes+=("$d")
     done
   else
@@ -327,7 +332,7 @@ cmd_receipt() {
   id="$(basename "$id" .md)"
 
   local inbox recipient state=""
-  for inbox in "$MAIL_ROOT"/*/inbox "$MAIL_ROOT"/humans/*/inbox; do
+  for inbox in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
     [ -d "$inbox" ] || continue
     if [ -e "$inbox/cur/$id.md" ]; then state=read
     elif [ -e "$inbox/new/$id.md" ]; then state=unread
@@ -397,7 +402,7 @@ message_path() {
   [ -f "$path" ] || die "message file not found: $path"
   dir="$(CDPATH= cd -- "$(dirname -- "$path")" && pwd)"
   case "$dir" in
-    "$MAIL_ROOT"/*/inbox/new|"$MAIL_ROOT"/humans/*/inbox/new|"$MAIL_ROOT"/*/inbox/cur|"$MAIL_ROOT"/humans/*/inbox/cur)
+    "$MAIL_ROOT"/*/inbox/new|"$MAIL_ROOT"/*/inbox/cur|"$HUMAN_MAIL_ROOT"/*/inbox/new|"$HUMAN_MAIL_ROOT"/*/inbox/cur)
       printf '%s/%s' "$dir" "$(basename -- "$path")" ;;
     *) die "not an agent-mail message: $path" ;;
   esac
@@ -441,7 +446,7 @@ cmd_reply() {
   case "$subject" in Re:\ *) ;; *) subject="Re: ${subject:-(no subject)}" ;; esac
   in_reply_to="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
   msgid="$(gen_msgid)"
-  drafts="$MAIL_ROOT/humans/josh/drafts"
+  drafts="$HUMAN_MAIL_ROOT/josh/drafts"
   mkdir -p "$drafts"
   draft="$drafts/$msgid.md"
   {
@@ -461,7 +466,7 @@ cmd_deliver() {
   [ $# -eq 1 ] || die "deliver: expected one draft file"
   [ -f "$draft" ] || die "draft file not found: $draft"
   dir="$(CDPATH= cd -- "$(dirname -- "$draft")" && pwd)"
-  [ "$dir" = "$MAIL_ROOT/humans/josh/drafts" ] || die "not a Josh agent-mail draft: $draft"
+  [ "$dir" = "$HUMAN_MAIL_ROOT/josh/drafts" ] || die "not a Josh agent-mail draft: $draft"
 
   local to from subject msgid inbox scratchpad human dst
   to="$(sed -n 's/^To: //p' "$draft" | head -1)"
@@ -495,7 +500,7 @@ cmd_sweep() {
   done
 
   local inbox f
-  for inbox in "$MAIL_ROOT"/*/inbox "$MAIL_ROOT"/humans/*/inbox; do
+  for inbox in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
     [ -d "$inbox/new" ] || continue
     for f in "$inbox/new"/*.md; do
       [ -e "$f" ] || continue
