@@ -88,6 +88,10 @@ if [[ -n "$real_nvim" ]]; then
 
     ln -s "$tmp/mail" "$tmp/mail-link"
     check_nvim_command "$archived" AgentMailReply 2 "$tmp/mail-link"
+
+    AGENT_MAIL_ROOT="$tmp/mail" "$real_nvim" --headless -u NONE \
+        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$archived" \
+        '+AgentMailReply' "+if exists(':AgentMailSend') != 2 | cquit 1 | endif" '+qa!'
 fi
 
 printf 'agent-mail tests passed\n'

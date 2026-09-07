@@ -1,5 +1,8 @@
 command! -buffer Critique call CritiqueDraft()
 
+if !exists('s:agent_mail_functions_loaded')
+let s:agent_mail_functions_loaded = 1
+
 function! s:AgentMailRun(args) abort
     let output = system('agent-mail ' . a:args . ' 2>&1')
     if v:shell_error
@@ -45,6 +48,8 @@ function! s:AgentMailSend() abort
         bdelete
     endif
 endfunction
+
+endif
 
 let s:agent_mail_root = resolve(fnamemodify(empty($AGENT_MAIL_ROOT) ? '/tmp/agent' : $AGENT_MAIL_ROOT, ':p'))
 let s:agent_mail_path = resolve(expand('%:p'))
