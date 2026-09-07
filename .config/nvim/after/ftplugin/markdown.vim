@@ -21,8 +21,10 @@ function! s:AgentMailArchive() abort
     if empty(destination)
         return
     endif
-    execute 'file ' . fnameescape(destination)
-    setlocal nomodified
+    let message_buffer = bufnr('')
+    let inbox = fnamemodify(destination, ':h:h')
+    execute 'Explore ' . fnameescape(inbox)
+    execute 'bdelete ' . message_buffer
     echo 'Archived to ' . destination
 endfunction
 

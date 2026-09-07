@@ -96,6 +96,13 @@ if [[ -n "$real_nvim" ]]; then
     AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
         --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$archived" \
         '+AgentMailReply' "+if exists(':AgentMailSend') != 2 | cquit 1 | endif" '+qa!'
+
+    nvim_message="$inbox/new/nvim-archive.md"
+    printf 'From: test-agent\nTo: josh\nSubject: archive in Neovim\n\nbody\n' >"$nvim_message"
+    AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
+        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' --cmd 'runtime plugin/netrwPlugin.vim' "$nvim_message" \
+        '+AgentMailArchive' "+if &filetype !=# 'netrw' | cquit 1 | endif" '+qa!'
+    [[ -f "$inbox/cur/nvim-archive.md" ]]
 fi
 
 printf 'agent-mail tests passed\n'
