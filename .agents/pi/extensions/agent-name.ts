@@ -42,7 +42,7 @@ export default function (pi: ExtensionAPI) {
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let activeAt = Date.now();
 	let userAt = Date.now();
-	const wakes: number[] = [];
+	const autonomousWakes: number[] = [];
 	// Keyed by filename, which agent-mail never reuses, so a message announced
 	// before a /resume is not re-announced after it.
 	const announced = new Set<string>();
@@ -182,13 +182,17 @@ export default function (pi: ExtensionAPI) {
 		const pressure = memoryPressureLevel();
 		if (shouldSuppressMailWake(pressure)) return;
 
+		const humanWaiting = unreadSummary(scratchpad).some((m) => !announced.has(m.file) && m.from === "josh");
 		const hourAgo = Date.now() - 60 * 60_000;
-		while (wakes.length > 0 && wakes[0] < hourAgo) wakes.shift();
-		if (wakes.length >= 4) return;
+		while (autonomousWakes.length > 0 && autonomousWakes[0] < hourAgo) autonomousWakes.shift();
+		// The budget prevents unattended agent-to-agent loops. Josh-originated mail
+		// is deliberate operator input, so spending that budget on it can suppress a
+		// later task while making the inbox the primary control plane.
+		if (!humanWaiting && autonomousWakes.length >= 4) return;
 
 		const message = mailNotice(scratchpad, announced, name, true);
 		if (!message) return;
-		wakes.push(Date.now());
+		if (!humanWaiting) autonomousWakes.push(Date.now());
 		activeAt = Date.now(); // the woken turn has not started yet; keep the next tick from firing too
 		// followUp rather than steer: if a turn is somehow still running, mail waits
 		// for its tool calls to finish instead of cutting into them.
