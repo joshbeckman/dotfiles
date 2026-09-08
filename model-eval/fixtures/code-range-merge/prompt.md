@@ -1,0 +1,1 @@
+Repair `merge_ranges` in this small Python project. It must merge overlapping and directly adjacent inclusive integer ranges, return sorted `[start, end]` lists, avoid mutating its input, and reject a range whose start is greater than its end with `ValueError`. Update the visible tests if useful. You may run exactly `python3 -m unittest -v`.

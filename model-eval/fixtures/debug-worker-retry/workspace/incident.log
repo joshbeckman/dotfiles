@@ -1,0 +1,8 @@
+12:00:00 worker job=J17 action=send result=ok
+12:00:01 worker job=J17 action=ack result=ok
+12:00:01 worker job=J17 action=ledger-write result=connection-reset
+12:00:06 recovery job=J17 ledger=missing queue=unacked action=retry
+12:00:07 worker job=J17 action=send result=ok
+12:00:08 worker job=J17 action=ack result=ok
+12:00:08 worker job=J17 action=ledger-write result=ok
+12:10:00 queue job=J17 timeout-seconds=300 age-at-retry-seconds=5

@@ -51,6 +51,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 - **`.gemrc`** — RubyGems settings
 - **`.ripgreprc`** — ripgrep defaults
 - **`.grcat`** — generic colouriser config
+- **[`model-eval/`](model-eval/README.md)** — local Pi model evaluation fixtures and reporting
 
 ### Scripts (`bin/`)
 
