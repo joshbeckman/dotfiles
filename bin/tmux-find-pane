@@ -12,10 +12,11 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: tmux-find-pane [--list] [QUERY]
+Usage: tmux-find-pane [--list] [--fallback-tree] [QUERY]
 
 Fuzzy-find a tmux pane by pane title (falls back to its running command) and
-switch to it. With --list, print the pane table and exit.
+switch to it. With --list, print the pane table and exit. With --fallback-tree,
+Escape opens tmux's session/window/pane tree instead of returning to the pane.
 USAGE
 }
 
@@ -25,23 +26,50 @@ list_panes() {
     awk -F'|' '{ printf "%-20s %-60s [%s]\n", $1, substr($2, 1, 60), $3 }'
 }
 
-case "${1:-}" in
-  -h | --help)
-    usage
-    exit 0
-    ;;
-  --list)
-    list_panes
-    exit 0
-    ;;
-esac
+fallback_tree=0
+query=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --list)
+      list_panes
+      exit 0
+      ;;
+    --fallback-tree)
+      fallback_tree=1
+      shift
+      ;;
+    -*)
+      echo "tmux-find-pane: unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      [ -z "$query" ] || { echo "tmux-find-pane: expected one query" >&2; exit 2; }
+      query="$1"
+      shift
+      ;;
+  esac
+done
 
 command -v fzf >/dev/null 2>&1 || { echo "tmux-find-pane: fzf not found" >&2; exit 1; }
 
 # -i, not fzf's smart-case default: an agent name typed as "Simoom" or "SIMOOM"
 # should find the same pane. Keep fzf's score sorting so a contiguous title
 # match ranks above weaker fuzzy matches that appeared earlier in tmux's list.
-selection=$(list_panes | fzf -i --query="${1:-}" --prompt="pane> " --height=100% --exit-0) || exit 0
+set +e
+selection=$(list_panes | fzf -i --query="$query" --prompt="pane> " --height=100% --exit-0)
+status=$?
+set -e
+if [ "$status" -eq 130 ] && [ "$fallback_tree" -eq 1 ]; then
+  tree_args=(choose-tree -K '#[fg=brightblack](#{mode_key_prefix}#{mode_key})#[default]' -F '#{E:@tree-format}')
+  [ -z "${TMUX_PANE:-}" ] || tree_args+=(-t "$TMUX_PANE")
+  tmux "${tree_args[@]}"
+  exit 0
+fi
+[ "$status" -eq 0 ] || exit 0
 [ -n "$selection" ] || exit 0
 
 target=${selection%% *}

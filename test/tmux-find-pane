@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/bin"
+
+cat >"$tmp/bin/tmux" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$TMUX_LOG"
+if [ "$1" = list-panes ]; then
+  printf '%s\n' 'alpha:1.0|First Agent|work' 'beta:2.1|Second Agent|other'
+fi
+EOF
+cat >"$tmp/bin/fzf" <<'EOF'
+#!/bin/sh
+input=$(cat)
+[ "${FZF_STATUS:-0}" -eq 0 ] || exit "$FZF_STATUS"
+printf '%s\n' "$input" | tail -1
+EOF
+chmod +x "$tmp/bin/tmux" "$tmp/bin/fzf"
+export PATH="$tmp/bin:/usr/bin:/bin"
+export TMUX_LOG="$tmp/tmux.log"
+
+"$root/bin/tmux-find-pane" second >/dev/null
+grep -Fxq 'switch-client -t beta' "$TMUX_LOG"
+grep -Fxq 'select-window -t beta:2' "$TMUX_LOG"
+grep -Fxq 'select-pane -t beta:2.1' "$TMUX_LOG"
+
+: >"$TMUX_LOG"
+FZF_STATUS=130 TMUX_PANE='%9' "$root/bin/tmux-find-pane" --fallback-tree >/dev/null
+grep -Fq 'choose-tree ' "$TMUX_LOG"
+grep -Fq -- '-t %9' "$TMUX_LOG"
+! grep -Fq 'switch-client' "$TMUX_LOG"
+
+: >"$TMUX_LOG"
+FZF_STATUS=130 "$root/bin/tmux-find-pane" >/dev/null
+! grep -Fq 'choose-tree' "$TMUX_LOG"
+
+printf 'tmux-find-pane tests passed\n'

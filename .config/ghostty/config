@@ -36,9 +36,9 @@ keybind = ctrl+a>k=goto_split:top
 # Pass CTRL+A through to the shell when doubled (matches wezterm).
 keybind = ctrl+a>ctrl+a=text:\x01
 
-# cmd+shift+a → tmux choose-tree. Sends the tmux prefix (C-s, \x13) followed
-# by C-j (\x0a), which is bound to choose-tree in .tmux.conf. tmux can't see
-# Cmd directly, so Ghostty translates the chord into the prefix sequence.
+# cmd+shift+a → fuzzy pane search, with Escape falling back to tmux choose-tree.
+# Sends the tmux prefix (C-s, \x13) followed by C-j (\x0a). tmux can't see Cmd
+# directly, so Ghostty translates the chord into the prefix sequence.
 keybind = cmd+shift+a=text:\x13\x0a
 
 # cmd+shift+m → alerted-only choose-tree. Same trick: prefix (C-s, \x13) then
