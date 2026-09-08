@@ -28,6 +28,9 @@ Targeted cleanup (optional positional filters; default is all):
   xcode       Xcode DerivedData + iOS DeviceSupport
   trash       ~/.Trash
 
+Durable agent scratchpads are intentionally excluded from cache cleanup. Use
+`agent-scratchpad list` and `agent-scratchpad prune` for retention-aware removal.
+
 Examples:
   free-space                 # show everything reclaimable, delete nothing
   free-space aerials brew    # dry-run just those two

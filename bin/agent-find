@@ -12,7 +12,7 @@ set -euo pipefail
 
 SESSIONS_DIR="${PI_SESSIONS_DIR:-$HOME/.pi/agent/sessions}"
 IDENTITIES_DIR="${AGENT_IDENTITIES_DIR:-$HOME/.pi/agent/identities/by-name}"
-MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
+MAIL_ROOT="${AGENT_MAIL_ROOT:-${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}}"
 
 usage() {
     cat <<EOF

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+export AGENT_SCRATCH_ROOT="$tmp/scratchpads"
+export PI_SESSIONS_DIR="$tmp/sessions"
+mkdir -p "$AGENT_SCRATCH_ROOT" "$PI_SESSIONS_DIR"
+
+make_pad() {
+  local dir="$AGENT_SCRATCH_ROOT/$1" name="$2" session="$3" session_file="${4:-(none)}"
+  mkdir -p "$dir"
+  printf '# %s\n\n- session: %s\n- session file: %s\n' "$name" "$session" "$session_file" >"$dir/session.md"
+  printf 'work\n' >"$dir/notes.md"
+}
+
+make_pad old-agent-11111111 'Old Agent' old-session
+make_pad recent-agent-22222222 'Recent Agent' recent-session
+make_pad live-agent-33333333 'Live Agent' live-session
+make_pad unread-agent-55555555 'Unread Agent' unread-session
+make_pad malformed-agent-66666666 'Malformed Agent' malformed-session
+printf 'not-a-pid\n' >"$AGENT_SCRATCH_ROOT/malformed-agent-66666666/.heartbeat"
+mkdir -p "$AGENT_SCRATCH_ROOT/unread-agent-55555555/inbox/new"
+printf 'From: sender\nSubject: waiting\n\nbody\n' >"$AGENT_SCRATCH_ROOT/unread-agent-55555555/inbox/new/message.md"
+session_log="$PI_SESSIONS_DIR/session.jsonl"
+printf '{}\n' >"$session_log"
+make_pad logged-agent-44444444 'Logged Agent' logged-session "$session_log"
+
+touch -t 202001010000 "$AGENT_SCRATCH_ROOT/old-agent-11111111/"*.md
+touch -t 202001010000 "$AGENT_SCRATCH_ROOT/logged-agent-44444444/"*.md
+touch -t 202001010000 "$AGENT_SCRATCH_ROOT/unread-agent-55555555/"*.md "$AGENT_SCRATCH_ROOT/unread-agent-55555555/inbox/new/message.md"
+printf '%s\tlive-session\n' "$$" >"$AGENT_SCRATCH_ROOT/live-agent-33333333/.heartbeat"
+
+list="$($root/bin/agent-scratchpad list)"
+[[ "$(stat -f %Lp "$AGENT_SCRATCH_ROOT")" == 700 ]]
+grep -Fq 'Old Agent (old-agent-11111111)' <<<"$list"
+grep -Fq 'live' <<<"$list"
+
+dry="$($root/bin/agent-scratchpad prune --days 30)"
+grep -Fq 'Old Agent' <<<"$dry"
+! grep -Fq 'Recent Agent' <<<"$dry"
+! grep -Fq 'Logged Agent' <<<"$dry"
+! grep -Fq 'Unread Agent' <<<"$dry"
+[[ -d "$AGENT_SCRATCH_ROOT/old-agent-11111111" ]]
+
+$root/bin/agent-scratchpad prune --days 30 --apply --yes >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/old-agent-11111111" ]]
+[[ -d "$AGENT_SCRATCH_ROOT/logged-agent-44444444" ]]
+[[ -d "$AGENT_SCRATCH_ROOT/unread-agent-55555555" ]]
+
+unread_dry="$($root/bin/agent-scratchpad prune --days 30 --include-unread)"
+grep -Fq 'Unread Agent' <<<"$unread_dry"
+grep -Fq 'unread=1' <<<"$unread_dry"
+$root/bin/agent-scratchpad prune --days 30 --include-unread --apply --yes >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/unread-agent-55555555" ]]
+
+if $root/bin/agent-scratchpad prune --agent 'Live Agent' --apply --yes >/dev/null 2>&1; then
+  echo 'live scratchpad was pruned without --force' >&2
+  exit 1
+fi
+[[ -d "$AGENT_SCRATCH_ROOT/live-agent-33333333" ]]
+$root/bin/agent-scratchpad prune --agent @+live-agent --apply --yes --force >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/live-agent-33333333" ]]
+
+if $root/bin/agent-scratchpad prune --agent 'Malformed Agent' --apply --yes >/dev/null 2>&1; then
+  echo 'malformed heartbeat did not fail closed' >&2
+  exit 1
+fi
+$root/bin/agent-scratchpad prune --agent 'Malformed Agent' --apply --yes --force >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/malformed-agent-66666666" ]]
+
+$root/bin/agent-scratchpad prune --agent 'Recent Agent' --apply --yes >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/recent-agent-22222222" ]]
+
+printf 'agent-scratchpad tests passed\n'

@@ -24,6 +24,10 @@ export EDITOR_LOG="$tmp/editor"
 export AGENT_MAIL_EDITOR=nvim
 export PATH="$tmp/bin:$PATH"
 
+mkdir -p "$tmp/shared/default-agent"
+default_id="$(env -u AGENT_MAIL_ROOT AGENT_SCRATCH_ROOT="$tmp/shared" "$command" send --to default-agent --from test-agent --subject 'Persistent root' --body 'Shared state.')"
+[[ -f "$tmp/shared/default-agent/inbox/new/$default_id.md" ]]
+
 msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
 [[ "$msgid" =~ ^[0-9]{8}T[0-9]{6}Z--from-test-agent--to-josh--needs-attention--[0-9]+-[0-9]+$ ]]
 mail_root="$(CDPATH= cd -- "$tmp/mail" && pwd -P)"
@@ -105,6 +109,10 @@ alias_archived="$(AGENT_HUMAN_MAIL_ROOT="$tmp/alias" "$command" archive "$physic
 [[ -f "$alias_archived" ]]
 
 if [[ -n "$real_nvim" ]]; then
+    env -u AGENT_MAIL_ROOT AGENT_SCRATCH_ROOT="$tmp/shared" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
+        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$tmp/shared/default-agent/inbox/new/$default_id.md" \
+        "+if exists(':AgentMailArchive') != 2 | cquit 1 | endif" +quit
+
     check_nvim_command() {
         local file="$1" name="$2" expected="$3" mail_root="${4:-$tmp/mail}"
         AGENT_MAIL_ROOT="$mail_root" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \

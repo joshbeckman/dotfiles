@@ -56,13 +56,19 @@ Dir.glob(File.join(home, '.pi', 'agent', 'sessions', '**', '*.jsonl')).each do |
   found[session_id] = name if session_id && name
 end
 
-Dir.glob('/tmp/agent/*/session.md').each do |path|
-  text = File.read(path)
-  session_id = text[/^- session: (.+)$/, 1]
-  name = text[/^# (.+)$/, 1]
-  found[session_id] = name if session_id && name
-rescue Errno::ENOENT
-  # A live agent can create or prune only its own scratchpad while this scans.
+scratch_roots = [
+  ENV['AGENT_SCRATCH_ROOT'] || File.join(home, '.local', 'state', 'agent', 'scratchpads'),
+  '/tmp/agent', # legacy pads from before durable storage
+].uniq
+scratch_roots.each do |root|
+  Dir.glob(File.join(root, '*', 'session.md')).each do |path|
+    text = File.read(path)
+    session_id = text[/^- session: (.+)$/, 1]
+    name = text[/^# (.+)$/, 1]
+    found[session_id] = name if session_id && name
+  rescue Errno::ENOENT
+    # A live agent can create or prune only its own scratchpad while this scans.
+  end
 end
 
 puts "realm: #{realm}"

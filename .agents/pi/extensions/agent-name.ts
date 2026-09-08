@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -16,7 +16,7 @@ import { memoryPressureLevel, shouldSuppressMailWake } from "./resource-pressure
 // call: the model cannot forget or re-roll it, and it costs no turn. Name and
 // scratchpad stay in one extension because the name is the directory slug.
 
-const SCRATCH_ROOT = "/tmp/agent";
+const SCRATCH_ROOT = process.env.AGENT_SCRATCH_ROOT || join(homedir(), ".local", "state", "agent", "scratchpads");
 const IDENTITY_ROOT = join(homedir(), ".pi", "agent", "identities");
 const REALM_FILE = join(homedir(), ".config", "agent-realm");
 
@@ -37,7 +37,8 @@ export default function (pi: ExtensionAPI) {
 	let name: string | undefined;
 	let realm: string | undefined;
 	let scratchpad: string | undefined;
-	let touchedAt = 0;
+	let heartbeatAt = 0;
+	let sessionId: string | undefined;
 	let sweptAt = 0;
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let activeAt = Date.now();
@@ -66,7 +67,7 @@ export default function (pi: ExtensionAPI) {
 		// Pi still creates an in-memory id for --no-session. Identity follows the
 		// process relationship, not that id: inherited subagents are public workers
 		// worth naming; ordinary one-shot prompts remain anonymous and consume none.
-		const sessionId = ephemeral && !preferredSurname ? undefined : ctx.sessionManager.getSessionId() ?? syntheticChildSessionId;
+		sessionId = ephemeral && !preferredSurname ? undefined : ctx.sessionManager.getSessionId() ?? syntheticChildSessionId;
 		realm = readRealm();
 		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, sessionFile) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
 		scratchpad = name && sessionId ? createScratchpad(name, sessionId, ctx) : undefined;
@@ -102,19 +103,16 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.hasUI) armPaneTitleReset();
 
 		if (timer) clearInterval(timer);
-		if (scratchpad && ctx.hasUI) {
-			showUnread(ctx, scratchpad);
+		if (scratchpad && sessionId) heartbeatAt = writeHeartbeat(scratchpad, sessionId, 0);
+		if (scratchpad) {
+			if (ctx.hasUI) showUnread(ctx, scratchpad);
 			timer = setInterval(() => {
-				showUnread(ctx, scratchpad as string);
-				sweptAt = sweep(sweptAt);
-				wakeForMail();
-				// A session parked >3 days waiting on Josh never fires
-				// before_agent_start, so activity-based restamping alone let
-				// tmp_cleaner reap the pads of still-open sessions. The timer is the
-				// liveness signal we want: it runs iff the pi process is alive, so
-				// pads of exited sessions still age out. keepAlive self-throttles to
-				// every 6h, so the 60s cadence costs nothing.
-				touchedAt = keepAlive(scratchpad as string, touchedAt);
+				if (ctx.hasUI) {
+					showUnread(ctx, scratchpad as string);
+					sweptAt = sweep(sweptAt);
+					wakeForMail();
+				}
+				if (sessionId) heartbeatAt = writeHeartbeat(scratchpad as string, sessionId, heartbeatAt);
 			}, 60_000);
 		}
 	});
@@ -145,13 +143,13 @@ export default function (pi: ExtensionAPI) {
 			}
 			return;
 		}
-		if (scratchpad) touchedAt = keepAlive(scratchpad, touchedAt);
+		if (scratchpad && sessionId) heartbeatAt = writeHeartbeat(scratchpad, sessionId, heartbeatAt);
 		const lines = [
 			`Your name for this session is ${name}. Use it when you need to identify yourself — in scratch file names, branch names, tmux titles, notifications, or when the user asks who they are talking to. Do not mention it otherwise.`,
 		];
 		if (scratchpad) {
 			lines.push(
-				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It survives across resumes of this session and is kept alive while this pi process runs, but macOS reaps it three days after the process exits (and a reboot can take it sooner), so nothing durable belongs there.`,
+				`Your scratchpad for this session is ${scratchpad} (already created, contains session.md). Put working notes, plans, drafts, diffs, and handoff documents there instead of in the repo. It persists across restarts and resumes. A heartbeat protects live sessions from explicit age-based pruning; the pad remains until it is pruned with agent-scratchpad.`,
 			);
 		}
 		// Mail goes in a conversation message, not the system prompt. The system
@@ -479,7 +477,10 @@ function createScratchpad(name: string, sessionId: string, ctx: NameContext): st
 	// so it must be the same handle every other surface computes.
 	const dir = join(SCRATCH_ROOT, `${nameSlug(name)}-${sessionId.slice(0, 8)}`);
 	try {
-		mkdirSync(dir, { recursive: true });
+		mkdirSync(SCRATCH_ROOT, { recursive: true, mode: 0o700 });
+		chmodSync(SCRATCH_ROOT, 0o700);
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		chmodSync(dir, 0o700);
 		writeFileSync(
 			join(dir, "session.md"),
 			[
@@ -501,28 +502,18 @@ function createScratchpad(name: string, sessionId: string, ctx: NameContext): st
 	return dir;
 }
 
-// macOS tmp_cleaner deletes /tmp files whose atime, mtime, AND ctime are all
-// older than 3 days, so a note written once early in a long-running session
-// would vanish under it. Restamping ties the scratchpad's lifetime to the
-// session *process* rather than to each file or to turn activity: a parked
-// session waiting days for Josh keeps its pad, and it ages out 3 days after
-// the pi process exits. utimes cannot set ctime directly, but calling it
-// updates ctime as a side effect, so one stamp refreshes all three clocks.
-function keepAlive(dir: string, touchedAt: number): number {
+// Durable pads need liveness, not recursive timestamp preservation. The prune
+// command reads this one small file to protect parked sessions without making
+// every artifact look recently modified.
+function writeHeartbeat(dir: string, sessionId: string, heartbeatAt: number): number {
 	const now = Date.now();
-	if (now - touchedAt < 6 * 60 * 60 * 1000) return touchedAt; // hourly-ish is ample against a 3-day threshold
+	if (now - heartbeatAt < 5 * 60_000) return heartbeatAt;
 	try {
-		const stamp = new Date(now);
-		utimesSync(dir, stamp, stamp);
-		for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
-			try {
-				utimesSync(join(entry.parentPath, entry.name), stamp, stamp);
-			} catch {} // a file the agent deleted mid-walk is not worth failing the turn over
-		}
+		writeFileSync(join(dir, ".heartbeat"), `${process.pid}\t${sessionId}\n`);
+		return now;
 	} catch {
-		return touchedAt;
+		return heartbeatAt;
 	}
-	return now;
 }
 
 function gitDescribe(cwd: string): string {

@@ -24,7 +24,7 @@ If your system prompt has not assigned a name, do **not** invent one: this compu
 
 ### Scratchpad
 
-If your system prompt names a session scratchpad, use it. Otherwise create `/tmp/agent/<your-name>/` at the start of the session and use that. Working notes, plans, drafts, scripts, extracted diffs, and handoff documents go there — not in the repo, and not as untracked files I have to notice and delete. Nothing durable belongs there. `/tmp` lives on disk, so it survives sleep and even a reboot — but macOS's `tmp_cleaner` runs periodically (not only at boot) and deletes anything whose atime, mtime, and ctime are all older than three days. Pi sessions restamp their scratchpad on a timer while the process is alive, so an open session keeps its pad even when parked for days; the pad ages out three days after the pi process exits. A scratchpad created by hand (no pi process, or a non-pi harness) has no keepalive, so an idle one can vanish in three days.
+If your system prompt names a session scratchpad, use it. Otherwise create a directory under `${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}/<your-name>/` and use that. Working notes, plans, drafts, scripts, extracted diffs, and handoff documents go there, not in the repo as untracked files I have to notice and delete. Scratchpads persist across restarts and resumes. A small heartbeat records liveness without rewriting artifact timestamps; explicit `agent-scratchpad prune` commands remove old or named pads. Durable project decisions still belong in repositories, issues, or project records.
 
 ### Conversation ownership and Agent Mail
 
@@ -38,7 +38,7 @@ Agents and I can leave messages for each other within one computer realm with `b
 - **Don't send bare acknowledgements.** "Got it" costs the recipient a turn and tells them nothing they cannot check with `agent-mail receipt`. Reply when you have something to say, or when the sender asked a question.
 - **Human mail.** `agent-mail send --to @josh --subject SUBJECT --body-file FILE` is the default delivery path for substantive responses to me. It writes to my persistent human inbox and immediately invokes the notification ladder. I read it with `agent-mail read --to @josh` and reply through the same interface.
 - **Inbox browser.** `agent-mail inbox @josh` or `agent-mail inbox @+handle` opens the matching Maildir in Neovim. Mail Markdown buffers expose `:AgentMailArchive` for moving `new/` to `cur/` and `:AgentMailReply` for opening a reply draft; reply drafts expose `:AgentMailSend` for atomic delivery.
-- **Lifetime.** Agent-session inboxes have the same `/tmp` lifetime as scratchpads; my human inbox persists across session exits and reboots. Agent Mail is still a communication log, not a project system: durable decisions belong in repositories, issues, or project records.
+- **Lifetime.** Agent-session and human inboxes persist across session exits and reboots. They are pruned explicitly rather than by operating-system temporary-file cleanup. Agent Mail is still a communication log, not a project system: durable decisions belong in repositories, issues, or project records.
 
 ### Artifact ownership between agents
 

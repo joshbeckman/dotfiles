@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}"
+SESSION_ROOT="${PI_SESSIONS_DIR:-$HOME/.pi/agent/sessions}"
+mkdir -p -m 700 "$ROOT"
+chmod 700 "$ROOT"
+ROOT="$(CDPATH= cd -- "$ROOT" && pwd -P)"
+[ ! -d "$SESSION_ROOT" ] || SESSION_ROOT="$(CDPATH= cd -- "$SESSION_ROOT" && pwd -P)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  agent-scratchpad list
+  agent-scratchpad prune --days N [--include-unread] [--apply] [--yes]
+  agent-scratchpad prune --agent NAME [--apply] [--yes] [--force]
+
+List or explicitly prune durable agent scratchpads. Prune is a dry run unless
+--apply is supplied. Age is the newest activity among the heartbeat, Pi session
+log, scratchpad files, and inbox messages. Live pads are never age-pruned.
+
+Options:
+  --days N      Select pads inactive for at least N days.
+  --agent NAME  Select one pad by display name, @+handle, or transport ID.
+  --include-unread  Permit age pruning of pads that still have unread mail.
+  --apply       Delete selected pads.
+  --yes         Skip the confirmation prompt with --apply.
+  --force       Permit --agent to remove a pad with a live heartbeat.
+EOF
+}
+
+mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+newest_activity() {
+  local dir="$1" newest=0 stamp file session_file
+  while IFS= read -r -d '' file; do
+    stamp="$(mtime "$file" || echo 0)"
+    [ "$stamp" -le "$newest" ] || newest="$stamp"
+  done < <(find "$dir" -type f -print0 2>/dev/null)
+
+  session_file="$(sed -n 's/^- session file: //p' "$dir/session.md" 2>/dev/null | head -1)"
+  if [ -f "$session_file" ]; then
+    session_file="$(CDPATH= cd -- "$(dirname "$session_file")" && pwd -P)/$(basename "$session_file")"
+    [[ "$session_file" == "$SESSION_ROOT/"* ]] || session_file=''
+  else
+    session_file=''
+  fi
+  if [ -n "$session_file" ]; then
+    stamp="$(mtime "$session_file" || echo 0)"
+    [ "$stamp" -le "$newest" ] || newest="$stamp"
+  fi
+  [ "$newest" -gt 0 ] || newest="$(mtime "$dir" || echo 0)"
+  printf '%s\n' "$newest"
+}
+
+is_live() {
+  local heartbeat="$1/.heartbeat" pid stamp now
+  [ -f "$heartbeat" ] || return 1
+  if ! read -r pid _ <"$heartbeat"; then return 0; fi
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  stamp="$(mtime "$heartbeat" || echo 0)"
+  now="$(date +%s)"
+  [ $((now - stamp)) -le 600 ] && return 0
+  # PID reuse can conservatively retain a dead pad, which is safer than deleting
+  # one still owned by a local process. --agent --force is the escape hatch.
+  kill -0 "$pid" 2>/dev/null
+}
+
+unread_count() {
+  local dir="$1/inbox/new"
+  [ -d "$dir" ] || { echo 0; return; }
+  find "$dir" -type f -name '*.md' | awk 'END { print NR + 0 }'
+}
+
+pad_name() {
+  sed -n '1s/^# //p' "$1/session.md" 2>/dev/null
+}
+
+pad_session() {
+  sed -n 's/^- session: //p' "$1/session.md" 2>/dev/null | head -1
+}
+
+human_size() {
+  du -sh "$1" 2>/dev/null | awk '{print $1}'
+}
+
+format_time() {
+  date -r "$1" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d "@$1" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || printf '?'
+}
+
+pads() {
+  find "$ROOT" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/session.md' \; -print | sort
+}
+
+list_pads() {
+  local dir stamp state
+  printf '%-7s  %-8s  %-19s  %s\n' STATE SIZE LAST-ACTIVE AGENT
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    stamp="$(newest_activity "$dir")"
+    state=parked
+    is_live "$dir" && state=live
+    printf '%-7s  %-8s  %-19s  %s (%s)\n' "$state" "$(human_size "$dir")" "$(format_time "$stamp")" "$(pad_name "$dir")" "$(basename "$dir")"
+  done < <(pads)
+}
+
+resolve_agent() {
+  local query="$1" bare slug dir base
+  bare="${query#@+}"
+  bare="${bare#@}"
+  if command -v agent-slug >/dev/null 2>&1; then
+    slug="$(agent-slug "$bare" 2>/dev/null || true)"
+  else
+    slug="$(printf '%s' "$bare" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')"
+  fi
+
+  local -a matches=()
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    base="$(basename "$dir")"
+    if [ "$base" = "$bare" ] || [ "$base" = "$slug" ] || [[ "$base" == "$slug-"* ]]; then
+      matches+=("$dir")
+    fi
+  done < <(pads)
+
+  case "${#matches[@]}" in
+    0) echo "agent-scratchpad: no scratchpad matches '$query'" >&2; return 1 ;;
+    1) printf '%s\n' "${matches[0]}" ;;
+    *) echo "agent-scratchpad: '$query' is ambiguous:" >&2; printf '  %s\n' "${matches[@]}" >&2; return 1 ;;
+  esac
+}
+
+prune_pads() {
+  local days='' agent='' apply=0 yes=0 force=0 include_unread=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days) days="${2:?--days requires a value}"; shift 2 ;;
+      --agent) agent="${2:?--agent requires a value}"; shift 2 ;;
+      --include-unread) include_unread=1; shift ;;
+      --apply) apply=1; shift ;;
+      --yes|-y) yes=1; shift ;;
+      --force) force=1; shift ;;
+      -h|--help) usage; return ;;
+      *) echo "agent-scratchpad: unknown option: $1" >&2; usage >&2; return 2 ;;
+    esac
+  done
+  [ -z "$days" ] || [ -z "$agent" ] || { echo 'agent-scratchpad: use --days or --agent, not both' >&2; return 2; }
+  [ -n "$days" ] || [ -n "$agent" ] || { echo 'agent-scratchpad: prune requires --days or --agent' >&2; return 2; }
+  if [ -n "$days" ]; then
+    case "$days" in ''|*[!0-9]*) echo 'agent-scratchpad: --days must be a non-negative integer' >&2; return 2 ;; esac
+  fi
+  [ "$force" -eq 0 ] || [ -n "$agent" ] || { echo 'agent-scratchpad: --force only applies with --agent' >&2; return 2; }
+  [ "$include_unread" -eq 0 ] || [ -n "$days" ] || { echo 'agent-scratchpad: --include-unread only applies with --days' >&2; return 2; }
+
+  local now cutoff dir stamp age state total_kb=0
+  now="$(date +%s)"
+  cutoff=$((now - ${days:-0} * 86400))
+  local -a selected=()
+  if [ -n "$agent" ]; then
+    dir="$(resolve_agent "$agent")" || return
+    if is_live "$dir" && [ "$force" -eq 0 ]; then
+      echo "agent-scratchpad: refusing to prune live pad $(basename "$dir") (use --force to override)" >&2
+      return 1
+    fi
+    selected+=("$dir")
+  else
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      is_live "$dir" && continue
+      [ "$include_unread" -eq 1 ] || [ "$(unread_count "$dir")" -eq 0 ] || continue
+      stamp="$(newest_activity "$dir")"
+      [ "$stamp" -le "$cutoff" ] && selected+=("$dir")
+    done < <(pads)
+  fi
+
+  if [ "${#selected[@]}" -eq 0 ]; then
+    echo 'No scratchpads selected.'
+    return
+  fi
+
+  echo "$([ "$apply" -eq 1 ] && echo 'Pruning' || echo 'Would prune'):"
+  for dir in "${selected[@]}"; do
+    stamp="$(newest_activity "$dir")"
+    age=$(((now - stamp) / 86400))
+    state=parked
+    is_live "$dir" && state=live
+    printf '  %s  %s  %sd old  unread=%s  %s  %s\n' "$(human_size "$dir")" "$state" "$age" "$(unread_count "$dir")" "$(pad_name "$dir")" "$dir"
+    total_kb=$((total_kb + $(du -sk "$dir" 2>/dev/null | awk '{print $1+0}')))
+  done
+  printf 'Total: %s KB\n' "$total_kb"
+
+  [ "$apply" -eq 1 ] || return 0
+  if [ "$yes" -eq 0 ]; then
+    printf 'Delete these durable scratchpads? [y/N] '
+    read -r reply
+    case "$reply" in y|Y|yes|YES) ;; *) echo 'Aborted.'; return 1 ;; esac
+  fi
+
+  for dir in "${selected[@]}"; do
+    [ "$(dirname "$dir")" = "$ROOT" ] && [ -f "$dir/session.md" ] || { echo "agent-scratchpad: unsafe path: $dir" >&2; return 1; }
+    [ ! -L "$dir" ] || { echo "agent-scratchpad: refusing symlinked pad: $dir" >&2; continue; }
+    if is_live "$dir" && [ "$force" -eq 0 ]; then
+      echo "skipped newly live pad $dir" >&2
+      continue
+    fi
+    if [ -n "$days" ] && [ "$(newest_activity "$dir")" -gt "$cutoff" ]; then
+      echo "skipped newly active pad $dir" >&2
+      continue
+    fi
+    if [ -n "$days" ] && [ "$include_unread" -eq 0 ] && [ "$(unread_count "$dir")" -gt 0 ]; then
+      echo "skipped pad with unread mail $dir" >&2
+      continue
+    fi
+    rm -rf -- "$dir"
+    printf 'pruned %s\n' "$dir"
+  done
+}
+
+command="${1:-}"
+[ $# -gt 0 ] && shift
+case "$command" in
+  list) [ $# -eq 0 ] || { usage >&2; exit 2; }; list_pads ;;
+  prune) prune_pads "$@" ;;
+  -h|--help|'') usage ;;
+  *) echo "agent-scratchpad: unknown command: $command" >&2; usage >&2; exit 2 ;;
+esac

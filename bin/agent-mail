@@ -14,9 +14,10 @@ set -euo pipefail
 # sits in (new/ vs cur/), not in a flag we rewrite — less mutable state, and it
 # leaves an audit trail until an agent explicitly discards.
 
-MAIL_ROOT="${AGENT_MAIL_ROOT:-/tmp/agent}"
+MAIL_ROOT="${AGENT_MAIL_ROOT:-${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}}"
 HUMAN_MAIL_ROOT="${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}"
-mkdir -p "$MAIL_ROOT" "$HUMAN_MAIL_ROOT"
+mkdir -p -m 700 "$MAIL_ROOT" "$HUMAN_MAIL_ROOT"
+chmod 700 "$MAIL_ROOT" "$HUMAN_MAIL_ROOT"
 MAIL_ROOT="$(CDPATH= cd -- "$MAIL_ROOT" && pwd -P)"
 HUMAN_MAIL_ROOT="$(CDPATH= cd -- "$HUMAN_MAIL_ROOT" && pwd -P)"
 
@@ -62,8 +63,9 @@ sweep  Notify Josh about messages unread for --hours (default 4). Any live
        session can run it; a dead recipient cannot escalate for itself.
 
 Env:
-  AGENT_MAIL_ROOT  Base dir (default /tmp/agent). Ephemeral: dies on reboot /
-                   ~3-day idle. Not for anything that must be received.
+  AGENT_MAIL_ROOT  Override agent inbox root (default AGENT_SCRATCH_ROOT or
+                   ~/.local/state/agent/scratchpads).
+  AGENT_SCRATCH_ROOT Persistent agent scratchpad and inbox root.
   AGENT_HUMAN_MAIL_ROOT Persistent human inboxes (default
                    ~/.local/state/agent-mail/humans).
   AGENT_MAIL_STALE_HOURS  Report the recipient's idle time on send once it
@@ -190,13 +192,18 @@ notify_human_delivery() {
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Hours since a path was last modified. The naming extension restamps each
-# scratchpad on session activity, so the directory's mtime is a liveness
-# signal for the session that owns it -- no registry or heartbeat file needed.
+# Hours since a scratchpad's last heartbeat or structural change. The heartbeat
+# keeps parked live sessions current without rewriting every artifact timestamp.
 # Only for *directories*: for a message file, use message_age_hours instead.
 idle_hours() {
-  local path="$1" mtime now
+  local path="$1" mtime heartbeat now
   mtime=$(stat -f %m "$path" 2>/dev/null) || return 1
+  heartbeat="$path/.heartbeat"
+  if [ -f "$heartbeat" ]; then
+    local heartbeat_mtime
+    heartbeat_mtime=$(stat -f %m "$heartbeat" 2>/dev/null || echo 0)
+    [ "$heartbeat_mtime" -le "$mtime" ] || mtime="$heartbeat_mtime"
+  fi
   now=$(date +%s)
   echo $(( (now - mtime) / 3600 ))
 }
@@ -318,7 +325,7 @@ cmd_send() {
     scratchpad="$(dirname "$inbox")"
     if [ -z "$human" ]; then
       # Validate the complete recipient list before writing any message copy.
-      [ -d "$scratchpad" ] || die "recipient '$recipient' has no scratchpad at $scratchpad (rebooted or pruned?)"
+      [ -d "$scratchpad" ] || die "recipient '$recipient' has no scratchpad at $scratchpad (not created or pruned?)"
       idle="$(idle_hours "$scratchpad" || echo 0)"
       if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
         echo "agent-mail: '$recipient' last active ${idle}h ago" >&2
@@ -512,7 +519,7 @@ cmd_inbox() {
   inbox="$(resolve_inbox "$id")"
   handle="$(human_handle "$id" || true)"
   scratchpad="$(dirname "$inbox")"
-  [ -n "$handle" ] || [ -d "$scratchpad" ] || die "recipient '$id' has no scratchpad at $scratchpad (rebooted or pruned?)"
+  [ -n "$handle" ] || [ -d "$scratchpad" ] || die "recipient '$id' has no scratchpad at $scratchpad (not created or pruned?)"
   ensure_maildir "$inbox"
   command -v "${AGENT_MAIL_EDITOR:-nvim}" >/dev/null 2>&1 || die "editor not found: ${AGENT_MAIL_EDITOR:-nvim}"
   exec "${AGENT_MAIL_EDITOR:-nvim}" "$inbox"
@@ -577,7 +584,7 @@ cmd_deliver() {
   inbox="$(resolve_inbox "$to")"
   human="$(human_handle "$to" || true)"
   scratchpad="$(dirname "$inbox")"
-  [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
+  [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (not created or pruned?)"
   ensure_maildir "$inbox"
   dst="$inbox/new/$msgid.md"
   [ ! -e "$dst" ] || die "delivery destination already exists: $dst"

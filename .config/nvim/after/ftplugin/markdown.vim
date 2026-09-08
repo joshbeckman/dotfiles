@@ -54,7 +54,7 @@ endfunction
 
 endif
 
-let s:agent_mail_root = resolve(fnamemodify(empty($AGENT_MAIL_ROOT) ? '/tmp/agent' : $AGENT_MAIL_ROOT, ':p'))
+let s:agent_mail_root = resolve(fnamemodify(empty($AGENT_MAIL_ROOT) ? (empty($AGENT_SCRATCH_ROOT) ? expand('~/.local/state/agent/scratchpads') : $AGENT_SCRATCH_ROOT) : $AGENT_MAIL_ROOT, ':p'))
 let s:human_mail_root = resolve(fnamemodify(empty($AGENT_HUMAN_MAIL_ROOT) ? expand('~/.local/state/agent-mail/humans') : $AGENT_HUMAN_MAIL_ROOT, ':p'))
 let s:agent_mail_path = resolve(expand('%:p'))
 let s:in_agent_mail = stridx(s:agent_mail_path, substitute(s:agent_mail_root, '/$', '', '') . '/') == 0
