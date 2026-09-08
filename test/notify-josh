@@ -51,9 +51,10 @@ export LOCAL_LOG="$tmp/local"
 export PUSH_LOG="$tmp/push"
 export TMUX=
 
-"$root/bin/notify-josh" 'Mail delivered' 'Read your inbox.' >/dev/null
+"$root/bin/notify-josh" --execute 'echo clicked' 'Mail delivered' 'Read your inbox.' >/dev/null
 [[ -s "$LOCAL_LOG" ]]
 [[ ! -e "$PUSH_LOG" ]]
 grep -Fq -- '-title Mail delivered' "$LOCAL_LOG"
+grep -Fq -- '-execute echo clicked' "$LOCAL_LOG"
 
 printf 'notify-josh tests passed\n'

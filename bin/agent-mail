@@ -167,10 +167,20 @@ ensure_maildir() {
   mkdir -p "$1/tmp" "$1/new" "$1/cur"
 }
 
+inbox_click_command() {
+  local handle="$1" self inner command
+  self="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/$(basename -- "$0")"
+  printf -v inner '%q ' "$self" inbox "@$handle"
+  inner="${inner% }"
+  printf -v command '%q ' /usr/bin/open -na Ghostty.app --args -e /bin/zsh -lic "$inner"
+  printf '%s' "${command% }"
+}
+
 notify_human_delivery() {
-  local handle="$1" inbox="$2" msgid="$3" from="$4" subject="$5"
+  local handle="$1" inbox="$2" msgid="$3" from="$4" subject="$5" click_command
   [ "$handle" = josh ] && command -v notify-josh >/dev/null 2>&1 || return 0
-  if notify-josh --from agent-mail "Agent mail: $subject" \
+  click_command="$(inbox_click_command "$handle")"
+  if notify-josh --from agent-mail --execute "$click_command" "Agent mail: $subject" \
     "From $from. Read with: agent-mail read --to @josh" >/dev/null 2>&1; then
     mkdir "$inbox/.escalated-$msgid" 2>/dev/null || true
   else

@@ -3,8 +3,8 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] TITLE MESSAGE...
-       notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] MESSAGE...
+Usage: notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] [--execute COMMAND] TITLE MESSAGE...
+       notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] [--execute COMMAND] MESSAGE...
 
 Notify Josh using the local notification ladder when possible, otherwise push.
 
@@ -13,6 +13,7 @@ Options:
   --local             Force the local terminal-notifier path.
   --from NAME         Sender for push notifications. Default: agent
   --pane-title TITLE  tmux pane title. Default: 🔔 TITLE
+  --execute COMMAND   Shell command to run when a local notification is clicked.
   -h, --help          Show this help.
 USAGE
 }
@@ -62,9 +63,12 @@ local_notify() {
   local title=$1
   local message=$2
   local pane_title=$3
+  local execute=$4
+  local -a args=(-title "$title" -message "$message" -sound default)
+  [ -z "$execute" ] || args+=(-execute "$execute")
 
   command -v terminal-notifier >/dev/null 2>&1 || return 1
-  terminal-notifier -title "$title" -message "$message" -sound default >/dev/null 2>&1 || return 1
+  terminal-notifier "${args[@]}" >/dev/null 2>&1 || return 1
 
   printf '\a'
 
@@ -135,6 +139,7 @@ NODE
 mode=auto
 from=agent
 pane_title=
+execute=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -152,6 +157,10 @@ while [ $# -gt 0 ]; do
       ;;
     --pane-title)
       pane_title=${2:?--pane-title requires a value}
+      shift 2
+      ;;
+    --execute)
+      execute=${2:?--execute requires a value}
       shift 2
       ;;
     -h|--help)
@@ -185,13 +194,13 @@ fi
 
 case "$mode" in
   local)
-    local_notify "$title" "$message" "$pane_title"
+    local_notify "$title" "$message" "$pane_title" "$execute"
     ;;
   push)
     push_notify "$title" "$message" "$from"
     ;;
   auto)
-    if display_active && local_notify "$title" "$message" "$pane_title"; then
+    if display_active && local_notify "$title" "$message" "$pane_title" "$execute"; then
       exit 0
     fi
     push_notify "$title" "$message" "$from"

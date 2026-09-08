@@ -35,6 +35,8 @@ grep -Fxq "Thread-ID: $msgid" "$inbox/new/$msgid.md"
 [[ -d "$inbox/.escalated-$msgid" ]]
 grep -Fq 'Agent mail: Needs attention' "$NOTIFY_LOG"
 grep -Fq 'From test-agent. Read with: agent-mail read --to @josh' "$NOTIFY_LOG"
+grep -Fq -- '--execute /usr/bin/open -na Ghostty.app --args -e /bin/zsh -lic' "$NOTIFY_LOG"
+grep -Fq 'agent-mail\ inbox\ @josh' "$NOTIFY_LOG"
 [[ "$("$command" addr @josh)" == "$inbox" ]]
 [[ "$("$command" addr josh)" == "$inbox" ]]
 "$command" scan --to @josh | grep -Fq "$msgid"
