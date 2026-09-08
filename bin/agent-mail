@@ -169,6 +169,19 @@ ensure_maildir() {
   mkdir -p "$1/tmp" "$1/new" "$1/cur"
 }
 
+clear_escalation_marker() {
+  rmdir "$1/.escalated-$2" 2>/dev/null || true
+}
+
+cleanup_escalation_markers() {
+  local inbox="$1" marker id
+  for marker in "$inbox"/.escalated-*; do
+    [ -d "$marker" ] || continue
+    id="${marker##*/.escalated-}"
+    [ -e "$inbox/new/$id.md" ] || rmdir "$marker" 2>/dev/null || true
+  done
+}
+
 inbox_click_command() {
   local handle="$1" self inner command
   self="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/$(basename -- "$0")"
@@ -482,7 +495,9 @@ cmd_read() {
 
   if [ "$peek" -eq 0 ] && [ "$(dirname "$f")" = "$inbox/new" ]; then
     mkdir -p "$inbox/cur"
-    mv "$f" "$inbox/cur/$(basename "$f")"
+    local basename; basename="$(basename "$f")"
+    mv "$f" "$inbox/cur/$basename"
+    clear_escalation_marker "$inbox" "${basename%.md}"
   fi
 }
 
@@ -498,6 +513,7 @@ cmd_discard() {
   [ -n "$to" ] && [ -n "$id" ] || die "discard: --to and --id required"
   local inbox; inbox="$(resolve_inbox "$to")"
   rm -f "$inbox/new/$id.md" "$inbox/cur/$id.md"
+  clear_escalation_marker "$inbox" "$id"
 }
 
 message_path() {
@@ -521,6 +537,7 @@ cmd_inbox() {
   scratchpad="$(dirname "$inbox")"
   [ -n "$handle" ] || [ -d "$scratchpad" ] || die "recipient '$id' has no scratchpad at $scratchpad (not created or pruned?)"
   ensure_maildir "$inbox"
+  cleanup_escalation_markers "$inbox"
   command -v "${AGENT_MAIL_EDITOR:-nvim}" >/dev/null 2>&1 || die "editor not found: ${AGENT_MAIL_EDITOR:-nvim}"
   exec "${AGENT_MAIL_EDITOR:-nvim}" "$inbox"
 }
@@ -535,6 +552,7 @@ cmd_archive() {
   dst="$inbox/cur/$(basename "$path")"
   [ ! -e "$dst" ] || die "archive destination already exists: $dst"
   mv "$path" "$dst"
+  clear_escalation_marker "$inbox" "$(basename "$path" .md)"
   printf '%s\n' "$dst"
 }
 
@@ -607,6 +625,7 @@ cmd_sweep() {
 
   local inbox f
   for inbox in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
+    [ "$dry" -eq 1 ] || cleanup_escalation_markers "$inbox"
     [ -d "$inbox/new" ] || continue
     for f in "$inbox/new"/*.md; do
       [ -e "$f" ] || continue

@@ -50,6 +50,7 @@ grep -Fq 'agent-mail\ inbox\ @josh' "$NOTIFY_LOG"
 "$command" read --to @josh | grep -Fq 'Please review this.'
 message="$inbox/cur/$msgid.md"
 [[ -f "$message" ]]
+[[ ! -e "$inbox/.escalated-$msgid" ]]
 "$command" receipt "$msgid" | grep -Fq $'read\t'
 
 mkdir -p "$mail_root/test-agent-session"
@@ -92,6 +93,10 @@ grep -Fxq "Thread-ID: $msgid" "$archived"
 reply_id="$("$command" send --to @josh --from test-agent --in-reply-to "$(basename "$archived" .md)" --subject 'Re: Needs attention' --body 'Following up.')"
 grep -Fxq "Thread-ID: $msgid" "$inbox/new/$reply_id.md"
 grep -Fxq "In-Reply-To: $(basename "$archived" .md)" "$inbox/new/$reply_id.md"
+
+mkdir "$inbox/.escalated-orphan"
+"$command" inbox @josh
+[[ ! -e "$inbox/.escalated-orphan" ]]
 
 "$command" inbox @+test-agent
 [[ "$(cat "$EDITOR_LOG")" == "$mail_root/test-agent-session/inbox" ]]
