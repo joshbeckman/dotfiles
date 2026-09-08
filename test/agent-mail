@@ -47,6 +47,24 @@ message="$inbox/cur/$msgid.md"
 "$command" receipt "$msgid" | grep -Fq $'read\t'
 
 mkdir -p "$mail_root/test-agent-session"
+
+before_invalid="$(find "$inbox/new" -type f | wc -l | tr -d ' ')"
+if "$command" send --to @josh --to missing-agent --subject 'Must not partially deliver' --body 'no' >/dev/null 2>&1; then
+    echo 'multi-recipient send unexpectedly accepted a missing recipient' >&2
+    exit 1
+fi
+[[ "$(find "$inbox/new" -type f | wc -l | tr -d ' ')" == "$before_invalid" ]]
+
+multi_id="$(printf 'Shared body.\n' | "$command" send --to '@josh, @+test-agent' --to @josh --from test-agent --subject 'Shared update')"
+multi_agent="$mail_root/test-agent-session/inbox/new/$multi_id.md"
+multi_human="$inbox/new/$multi_id.md"
+[[ -f "$multi_agent" && -f "$multi_human" ]]
+[[ "$multi_id" == *'--from-test-agent--to-josh+test-agent--shared-update--'* ]]
+grep -Fxq 'To: josh, test-agent' "$multi_agent"
+grep -Fq 'Shared body.' "$multi_agent"
+cmp -s "$multi_agent" "$multi_human"
+[[ "$("$command" receipt "$multi_id" | wc -l | tr -d ' ')" == 2 ]]
+
 draft="$("$command" reply "$message")"
 [[ "$draft" == "$human_root/josh/drafts/"*.md ]]
 grep -Fxq 'From: josh' "$draft"

@@ -45,7 +45,8 @@ Message filenames expose UTC creation time, sender, receiver, and a truncated
 subject before a collision-resistant suffix. Thread-ID names the root message;
 In-Reply-To names the immediate parent.
 
-send   Deliver a message. Body from --body/-m, --body-file, or stdin.
+send   Deliver a message. Repeat --to or separate recipients with commas.
+       Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
 receipt Say whether a message you sent has been read. Takes the MSGID that
        `send` printed. Exits 1 if it is in no inbox.
@@ -256,10 +257,11 @@ thread_id_for_parent() {
 }
 
 cmd_send() {
-  local to="" from="$(sender_id)" reply_to="" subject="" in_reply_to="" body_file="" body="" have_body=0
+  local from="$(sender_id)" reply_to="" subject="" in_reply_to="" body_file="" body="" have_body=0
+  local -a raw_recipients=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --to) to="$2"; shift 2 ;;
+      --to) raw_recipients+=("$2"); shift 2 ;;
       --from) from="$2"; shift 2 ;;
       --reply-to) reply_to="$2"; shift 2 ;;
       --subject) subject="$2"; shift 2 ;;
@@ -273,41 +275,65 @@ cmd_send() {
     esac
   done
   [ "$have_body" -eq 1 ] && [ -n "$body_file" ] && die "send: --body and --body-file are mutually exclusive"
-  [ -n "$to" ] || die "send: --to required"
-  # Headers keep the canonical bare ID so a reply's --to needs no cleanup.
-  to="$(normalize_id "$to")"
+  [ "${#raw_recipients[@]}" -gt 0 ] || die "send: --to required"
   from="$(normalize_id "$from")"
   [ -n "$reply_to" ] && reply_to="$(normalize_id "$reply_to")"
 
-  local inbox; inbox="$(resolve_inbox "$to")"
-  local human=""; human="$(human_handle "$to" || true)"
-  local scratchpad; scratchpad="$(dirname "$inbox")"
-  if [ -z "$human" ]; then
-    # Fail loudly if the recipient scratchpad is gone (reboot/pruned) rather
-    # than silently conjuring a dead inbox nobody will ever read.
-    [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (rebooted or pruned?)"
+  local -a recipients=() inboxes=() humans=()
+  local raw recipient existing duplicate
+  for raw in "${raw_recipients[@]}"; do
+    while :; do
+      case "$raw" in
+        *,*) recipient="${raw%%,*}"; raw="${raw#*,}"; [ -n "$raw" ] || die "send: empty recipient in --to list" ;;
+        *) recipient="$raw"; raw="" ;;
+      esac
+      # Email-style lists commonly include a space after each comma.
+      recipient="${recipient#"${recipient%%[![:space:]]*}"}"
+      recipient="${recipient%"${recipient##*[![:space:]]}"}"
+      [ -n "$recipient" ] || die "send: empty recipient in --to list"
+      recipient="$(normalize_id "$recipient")"
+      duplicate=0
+      for existing in "${recipients[@]}"; do
+        [ "$existing" = "$recipient" ] && duplicate=1
+      done
+      [ "$duplicate" -eq 1 ] || recipients+=("$recipient")
+      [ -z "$raw" ] && break
+    done
+  done
 
-    # Report, don't predict: an overnight-idle session usually resumes, so state
-    # the age and let the sender judge. Not fatal either way; there is no wakeup,
-    # and the sender's only signal about a quiet recipient is how quiet it is.
-    local idle; idle="$(idle_hours "$scratchpad" || echo 0)"
-    if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
-      echo "agent-mail: '$to' last active ${idle}h ago" >&2
+  local inbox human scratchpad idle
+  for recipient in "${recipients[@]}"; do
+    inbox="$(resolve_inbox "$recipient")"
+    human="$(human_handle "$recipient" || true)"
+    scratchpad="$(dirname "$inbox")"
+    if [ -z "$human" ]; then
+      # Validate the complete recipient list before writing any message copy.
+      [ -d "$scratchpad" ] || die "recipient '$recipient' has no scratchpad at $scratchpad (rebooted or pruned?)"
+      idle="$(idle_hours "$scratchpad" || echo 0)"
+      if [ "$idle" -ge "${AGENT_MAIL_STALE_HOURS:-12}" ]; then
+        echo "agent-mail: '$recipient' last active ${idle}h ago" >&2
+      fi
     fi
-  fi
+    ensure_maildir "$inbox"
+    inboxes+=("$inbox")
+    humans+=("$human")
+  done
 
-  ensure_maildir "$inbox"
+  local to_header="${recipients[0]}" to_filename="${recipients[0]}" i
+  for ((i = 1; i < ${#recipients[@]}; i++)); do
+    to_header+=", ${recipients[$i]}"
+    to_filename+="+${recipients[$i]}"
+  done
 
   local effective_subject="${subject:-(no subject)}"
-  local msgid; msgid="$(gen_msgid "$from" "$to" "$effective_subject")"
+  local msgid; msgid="$(gen_msgid "$from" "$to_filename" "$effective_subject")"
   local thread_id="$msgid"
   [ -z "$in_reply_to" ] || thread_id="$(thread_id_for_parent "$in_reply_to")"
-  local tmp="$inbox/tmp/$msgid.md"
-  local dst="$inbox/new/$msgid.md"
+  local source_tmp="${inboxes[0]}/tmp/$msgid.md"
 
   {
     echo "From: $from"
-    echo "To: $to"
+    echo "To: $to_header"
     [ -n "$reply_to" ] && echo "Reply-To: $reply_to"
     echo "Date: $(now_iso)"
     echo "Message-ID: $msgid"
@@ -322,15 +348,26 @@ cmd_send() {
     else
       cat
     fi
-  } > "$tmp"
+  } > "$source_tmp"
 
-  # Atomic within one filesystem: reader in new/ never sees a partial write.
-  mv "$tmp" "$dst"
+  local tmp dst
+  for ((i = 0; i < ${#inboxes[@]}; i++)); do
+    dst="${inboxes[$i]}/new/$msgid.md"
+    [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
+    if [ "$i" -gt 0 ]; then
+      tmp="${inboxes[$i]}/tmp/$msgid.md"
+      cp "$source_tmp" "$tmp"
+    fi
+  done
+  for ((i = 0; i < ${#inboxes[@]}; i++)); do
+    tmp="${inboxes[$i]}/tmp/$msgid.md"
+    dst="${inboxes[$i]}/new/$msgid.md"
+    mv "$tmp" "$dst"
+  done
 
-  # Josh's inbox is also an attention channel. Successful notification marks
-  # this delivery so the unread sweep does not send the same alert four hours
-  # later; a failed notification stays eligible for that fallback.
-  notify_human_delivery "$human" "$inbox" "$msgid" "$from" "$effective_subject"
+  for ((i = 0; i < ${#inboxes[@]}; i++)); do
+    notify_human_delivery "${humans[$i]}" "${inboxes[$i]}" "$msgid" "$from" "$effective_subject"
+  done
 
   echo "$msgid"
 }
@@ -379,18 +416,19 @@ cmd_receipt() {
   [ -n "$id" ] || die "receipt: MSGID required"
   id="$(basename "$id" .md)"
 
-  local inbox recipient state=""
+  local inbox recipient state="" found=0
   for inbox in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
     [ -d "$inbox" ] || continue
     if [ -e "$inbox/cur/$id.md" ]; then state=read
     elif [ -e "$inbox/new/$id.md" ]; then state=unread
     else continue
     fi
+    found=1
     recipient="$(basename "$(dirname "$inbox")")"
     local age; age="$(message_age_hours "$inbox/$([ "$state" = read ] && echo cur || echo new)/$id.md" || echo 0)"
     printf '%s\t%s\tto:%s\tdelivered:%s\t%sh ago\n' "$state" "$id" "$recipient" "${id%%-*}" "$age"
-    return 0
   done
+  [ "$found" -eq 0 ] || return 0
 
   # Absence is ambiguous on purpose: discard removes from both new/ and cur/,
   # so a read-then-discarded message is indistinguishable from one never sent.
