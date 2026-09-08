@@ -25,10 +25,13 @@ export AGENT_MAIL_EDITOR=nvim
 export PATH="$tmp/bin:$PATH"
 
 msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
+[[ "$msgid" =~ ^[0-9]{8}T[0-9]{6}Z--from-test-agent--to-josh--needs-attention--[0-9]+-[0-9]+$ ]]
 mail_root="$(CDPATH= cd -- "$tmp/mail" && pwd -P)"
 human_root="$(CDPATH= cd -- "$tmp/humans" && pwd -P)"
 inbox="$human_root/josh/inbox"
 [[ -f "$inbox/new/$msgid.md" ]]
+grep -Fxq "Message-ID: $msgid" "$inbox/new/$msgid.md"
+grep -Fxq "Thread-ID: $msgid" "$inbox/new/$msgid.md"
 [[ -d "$inbox/.escalated-$msgid" ]]
 grep -Fq 'Agent mail: Needs attention' "$NOTIFY_LOG"
 grep -Fq 'From test-agent. Read with: agent-mail read --to @josh' "$NOTIFY_LOG"
@@ -49,7 +52,9 @@ draft="$("$command" reply "$message")"
 grep -Fxq 'From: josh' "$draft"
 grep -Fxq 'To: test-agent' "$draft"
 grep -Fxq "In-Reply-To: $msgid" "$draft"
+grep -Fxq "Thread-ID: $msgid" "$draft"
 grep -Fxq 'Subject: Re: Needs attention' "$draft"
+[[ "$(basename "$draft" .md)" =~ ^[0-9]{8}T[0-9]{6}Z--from-josh--to-test-agent--re-needs-attention--[0-9]+-[0-9]+$ ]]
 printf 'Reply body.\n' >>"$draft"
 
 delivered="$("$command" deliver "$draft")"
@@ -58,6 +63,11 @@ grep -Fq 'Reply body.' "$delivered"
 archived="$("$command" archive "$delivered")"
 [[ "$archived" == "$mail_root/test-agent-session/inbox/cur/"*.md ]]
 [[ -f "$archived" ]]
+grep -Fxq "Thread-ID: $msgid" "$archived"
+
+reply_id="$("$command" send --to @josh --from test-agent --in-reply-to "$(basename "$archived" .md)" --subject 'Re: Needs attention' --body 'Following up.')"
+grep -Fxq "Thread-ID: $msgid" "$inbox/new/$reply_id.md"
+grep -Fxq "In-Reply-To: $(basename "$archived" .md)" "$inbox/new/$reply_id.md"
 
 "$command" inbox @+test-agent
 [[ "$(cat "$EDITOR_LOG")" == "$mail_root/test-agent-session/inbox" ]]

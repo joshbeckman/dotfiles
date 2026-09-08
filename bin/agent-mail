@@ -41,6 +41,10 @@ form are accepted; sigils are stripped. Bare `josh` remains accepted. Agent
 inboxes resolve under AGENT_MAIL_ROOT; human inboxes persist under
 AGENT_HUMAN_MAIL_ROOT.
 
+Message filenames expose UTC creation time, sender, receiver, and a truncated
+subject before a collision-resistant suffix. Thread-ID names the root message;
+In-Reply-To names the immediate parent.
+
 send   Deliver a message. Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
 receipt Say whether a message you sent has been read. Takes the MSGID that
@@ -206,9 +210,49 @@ message_age_hours() {
   echo $(( (now - sent) / 3600 ))
 }
 
-# Sortable, collision-resistant message id: epoch + pid + random.
+filename_component() {
+  local value="$1" limit="$2"
+  LC_ALL=C printf '%s' "$value" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9._@+-]+/-/g; s/-+/-/g; s/^[-.]+//; s/[-.]+$//' |
+    cut -c1-"$limit" |
+    sed -E 's/[-.]+$//'
+}
+
+# The descriptive fields make Maildir listings useful; pid and random retain
+# collision resistance when one sender creates several messages per second.
 gen_msgid() {
-  echo "$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}${RANDOM}"
+  local from to subject
+  from="$(filename_component "$1" 48)"
+  to="$(filename_component "$2" 48)"
+  subject="$(filename_component "$3" 48)"
+  printf '%s--from-%s--to-%s--%s--%s-%s\n' \
+    "$(date -u +%Y%m%dT%H%M%SZ)" "${from:-unknown}" "${to:-unknown}" \
+    "${subject:-no-subject}" "$$" "${RANDOM}${RANDOM}"
+}
+
+thread_id_for_message() {
+  local path="$1" thread
+  thread="$(sed -n 's/^Thread-ID: //p' "$path" | head -1)"
+  [ -n "$thread" ] || thread="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
+  printf '%s' "$thread"
+}
+
+thread_id_for_parent() {
+  local id="$(basename "$1" .md)" inbox state path
+  for inbox in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
+    [ -d "$inbox" ] || continue
+    for state in new cur; do
+      path="$inbox/$state/$id.md"
+      if [ -f "$path" ]; then
+        thread_id_for_message "$path"
+        return
+      fi
+    done
+  done
+  # A parent can have aged out with its session inbox. Keeping its ID still
+  # links the new branch instead of silently starting an unrelated thread.
+  printf '%s' "$id"
 }
 
 cmd_send() {
@@ -254,7 +298,10 @@ cmd_send() {
 
   ensure_maildir "$inbox"
 
-  local msgid; msgid="$(gen_msgid)"
+  local effective_subject="${subject:-(no subject)}"
+  local msgid; msgid="$(gen_msgid "$from" "$to" "$effective_subject")"
+  local thread_id="$msgid"
+  [ -z "$in_reply_to" ] || thread_id="$(thread_id_for_parent "$in_reply_to")"
   local tmp="$inbox/tmp/$msgid.md"
   local dst="$inbox/new/$msgid.md"
 
@@ -264,8 +311,9 @@ cmd_send() {
     [ -n "$reply_to" ] && echo "Reply-To: $reply_to"
     echo "Date: $(now_iso)"
     echo "Message-ID: $msgid"
+    echo "Thread-ID: $thread_id"
     [ -n "$in_reply_to" ] && echo "In-Reply-To: $in_reply_to"
-    echo "Subject: ${subject:-(no subject)}"
+    echo "Subject: $effective_subject"
     echo
     if [ "$have_body" -eq 1 ]; then
       printf '%s\n' "$body"
@@ -282,7 +330,7 @@ cmd_send() {
   # Josh's inbox is also an attention channel. Successful notification marks
   # this delivery so the unread sweep does not send the same alert four hours
   # later; a failed notification stays eligible for that fallback.
-  notify_human_delivery "$human" "$inbox" "$msgid" "$from" "${subject:-(no subject)}"
+  notify_human_delivery "$human" "$inbox" "$msgid" "$from" "$effective_subject"
 
   echo "$msgid"
 }
@@ -438,14 +486,16 @@ cmd_archive() {
 cmd_reply() {
   local path; path="$(message_path "${1:-}")"
   [ $# -eq 1 ] || die "reply: expected one message file"
-  local to subject in_reply_to msgid drafts draft
+  local to subject in_reply_to thread_id msgid drafts draft
   to="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
   [ -n "$to" ] || to="$(sed -n 's/^From: //p' "$path" | head -1)"
   [ -n "$to" ] || die "reply: message has no From or Reply-To header"
   subject="$(sed -n 's/^Subject: //p' "$path" | head -1)"
   case "$subject" in Re:\ *) ;; *) subject="Re: ${subject:-(no subject)}" ;; esac
   in_reply_to="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
-  msgid="$(gen_msgid)"
+  thread_id="$(thread_id_for_message "$path")"
+  msgid="$(gen_msgid josh "$(normalize_id "$to")" "$subject")"
+  thread_id="${thread_id:-$msgid}"
   drafts="$HUMAN_MAIL_ROOT/josh/drafts"
   mkdir -p "$drafts"
   draft="$drafts/$msgid.md"
@@ -454,6 +504,7 @@ cmd_reply() {
     echo "To: $(normalize_id "$to")"
     echo "Date: $(now_iso)"
     echo "Message-ID: $msgid"
+    echo "Thread-ID: ${thread_id:-$in_reply_to}"
     [ -n "$in_reply_to" ] && echo "In-Reply-To: $in_reply_to"
     echo "Subject: $subject"
     echo
