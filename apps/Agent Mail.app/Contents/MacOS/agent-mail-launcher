@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-macos_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
-dotfiles_dir="$(CDPATH= cd -- "$macos_dir/../../../.." && pwd -P)"
-printf -v inbox_command '%q ' "$dotfiles_dir/bin/agent-mail" inbox @josh
+agent_mail="${AGENT_MAIL_BIN:-$HOME/bin/agent-mail}"
+[ -x "$agent_mail" ] || { echo "Agent Mail launcher: not executable: $agent_mail" >&2; exit 1; }
+printf -v inbox_command '%q ' "$agent_mail" inbox @josh
 
 exec "${AGENT_MAIL_OPEN:-/usr/bin/open}" -na Ghostty.app --args \
   -e /bin/zsh -lic "${inbox_command% }"

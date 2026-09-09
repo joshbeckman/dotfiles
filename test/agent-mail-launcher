@@ -12,7 +12,8 @@ EOF
 chmod +x "$tmp/open"
 export OPEN_LOG="$tmp/open.log"
 
-AGENT_MAIL_OPEN="$tmp/open" "$root/apps/Agent Mail.app/Contents/MacOS/agent-mail-launcher"
+AGENT_MAIL_BIN="$root/bin/agent-mail" AGENT_MAIL_OPEN="$tmp/open" \
+  "$root/apps/Agent Mail.app/Contents/MacOS/agent-mail-launcher"
 args="$(cat "$OPEN_LOG")"
 [[ "$args" == '-na Ghostty.app --args -e /bin/zsh -lic '* ]]
 [[ "$args" == *"$root/bin/agent-mail inbox @josh"* ]]
@@ -20,6 +21,6 @@ args="$(cat "$OPEN_LOG")"
 plutil -lint "$root/apps/Agent Mail.app/Contents/Info.plist" >/dev/null
 plutil -extract CFBundleIdentifier raw "$root/apps/Agent Mail.app/Contents/Info.plist" | grep -Fxq org.joshbeckman.agent-mail
 
-grep -Fq 'symlink_agent_config "$DOTFILES_DIR/apps/Agent Mail.app" "$HOME/Applications/Agent Mail.app"' "$root/setup"
+grep -Fq '/usr/bin/ditto "$DOTFILES_DIR/apps/Agent Mail.app" "$agent_mail_app"' "$root/setup"
 
 printf 'agent-mail launcher tests passed\n'

@@ -152,7 +152,15 @@ __setup_mac(){
 
         echo '  ======  installing Agent Mail application launcher'
         mkdir -p "$HOME/Applications"
-        symlink_agent_config "$DOTFILES_DIR/apps/Agent Mail.app" "$HOME/Applications/Agent Mail.app"
+        agent_mail_app="$HOME/Applications/Agent Mail.app"
+        if [ -L "$agent_mail_app" ]; then
+                rm -f "$agent_mail_app"
+        elif [ -e "$agent_mail_app" ] && [ "$(defaults read "$agent_mail_app/Contents/Info" CFBundleIdentifier 2>/dev/null)" != "org.joshbeckman.agent-mail" ]; then
+                backup_path="${agent_mail_app}.backup.$(date +%s)"
+                echo "  ======  moving existing $agent_mail_app to $backup_path"
+                mv "$agent_mail_app" "$backup_path"
+        fi
+        /usr/bin/ditto "$DOTFILES_DIR/apps/Agent Mail.app" "$agent_mail_app"
 
         if command -v brew &> /dev/null
         then
