@@ -92,6 +92,23 @@ archived="$("$command" archive "$delivered")"
 [[ -f "$archived" ]]
 grep -Fxq "Thread-ID: $msgid" "$archived"
 
+compose_draft="$("$command" compose)"
+[[ "$compose_draft" == "$human_root/josh/drafts/compose-"*.md ]]
+grep -Fxq 'From: josh' "$compose_draft"
+! grep -q '^Message-ID: ' "$compose_draft"
+awk '{
+    if ($0 == "To: ") print "To: @+test-agent"
+    else if ($0 == "Subject: ") print "Subject: Fresh thread"
+    else print
+}' "$compose_draft" >"$compose_draft.tmp"
+mv "$compose_draft.tmp" "$compose_draft"
+composed="$("$command" deliver "$compose_draft")"
+[[ "$composed" == "$mail_root/test-agent-session/inbox/new/"*.md ]]
+grep -Eq '^Message-ID: .+' "$composed"
+composed_id="$(sed -n 's/^Message-ID: //p' "$composed")"
+grep -Fxq "Thread-ID: $composed_id" "$composed"
+grep -Fxq 'Subject: Fresh thread' "$composed"
+
 reply_id="$("$command" send --to @josh --from test-agent --in-reply-to "$(basename "$archived" .md)" --subject 'Re: Needs attention' --body 'Following up.')"
 grep -Fxq "Thread-ID: $msgid" "$inbox/new/$reply_id.md"
 grep -Fxq "In-Reply-To: $(basename "$archived" .md)" "$inbox/new/$reply_id.md"
@@ -119,6 +136,12 @@ alias_archived="$(AGENT_HUMAN_MAIL_ROOT="$tmp/alias" "$command" archive "$physic
 [[ -f "$alias_archived" ]]
 
 if [[ -n "$real_nvim" ]]; then
+    AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
+        --cmd 'let mapleader=" "' --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' \
+        --cmd 'runtime plugin/netrwPlugin.vim' "+execute 'Explore ' . fnameescape('$inbox')" \
+        "+if exists(':AgentMailCompose') != 2 | cquit 1 | endif" \
+        "+let m=maparg(' c','n',0,1) | if get(m,'buffer',0) != 1 || get(m,'rhs','') !~# 'AgentMailCompose' | cquit 1 | endif" +quit
+
     env -u AGENT_MAIL_ROOT AGENT_SCRATCH_ROOT="$tmp/shared" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
         --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$tmp/shared/default-agent/inbox/new/$default_id.md" \
         "+if exists(':AgentMailArchive') != 2 | cquit 1 | endif" +quit

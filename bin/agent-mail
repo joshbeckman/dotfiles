@@ -32,6 +32,7 @@ Usage:
   agent-mail addr   ID
   agent-mail inbox  ID
   agent-mail archive FILE
+  agent-mail compose
   agent-mail reply  FILE
   agent-mail deliver FILE
   agent-mail sweep  [--hours N] [--dry-run]
@@ -57,6 +58,7 @@ discard Delete a message from cur/ or new/.
 addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
 inbox Open an ID's inbox directory in Neovim.
 archive Move a message from inbox/new to inbox/cur.
+compose Create a blank Josh-authored draft and print its path.
 reply  Create a reply draft and print its path.
 deliver Atomically move a reply draft into its recipient's inbox/new.
 sweep  Notify Josh about messages unread for --hours (default 4). Any live
@@ -557,6 +559,21 @@ cmd_archive() {
   printf '%s\n' "$dst"
 }
 
+cmd_compose() {
+  [ $# -eq 0 ] || die "compose: expected no arguments"
+  local drafts draft
+  drafts="$HUMAN_MAIL_ROOT/josh/drafts"
+  mkdir -p "$drafts"
+  draft="$drafts/compose-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM.md"
+  {
+    echo "From: josh"
+    echo "To: "
+    echo "Subject: "
+    echo
+  } >"$draft"
+  printf '%s\n' "$draft"
+}
+
 cmd_reply() {
   local path; path="$(message_path "${1:-}")"
   [ $# -eq 1 ] || die "reply: expected one message file"
@@ -598,13 +615,31 @@ cmd_deliver() {
   from="$(sed -n 's/^From: //p' "$draft" | head -1)"
   subject="$(sed -n 's/^Subject: //p' "$draft" | head -1)"
   msgid="$(sed -n 's/^Message-ID: //p' "$draft" | head -1)"
-  [ -n "$to" ] && [ -n "$from" ] && [ -n "$msgid" ] || die "draft is missing To, From, or Message-ID"
+  [ -n "$to" ] && [ -n "$from" ] || die "draft is missing To or From"
   to="$(normalize_id "$to")"
   inbox="$(resolve_inbox "$to")"
   human="$(human_handle "$to" || true)"
   scratchpad="$(dirname "$inbox")"
   [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (not created or pruned?)"
   ensure_maildir "$inbox"
+  if [ -z "$msgid" ]; then
+    local date tmp
+    date="$(now_iso)"
+    msgid="$(gen_msgid "$from" "$to" "${subject:-(no subject)}")"
+    tmp="$draft.tmp-$$-$RANDOM"
+    awk -v date="$date" -v msgid="$msgid" '
+      /^To: / && !inserted {
+        print
+        print "Date: " date
+        print "Message-ID: " msgid
+        print "Thread-ID: " msgid
+        inserted=1
+        next
+      }
+      { print }
+    ' "$draft" >"$tmp"
+    mv "$tmp" "$draft"
+  fi
   dst="$inbox/new/$msgid.md"
   [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
   mv "$draft" "$dst"
@@ -668,6 +703,7 @@ case "$sub" in
   discard) cmd_discard "$@" ;;
   inbox)   cmd_inbox "$@" ;;
   archive) cmd_archive "$@" ;;
+  compose) cmd_compose "$@" ;;
   reply)   cmd_reply "$@" ;;
   deliver) cmd_deliver "$@" ;;
   sweep)   cmd_sweep "$@" ;;
