@@ -38,6 +38,15 @@ function! s:AgentMailReply() abort
     endif
 endfunction
 
+function! s:AgentMailReplyAll() abort
+    let draft = s:AgentMailRun('reply-all ' . shellescape(expand('%:p')))
+    if !empty(draft)
+        execute 'tabedit ' . fnameescape(draft)
+        normal! G
+        startinsert
+    endif
+endfunction
+
 function! s:AgentMailSend() abort
     write
     let destination = s:AgentMailRun('deliver ' . shellescape(expand('%:p')))
@@ -63,11 +72,15 @@ if s:in_agent_mail || s:in_human_mail
     if s:agent_mail_path =~# '/inbox/new/[^/]*\.md$'
         command! -buffer AgentMailArchive call <SID>AgentMailArchive()
         command! -buffer AgentMailReply call <SID>AgentMailReply()
+        command! -buffer AgentMailReplyAll call <SID>AgentMailReplyAll()
         nnoremap <buffer> <silent> <nowait> <Leader>e :AgentMailArchive<CR>
         nnoremap <buffer> <silent> <nowait> <Leader>r :AgentMailReply<CR>
+        nnoremap <buffer> <silent> <nowait> <Leader>a :AgentMailReplyAll<CR>
     elseif s:agent_mail_path =~# '/inbox/cur/[^/]*\.md$'
         command! -buffer AgentMailReply call <SID>AgentMailReply()
+        command! -buffer AgentMailReplyAll call <SID>AgentMailReplyAll()
         nnoremap <buffer> <silent> <nowait> <Leader>r :AgentMailReply<CR>
+        nnoremap <buffer> <silent> <nowait> <Leader>a :AgentMailReplyAll<CR>
     elseif s:agent_mail_path =~# '/josh/drafts/[^/]*\.md$'
         command! -buffer AgentMailSend call <SID>AgentMailSend()
         nnoremap <buffer> <silent> <nowait> <Leader>d :AgentMailSend<CR>

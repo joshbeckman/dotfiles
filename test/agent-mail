@@ -55,7 +55,7 @@ message="$inbox/cur/$msgid.md"
 [[ ! -e "$inbox/.escalated-$msgid" ]]
 "$command" receipt "$msgid" | grep -Fq $'read\t'
 
-mkdir -p "$mail_root/test-agent-session"
+mkdir -p "$mail_root/test-agent-session" "$mail_root/other-agent-session"
 
 before_invalid="$(find "$inbox/new" -type f | wc -l | tr -d ' ')"
 if "$command" send --to @josh --to missing-agent --subject 'Must not partially deliver' --body 'no' >/dev/null 2>&1; then
@@ -73,6 +73,21 @@ grep -Fxq 'To: josh, test-agent' "$multi_agent"
 grep -Fq 'Shared body.' "$multi_agent"
 cmp -s "$multi_agent" "$multi_human"
 [[ "$("$command" receipt "$multi_id" | wc -l | tr -d ' ')" == 2 ]]
+
+group_id="$("$command" send --to @josh --to @+other-agent --from test-agent --subject 'Group thread' --body 'Everyone should see this.')"
+group_message="$inbox/new/$group_id.md"
+reply_all_draft="$("$command" reply-all "$group_message")"
+grep -Fxq 'To: test-agent, other-agent' "$reply_all_draft"
+grep -Fxq "Thread-ID: $group_id" "$reply_all_draft"
+grep -Fxq "In-Reply-To: $group_id" "$reply_all_draft"
+printf 'Replying to everyone.\n' >>"$reply_all_draft"
+reply_all_delivery="$("$command" deliver "$reply_all_draft")"
+reply_all_id="$(basename "$reply_all_delivery" .md)"
+[[ "$reply_all_delivery" == "$mail_root/test-agent-session/inbox/new/$reply_all_id.md" ]]
+[[ -f "$mail_root/other-agent-session/inbox/new/$reply_all_id.md" ]]
+cmp -s "$reply_all_delivery" "$mail_root/other-agent-session/inbox/new/$reply_all_id.md"
+[[ ! -e "$reply_all_draft" ]]
+grep -Fq 'Replying to everyone.' "$reply_all_delivery"
 
 draft="$("$command" reply "$message")"
 [[ "$draft" == "$human_root/josh/drafts/"*.md ]]
@@ -159,8 +174,10 @@ if [[ -n "$real_nvim" ]]; then
             "+let m=maparg('$lhs','n',0,1) | if get(m,'buffer',0) != 1 || get(m,'rhs','') !~# '$command' | cquit 1 | endif" +quit
     }
     check_nvim_command "$message" AgentMailReply 2
+    check_nvim_command "$message" AgentMailReplyAll 2
     check_nvim_command "$message" AgentMailArchive 0
     check_nvim_command "$archived" AgentMailReply 2
+    check_nvim_command "$archived" AgentMailReplyAll 2
     check_nvim_command "$archived" AgentMailArchive 0
 
     draft="$("$command" reply "$archived")"
@@ -168,7 +185,9 @@ if [[ -n "$real_nvim" ]]; then
     check_nvim_command "$draft" AgentMailReply 0
     check_nvim_mapping "$inbox/new/$reply_id.md" ' e' AgentMailArchive
     check_nvim_mapping "$inbox/new/$reply_id.md" ' r' AgentMailReply
+    check_nvim_mapping "$inbox/new/$reply_id.md" ' a' AgentMailReplyAll
     check_nvim_mapping "$archived" ' r' AgentMailReply
+    check_nvim_mapping "$archived" ' a' AgentMailReplyAll
     check_nvim_mapping "$draft" ' d' AgentMailSend
 
     ln -s "$tmp/mail" "$tmp/mail-link"

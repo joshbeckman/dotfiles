@@ -34,6 +34,7 @@ Usage:
   agent-mail archive FILE
   agent-mail compose
   agent-mail reply  FILE
+  agent-mail reply-all FILE
   agent-mail deliver FILE
   agent-mail sweep  [--hours N] [--dry-run]
 
@@ -60,7 +61,8 @@ inbox Open an ID's inbox directory in Neovim.
 archive Move a message from inbox/new to inbox/cur.
 compose Create a blank Josh-authored draft and print its path.
 reply  Create a reply draft and print its path.
-deliver Atomically move a reply draft into its recipient's inbox/new.
+reply-all Create a draft to the sender and other original recipients.
+deliver Atomically move a reply draft into each recipient's inbox/new.
 sweep  Notify Josh about messages unread for --hours (default 4). Any live
        session can run it; a dead recipient cannot escalate for itself.
 
@@ -86,6 +88,30 @@ normalize_id() {
   id="${id#@}"
   id="${id#+}"
   printf '%s' "$id"
+}
+
+PARSED_RECIPIENTS=()
+parse_recipient_lists() {
+  PARSED_RECIPIENTS=()
+  local raw recipient existing duplicate
+  for raw in "$@"; do
+    while :; do
+      case "$raw" in
+        *,*) recipient="${raw%%,*}"; raw="${raw#*,}"; [ -n "$raw" ] || die "empty recipient in list" ;;
+        *) recipient="$raw"; raw="" ;;
+      esac
+      recipient="${recipient#"${recipient%%[![:space:]]*}"}"
+      recipient="${recipient%"${recipient##*[![:space:]]}"}"
+      [ -n "$recipient" ] || die "empty recipient in list"
+      recipient="$(normalize_id "$recipient")"
+      duplicate=0
+      for existing in "${PARSED_RECIPIENTS[@]}"; do
+        [ "$existing" = "$recipient" ] && duplicate=1
+      done
+      [ "$duplicate" -eq 1 ] || PARSED_RECIPIENTS+=("$recipient")
+      [ -z "$raw" ] && break
+    done
+  done
 }
 
 # The sender's own address, in the order the forms are trustworthy. The
@@ -311,29 +337,10 @@ cmd_send() {
   from="$(normalize_id "$from")"
   [ -n "$reply_to" ] && reply_to="$(normalize_id "$reply_to")"
 
-  local -a recipients=() inboxes=() humans=()
-  local raw recipient existing duplicate
-  for raw in "${raw_recipients[@]}"; do
-    while :; do
-      case "$raw" in
-        *,*) recipient="${raw%%,*}"; raw="${raw#*,}"; [ -n "$raw" ] || die "send: empty recipient in --to list" ;;
-        *) recipient="$raw"; raw="" ;;
-      esac
-      # Email-style lists commonly include a space after each comma.
-      recipient="${recipient#"${recipient%%[![:space:]]*}"}"
-      recipient="${recipient%"${recipient##*[![:space:]]}"}"
-      [ -n "$recipient" ] || die "send: empty recipient in --to list"
-      recipient="$(normalize_id "$recipient")"
-      duplicate=0
-      for existing in "${recipients[@]}"; do
-        [ "$existing" = "$recipient" ] && duplicate=1
-      done
-      [ "$duplicate" -eq 1 ] || recipients+=("$recipient")
-      [ -z "$raw" ] && break
-    done
-  done
+  parse_recipient_lists "${raw_recipients[@]}"
+  local -a recipients=("${PARSED_RECIPIENTS[@]}") inboxes=() humans=()
 
-  local inbox human scratchpad idle
+  local recipient inbox human scratchpad idle
   for recipient in "${recipients[@]}"; do
     inbox="$(resolve_inbox "$recipient")"
     human="$(human_handle "$recipient" || true)"
@@ -574,25 +581,21 @@ cmd_compose() {
   printf '%s\n' "$draft"
 }
 
-cmd_reply() {
-  local path; path="$(message_path "${1:-}")"
-  [ $# -eq 1 ] || die "reply: expected one message file"
-  local to subject in_reply_to thread_id msgid drafts draft
-  to="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
-  [ -n "$to" ] || to="$(sed -n 's/^From: //p' "$path" | head -1)"
-  [ -n "$to" ] || die "reply: message has no From or Reply-To header"
+create_reply_draft() {
+  local path="$1" to="$2" subject in_reply_to thread_id msgid drafts draft to_filename
   subject="$(sed -n 's/^Subject: //p' "$path" | head -1)"
   case "$subject" in Re:\ *) ;; *) subject="Re: ${subject:-(no subject)}" ;; esac
   in_reply_to="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
   thread_id="$(thread_id_for_message "$path")"
-  msgid="$(gen_msgid josh "$(normalize_id "$to")" "$subject")"
+  to_filename="${to//, /+}"
+  msgid="$(gen_msgid josh "$to_filename" "$subject")"
   thread_id="${thread_id:-$msgid}"
   drafts="$HUMAN_MAIL_ROOT/josh/drafts"
   mkdir -p "$drafts"
   draft="$drafts/$msgid.md"
   {
     echo "From: josh"
-    echo "To: $(normalize_id "$to")"
+    echo "To: $to"
     echo "Date: $(now_iso)"
     echo "Message-ID: $msgid"
     echo "Thread-ID: ${thread_id:-$in_reply_to}"
@@ -603,6 +606,38 @@ cmd_reply() {
   printf '%s\n' "$draft"
 }
 
+cmd_reply() {
+  local path; path="$(message_path "${1:-}")"
+  [ $# -eq 1 ] || die "reply: expected one message file"
+  local to
+  to="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
+  [ -n "$to" ] || to="$(sed -n 's/^From: //p' "$path" | head -1)"
+  [ -n "$to" ] || die "reply: message has no From or Reply-To header"
+  create_reply_draft "$path" "$(normalize_id "$to")"
+}
+
+cmd_reply_all() {
+  local path; path="$(message_path "${1:-}")"
+  [ $# -eq 1 ] || die "reply-all: expected one message file"
+  local sender original_to recipient human to=""
+  sender="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
+  [ -n "$sender" ] || sender="$(sed -n 's/^From: //p' "$path" | head -1)"
+  original_to="$(sed -n 's/^To: //p' "$path" | head -1)"
+  [ -n "$sender" ] || die "reply-all: message has no From or Reply-To header"
+  if [ -n "$original_to" ]; then
+    parse_recipient_lists "$sender" "$original_to"
+  else
+    parse_recipient_lists "$sender"
+  fi
+  for recipient in "${PARSED_RECIPIENTS[@]}"; do
+    human="$(human_handle "$recipient" || true)"
+    [ "$human" = josh ] && continue
+    [ -z "$to" ] && to="$recipient" || to+=", $recipient"
+  done
+  [ -n "$to" ] || die "reply-all: message has no recipients other than Josh"
+  create_reply_draft "$path" "$to"
+}
+
 cmd_deliver() {
   local draft="${1:-}" dir
   [ $# -eq 1 ] || die "deliver: expected one draft file"
@@ -610,22 +645,32 @@ cmd_deliver() {
   dir="$(CDPATH= cd -- "$(dirname -- "$draft")" && pwd)"
   [ "$dir" = "$HUMAN_MAIL_ROOT/josh/drafts" ] || die "not a Josh agent-mail draft: $draft"
 
-  local to from subject msgid inbox scratchpad human dst
+  local to from subject msgid recipient inbox scratchpad human dst to_filename i
+  local -a recipients=() inboxes=() humans=()
   to="$(sed -n 's/^To: //p' "$draft" | head -1)"
   from="$(sed -n 's/^From: //p' "$draft" | head -1)"
   subject="$(sed -n 's/^Subject: //p' "$draft" | head -1)"
   msgid="$(sed -n 's/^Message-ID: //p' "$draft" | head -1)"
   [ -n "$to" ] && [ -n "$from" ] || die "draft is missing To or From"
-  to="$(normalize_id "$to")"
-  inbox="$(resolve_inbox "$to")"
-  human="$(human_handle "$to" || true)"
-  scratchpad="$(dirname "$inbox")"
-  [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$to' has no scratchpad at $scratchpad (not created or pruned?)"
-  ensure_maildir "$inbox"
+  parse_recipient_lists "$to"
+  recipients=("${PARSED_RECIPIENTS[@]}")
+  to_filename="${recipients[0]}"
+  for ((i = 1; i < ${#recipients[@]}; i++)); do
+    to_filename+="+${recipients[$i]}"
+  done
+  for recipient in "${recipients[@]}"; do
+    inbox="$(resolve_inbox "$recipient")"
+    human="$(human_handle "$recipient" || true)"
+    scratchpad="$(dirname "$inbox")"
+    [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$recipient' has no scratchpad at $scratchpad (not created or pruned?)"
+    ensure_maildir "$inbox"
+    inboxes+=("$inbox")
+    humans+=("$human")
+  done
   if [ -z "$msgid" ]; then
     local date tmp
     date="$(now_iso)"
-    msgid="$(gen_msgid "$from" "$to" "${subject:-(no subject)}")"
+    msgid="$(gen_msgid "$from" "$to_filename" "${subject:-(no subject)}")"
     tmp="$draft.tmp-$$-$RANDOM"
     awk -v date="$date" -v msgid="$msgid" '
       /^To: / && !inserted {
@@ -640,11 +685,22 @@ cmd_deliver() {
     ' "$draft" >"$tmp"
     mv "$tmp" "$draft"
   fi
-  dst="$inbox/new/$msgid.md"
-  [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
-  mv "$draft" "$dst"
-  notify_human_delivery "$human" "$inbox" "$msgid" "$from" "${subject:-(no subject)}"
-  printf '%s\n' "$dst"
+  for inbox in "${inboxes[@]}"; do
+    dst="$inbox/new/$msgid.md"
+    [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
+  done
+  local first_dst="" tmp_dst
+  for ((i = 0; i < ${#inboxes[@]}; i++)); do
+    inbox="${inboxes[$i]}"
+    dst="$inbox/new/$msgid.md"
+    tmp_dst="$inbox/tmp/$msgid.md.$$-$RANDOM"
+    cp "$draft" "$tmp_dst"
+    mv "$tmp_dst" "$dst"
+    [ -n "$first_dst" ] || first_dst="$dst"
+    notify_human_delivery "${humans[$i]}" "$inbox" "$msgid" "$from" "${subject:-(no subject)}"
+  done
+  rm "$draft"
+  printf '%s\n' "$first_dst"
 }
 
 # Escalate to the human when nobody picked a message up. Runs from any live
@@ -703,9 +759,10 @@ case "$sub" in
   discard) cmd_discard "$@" ;;
   inbox)   cmd_inbox "$@" ;;
   archive) cmd_archive "$@" ;;
-  compose) cmd_compose "$@" ;;
-  reply)   cmd_reply "$@" ;;
-  deliver) cmd_deliver "$@" ;;
+  compose)   cmd_compose "$@" ;;
+  reply)     cmd_reply "$@" ;;
+  reply-all) cmd_reply_all "$@" ;;
+  deliver)   cmd_deliver "$@" ;;
   sweep)   cmd_sweep "$@" ;;
   # resolve_inbox returns a canonical path with status 0 for an unknown ID so
   # send can report the missing scratchpad with the name in it. addr has no such
