@@ -24,7 +24,7 @@ HUMAN_MAIL_ROOT="$(CDPATH= cd -- "$HUMAN_MAIL_ROOT" && pwd -P)"
 usage() {
   cat <<'USAGE'
 Usage:
-  agent-mail send   --to ID [--from ID] [--reply-to ID] [--subject S] [--in-reply-to MID] [--body TEXT | --body-file F]
+  agent-mail send   (--to ID... | --reply-all FILE) [--from ID] [--reply-to ID] [--subject S] [--in-reply-to MID] [--body TEXT | --body-file F]
   agent-mail scan   [--to ID] [--all]
   agent-mail receipt MSGID
   agent-mail read   --to ID [--id MSG] [--peek]
@@ -49,6 +49,7 @@ subject before a collision-resistant suffix. Thread-ID names the root message;
 In-Reply-To names the immediate parent.
 
 send   Deliver a message. Repeat --to or separate recipients with commas.
+       --reply-all derives recipients and thread headers from an existing message.
        Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
 receipt Say whether a message you sent has been read. Takes the MSGID that
@@ -315,13 +316,14 @@ thread_id_for_parent() {
 }
 
 cmd_send() {
-  local from="$(sender_id)" reply_to="" subject="" in_reply_to="" body_file="" body="" have_body=0
+  local from="$(sender_id)" reply_to="" reply_all_file="" subject="" in_reply_to="" body_file="" body="" have_body=0
   local -a raw_recipients=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --to) raw_recipients+=("$2"); shift 2 ;;
       --from) from="$2"; shift 2 ;;
       --reply-to) reply_to="$2"; shift 2 ;;
+      --reply-all) reply_all_file="$2"; shift 2 ;;
       --subject) subject="$2"; shift 2 ;;
       --in-reply-to) in_reply_to="$2"; shift 2 ;;
       --body-file) body_file="$2"; shift 2 ;;
@@ -333,10 +335,38 @@ cmd_send() {
     esac
   done
   [ "$have_body" -eq 1 ] && [ -n "$body_file" ] && die "send: --body and --body-file are mutually exclusive"
-  [ "${#raw_recipients[@]}" -gt 0 ] || die "send: --to required"
+  [ -z "$reply_all_file" ] || [ "${#raw_recipients[@]}" -eq 0 ] || die "send: --reply-all and --to are mutually exclusive"
   from="$(normalize_id "$from")"
   [ -n "$reply_to" ] && reply_to="$(normalize_id "$reply_to")"
 
+  if [ -n "$reply_all_file" ]; then
+    local source_path source_sender source_to source_subject source_id self_inbox candidate candidate_inbox
+    source_path="$(message_path "$reply_all_file")"
+    source_sender="$(sed -n 's/^Reply-To: //p' "$source_path" | head -1)"
+    [ -n "$source_sender" ] || source_sender="$(sed -n 's/^From: //p' "$source_path" | head -1)"
+    source_to="$(sed -n 's/^To: //p' "$source_path" | head -1)"
+    source_id="$(sed -n 's/^Message-ID: //p' "$source_path" | head -1)"
+    [ -n "$source_sender" ] && [ -n "$source_id" ] || die "send: reply-all source is missing From or Message-ID"
+    if [ -n "$source_to" ]; then
+      parse_recipient_lists "$source_sender" "$source_to"
+    else
+      parse_recipient_lists "$source_sender"
+    fi
+    self_inbox="$(resolve_inbox "$from")"
+    raw_recipients=()
+    for candidate in "${PARSED_RECIPIENTS[@]}"; do
+      candidate_inbox="$(resolve_inbox "$candidate")"
+      [ "$candidate_inbox" = "$self_inbox" ] || raw_recipients+=("$candidate")
+    done
+    [ "${#raw_recipients[@]}" -gt 0 ] || die "send: reply-all source has no other recipients"
+    if [ -z "$subject" ]; then
+      source_subject="$(sed -n 's/^Subject: //p' "$source_path" | head -1)"
+      case "$source_subject" in Re:\ *) subject="$source_subject" ;; *) subject="Re: ${source_subject:-(no subject)}" ;; esac
+    fi
+    [ -n "$in_reply_to" ] || in_reply_to="$source_id"
+  fi
+
+  [ "${#raw_recipients[@]}" -gt 0 ] || die "send: --to or --reply-all required"
   parse_recipient_lists "${raw_recipients[@]}"
   local -a recipients=("${PARSED_RECIPIENTS[@]}") inboxes=() humans=()
 

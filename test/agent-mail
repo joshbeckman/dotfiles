@@ -89,6 +89,19 @@ cmp -s "$reply_all_delivery" "$mail_root/other-agent-session/inbox/new/$reply_al
 [[ ! -e "$reply_all_draft" ]]
 grep -Fq 'Replying to everyone.' "$reply_all_delivery"
 
+agent_group_id="$("$command" send --to @+test-agent --to @josh --from other-agent --subject 'Agent group thread' --body 'Can every agent reply?')"
+agent_group_source="$mail_root/test-agent-session/inbox/new/$agent_group_id.md"
+agent_reply_id="$(AGENT_SCRATCHPAD="$mail_root/test-agent-session" "$command" send --reply-all "$agent_group_source" --body 'Yes, replying to all.')"
+agent_reply_message="$mail_root/other-agent-session/inbox/new/$agent_reply_id.md"
+agent_reply_human="$inbox/new/$agent_reply_id.md"
+[[ -f "$agent_reply_message" && -f "$agent_reply_human" ]]
+cmp -s "$agent_reply_message" "$agent_reply_human"
+grep -Fxq 'To: other-agent, josh' "$agent_reply_message"
+grep -Fxq "Thread-ID: $agent_group_id" "$agent_reply_message"
+grep -Fxq "In-Reply-To: $agent_group_id" "$agent_reply_message"
+grep -Fxq 'Subject: Re: Agent group thread' "$agent_reply_message"
+grep -Fq 'Yes, replying to all.' "$agent_reply_message"
+
 draft="$("$command" reply "$message")"
 [[ "$draft" == "$human_root/josh/drafts/"*.md ]]
 grep -Fxq 'From: josh' "$draft"
