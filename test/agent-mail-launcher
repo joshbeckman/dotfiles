@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd -P)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+cat >"$tmp/open" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >"$OPEN_LOG"
+EOF
+chmod +x "$tmp/open"
+export OPEN_LOG="$tmp/open.log"
+
+AGENT_MAIL_OPEN="$tmp/open" "$root/apps/Agent Mail.app/Contents/MacOS/agent-mail-launcher"
+args="$(cat "$OPEN_LOG")"
+[[ "$args" == '-na Ghostty.app --args -e /bin/zsh -lic '* ]]
+[[ "$args" == *"$root/bin/agent-mail inbox @josh"* ]]
+
+plutil -lint "$root/apps/Agent Mail.app/Contents/Info.plist" >/dev/null
+plutil -extract CFBundleIdentifier raw "$root/apps/Agent Mail.app/Contents/Info.plist" | grep -Fxq org.joshbeckman.agent-mail
+
+grep -Fq 'symlink_agent_config "$DOTFILES_DIR/apps/Agent Mail.app" "$HOME/Applications/Agent Mail.app"' "$root/setup"
+
+printf 'agent-mail launcher tests passed\n'

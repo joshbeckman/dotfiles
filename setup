@@ -150,6 +150,10 @@ __setup_linux(){
 __setup_mac(){
         echo "Detected Mac!"
 
+        echo '  ======  installing Agent Mail application launcher'
+        mkdir -p "$HOME/Applications"
+        symlink_agent_config "$DOTFILES_DIR/apps/Agent Mail.app" "$HOME/Applications/Agent Mail.app"
+
         if command -v brew &> /dev/null
         then
                 echo "Refreshing your brew"
