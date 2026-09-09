@@ -10,6 +10,11 @@ set -euo pipefail
 # which needs locking and loses per-session isolation. We keep email's proven
 # *format* (RFC-822 headers) and drop its transport.
 #
+# Creating one native-mail OS account per agent was evaluated and rejected:
+# it retains the session registry while adding privileged account, mailbox, and
+# alias state. Decision: "Keep Agent Mail independent of OS user accounts"
+# https://github.com/joshbeckman/dotfiles/issues/7
+#
 # Why not delete-on-read for state? State lives in *which directory* a message
 # sits in (new/ vs cur/), not in a flag we rewrite — less mutable state, and it
 # leaves an audit trail until an agent explicitly discards.
