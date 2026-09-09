@@ -15,12 +15,14 @@ EOF
 cat >"$tmp/bin/nvim" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >"$EDITOR_LOG"
+printf '%s\n' "$PWD" >"$EDITOR_CWD_LOG"
 EOF
 chmod +x "$tmp/bin/notify-josh" "$tmp/bin/nvim"
 export AGENT_MAIL_ROOT="$tmp/mail"
 export AGENT_HUMAN_MAIL_ROOT="$tmp/humans"
 export NOTIFY_LOG="$tmp/notifications"
 export EDITOR_LOG="$tmp/editor"
+export EDITOR_CWD_LOG="$tmp/editor-cwd"
 export AGENT_MAIL_EDITOR=nvim
 export PATH="$tmp/bin:$PATH"
 
@@ -97,9 +99,12 @@ grep -Fxq "In-Reply-To: $(basename "$archived" .md)" "$inbox/new/$reply_id.md"
 mkdir "$inbox/.escalated-orphan"
 "$command" inbox @josh
 [[ ! -e "$inbox/.escalated-orphan" ]]
+[[ "$(cat "$EDITOR_LOG")" == "." ]]
+[[ "$(cat "$EDITOR_CWD_LOG")" == "$inbox" ]]
 
 "$command" inbox @+test-agent
-[[ "$(cat "$EDITOR_LOG")" == "$mail_root/test-agent-session/inbox" ]]
+[[ "$(cat "$EDITOR_LOG")" == "." ]]
+[[ "$(cat "$EDITOR_CWD_LOG")" == "$mail_root/test-agent-session/inbox" ]]
 if "$command" send --to '../../outside' --body 'no' >/dev/null 2>&1; then
     echo 'path-like recipient unexpectedly accepted' >&2
     exit 1
@@ -124,6 +129,12 @@ if [[ -n "$real_nvim" ]]; then
             --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
             "+if exists(':$name') != $expected | cquit 1 | endif" +quit
     }
+    check_nvim_mapping() {
+        local file="$1" lhs="$2" command="$3"
+        AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
+            --cmd 'let mapleader=" "' --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
+            "+let m=maparg('$lhs','n',0,1) | if get(m,'buffer',0) != 1 || get(m,'rhs','') !~# '$command' | cquit 1 | endif" +quit
+    }
     check_nvim_command "$message" AgentMailReply 2
     check_nvim_command "$message" AgentMailArchive 0
     check_nvim_command "$archived" AgentMailReply 2
@@ -132,6 +143,10 @@ if [[ -n "$real_nvim" ]]; then
     draft="$("$command" reply "$archived")"
     check_nvim_command "$draft" AgentMailSend 2
     check_nvim_command "$draft" AgentMailReply 0
+    check_nvim_mapping "$inbox/new/$reply_id.md" ' e' AgentMailArchive
+    check_nvim_mapping "$inbox/new/$reply_id.md" ' r' AgentMailReply
+    check_nvim_mapping "$archived" ' r' AgentMailReply
+    check_nvim_mapping "$draft" ' d' AgentMailSend
 
     ln -s "$tmp/mail" "$tmp/mail-link"
     check_nvim_command "$archived" AgentMailReply 2 "$tmp/mail-link"

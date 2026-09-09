@@ -63,9 +63,13 @@ if s:in_agent_mail || s:in_human_mail
     if s:agent_mail_path =~# '/inbox/new/[^/]*\.md$'
         command! -buffer AgentMailArchive call <SID>AgentMailArchive()
         command! -buffer AgentMailReply call <SID>AgentMailReply()
+        nnoremap <buffer> <silent> <nowait> <Leader>e :AgentMailArchive<CR>
+        nnoremap <buffer> <silent> <nowait> <Leader>r :AgentMailReply<CR>
     elseif s:agent_mail_path =~# '/inbox/cur/[^/]*\.md$'
         command! -buffer AgentMailReply call <SID>AgentMailReply()
+        nnoremap <buffer> <silent> <nowait> <Leader>r :AgentMailReply<CR>
     elseif s:agent_mail_path =~# '/josh/drafts/[^/]*\.md$'
         command! -buffer AgentMailSend call <SID>AgentMailSend()
+        nnoremap <buffer> <silent> <nowait> <Leader>d :AgentMailSend<CR>
     endif
 endif

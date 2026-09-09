@@ -539,7 +539,8 @@ cmd_inbox() {
   ensure_maildir "$inbox"
   cleanup_escalation_markers "$inbox"
   command -v "${AGENT_MAIL_EDITOR:-nvim}" >/dev/null 2>&1 || die "editor not found: ${AGENT_MAIL_EDITOR:-nvim}"
-  exec "${AGENT_MAIL_EDITOR:-nvim}" "$inbox"
+  cd "$inbox"
+  exec "${AGENT_MAIL_EDITOR:-nvim}" .
 }
 
 cmd_archive() {
