@@ -42,18 +42,21 @@ exit 1
 EOF
 cat >"$tmp/bin/tmux" <<'EOF'
 #!/bin/sh
-exit 0
+printf '%s\n' "$*" >>"$TMUX_LOG"
 EOF
 chmod +x "$tmp/bin"/*
 
 export PATH="$tmp/bin:/usr/bin:/bin"
 export LOCAL_LOG="$tmp/local"
 export PUSH_LOG="$tmp/push"
-export TMUX=
+export TMUX_LOG="$tmp/tmux"
+export TMUX=fake
 
-"$root/bin/notify-josh" --execute 'echo clicked' 'Mail delivered' 'Read your inbox.' >/dev/null
+"$root/bin/notify-josh" --pane-title 'must not replace the pane title' --execute 'echo clicked' 'Mail delivered' 'Read your inbox.' >"$tmp/stdout"
 [[ -s "$LOCAL_LOG" ]]
 [[ ! -e "$PUSH_LOG" ]]
+[[ ! -e "$TMUX_LOG" ]]
+[[ "$(od -An -tu1 "$tmp/stdout" | tr -d '[:space:]')" == 7 ]]
 grep -Fq -- '-title Mail delivered' "$LOCAL_LOG"
 grep -Fq -- '-execute echo clicked' "$LOCAL_LOG"
 

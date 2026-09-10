@@ -12,7 +12,7 @@ Options:
   --push              Force the Josh Status MCP push path.
   --local             Force the local terminal-notifier path.
   --from NAME         Sender for push notifications. Default: agent
-  --pane-title TITLE  tmux pane title. Default: 🔔 TITLE
+  --pane-title TITLE  Deprecated compatibility option; pane titles are preserved.
   --execute COMMAND   Shell command to run when a local notification is clicked.
   -h, --help          Show this help.
 USAGE
@@ -62,8 +62,7 @@ display_active() {
 local_notify() {
   local title=$1
   local message=$2
-  local pane_title=$3
-  local execute=$4
+  local execute=$3
   local -a args=(-title "$title" -message "$message" -sound default)
   [ -z "$execute" ] || args+=(-execute "$execute")
 
@@ -71,10 +70,6 @@ local_notify() {
   terminal-notifier "${args[@]}" >/dev/null 2>&1 || return 1
 
   printf '\a'
-
-  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
-    tmux select-pane -T "$pane_title" >/dev/null 2>&1 || true
-  fi
 }
 
 push_notify() {
@@ -138,7 +133,6 @@ NODE
 
 mode=auto
 from=agent
-pane_title=
 execute=
 
 while [ $# -gt 0 ]; do
@@ -156,7 +150,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --pane-title)
-      pane_title=${2:?--pane-title requires a value}
+      : "${2:?--pane-title requires a value}"
       shift 2
       ;;
     --execute)
@@ -188,19 +182,15 @@ else
   message=$*
 fi
 
-if [ -z "$pane_title" ]; then
-  pane_title="🔔 ${title:0:60}"
-fi
-
 case "$mode" in
   local)
-    local_notify "$title" "$message" "$pane_title" "$execute"
+    local_notify "$title" "$message" "$execute"
     ;;
   push)
     push_notify "$title" "$message" "$from"
     ;;
   auto)
-    if display_active && local_notify "$title" "$message" "$pane_title" "$execute"; then
+    if display_active && local_notify "$title" "$message" "$execute"; then
       exit 0
     fi
     push_notify "$title" "$message" "$from"
