@@ -16,6 +16,11 @@
     "https://github.com/shopify-playground/shop-pi-fy"
   ],
   "lastChangelogVersion": "0.75.5",
+  "retry": {
+    "enabled": true,
+    "maxRetries": 20,
+    "baseDelayMs": 5000
+  },
   "compaction": {
     "enabled": true
   }
