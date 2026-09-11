@@ -97,7 +97,7 @@ After merge:
 
 1. Get the merge commit.
 2. Use `verify-conveyor-deployment` when available; it is the source of truth for Conveyor commands, help-first checks, unsupported repositories, affected zones, and commit-ancestry fallback. For other deployment systems, use the repository's supported status surface or ask Josh when none exists.
-3. Poll deployment every 30 minutes. Do not assume merged means deployed.
+3. If the PR is registered with a healthy `agent-pr-monitor` deployment checker, park and wait for its `agent-mail` notification. The monitor already checks merged PRs every 30 minutes; do not add a sleep loop, background watcher, or conversational poll. Use direct deployment checks every 30 minutes only when monitoring is unavailable or unhealthy. Do not assume merged means deployed.
 4. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
 5. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
@@ -105,6 +105,8 @@ Only then is the PR lifecycle complete. Run `agent-pr-monitor release PR_URL`; t
 
 ## Polling cadence
 
-When registered, the shared monitor polls without model turns and sends only state changes through `agent-mail`; do not duplicate it with conversational polling or a per-session background job. Without the monitor, poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often.
+When registered, the shared monitor polls without model turns and sends only state changes through `agent-mail`; do not duplicate it with conversational polling or a per-session background job. When monitoring is unavailable or unhealthy, poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often. Stop fallback polling when healthy monitoring resumes.
 
 Keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave the PR checklist with the current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.
+
+Co-authored-by: AI Simoom Farrier (pi/openai/gpt-6-astra) @+simoom-farrier
