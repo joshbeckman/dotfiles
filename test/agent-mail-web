@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+import base64
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import sys
+import threading
+import unittest
+import urllib.request
+import urllib.error
+from urllib.parse import quote
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent.parent
+loader = importlib.machinery.SourceFileLoader('mailweb', str(ROOT / 'bin/agent-mail-web'))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+web = importlib.util.module_from_spec(spec)
+loader.exec_module(web)
+
+
+class WebTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.env = dict(os.environ)
+        fake = self.root / 'bin'
+        fake.mkdir()
+        (fake / 'notify-josh').write_text('#!/bin/sh\nexit 0\n')
+        (fake / 'notify-josh').chmod(0o755)
+        os.environ.update(AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PATH=str(fake) + ':' + os.environ['PATH'])
+        (self.root / 'agents/alder-turner-12345678').mkdir(parents=True)
+        (self.root / 'agents/birch-weaver-87654321').mkdir()
+        self.box = web.Mailbox()
+        self.id = web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--to', '@+birch-weaver', '--subject', 'A test thread', '--body', '**Hello**\n\nA searchable needle.\n')
+        self.key = 'inbox:' + self.id + '.md'
+        self.server = web.HTTPServer(('127.0.0.1', 0), web.Handler)
+        self.server.box = self.box
+        self.server.token = 'fixture-token'
+        self.server.authority = '127.0.0.1:' + str(self.server.server_port)
+        self.url = 'http://' + self.server.authority
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+        os.environ.clear()
+        os.environ.update(self.env)
+        self.tmp.cleanup()
+
+    def request(self, path, data=None, **headers):
+        defaults = {'X-Agent-Mail-Token': 'fixture-token', 'Origin': self.url}
+        if data is not None:
+            defaults['Content-Type'] = 'application/json'
+        defaults.update(headers)
+        req = urllib.request.Request(self.url + path, data=json.dumps(data).encode() if data is not None else None, headers=defaults)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as r:
+            return r.code, r.read()
+
+    def test_open_search_archive_and_thread(self):
+        before = self.box.path(self.key).read_bytes()
+        status, body = self.request('/api/thread?key=' + quote(self.key))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(json.loads(body)), 1)
+        self.assertEqual(self.box.path(self.key).read_bytes(), before)
+        self.assertEqual(len(self.box.listing('all', 'needle')['messages']), 1)
+        self.assertEqual(self.request('/api/archive', {'key': self.key})[0], 200)
+        self.assertFalse((self.box.directory('inbox') / (self.id + '.md')).exists())
+        self.assertEqual(len(self.box.listing('archive', '')['messages']), 1)
+
+    def test_compose_save_send_and_reply_all(self):
+        draft = self.box.draft('reply-all', self.key)
+        self.assertIn('birch-weaver', draft['to'])
+        self.assertNotIn('josh', draft['to'])
+        draft = self.box.save(dict(draft, body='My reply.'))
+        self.assertEqual(self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})[0], 200)
+        self.assertEqual(len(self.box.listing('sent', '')['messages']), 1)
+        self.assertEqual(len(self.box.thread(self.key)), 2)
+        # A double click or lost response must not deliver a second message.
+        self.assertEqual(self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})[0], 404)
+        sent = self.box.listing('sent', '')['messages'][0]
+        self.assertEqual(sent['thread'], self.id)
+        reply = self.box.draft('reply', sent['key'])
+        self.assertNotIn('josh', reply['to'])
+        self.assertEqual(len(self.box.listing('sent', '')['messages']), 1)
+
+    def test_draft_conflict_and_header_injection(self):
+        draft = self.box.draft('compose')
+        self.box.path(draft['key']).write_text('From: josh\nTo: alder-turner\nSubject: CLI edit\n\nDifferent body')
+        with self.assertRaises(web.MailError) as cm:
+            self.box.save(dict(draft, body='Web edit'))
+        self.assertEqual(cm.exception.status, 409)
+        draft = self.box.message(draft['key'])
+        with self.assertRaises(web.MailError):
+            self.box.save(dict(draft, to='alder-turner\nFrom: someone-else'))
+        invalid = self.box.save(dict(draft, to='missing-agent', body='No partial delivery'))
+        self.assertEqual(self.request('/api/send', {'key': invalid['key'], 'revision': invalid['revision']})[0], 400)
+        self.assertTrue(self.box.path(invalid['key']).exists())
+        self.assertEqual(len(self.box.listing('sent', '')['messages']), 0)
+
+    def test_http_boundary(self):
+        self.assertEqual(self.request('/api/messages', **{'X-Agent-Mail-Token': ''})[0], 403)
+        self.assertEqual(self.request('/api/messages', Host='evil.example')[0], 403)
+        self.assertEqual(self.request('/api/messages', Origin='https://evil.example')[0], 403)
+        self.assertEqual(self.request('/api/archive', {'key':self.key}, **{'Sec-Fetch-Site':'cross-site'})[0], 403)
+        self.assertEqual(self.request('/api/archive', {'key':self.key}, Origin='')[0], 403)
+        self.assertEqual(self.request('/api/messages', **{'X-Agent-Mail-Token':'wrong'})[0], 403)
+        self.assertEqual(self.request('/../../.gitconfig')[0], 404)
+        self.assertEqual(self.request('/api/thread?key=inbox:../secret.md')[0], 400)
+        self.assertTrue(self.box.path(self.key).exists())
+
+    def test_symlink_and_images(self):
+        outside = self.root / 'outside.md'
+        outside.write_text('private')
+        (self.box.directory('inbox') / 'link.md').symlink_to(outside)
+        with self.assertRaises(web.MailError):
+            self.box.message('inbox:link.md')
+        self.assertTrue(self.box.listing('inbox','')['warnings'])
+        image = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7ZkAAAAASUVORK5CYII=')
+        stored = self.box.attachment({'data': base64.b64encode(image).decode()})
+        name = stored['url'].split('/')[-1]
+        self.assertEqual(self.request('/api/attachment?name='+name), (200, image))
+        with self.assertRaises(web.MailError):
+            self.box.attachment({'data':base64.b64encode(b'<svg onload="alert(1)">').decode()})
+        self.assertEqual(self.request('/api/attachment?name=../../outside.md')[0], 400)
+        (self.box.attachments/name).unlink()
+        (self.box.attachments/name).symlink_to(outside)
+        self.assertEqual(self.request('/api/attachment?name='+name)[0], 404)
+
+    def test_two_bridges_cannot_send_one_draft_twice(self):
+        draft = self.box.save(dict(self.box.draft('compose'), to='alder-turner', body='Exactly once'))
+        other = web.HTTPServer(('127.0.0.1', 0), web.Handler)
+        other.box = web.Mailbox()
+        other.token = 'fixture-token'
+        other.authority = '127.0.0.1:' + str(other.server_port)
+        serving = threading.Thread(target=other.serve_forever, daemon=True)
+        serving.start()
+        results = []
+        def send(base):
+            req = urllib.request.Request(base + '/api/send', data=json.dumps({'key': draft['key'], 'revision': draft['revision']}).encode(), headers={'X-Agent-Mail-Token': 'fixture-token', 'Origin': base, 'Content-Type': 'application/json'})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    results.append(response.status)
+            except urllib.error.HTTPError as response:
+                results.append(response.code)
+        try:
+            workers = [threading.Thread(target=send, args=(base,)) for base in (self.url, 'http://' + other.authority)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+            self.assertEqual(sorted(results), [200, 404])
+            self.assertEqual(len(self.box.listing('sent', '')['messages']), 1)
+        finally:
+            other.shutdown()
+            other.server_close()
+            serving.join()
+
+    def test_contacts(self):
+        contacts = self.box.contacts()
+        alder = next(c for c in contacts if c['handle']=='@+alder-turner')
+        self.assertTrue(alder['addressable'])
+        self.assertEqual(alder['status'], 'parked')
+
+
+if __name__ == '__main__':
+    unittest.main()

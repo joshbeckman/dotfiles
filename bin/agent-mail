@@ -36,6 +36,7 @@ Usage:
   agent-mail discard --to ID --id MSG
   agent-mail addr   ID
   agent-mail inbox  ID
+  agent-mail web    [--port PORT] [--no-open]
   agent-mail archive FILE
   agent-mail compose
   agent-mail reply  FILE
@@ -64,11 +65,12 @@ read   Print the oldest unread message (or --id), moving it new/ -> cur/.
 discard Delete a message from cur/ or new/.
 addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
 inbox Open an ID's inbox directory in Neovim.
+web   Open Josh's web inbox through a loopback-only local bridge.
 archive Move a message from inbox/new to inbox/cur.
 compose Create a blank Josh-authored draft and print its path.
 reply  Create a reply draft and print its path.
 reply-all Create a draft to the sender and other original recipients.
-deliver Atomically move a reply draft into each recipient's inbox/new.
+deliver Atomically copy a draft to recipients and retain a human Sent copy.
 sweep  Notify Josh about messages unread for --hours (default 4). Any live
        session can run it; a dead recipient cannot escalate for itself.
 
@@ -315,9 +317,28 @@ thread_id_for_parent() {
       fi
     done
   done
+  for path in "$HUMAN_MAIL_ROOT"/*/sent/"$id.md"; do
+    if [ -f "$path" ]; then
+      thread_id_for_message "$path"
+      return
+    fi
+  done
   # A parent can have aged out with its session inbox. Keeping its ID still
   # links the new branch instead of silently starting an unrelated thread.
   printf '%s' "$id"
+}
+
+retain_human_sent() {
+  local source="$1" from="$2" msgid="$3" handle sent tmp
+  handle="$(human_handle "$(normalize_id "$from")" || true)"
+  [ -n "$handle" ] || return 0
+  case "$handle" in *[!A-Za-z0-9._-]*|.|..) die "invalid human sender" ;; esac
+  sent="$HUMAN_MAIL_ROOT/$handle/sent"
+  mkdir -p -m 700 "$sent"
+  tmp="$(mktemp "$sent/.sent.XXXXXXXX")"
+  cp "$source" "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$sent/$msgid.md"
 }
 
 cmd_send() {
@@ -403,7 +424,8 @@ cmd_send() {
   local msgid; msgid="$(gen_msgid "$from" "$to_filename" "$effective_subject")"
   local thread_id="$msgid"
   [ -z "$in_reply_to" ] || thread_id="$(thread_id_for_parent "$in_reply_to")"
-  local source_tmp="${inboxes[0]}/tmp/$msgid.md"
+  # A recipient may read/move its copy before we retain the sender's Sent copy.
+  local source_tmp="${inboxes[0]}/tmp/$msgid.source"
 
   {
     echo "From: $from"
@@ -428,10 +450,8 @@ cmd_send() {
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
     dst="${inboxes[$i]}/new/$msgid.md"
     [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
-    if [ "$i" -gt 0 ]; then
-      tmp="${inboxes[$i]}/tmp/$msgid.md"
-      cp "$source_tmp" "$tmp"
-    fi
+    tmp="${inboxes[$i]}/tmp/$msgid.md"
+    cp "$source_tmp" "$tmp"
   done
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
     tmp="${inboxes[$i]}/tmp/$msgid.md"
@@ -439,6 +459,8 @@ cmd_send() {
     mv "$tmp" "$dst"
   done
 
+  retain_human_sent "$source_tmp" "$from" "$msgid"
+  rm "$source_tmp"
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
     notify_human_delivery "${humans[$i]}" "${inboxes[$i]}" "$msgid" "$from" "$effective_subject"
   done
@@ -565,7 +587,7 @@ message_path() {
   [ -f "$path" ] || die "message file not found: $path"
   dir="$(CDPATH= cd -- "$(dirname -- "$path")" && pwd)"
   case "$dir" in
-    "$MAIL_ROOT"/*/inbox/new|"$MAIL_ROOT"/*/inbox/cur|"$HUMAN_MAIL_ROOT"/*/inbox/new|"$HUMAN_MAIL_ROOT"/*/inbox/cur)
+    "$MAIL_ROOT"/*/inbox/new|"$MAIL_ROOT"/*/inbox/cur|"$HUMAN_MAIL_ROOT"/*/inbox/new|"$HUMAN_MAIL_ROOT"/*/inbox/cur|"$HUMAN_MAIL_ROOT"/*/sent)
       printf '%s/%s' "$dir" "$(basename -- "$path")" ;;
     *) die "not an agent-mail message: $path" ;;
   esac
@@ -732,9 +754,12 @@ cmd_deliver() {
     cp "$draft" "$tmp_dst"
     mv "$tmp_dst" "$dst"
     [ -n "$first_dst" ] || first_dst="$dst"
-    notify_human_delivery "${humans[$i]}" "$inbox" "$msgid" "$from" "${subject:-(no subject)}"
   done
+  retain_human_sent "$draft" "$from" "$msgid"
   rm "$draft"
+  for ((i = 0; i < ${#inboxes[@]}; i++)); do
+    notify_human_delivery "${humans[$i]}" "${inboxes[$i]}" "$msgid" "$from" "${subject:-(no subject)}"
+  done
   printf '%s\n' "$first_dst"
 }
 
@@ -793,6 +818,7 @@ case "$sub" in
   read)    cmd_read "$@" ;;
   discard) cmd_discard "$@" ;;
   inbox)   cmd_inbox "$@" ;;
+  web)     exec "$(dirname "$0")/agent-mail-web" "$@" ;;
   archive) cmd_archive "$@" ;;
   compose)   cmd_compose "$@" ;;
   reply)     cmd_reply "$@" ;;

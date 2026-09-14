@@ -1,0 +1,17 @@
+{
+  "name": "agent-mail-web-renderers",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node browser-test.mjs"
+  },
+  "dependencies": {
+    "dompurify": "3.4.15",
+    "marked": "17.0.1",
+    "mermaid": "11.17.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3",
+    "playwright-core": "1.63.0"
+  }
+}

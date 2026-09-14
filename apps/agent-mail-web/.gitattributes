@@ -1,0 +1,2 @@
+# Dependency template literals retain their upstream whitespace.
+vendor.js -whitespace linguist-vendored=true

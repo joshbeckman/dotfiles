@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""Loopback UI for Agent Mail. No database; the CLI owns delivery and archive."""
+import argparse
+import base64
+import fcntl
+import hashlib
+import hmac
+import json
+import mimetypes
+import os
+from pathlib import Path
+import re
+import secrets
+import subprocess
+import sys
+import tempfile
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlsplit
+import webbrowser
+
+ROOT = Path(__file__).resolve().parent.parent
+ASSETS = ROOT / 'apps/agent-mail-web'
+CLI = ROOT / 'bin/agent-mail'
+MAX_MESSAGE = 2 * 1024 * 1024
+MAX_IMAGE = 5 * 1024 * 1024
+FOLDERS = {'inbox': 'inbox/new', 'archive': 'inbox/cur', 'sent': 'sent', 'drafts': 'drafts'}
+
+
+class MailError(Exception):
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
+
+
+def cli(*args):
+    result = subprocess.run([str(CLI), *map(str, args)], capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise MailError(result.stderr.strip() or 'Agent Mail command failed')
+    return result.stdout.strip()
+
+
+def atomic_write(path, data):
+    fd, tmp = tempfile.mkstemp(prefix='.web-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def parse_mail(path):
+    raw = path.read_bytes()
+    if len(raw) > MAX_MESSAGE:
+        raise MailError('Message exceeds the 2 MiB reader limit')
+    text = raw.decode('utf-8', errors='replace')
+    header, _, body = text.partition('\n\n')
+    fields = {}
+    for line in header.splitlines():
+        key, sep, value = line.partition(':')
+        if sep:
+            fields.setdefault(key.lower(), value.strip())
+    return {'id': fields.get('message-id', path.stem),
+            'thread': fields.get('thread-id') or fields.get('in-reply-to') or fields.get('message-id', path.stem),
+            'parent': fields.get('in-reply-to', ''), 'from': fields.get('from', ''),
+            'to': fields.get('to', ''), 'subject': fields.get('subject', ''),
+            'date': fields.get('date', ''), 'body': body,
+            'revision': hashlib.sha256(raw).hexdigest()}
+
+
+class Mailbox:
+    def __init__(self):
+        human_root = Path(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans')).expanduser()
+        (human_root / 'josh').mkdir(parents=True, mode=0o700, exist_ok=True)
+        self.home = Path(cli('addr', '@josh')).parent.resolve()
+        self.cache = {}
+        for folder in FOLDERS:
+            self.directory(folder)
+        self.attachments = self.home / 'attachments'
+        self.attachments.mkdir(mode=0o700, exist_ok=True)
+        if self.attachments.is_symlink():
+            raise MailError('Attachment directory must not be a symlink')
+
+    def directory(self, folder):
+        if folder not in FOLDERS:
+            raise MailError('Unknown folder')
+        path = self.home / FOLDERS[folder]
+        path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if path.is_symlink() or not path.resolve().is_relative_to(self.home):
+            raise MailError('Folder escapes the mailbox')
+        return path
+
+    def path(self, key, folder=None):
+        parts = key.split(':') if isinstance(key, str) else []
+        if len(parts) != 2 or (folder and parts[0] != folder):
+            raise MailError('Invalid message key')
+        group, name = parts
+        if not re.fullmatch(r'[A-Za-z0-9_.@+\-]+\.md', name) or name.startswith('.'):
+            raise MailError('Invalid message name')
+        path = self.directory(group) / name
+        if path.is_symlink() or not path.is_file():
+            raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
+        return path
+
+    def message(self, key):
+        path = self.path(key)
+        stat = path.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        cached = self.cache.get(key)
+        if not cached or cached[0] != stamp:
+            self.cache[key] = (stamp, dict(parse_mail(path), key=key, folder=key.split(':')[0]))
+        return dict(self.cache[key][1])
+
+    def messages(self):
+        messages, warnings, present = [], [], set()
+        for folder in FOLDERS:
+            for path in self.directory(folder).glob('*.md'):
+                key = folder + ':' + path.name
+                present.add(key)
+                try:
+                    if path.stat().st_size > MAX_MESSAGE:
+                        raise MailError('Message exceeds the 2 MiB reader limit')
+                    messages.append(self.message(key))
+                except (MailError, OSError) as e:
+                    warnings.append(f'{path.name}: {e}')
+        self.cache = {k: v for k, v in self.cache.items() if k in present}
+        return sorted(messages, key=lambda m: (m['date'], m['key']), reverse=True), warnings
+
+    def listing(self, folder, query):
+        messages, warnings = self.messages()
+        if folder not in (*FOLDERS, 'all'):
+            raise MailError('Unknown folder')
+        counts = {f: sum(m['folder'] == f for m in messages) for f in FOLDERS}
+        words = query.casefold().split()
+        matches = [m for m in messages if (folder == 'all' or m['folder'] == folder)
+                   and all(w in '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold() for w in words)]
+        return {'messages': [dict((k, v) for k, v in m.items() if k != 'body') |
+                             {'excerpt': re.sub(r'\s+', ' ', m['body'])[:180]} for m in matches],
+                'counts': counts, 'warnings': warnings}
+
+    def thread(self, key):
+        selected = self.message(key)
+        messages, _ = self.messages()
+        unique = {}
+        for m in messages:
+            if m['folder'] != 'drafts' and m['thread'] == selected['thread']:
+                old = unique.get(m['id'])
+                if not old or m['folder'] == 'inbox':
+                    unique[m['id']] = m
+        return sorted(unique.values(), key=lambda m: (m['date'], m['id']))
+
+    def draft(self, mode, key=None):
+        if mode not in ('compose', 'reply', 'reply-all'):
+            raise MailError('Unknown draft mode')
+        if mode == 'compose':
+            path = Path(cli('compose'))
+        else:
+            source = self.message(key)
+            # A reply to our Sent message goes to its recipients, not back to Josh.
+            if mode == 'reply' and source['folder'] == 'sent':
+                mode = 'reply-all'
+            path = Path(cli(mode, self.path(key)))
+        return self.message('drafts:' + path.name)
+
+    def save(self, data):
+        path = self.path(data.get('key'), 'drafts')
+        current = self.message(data['key'])
+        if data.get('revision') != current['revision']:
+            raise MailError('Draft changed in another window or editor. Reopen it before saving.', 409)
+        for field in ('to', 'subject', 'body'):
+            if not isinstance(data.get(field), str):
+                raise MailError('Draft fields must be text')
+        if any(c in data['to'] + data['subject'] for c in '\r\n\x00'):
+            raise MailError('Recipient and subject fields must be single lines')
+        if len(data['to']) > 4000 or len(data['subject']) > 1000 or len(data['body']) > MAX_MESSAGE // 2:
+            raise MailError('Draft is too large')
+        header = path.read_text().partition('\n\n')[0]
+        lines = [line for line in header.splitlines() if not line.startswith(('To:', 'Subject:', 'From:'))]
+        text = '\n'.join(['From: josh', 'To: ' + data['to'], 'Subject: ' + data['subject'], *lines]) + '\n\n' + data['body']
+        atomic_write(path, text.encode())
+        return self.message(data['key'])
+
+    def contacts(self):
+        root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()
+        registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
+        contacts = {}
+        for p in registry.glob('*'):
+            if p.is_file() and not p.name.startswith('.'):
+                contacts[p.name] = {'handle': '@+' + p.name, 'lastSeen': None, 'status': 'historical', 'addressable': False}
+        for pad in root.glob('*'):
+            if not pad.is_dir() or pad.is_symlink():
+                continue
+            handle = re.sub(r'-[0-9a-f]{8}$', '', pad.name)
+            entry = contacts.setdefault(handle, {'handle': '@+' + handle})
+            entry.update(addressable=True, status='parked', lastSeen=None)
+            heartbeat = pad / '.heartbeat'
+            try:
+                pid = int(heartbeat.read_text().split()[0])
+                stamp = heartbeat.stat().st_mtime
+                entry['lastSeen'] = stamp
+                if pid > 1:
+                    os.kill(pid, 0)
+                    if time.time() - stamp < 600:
+                        entry['status'] = 'active (heartbeat)'
+            except (OSError, ValueError, IndexError):
+                pass
+        messages, _ = self.messages()
+        for m in messages:
+            for who in (m['from'] + ',' + m['to']).split(','):
+                handle = re.sub(r'-[0-9a-f]{8}$', '', who.strip().lstrip('@+'))
+                if not handle or handle == 'josh':
+                    continue
+                contacts.setdefault(handle, {'handle': who.strip(), 'status': 'historical', 'addressable': False, 'lastSeen': None})
+        return sorted(contacts.values(), key=lambda c: (not c['status'].startswith('active'), not c['addressable'], c['handle']))
+
+    def attachment(self, data):
+        try:
+            raw = base64.b64decode(data.get('data', ''), validate=True)
+        except (ValueError, TypeError):
+            raise MailError('Invalid image')
+        if not raw or len(raw) > MAX_IMAGE:
+            raise MailError('Images must be at most 5 MiB')
+        ext = image_type(raw)
+        if not ext:
+            raise MailError('Only PNG, JPEG, GIF and WebP images are supported')
+        name = secrets.token_hex(16) + '.' + ext
+        atomic_write(self.attachments / name, raw)
+        # Relative to the human mailbox, so sent and received copies can share it.
+        return {'url': (self.attachments / name).as_uri()}
+
+
+def image_type(raw):
+    if raw.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'png'
+    if raw.startswith(b'\xff\xd8\xff'):
+        return 'jpg'
+    if raw.startswith((b'GIF87a', b'GIF89a')):
+        return 'gif'
+    if raw.startswith(b'RIFF') and raw[8:12] == b'WEBP':
+        return 'webp'
+    return None
+
+
+class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
+
+    def log_message(self, *_):
+        pass  # Request paths can contain private search terms.
+
+    def reply(self, status, body, mime='application/json'):
+        if mime == 'application/json':
+            body = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', mime)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        if urlsplit(self.path).path == '/reader.html':
+            images = 'data: https:' if parse_qs(urlsplit(self.path).query).get('remote') == ['1'] else 'data:'
+            policy = f"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src {images}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+        else:
+            policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        self.send_header('Content-Security-Policy', policy)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_request(self):
+        try:
+            if self.headers.get('Host') != self.server.authority:
+                raise MailError('Invalid Host', 403)
+            url = urlsplit(self.path)
+            origin = self.headers.get('Origin')
+            # Opaque-origin reader frames load these two public, data-free assets.
+            reader_asset = self.command == 'GET' and url.path in ('/reader.js', '/reader.css')
+            if not reader_asset:
+                if origin and origin != 'http://' + self.server.authority:
+                    raise MailError('Invalid Origin', 403)
+                if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                    raise MailError('Cross-site requests are not allowed', 403)
+            if url.path.startswith('/api/'):
+                token = self.headers.get('X-Agent-Mail-Token', '')
+                if not hmac.compare_digest(token, self.server.token):
+                    raise MailError('Open the launch URL from agent-mail web to authorize this tab.', 403)
+                if self.command == 'POST':
+                    if origin != 'http://' + self.server.authority or self.headers.get('Content-Type') != 'application/json':
+                        raise MailError('A same-origin JSON request is required', 403)
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if length < 1 or length > 8 * 1024 * 1024:
+                        raise MailError('Request too large or empty', 413)
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict):
+                        raise MailError('Expected a JSON object')
+                    # Separate web launches still share one mailbox and draft revisions.
+                    fd = os.open(self.server.box.home / '.web-write.lock', os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(fd, 'w') as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                        return self.post(url.path, data)
+                return self.get(url.path, parse_qs(url.query))
+            if self.command != 'GET':
+                raise MailError('Unknown endpoint', 404)
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'reader.html', 'reader.css', 'reader.js')}}
+            if url.path not in static:
+                raise MailError('Not found', 404)
+            p = ASSETS / static[url.path]
+            self.reply(200, p.read_bytes(), mimetypes.guess_type(p)[0] or 'application/octet-stream')
+        except MailError as e:
+            self.reply(e.status, {'error': str(e)})
+        except (ValueError, KeyError, TypeError):
+            self.reply(400, {'error': 'Invalid request'})
+        except (OSError, subprocess.TimeoutExpired) as e:
+            self.reply(503, {'error': 'Local mail operation failed. Refresh before retrying: ' + str(e)})
+
+    def get(self, route, args):
+        box = self.server.box
+        key = args.get('key', [''])[0]
+        if route == '/api/messages':
+            result = box.listing(args.get('folder', ['inbox'])[0], args.get('q', [''])[0])
+        elif route == '/api/thread':
+            result = box.thread(key)
+        elif route == '/api/draft':
+            box.path(key, 'drafts')
+            result = box.message(key)
+        elif route == '/api/contacts':
+            result = box.contacts()
+        elif route == '/api/attachment':
+            name = args.get('name', [''])[0]
+            if not re.fullmatch(r'[0-9a-f]{32}\.(png|jpg|gif|webp)', name):
+                raise MailError('Invalid attachment')
+            p = box.attachments / name
+            if p.is_symlink() or not p.is_file():
+                raise MailError('Image unavailable', 404)
+            raw = p.read_bytes()
+            if len(raw) > MAX_IMAGE or not image_type(raw):
+                raise MailError('Invalid image')
+            return self.reply(200, raw, mimetypes.guess_type(p)[0])
+        else:
+            raise MailError('Unknown endpoint', 404)
+        self.reply(200, result)
+
+    def post(self, route, data):
+        box = self.server.box
+        if route == '/api/archive':
+            path = box.path(data.get('key'), 'inbox')
+            cli('archive', path)
+            result = {'ok': True}
+        elif route == '/api/draft':
+            result = box.draft(data.get('mode'), data.get('key'))
+        elif route == '/api/save':
+            result = box.save(data)
+        elif route == '/api/send':
+            path = box.path(data.get('key'), 'drafts')
+            if box.message(data['key'])['revision'] != data.get('revision'):
+                raise MailError('Draft changed; reopen it before sending.', 409)
+            cli('deliver', path)
+            result = {'ok': True}
+        elif route == '/api/attachment':
+            result = box.attachment(data)
+        else:
+            raise MailError('Unknown endpoint', 404)
+        self.reply(200, result)
+
+    do_GET = handle_request
+    do_POST = handle_request
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--port', type=int, default=0, help='loopback port (default: a free port)')
+    parser.add_argument('--no-open', action='store_true', help='print the private launch URL without opening a browser')
+    args = parser.parse_args()
+    box = Mailbox()
+    server = HTTPServer(('127.0.0.1', args.port), Handler)
+    server.box = box
+    server.token = secrets.token_urlsafe(32)
+    server.authority = '127.0.0.1:' + str(server.server_port)
+    url = 'http://' + server.authority + '/#' + server.token
+    print('Agent Mail web inbox (keep this launch URL private):\n' + url, flush=True)
+    print('Ctrl-C stops the bridge. Neovim and CLI mail remain available.', flush=True)
+    if not args.no_open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == '__main__':
+    main()

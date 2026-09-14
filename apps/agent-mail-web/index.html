@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Agent Mail</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/vendor.js"></script>
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Agent Mail <small>@josh</small></h1>
+      <form id="search-form" role="search">
+        <label for="search">Search all mail</label
+        ><input
+          id="search"
+          type="search"
+          placeholder="Sender, subject, or message…"
+          autocomplete="off"
+        /><button>Search</button>
+      </form>
+      <button id="help-button" title="Keyboard shortcuts (?)">Shortcuts</button>
+    </header>
+    <nav aria-label="Mail folders">
+      <button id="compose">Compose</button
+      ><button data-folder="inbox" aria-current="page">
+        Inbox <span id="count-inbox"></span></button
+      ><button data-folder="archive">
+        Archive <span id="count-archive"></span></button
+      ><button data-folder="sent">Sent <span id="count-sent"></span></button
+      ><button data-folder="drafts">
+        Drafts <span id="count-drafts"></span></button
+      ><button data-folder="all">All mail</button
+      ><button id="contacts-button">Contacts</button
+      ><button id="refresh">Refresh</button>
+    </nav>
+    <p id="status" role="status" aria-live="polite">
+      Connecting to the local inbox…
+    </p>
+    <main>
+      <section id="mail-list" aria-label="Messages">
+        <h2 id="folder-title">Inbox</h2>
+        <p class="hint">
+          Opening mail leaves it here. Archive with <kbd>e</kbd>.
+        </p>
+        <div id="rows"></div>
+      </section>
+      <section id="reader" aria-label="Conversation" hidden>
+        <div class="actions">
+          <button id="back">Back to list</button
+          ><button id="archive">Archive thread</button
+          ><button id="reply">Reply</button
+          ><button id="reply-all">Reply all</button>
+        </div>
+        <h2 id="thread-title" tabindex="-1"></h2>
+        <p id="participants"></p>
+        <div id="thread"></div>
+      </section>
+      <section id="editor" aria-label="Compose message" hidden>
+        <div class="actions">
+          <button id="close-draft">Save & close</button
+          ><button id="save-draft">Save draft</button
+          ><button id="send">Send</button
+          ><button id="preview-button">Preview</button>
+        </div>
+        <h2>Markdown message</h2>
+        <label for="to">To (comma-separated handles)</label
+        ><input
+          id="to"
+          list="contact-options"
+          autocomplete="off"
+          spellcheck="false"
+        /><datalist id="contact-options"></datalist
+        ><label for="subject">Subject</label><input id="subject" /><label
+          for="body"
+          >Message</label
+        ><textarea id="body" rows="18" spellcheck="true"></textarea
+        ><label for="image"
+          >Attach image (PNG, JPEG, GIF or WebP, up to 5 MiB)</label
+        ><input
+          id="image"
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+        />
+        <p id="draft-status" role="status"></p>
+        <div id="preview" hidden></div>
+      </section>
+      <section id="contacts" aria-label="Contacts" hidden>
+        <h2>Contacts</h2>
+        <p>
+          Activity is observed, not guaranteed availability. Historical
+          recipients may no longer have an inbox.
+        </p>
+        <label for="contact-search">Find a recipient</label
+        ><input id="contact-search" type="search" />
+        <div id="contact-list"></div>
+      </section>
+    </main>
+    <dialog id="help">
+      <h2>Keyboard shortcuts</h2>
+      <dl>
+        <dt>j / k</dt>
+        <dd>Next / previous conversation</dd>
+        <dt>o / Enter</dt>
+        <dd>Open conversation</dd>
+        <dt>u</dt>
+        <dd>Return to list</dd>
+        <dt>/</dt>
+        <dd>Search all mail</dd>
+        <dt>e</dt>
+        <dd>Archive conversation</dd>
+        <dt>c</dt>
+        <dd>Compose</dd>
+        <dt>r / a</dt>
+        <dd>Reply / reply all</dd>
+        <dt>g i / g a / g s / g d</dt>
+        <dd>Inbox / all mail / Sent / Drafts</dd>
+        <dt>Ctrl+Enter / ⌘+Enter</dt>
+        <dd>Confirm and send draft</dd>
+        <dt>?</dt>
+        <dd>Show shortcuts</dd>
+      </dl>
+      <form method="dialog"><button>Close</button></form>
+    </dialog>
+    <footer>Local files · explicit archive · no cloud service</footer>
+  </body>
+</html>

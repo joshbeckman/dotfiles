@@ -1,0 +1,74 @@
+html {
+  color-scheme: light;
+  --bg: #fff;
+  --alt: #f6f6f3;
+  --text: #0d0d0d;
+  --link: #002fa7;
+}
+html.dark {
+  color-scheme: dark;
+  --bg: #121212;
+  --alt: #202020;
+  --text: #eee;
+  --link: #9ab6ff;
+}
+body {
+  margin: 0.5rem 0;
+  padding: 0 0.75rem 1rem 0;
+  color: var(--text);
+  background: var(--bg);
+  font:
+    16px/1.6 "IBM Plex Sans",
+    system-ui,
+    sans-serif;
+  overflow-wrap: anywhere;
+}
+p,
+ul,
+ol,
+blockquote {
+  max-width: 75ch;
+}
+a {
+  color: var(--link);
+}
+pre,
+code {
+  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
+}
+pre {
+  overflow: auto;
+  padding: 1rem;
+  background: var(--alt);
+}
+blockquote {
+  border-left: 2px solid #888;
+  margin-left: 0;
+  padding-left: 1rem;
+}
+table {
+  border-collapse: collapse;
+}
+td,
+th {
+  border: 1px solid #888;
+  padding: 0.4rem;
+}
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+h1,
+h2,
+h3 {
+  font-family: "IBM Plex Sans Condensed", system-ui, sans-serif;
+}
+hr {
+  border: 0;
+  border-top: 1px solid #888;
+}
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}

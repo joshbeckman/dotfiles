@@ -14,6 +14,7 @@ brew "git"
 brew "git-delta"
 brew "neovim"
 brew "perl"
+brew "python"
 brew "pinentry-mac" if OS.mac?
 brew "reattach-to-user-namespace"
 brew "ripgrep"

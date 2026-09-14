@@ -88,6 +88,14 @@ reply_all_id="$(basename "$reply_all_delivery" .md)"
 cmp -s "$reply_all_delivery" "$mail_root/other-agent-session/inbox/new/$reply_all_id.md"
 [[ ! -e "$reply_all_draft" ]]
 grep -Fq 'Replying to everyone.' "$reply_all_delivery"
+cmp -s "$reply_all_delivery" "$human_root/josh/sent/$reply_all_id.md"
+sent_reply="$("$command" reply-all "$human_root/josh/sent/$reply_all_id.md")"
+grep -Fxq "Thread-ID: $group_id" "$sent_reply"
+grep -Fxq 'To: test-agent, other-agent' "$sent_reply"
+
+sent_id="$("$command" send --from @josh --to @+test-agent --subject 'Sent copy' --body 'Keep my outbound mail.')"
+cmp -s "$human_root/josh/sent/$sent_id.md" "$mail_root/test-agent-session/inbox/new/$sent_id.md"
+[[ ! -d "$human_root/test-agent/sent" ]]
 
 agent_group_id="$("$command" send --to @+test-agent --to @josh --from other-agent --subject 'Agent group thread' --body 'Can every agent reply?')"
 agent_group_source="$mail_root/test-agent-session/inbox/new/$agent_group_id.md"
