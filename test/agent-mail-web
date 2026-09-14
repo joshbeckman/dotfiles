@@ -2,6 +2,7 @@
 import base64
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import tempfile
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.request
 import urllib.error
 from urllib.parse import quote
@@ -69,6 +71,23 @@ class WebTest(unittest.TestCase):
                 return r.status, r.read()
         except urllib.error.HTTPError as r:
             return r.code, r.read()
+
+    def test_launch_port_defaults_and_override(self):
+        for flags, port in (([], 8765), (['--port', '0'], 0), (['--port', '8799'], 8799)):
+            with self.subTest(port=port), patch.object(sys, 'argv', ['agent-mail-web', '--no-open', *flags]), patch.object(web, 'HTTPServer') as factory, patch('sys.stdout', new_callable=io.StringIO):
+                factory.return_value.server_port = port or 12345
+                factory.return_value.serve_forever.side_effect = KeyboardInterrupt
+                web.main()
+                factory.assert_called_once_with(('127.0.0.1', port), web.Handler)
+                factory.return_value.server_close.assert_called_once()
+
+    def test_occupied_or_invalid_port_fails(self):
+        for port in (self.server.server_port, -1, 65536):
+            with self.subTest(port=port), patch.object(sys, 'argv', ['agent-mail-web', '--no-open', '--port', str(port)]), patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                with self.assertRaises(SystemExit) as stopped:
+                    web.main()
+                self.assertEqual(stopped.exception.code, 2)
+                self.assertIn('Cannot listen' if port == self.server.server_port else '--port must be', stderr.getvalue())
 
     def test_open_search_archive_and_thread(self):
         before = self.box.path(self.key).read_bytes()

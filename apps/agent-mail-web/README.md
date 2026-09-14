@@ -8,7 +8,9 @@ agent-mail web
 agent-mail-web
 ```
 
-The bridge binds to a free port on `127.0.0.1`, opens the browser, and runs until Ctrl-C. Keep its terminal open. `--no-open` prints the launch URL instead; `--port 8799` chooses a port. Treat the launch URL as private: its fragment authorizes that browser tab for this server lifetime. Refreshing the tab works; restarting the bridge requires its new launch URL.
+The bridge binds to `http://127.0.0.1:8765`, opens the browser, and runs until Ctrl-C. Keep its terminal open. `--no-open` prints the launch URL instead; `--port 8799` chooses another fixed port and `--port 0` chooses a free port for an isolated instance. If the requested port is occupied, startup fails rather than silently changing the address. No hostname or proxy configuration is needed.
+
+Treat the launch URL as private: its fragment authorizes that browser tab for this server lifetime. The default address stays fixed, but authentication still rotates on restart. Refreshing the tab works; restarting the bridge requires its new launch URL.
 
 Requires Python 3.10+ (tracked in `Brewfile`) and a modern browser. Runtime assets are bundled locally; Node/npm are needed only to rebuild or run browser tests. The existing `agent-mail inbox @josh`, Neovim mappings, and macOS launcher remain unchanged.
 

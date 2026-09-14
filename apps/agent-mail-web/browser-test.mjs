@@ -64,10 +64,14 @@ const id = cli(
   "--body",
   '# Fixture heading\n\n**Bold text** and a searchable persimmon.\n\n```mermaid\ngraph LR\n Mail --> Reply\n```\n\n![remote](https://example.invalid/tracker.png)\n\n<script>parent.document.body.dataset.compromised="yes"</script>\n\n[unsafe](javascript:alert(1))',
 );
-const processServer = spawn(join(root, "bin/agent-mail-web"), ["--no-open"], {
-  env,
-  stdio: ["ignore", "pipe", "inherit"],
-});
+const processServer = spawn(
+  join(root, "bin/agent-mail-web"),
+  ["--port", "0", "--no-open"],
+  {
+    env,
+    stdio: ["ignore", "pipe", "inherit"],
+  },
+);
 let browser;
 try {
   const lines = createInterface({ input: processServer.stdout });
