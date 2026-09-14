@@ -30,6 +30,8 @@ pi-model-eval run \
 
 By default, each trial loads the extensions, skills, prompt templates, context files, settings, and authentication from the active Pi configuration. This measures a model in the environment where I actually use it rather than as a bare provider call.
 
+The source configuration is never Pi's writable runtime directory. Each trial copies root configuration files, including settings and authentication, into a private temporary directory and points `PI_CODING_AGENT_DIR` there. Source-relative resource and local-package settings are resolved to their original absolute locations; missing selected paths fail the trial instead of silently degrading it. Installed resource directories remain discoverable from their selected source while startup package and model-catalog network updates are disabled. The private directory is removed after normal completion, failure, timeout, or interruption and is never included in run artifacts. The manifest fingerprint still describes the selected source configuration, not its disposable runtime copy.
+
 Use another configuration directory to compare setups:
 
 ```sh
@@ -57,7 +59,7 @@ A timeout or observed spend stop first sends RPC `abort`, then terminates the tr
 
 Every trial gets a fresh temporary workspace and session while loading the active Pi configuration. Project approval and session persistence remain disabled. The evaluation extension is added after the configured extensions. It permits read-only access to configured skill files, restricts other reads and all writes to relative, non-symlink paths inside the workspace, and permits only exact shell commands named by the fixture. Allowed commands and graders run with a minimal environment so model-written code cannot read credentials inherited from the operator's shell.
 
-This boundary prevents accidental access during trusted, dependency-free fixtures. It is not a hostile-code sandbox. Fixtures that require arbitrary shell execution, package installation, live services, private data, or network access need a separate design decision.
+This boundary prevents accidental access during trusted, dependency-free fixtures. It is not a hostile-code sandbox. Configured extensions still execute as trusted code; configuration isolation prevents Pi-owned state writes but cannot constrain an extension that deliberately writes directly to another path. Fixtures that require arbitrary shell execution, package installation, live services, private data, or network access need a separate design decision.
 
 ## Add a fixture
 

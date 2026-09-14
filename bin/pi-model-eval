@@ -16,6 +16,9 @@ ROOT = File.expand_path("..", __dir__)
 FIXTURES = File.join(ROOT, "model-eval", "fixtures")
 EXTENSION = File.join(ROOT, "model-eval", "evaluation-boundary.ts")
 DEFAULT_RESULTS = File.expand_path(ENV.fetch("PI_MODEL_EVAL_RESULTS", "~/.local/share/pi-model-eval/runs"))
+# Package caches can be hundreds of megabytes; offline startup lets Pi read shared resources without updating them.
+CONFIG_RESOURCE_DIRS = %w[extensions skills prompts prompt-templates themes git npm].freeze
+SETTINGS_RESOURCE_KEYS = %w[extensions skills prompts themes].freeze
 
 class EvalError < StandardError; end
 
@@ -102,7 +105,8 @@ def configuration_snapshot(options)
   digest << JSON.generate(discovery) << "\0" << JSON.generate(explicit)
   {
     "label" => options[:config_label], "source" => source, "fingerprint" => digest.hexdigest,
-    "tracked_file_count" => files.length, "discovery" => discovery, "explicit" => explicit
+    "tracked_file_count" => files.length, "discovery" => discovery, "explicit" => explicit,
+    "runtime_isolation" => "private_per_trial"
   }
 end
 
@@ -118,9 +122,77 @@ def pi_configuration_args(options)
   args
 end
 
-def pi_configuration_env(options)
-  config_dir = options[:config_dir] || ENV["PI_CODING_AGENT_DIR"]
-  config_dir ? {"PI_CODING_AGENT_DIR" => File.expand_path(config_dir)} : {}
+def source_relative_resource(value, source, allow_unresolved: false)
+  marker = value.start_with?("!", "+", "-") ? value[0] : ""
+  path = marker.empty? ? value : value[1..]
+  resolved = path.start_with?("~") ? File.expand_path(path) : File.expand_path(path, source)
+  matches = Dir.glob(resolved, File::FNM_EXTGLOB)
+  raise EvalError, "configured Pi resource is unavailable" if !allow_unresolved && matches.empty?
+  "#{marker}#{resolved}"
+end
+
+def rewrite_source_relative_settings(source, destination)
+  path = File.join(destination, "settings.json")
+  return unless File.file?(path)
+
+  settings = JSON.parse(File.read(path))
+  SETTINGS_RESOURCE_KEYS.each do |key|
+    next unless settings[key].is_a?(Array)
+    settings[key] = settings[key].map do |value|
+      next value unless value.is_a?(String)
+      source_relative_resource(value, source, allow_unresolved: value.start_with?("!", "-"))
+    end
+  end
+  if settings["packages"].is_a?(Array)
+    settings["packages"] = settings["packages"].map do |entry|
+      value = entry.is_a?(Hash) ? entry["source"] : entry
+      next entry unless value.is_a?(String) && (value.start_with?("./", "../") || File.exist?(File.expand_path(value, source)))
+
+      resolved = source_relative_resource(value, source)
+      entry.is_a?(Hash) ? entry.merge("source" => resolved) : resolved
+    end
+  end
+  File.write(path, JSON.pretty_generate(settings) + "\n")
+  File.chmod(0o600, path)
+rescue JSON::ParserError, SystemCallError
+  raise EvalError, "could not prepare private Pi settings"
+end
+
+def prepare_isolated_config(source, destination)
+  raise EvalError, "source Pi config directory is unavailable" unless File.directory?(source)
+
+  FileUtils.mkdir_p(destination, mode: 0o700)
+  Dir.children(source).sort.each do |entry|
+    path = File.join(source, entry)
+    next unless File.file?(path)
+
+    target = File.join(destination, entry)
+    mode = 0o600 | (File.stat(path).mode & 0o111)
+    File.open(target, File::WRONLY | File::CREAT | File::EXCL, mode) { |file| file.write(File.binread(path)) }
+  rescue SystemCallError
+    raise EvalError, "could not create private Pi configuration"
+  end
+
+  rewrite_source_relative_settings(source, destination)
+
+  CONFIG_RESOURCE_DIRS.each do |entry|
+    path = File.join(source, entry)
+    next unless File.exist?(path)
+    raise EvalError, "configured Pi resource is not a directory: #{entry}" unless File.directory?(path)
+
+    File.symlink(File.realpath(path), File.join(destination, entry))
+  rescue SystemCallError
+    raise EvalError, "could not link configured Pi resources"
+  end
+  destination
+rescue SystemCallError
+  raise EvalError, "could not create private Pi configuration"
+end
+
+def pi_configuration_env(private_config_dir)
+  raise EvalError, "private Pi configuration is unavailable" unless File.directory?(private_config_dir)
+
+  {"PI_CODING_AGENT_DIR" => private_config_dir, "PI_OFFLINE" => "1"}
 end
 
 def parse_options(argv)
@@ -287,6 +359,7 @@ def run_trial(options, fixture, model, repeat, trial_dir)
   started_wall = Time.now.utc
   started_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   workspace_parent = Dir.mktmpdir("pi-model-eval-")
+  private_config = prepare_isolated_config(effective_config_dir(options), File.join(workspace_parent, "config"))
   workspace = File.join(workspace_parent, "workspace")
   safe_copy_workspace(File.join(fixture.fetch("path"), "workspace"), workspace)
   baseline_hashes = workspace_hashes(workspace)
@@ -305,7 +378,7 @@ def run_trial(options, fixture, model, repeat, trial_dir)
     "PI_EVAL_CONFIG_ROOT" => effective_config_dir(options),
     "PI_EVAL_SKILL_ROOTS" => JSON.generate(options[:skills]),
     "PI_CACHE_RETENTION" => ENV["PI_CACHE_RETENTION"]
-  }.compact.merge(pi_configuration_env(options))
+  }.compact.merge(pi_configuration_env(private_config))
   prompt = File.read(File.join(fixture.fetch("path"), "prompt.md"))
   system_prompt = "You are completing one isolated evaluation fixture. Work only inside the current directory. Follow the task exactly and finish with a concise answer."
   config_args = pi_configuration_args(options)
@@ -662,7 +735,19 @@ begin
     when "run"
       run_suite(options)
     when "models"
-      exec(pi_configuration_env(options), options[:pi], *pi_configuration_args(options), "--list-models")
+      status = nil
+      Dir.mktmpdir("pi-model-eval-models-") do |directory|
+        private_config = prepare_isolated_config(effective_config_dir(options), File.join(directory, "config"))
+        pid = Process.spawn(pi_configuration_env(private_config), options[:pi], *pi_configuration_args(options), "--list-models", pgroup: true)
+        begin
+          _, status = Process.wait2(pid)
+        rescue Interrupt
+          Process.kill("TERM", -pid) rescue nil
+          Process.wait(pid) rescue nil
+          raise
+        end
+      end
+      exit(status.exitstatus || 1)
     else
       warn parser
       exit(command ? 64 : 0)

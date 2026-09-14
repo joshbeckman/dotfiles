@@ -10,18 +10,48 @@ cat >"$tmp/fake-pi" <<'RUBY'
 require "json"
 
 File.write(ENV["FAKE_PI_ARGV_FILE"], ARGV.join("\n")) if ENV["FAKE_PI_ARGV_FILE"]
-File.write(ENV["FAKE_PI_CONFIG_FILE"], ENV.fetch("PI_CODING_AGENT_DIR", "")) if ENV["FAKE_PI_CONFIG_FILE"]
 
 if ARGV.include?("--version")
   puts "fake-pi 1.0"
   exit
 end
+File.write(ENV["FAKE_PI_CONFIG_FILE"], ENV.fetch("PI_CODING_AGENT_DIR", "")) if ENV["FAKE_PI_CONFIG_FILE"]
 if ARGV.include?("--list-models")
   puts "fake/model"
   exit
 end
 
 File.write(ENV["FAKE_PI_PID_FILE"], Process.pid) if ENV["FAKE_PI_PID_FILE"]
+
+config_dir = ENV.fetch("PI_CODING_AGENT_DIR")
+settings_path = File.join(config_dir, "settings.json")
+
+def write_config_proof(config_dir, destination)
+  return unless destination
+
+  settings = JSON.parse(File.read(File.join(config_dir, "settings.json"))) rescue {}
+  File.write(destination, JSON.generate(
+    "config_dir" => config_dir,
+    "settings_symlink" => File.symlink?(File.join(config_dir, "settings.json")),
+    "auth_symlink" => File.symlink?(File.join(config_dir, "auth.json")),
+    "retry_enabled" => settings.dig("retry", "enabled"),
+    "retry_max" => settings.dig("retry", "maxRetries"),
+    "compaction_enabled" => settings.dig("compaction", "enabled"),
+    "extensions_available" => File.file?(File.join(config_dir, "extensions", "example.ts")),
+    "skills_available" => File.file?(File.join(config_dir, "skills", "example", "SKILL.md")),
+    "relative_extension" => settings.fetch("extensions", []).first,
+    "local_package" => settings.fetch("packages", []).first&.fetch("source", nil),
+    "offline" => ENV["PI_OFFLINE"]
+  ))
+end
+
+if ENV["FAKE_PI_MUTATE_CONFIG"]
+  File.write(File.join(config_dir, "auth.json"), JSON.generate("mutated" => true))
+  File.write(File.join(config_dir, "models-store.json"), JSON.generate("mutated" => true))
+  File.write(File.join(config_dir, "trust.json"), JSON.generate("mutated" => true))
+  File.write(File.join(config_dir, "runtime-state.json"), "mutated\n")
+end
+write_config_proof(config_dir, ENV["FAKE_PI_CONFIG_PROOF_FILE"])
 
 def emit(value)
   puts JSON.generate(value)
@@ -38,6 +68,13 @@ while (line = STDIN.gets)
     emit("id" => command["id"], "type" => "response", "command" => "get_state", "success" => true,
          "data" => {"model" => {"provider" => "fake", "id" => "model", "cost" => {"input" => 1, "output" => 1, "cacheRead" => 1, "cacheWrite" => 1}}, "thinkingLevel" => "off"})
   when "set_auto_retry", "set_auto_compaction"
+    if ENV["FAKE_PI_MUTATE_CONFIG"]
+      settings = JSON.parse(File.read(settings_path)) rescue {}
+      key = command["type"] == "set_auto_retry" ? "retry" : "compaction"
+      settings[key] = (settings[key].is_a?(Hash) ? settings[key] : {}).merge("enabled" => command["enabled"])
+      File.write(settings_path, JSON.pretty_generate(settings))
+      write_config_proof(config_dir, ENV["FAKE_PI_CONFIG_PROOF_FILE"])
+    end
     emit("id" => command["id"], "type" => "response", "command" => command["type"], "success" => true)
   when "prompt"
     if mode == "reject"
@@ -75,8 +112,12 @@ end
 RUBY
 chmod +x "$tmp/fake-pi"
 
+mkdir "$tmp/default-config"
+printf '{"retry":{"enabled":true},"compaction":{"enabled":true}}\n' >"$tmp/default-config/settings.json"
+export PI_CODING_AGENT_DIR="$tmp/default-config"
+
 plan="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor)"
-ruby -rjson -e 'p=JSON.parse(STDIN.read); c=p["configuration"]; abort unless p["trial_count"] == 1 && p["maximum_if_every_trial_reaches_cap_usd"] == 0.5 && c["label"] == "default" && c["fingerprint"].match?(/\A[0-9a-f]{64}\z/) && c["discovery"].values.all?' <<<"$plan"
+ruby -rjson -e 'p=JSON.parse(STDIN.read); c=p["configuration"]; abort unless p["trial_count"] == 1 && p["maximum_if_every_trial_reaches_cap_usd"] == 0.5 && c["label"] == "default" && c["fingerprint"].match?(/\A[0-9a-f]{64}\z/) && c["discovery"].values.all? && c["runtime_isolation"] == "private_per_trial"' <<<"$plan"
 mkdir "$tmp/config"
 printf '{"version":1}\n' >"$tmp/config/settings.json"
 configured_plan="$($root/bin/pi-model-eval plan --models fake/model:off --fixtures design-event-cursor --config-dir "$tmp/config" --config-label experiment)"
@@ -89,7 +130,9 @@ printf '{"version":1}\n' >"$tmp/config/settings.json"
 FAKE_PI_ARGV_FILE="$tmp/models-argv" FAKE_PI_CONFIG_FILE="$tmp/models-config" "$root/bin/pi-model-eval" models --pi "$tmp/fake-pi" --config-dir "$tmp/config" --no-skills --extension "$tmp/fake-pi" >/dev/null
 grep -qx -- '--no-skills' "$tmp/models-argv"
 grep -qx -- '--extension' "$tmp/models-argv"
-[[ "$(cat "$tmp/models-config")" == "$tmp/config" ]]
+models_private_config="$(cat "$tmp/models-config")"
+[[ "$models_private_config" != "$tmp/config" ]]
+[[ ! -e "$models_private_config" ]]
 if "$root/bin/pi-model-eval" plan --models fake/model >/dev/null 2>&1; then
     echo 'model without explicit thinking unexpectedly accepted' >&2
     exit 1
@@ -175,6 +218,63 @@ grep -qx -- '--append-system-prompt' "$tmp/fake-argv"
 ! grep -qx -- '--system-prompt' "$tmp/fake-argv"
 ! grep -q 'should-not-persist' "${result%/result.json}/stderr.log"
 ! grep -q 'assistantMessageEvent\|"text".*answer\|private diagnostic' "${result%/result.json}/events.jsonl"
+
+mkdir -p "$tmp/source-config/extensions" "$tmp/source-config/skills/example" "$tmp/source-config/providers" "$tmp/local-package/extensions" "$tmp/source-targets"
+printf 'export default () => {}\n' >"$tmp/source-config/extensions/example.ts"
+printf '%s\n' '# Example' >"$tmp/source-config/skills/example/SKILL.md"
+printf 'export default () => {}\n' >"$tmp/source-config/providers/local.ts"
+printf 'export default () => {}\n' >"$tmp/local-package/extensions/package.ts"
+printf '{"retry":{"enabled":true,"maxRetries":7},"compaction":{"enabled":true},"extensions":["./providers/local.ts"],"packages":[{"source":"../local-package","extensions":["extensions/package.ts"]}]}\n' >"$tmp/source-targets/settings.json"
+printf '{"fake":{"type":"api_key","key":"test-only"}}\n' >"$tmp/source-targets/auth.json"
+printf '{"catalog":"original"}\n' >"$tmp/source-config/models-store.json"
+printf '{"trusted":"original"}\n' >"$tmp/source-config/trust.json"
+ln -s "$tmp/source-targets/settings.json" "$tmp/source-config/settings.json"
+ln -s "$tmp/source-targets/auth.json" "$tmp/source-config/auth.json"
+cp "$tmp/source-targets/settings.json" "$tmp/expected-settings.json"
+cp "$tmp/source-targets/auth.json" "$tmp/expected-auth.json"
+cp "$tmp/source-config/models-store.json" "$tmp/expected-models-store.json"
+cp "$tmp/source-config/trust.json" "$tmp/expected-trust.json"
+
+run_dir="$(FAKE_PI_MUTATE_CONFIG=1 FAKE_PI_CONFIG_FILE="$tmp/isolation-config-path" FAKE_PI_CONFIG_PROOF_FILE="$tmp/isolation-proof" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --config-dir "$tmp/source-config" --fixtures design-event-cursor --results "$tmp/isolation-normal")"
+private_config="$(cat "$tmp/isolation-config-path")"
+[[ "$private_config" != "$tmp/source-config" && ! -e "$private_config" ]]
+cmp "$tmp/expected-settings.json" "$tmp/source-targets/settings.json"
+cmp "$tmp/expected-auth.json" "$tmp/source-targets/auth.json"
+cmp "$tmp/expected-models-store.json" "$tmp/source-config/models-store.json"
+cmp "$tmp/expected-trust.json" "$tmp/source-config/trust.json"
+[[ ! -e "$tmp/source-config/runtime-state.json" ]]
+! grep -R -q 'test-only' "$run_dir"
+ruby -rjson -e 'p=JSON.parse(File.read(ARGV[0])); abort if p["settings_symlink"] || p["auth_symlink"]; abort unless p["retry_enabled"] == false && p["retry_max"] == 7 && p["compaction_enabled"] == false && p["extensions_available"] && p["skills_available"] && p["relative_extension"] == ARGV[1] && p["local_package"] == ARGV[2] && p["offline"] == "1"' "$tmp/isolation-proof" "$tmp/source-config/providers/local.ts" "$tmp/local-package"
+
+run_dir="$(FAKE_PI_MODE=reject FAKE_PI_MUTATE_CONFIG=1 FAKE_PI_CONFIG_FILE="$tmp/failure-config-path" PI_CODING_AGENT_DIR="$tmp/source-config" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --results "$tmp/isolation-failure")"
+private_config="$(cat "$tmp/failure-config-path")"
+[[ "$private_config" != "$tmp/source-config" && ! -e "$private_config" ]]
+cmp "$tmp/expected-settings.json" "$tmp/source-targets/settings.json"
+cmp "$tmp/expected-auth.json" "$tmp/source-targets/auth.json"
+cmp "$tmp/expected-models-store.json" "$tmp/source-config/models-store.json"
+cmp "$tmp/expected-trust.json" "$tmp/source-config/trust.json"
+[[ ! -e "$tmp/source-config/runtime-state.json" ]]
+
+mkdir -p "$tmp/default-home/.pi/agent/providers" "$tmp/default-home/.pi/local-package/extensions"
+cp "$tmp/expected-settings.json" "$tmp/default-home/.pi/agent/settings.json"
+printf 'export default () => {}\n' >"$tmp/default-home/.pi/agent/providers/local.ts"
+printf 'export default () => {}\n' >"$tmp/default-home/.pi/local-package/extensions/package.ts"
+run_dir="$(env -u PI_CODING_AGENT_DIR HOME="$tmp/default-home" FAKE_PI_MODE=timeout FAKE_PI_MUTATE_CONFIG=1 FAKE_PI_CONFIG_FILE="$tmp/default-config-path" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 0.1 --results "$tmp/isolation-default")"
+[[ -s "$tmp/default-config-path" ]]
+private_config="$(cat "$tmp/default-config-path")"
+[[ -n "$private_config" && "$private_config" != "$tmp/default-home/.pi/agent" && ! -e "$private_config" ]]
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "timeout" && r["termination_reason"] == "trial_timeout"' "$result"
+cmp "$tmp/expected-settings.json" "$tmp/default-home/.pi/agent/settings.json"
+[[ ! -e "$tmp/default-home/.pi/agent/runtime-state.json" ]]
+
+mkdir "$tmp/unusable-config"
+printf '{"extensions":["./missing/provider.ts"]}\n' >"$tmp/unusable-config/settings.json"
+run_dir="$(FAKE_PI_PID_FILE="$tmp/unusable-fake-pid" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --config-dir "$tmp/unusable-config" --fixtures design-event-cursor --results "$tmp/isolation-unusable")"
+result="$(find "$run_dir/trials" -name result.json -print -quit)"
+ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "infrastructure_error" && r["termination_reason"] == "harness_exception" && r["error"] == "EvalError"' "$result"
+[[ ! -e "$tmp/unusable-fake-pid" ]]
+cmp <(printf '{"extensions":["./missing/provider.ts"]}\n') "$tmp/unusable-config/settings.json"
 
 run_dir="$(FAKE_PI_MODE=timeout "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --fixtures design-event-cursor --timeout 0.1 --results "$tmp/timeout")"
 result="$(find "$run_dir/trials" -name result.json -print -quit)"
