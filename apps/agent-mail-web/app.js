@@ -48,6 +48,25 @@ const date = (value) => {
         minute: "2-digit",
       });
 };
+const composer = MailComposer.create($("body-editor"), changed, error);
+let keywordGeneration = 0;
+async function loadKeywords() {
+  const generation = ++keywordGeneration;
+  $("keyword-status").textContent = "Loading local keywords…";
+  try {
+    const result = await api("keywords");
+    if (generation !== keywordGeneration) return;
+    composer.keywords(result.words);
+    $("keyword-status").textContent = result.available
+      ? `${result.words.length} local keyword${result.words.length === 1 ? "" : "s"} · Ctrl+n / Ctrl+p to complete, Tab to accept`
+      : "No local keywords.txt found; editor remains available.";
+  } catch (e) {
+    if (generation !== keywordGeneration) return;
+    composer.keywords([]);
+    $("keyword-status").textContent =
+      "Keyword completion unavailable: " + e.message;
+  }
+}
 async function api(path, data) {
   const response = await fetch("/api/" + path, {
     headers: {
@@ -300,13 +319,15 @@ async function loadDraft(value) {
   dirty = false;
   $("to").value = value.to;
   $("subject").value = value.subject;
-  $("body").value = value.body;
+  composer.load(value.body);
+  loadKeywords();
   $("preview").hidden = true;
   $("preview").replaceChildren();
   $("draft-status").textContent = "Saved on disk";
   if (value.parent && !(await openThread(value))) return;
   show("editor");
-  $(value.to ? "body" : "to").focus();
+  if (value.to) composer.focus();
+  else $("to").focus();
 }
 function saveDraft() {
   clearTimeout(timer);
@@ -318,7 +339,7 @@ function saveDraft() {
         const fields = {
           to: $("to").value,
           subject: $("subject").value,
-          body: $("body").value,
+          body: composer.value(),
         };
         const result = await api("save", {
           key: old.key,
@@ -327,7 +348,9 @@ function saveDraft() {
         });
         if (draft === old) {
           draft = result;
-          dirty = Object.entries(fields).some(([k, v]) => $(k).value !== v);
+          dirty = Object.entries(fields).some(
+            ([k, v]) => (k === "body" ? composer.value() : $(k).value) !== v,
+          );
           $("draft-status").textContent =
             "Saved on disk · " + new Date().toLocaleTimeString();
         }
@@ -350,6 +373,7 @@ async function sendDraft() {
     (el) => [el, el.disabled],
   );
   controls.forEach(([el]) => (el.disabled = true));
+  composer.readOnly(true);
   try {
     await saveDraft();
     const sent = await api("send", {
@@ -370,6 +394,7 @@ async function sendDraft() {
   } finally {
     busy = false;
     controls.forEach(([el, disabled]) => (el.disabled = disabled));
+    composer.readOnly(false);
     if (view === "reader" && current)
       $("archive").disabled = !current.messages.some(
         (m) => m.folder === "inbox",
@@ -391,6 +416,7 @@ async function deleteDraft() {
     (el) => [el, el.disabled],
   );
   controls.forEach(([el]) => (el.disabled = true));
+  composer.readOnly(true);
   try {
     // A pending save may advance the revision; deletion still checks disk state if it failed.
     await saving.catch(() => {});
@@ -402,6 +428,7 @@ async function deleteDraft() {
   } finally {
     busy = false;
     controls.forEach(([el, disabled]) => (el.disabled = disabled));
+    composer.readOnly(false);
   }
 }
 async function attach() {
@@ -423,18 +450,13 @@ async function attach() {
       throw new Error(
         "Draft changed during image upload. Attach it again to the intended message.",
       );
-    const body = $("body");
-    body.setRangeText(
+    composer.insert(
       "\n![" +
         file.name.replace(/[\[\]<>\r\n]/g, "") +
         "](" +
         result.url +
         ")\n",
-      body.selectionStart,
-      body.selectionEnd,
-      "end",
     );
-    changed();
     $("image").value = "";
   } finally {
     uploading = false;
@@ -783,12 +805,11 @@ $("save-draft").onclick = () => saveDraft().catch(error);
 $("close-draft").onclick = () => navigate("drafts").catch(error);
 $("send").onclick = () => sendDraft().catch(error);
 $("delete-draft").onclick = () => deleteDraft().catch(error);
-for (const id of ["to", "subject", "body"])
-  $(id).addEventListener("input", changed);
+for (const id of ["to", "subject"]) $(id).addEventListener("input", changed);
 $("image").onchange = () => attach().catch(error);
 $("preview-button").onclick = () => {
   $("preview").hidden = false;
-  renderMarkdown($("body").value, $("preview")).catch(error);
+  renderMarkdown(composer.value(), $("preview")).catch(error);
 };
 $("contacts-button").onclick = async () => {
   try {
@@ -815,7 +836,7 @@ window.addEventListener("beforeunload", (e) => {
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (busy || e.isComposing || $("help").open) return;
+  if (busy || e.isComposing || document.querySelector("dialog[open]")) return;
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && view === "editor") {
     e.preventDefault();
     sendDraft().catch(error);

@@ -29,6 +29,7 @@ class WebTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.env = dict(os.environ)
+        os.environ['XDG_CONFIG_HOME'] = str(self.root / 'config')
         fake = self.root / 'bin'
         fake.mkdir()
         (fake / 'notify-josh').write_text('#!/bin/sh\nexit 0\n')
@@ -71,6 +72,28 @@ class WebTest(unittest.TestCase):
                 return r.status, r.read()
         except urllib.error.HTTPError as r:
             return r.code, r.read()
+
+    def test_keywords_are_local_bounded_and_authenticated(self):
+        self.assertEqual(json.loads(self.request('/api/keywords')[1]), {'available': False, 'words': []})
+        path = self.root / 'config/nvim/keywords.txt'
+        path.parent.mkdir(parents=True)
+        target = self.root / 'dictionary.txt'
+        target.write_text('@+alder-turner\n@+alder-turner\nname.with_dot\n')
+        path.symlink_to(target)
+        self.assertEqual(json.loads(self.request('/api/keywords')[1])['words'], ['@+alder-turner', 'name.with_dot'])
+        self.assertEqual(self.request('/api/keywords', **{'X-Agent-Mail-Token': ''})[0], 403)
+        self.assertEqual(self.request('/api/keywords', Origin='null')[0], 403)
+        self.assertEqual(self.request('/api/keywords?path=/etc/passwd')[0], 400)
+        self.assertEqual(self.request('/keywords.txt')[0], 404)
+        target.write_text('@+new-agent\n')
+        self.assertEqual(json.loads(self.request('/api/keywords')[1])['words'], ['@+new-agent'])
+        target.write_bytes(b'a' * (1024 * 1024 + 1))
+        self.assertEqual(self.request('/api/keywords')[0], 400)
+        target.write_text('a' * 257)
+        self.assertEqual(self.request('/api/keywords')[0], 400)
+        path.unlink()
+        os.mkfifo(path)
+        self.assertEqual(self.request('/api/keywords')[0], 400)
 
     def test_launch_port_defaults_and_override(self):
         for flags, port in (([], 8765), (['--port', '0'], 0), (['--port', '8799'], 8799)):

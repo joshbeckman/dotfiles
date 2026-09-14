@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,24 @@ def cli(*args):
     if result.returncode:
         raise MailError(result.stderr.strip() or 'Agent Mail command failed')
     return result.stdout.strip()
+
+
+def local_keywords():
+    path = Path(os.environ.get('XDG_CONFIG_HOME', '~/.config')).expanduser() / 'nvim/keywords.txt'
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return {'available': False, 'words': []}
+    with os.fdopen(fd, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise MailError('Keyword dictionary must be a regular file')
+        raw = source.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise MailError('Keyword dictionary exceeds 1 MiB')
+    words = list(dict.fromkeys(raw.decode('utf-8').split()))
+    if len(words) > 10000 or any(len(word) > 256 for word in words):
+        raise MailError('Keyword dictionary exceeds 10,000 words or 256 characters per word')
+    return {'available': True, 'words': words}
 
 
 def atomic_write(path, data):
@@ -328,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.get(url.path, parse_qs(url.query))
             if self.command != 'GET':
                 raise MailError('Unknown endpoint', 404)
-            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png')}}
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png')}}
             if url.path not in static:
                 raise MailError('Not found', 404)
             p = ASSETS / static[url.path]
@@ -350,6 +369,10 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/draft':
             box.path(key, 'drafts')
             result = box.message(key)
+        elif route == '/api/keywords':
+            if args:
+                raise MailError('Keyword dictionary paths are configured locally, not through the API')
+            result = local_keywords()
         elif route == '/api/contacts':
             result = box.contacts(args.get('q', [''])[0])
         elif route == '/api/contact':

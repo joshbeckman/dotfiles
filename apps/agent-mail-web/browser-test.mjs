@@ -47,7 +47,11 @@ const env = {
   AGENT_HUMAN_MAIL_ROOT: humans,
   AGENT_IDENTITIES_DIR: join(tmp, "identities"),
   PI_SESSIONS_DIR: join(tmp, "sessions"),
+  XDG_CONFIG_HOME: join(tmp, "config"),
 };
+await mkdir(join(env.XDG_CONFIG_HOME, "nvim"), { recursive: true });
+const keywordFile = join(env.XDG_CONFIG_HOME, "nvim/keywords.txt");
+await writeFile(keywordFile, "@+alder-turner\n@+alder-weaver\nname.with_dot\n");
 await mkdir(env.AGENT_IDENTITIES_DIR);
 await mkdir(env.PI_SESSIONS_DIR);
 const sid = "12345678-0000-0000-0000-000000000001";
@@ -318,7 +322,7 @@ try {
     ),
   });
   await page.waitForFunction(() =>
-    document.getElementById("body").value.includes("file:"),
+    document.getElementById("body").textContent.includes("file:"),
   );
   await page.locator("#preview-button").click();
   await page
@@ -453,15 +457,17 @@ try {
   await page.getByRole("button", { name: /josh Saved draft/ }).click();
   await page.locator("#editor").waitFor({ state: "visible" });
   assert.equal(
-    await page.locator("#body").inputValue(),
+    await page.locator("#body").textContent(),
     "Latest version while save was in flight",
   );
   // Typing Gmail shortcut letters in the composer must not navigate or archive.
   await page.locator("#body").press("e");
   assert.equal(await page.locator("#editor").isVisible(), true);
-  await page.locator("#send").click();
+  const beforeSend = await page.evaluate(() => composer.value());
+  await page.locator("#body").press("Control+Enter");
   await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
   assert.equal(await page.locator("#reader").isVisible(), false);
+  assert.equal(await page.evaluate(() => composer.value()), beforeSend);
   const sentBeforeDelete = await readdir(join(humans, "josh/sent"));
   await page.locator("#compose").click();
   await page.locator("#body").fill("Disposable draft");
@@ -489,16 +495,142 @@ try {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "i" }));
   });
   await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
+  await page.locator("#compose").click();
+  await page.getByText(/3 local keywords/).waitFor();
+  const body = page.locator("#body");
+  await body.fill("@+ald");
+  await body.press("Control+n");
+  await page.locator(".cm-tooltip-autocomplete").waitFor();
+  // CodeMirror guards against accidental acceptance for the first 75 ms.
+  await page.waitForTimeout(100);
+  await body.press("Tab");
+  assert.match(await body.textContent(), /^@\+alder-(turner|weaver)$/);
+  await body.fill("name.w");
+  await body.press("Control+p");
+  await page.locator(".cm-tooltip-autocomplete").waitFor();
+  await page.waitForTimeout(100);
+  await body.press("Tab");
+  assert.equal(await body.textContent(), "name.with_dot");
+  await body.fill("one\ntwo\nthree");
+  await page.locator("#vim-mode").check();
+  await body.press("g");
+  await body.press("g");
+  await body.press("d");
+  await body.press("d");
+  assert.equal(await page.evaluate(() => composer.value()), "two\nthree");
+  await body.press("u");
+  assert.equal(await page.evaluate(() => composer.value()), "one\ntwo\nthree");
+  await body.press("Control+r");
+  assert.equal(await page.evaluate(() => composer.value()), "two\nthree");
+  assert.equal(await page.locator("#editor").isVisible(), true);
+  await page.locator("#vimrc-button").click();
+  await page
+    .locator("#vimrc-input")
+    .fill(
+      'inoremap jk <Esc>\nset number\nlet mapleader=","\nnnoremap <leader>x dd',
+    );
+  await page.locator("#vimrc-input").press("Control+Enter");
+  assert.equal(await page.locator("#vimrc-dialog").isVisible(), true);
+  await page.locator("#vimrc-apply").click();
+  await page
+    .getByText("2 mappings applied; unsupported lines ignored: 2")
+    .waitFor();
+  await page
+    .locator("#vimrc-dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await body.press("i");
+  await page.keyboard.type("jk");
+  await page.keyboard.type(",x");
+  assert.equal(await page.evaluate(() => composer.value()), "three");
+  await body.press("u");
+  await page.locator("#vimrc-button").click();
+  await page
+    .locator("#vimrc-input")
+    .fill(
+      'inoremap jk <Esc>\nlet mapleader="\\<Space>"\nnnoremap <leader>x dd',
+    );
+  await page.locator("#vimrc-apply").click();
+  await page.getByText("2 mappings applied.", { exact: true }).waitFor();
+  await page.locator("#vimrc-input").fill("inoremap jk");
+  await page.locator("#vimrc-apply").click();
+  await page.getByText(/a mapping needs a key and an action/).waitFor();
+  await page
+    .locator("#vimrc-dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await body.press("Space");
+  await body.press("x");
+  assert.equal(await page.evaluate(() => composer.value()), "three");
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.screenshot({
+      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-vim.png",
+      fullPage: true,
+    });
+    await page.emulateMedia({ colorScheme: "light" });
+  }
+  await body.press("i");
+  await page.keyboard.type("@+ald");
+  await body.press("Control+n");
+  await page.locator(".cm-tooltip-autocomplete").waitFor();
+  // CodeMirror guards against accidental acceptance for the first 75 ms.
+  await page.waitForTimeout(100);
+  await body.press("Tab");
+  assert.match(
+    await page.evaluate(() => composer.value()),
+    /^@\+alder-(turner|weaver)three$/,
+  );
+  await body.press("Escape");
+  await page.locator("#close-draft").click();
+  await page.reload();
+  await page.getByRole("button", { name: /^Drafts/ }).click();
+  await page.locator(".row").click();
+  assert.equal(await page.locator("#vim-mode").isChecked(), true);
+  await page.locator("#vimrc-button").click();
+  assert.match(await page.locator("#vimrc-input").inputValue(), /inoremap jk/);
+  await page
+    .locator("#vimrc-dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await page.locator("#vim-mode").uncheck();
+  await writeFile(keywordFile, "@+new-fixture-agent\n");
+  await page.locator("#close-draft").click();
+  await page.locator(".row").click();
+  await page.getByText(/1 local keyword/).waitFor();
+  await body.fill("@+new");
+  await body.press("Control+n");
+  await page.locator(".cm-tooltip-autocomplete").waitFor();
+  // CodeMirror guards against accidental acceptance for the first 75 ms.
+  await page.waitForTimeout(100);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({
+      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-light.png",
+      fullPage: true,
+    });
+  await body.press("Tab");
+  assert.equal(await body.textContent(), "@+new-fixture-agent");
   await page.emulateMedia({ colorScheme: "dark" });
   await page.setViewportSize({ width: 390, height: 844 });
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({
+      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-dark.png",
+      fullPage: true,
+    });
   assert(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   );
+  await rm(keywordFile);
+  await page.locator("#close-draft").click();
+  await page.locator(".row").click();
+  await page.getByText(/No local keywords.txt found/).waitFor();
+  assert.equal(await page.locator("#body").isEditable(), true);
+  assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
+    "Browser tests passed: local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

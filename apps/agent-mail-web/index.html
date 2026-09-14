@@ -7,6 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/style.css" />
     <script defer src="/vendor.js"></script>
+    <script defer src="/composer-vendor.js"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
@@ -80,11 +81,15 @@
           autocomplete="off"
           spellcheck="false"
         /><datalist id="contact-options"></datalist
-        ><label for="subject">Subject</label><input id="subject" /><label
-          for="body"
-          >Message</label
-        ><textarea id="body" rows="18" spellcheck="true"></textarea
-        ><label for="image"
+        ><label for="subject">Subject</label><input id="subject" />
+        <div id="body-label">Message</div>
+        <div class="composer-preferences">
+          <label><input id="vim-mode" type="checkbox" /> Vim mode</label>
+          <button id="vimrc-button" type="button">Configure .vimrc</button>
+        </div>
+        <div id="body-editor"></div>
+        <p id="keyword-status" class="hint" role="status"></p>
+        <label for="image"
           >Attach image (PNG, JPEG, GIF or WebP, up to 5 MiB)</label
         ><input
           id="image"
@@ -116,6 +121,23 @@
         <div id="contact-list"></div>
       </section>
     </main>
+    <dialog id="vimrc-dialog" aria-labelledby="vimrc-title">
+      <h2 id="vimrc-title">Vim mappings</h2>
+      <p>
+        Supports map, noremap, mode-specific mappings and mapleader. Other
+        Vimscript, settings and plugins are not executed.
+      </p>
+      <label for="vimrc-input">.vimrc mappings</label>
+      <textarea
+        id="vimrc-input"
+        rows="10"
+        spellcheck="false"
+        placeholder="inoremap jk &lt;Esc&gt;"
+      ></textarea>
+      <p id="vimrc-status" role="status"></p>
+      <button id="vimrc-apply" type="button">Apply mappings</button>
+      <form method="dialog"><button>Close</button></form>
+    </dialog>
     <dialog id="help">
       <h2>Keyboard shortcuts</h2>
       <dl>
@@ -137,6 +159,11 @@
         <dd>Inbox / all mail / Sent / Drafts</dd>
         <dt>Ctrl+Enter / ⌘+Enter</dt>
         <dd>Confirm and send draft</dd>
+        <dt>Ctrl+n / Ctrl+p (composer, insert mode)</dt>
+        <dd>
+          Open or move through keyword completions; Tab accepts, Escape
+          dismisses
+        </dd>
         <dt>?</dt>
         <dd>Show shortcuts</dd>
       </dl>

@@ -10,9 +10,18 @@ await build({
   outfile: "vendor.js",
   legalComments: "eof",
 });
+await build({
+  entryPoints: ["composer.js"],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  globalName: "MailComposer",
+  outfile: "composer-vendor.js",
+  legalComments: "eof",
+});
 const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
 let licenses =
-  "Bundled third-party renderers. Rebuild with npm ci --ignore-scripts && npm run build.\n";
+  "Bundled third-party editor and renderers. Rebuild with npm ci --ignore-scripts && npm run build.\n";
 for (const [path, info] of Object.entries(lock.packages).sort()) {
   if (!path || info.dev || info.optional) continue;
   const pkg = JSON.parse(await readFile(join(path, "package.json"), "utf8"));

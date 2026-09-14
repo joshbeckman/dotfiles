@@ -314,20 +314,80 @@ details.message summary time {
 .render-tools button {
   font-size: 0.85rem;
 }
-#editor label {
+#editor label,
+#body-label {
   display: block;
   margin: 0.8rem 0 0.3rem;
 }
-#editor input:not([type="file"]),
-#editor textarea {
+#to,
+#subject,
+#vimrc-input {
   width: 100%;
+}
+.composer-preferences {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+#editor .composer-preferences label {
+  margin: 0;
+}
+#body-editor {
+  margin-top: 0.5rem;
+}
+#body-editor .cm-editor {
+  border: 1px solid var(--c-border);
+  background: var(--c-bg);
+  color: var(--c-text);
+}
+#body-editor .cm-scroller {
+  max-height: 65vh;
+}
+#body-editor .cm-content {
+  min-height: 18rem;
+  overflow-wrap: anywhere;
+}
+#body-editor .cm-cursor {
+  border-left-color: var(--c-text);
+}
+#body-editor .cm-fat-cursor {
+  background: var(--c-focus);
+  color: var(--c-bg) !important;
+}
+#body-editor .cm-editor:not(.cm-focused) .cm-fat-cursor {
+  background: transparent;
+  outline: 1px solid var(--c-focus);
+  color: transparent !important;
+}
+#body-editor .cm-selectionBackground {
+  background: var(--c-selection, #a9c2f180);
+}
+#body-editor .cm-tooltip,
+#body-editor .cm-panels {
+  background: var(--c-bg);
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+#body-editor .cm-tooltip-autocomplete ul li[aria-selected] {
+  background: var(--c-selected);
+  color: var(--c-text);
+  outline: 1px solid var(--c-focus);
+}
+#vimrc-dialog {
+  width: min(42rem, 90vw);
+}
+#vimrc-dialog form {
+  display: inline-block;
+}
+#vimrc-input {
+  font-family: monospace;
 }
 #body {
   font:
     15px/1.6 "Berkeley Mono",
     "IBM Plex Mono",
     monospace;
-  resize: vertical;
 }
 #draft-status {
   font-size: 0.85rem;

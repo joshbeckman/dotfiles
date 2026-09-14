@@ -30,6 +30,22 @@ Requires Python 3.10+ (tracked in `Brewfile`) and a modern browser. Runtime asse
 - **Contact search** runs an actual `agent-find` case-insensitive regex search across session transcripts. Submit with Enter or Find agents; it does not run an expensive transcript search on every keystroke. Results show full details and up to 30 sessions ranked by matching lines. All contacts returns to the directory. Unlike an agent’s own CLI search, this human-facing search includes the session that launched the web bridge.
 - The message list refreshes every ten seconds while visible. Files over 2 MiB or unreadable files produce warnings instead of breaking the inbox. Mail from agents’ unrelated conversations is not indexed.
 
+## Composer
+
+The Markdown body uses a locally bundled CodeMirror editor. **Vim mode** is optional and remembered by the browser. **Configure .vimrc** accepts pasted mappings: `map`, `noremap`, their normal/insert/visual/operator-mode variants, and `let mapleader`. Unsupported lines are reported; this does not load desktop Vim plugins or execute arbitrary Vimscript. A configured leader is reserved as a mapping prefix in its mapped modes.
+
+For example:
+
+```vim
+inoremap jk <Esc>
+let mapleader = "\<Space>"
+nnoremap <leader>x dd
+```
+
+Completion uses `$XDG_CONFIG_HOME/nvim/keywords.txt`, defaulting to `~/.config/nvim/keywords.txt`. The authenticated bridge rereads it when a draft opens. The dictionary stays on your machine and is not included in browser assets or this repository. Handles such as `@+name-of-realm`, dotted names, and underscores complete as whole tokens. Ctrl+n / Ctrl+p open or navigate completions in insert mode (or with Vim disabled); Tab accepts and Escape dismisses. With Vim enabled, another Escape returns to normal mode. Missing or invalid dictionaries leave the editor usable with an explanatory status. Dictionaries are limited to 1 MiB, 10,000 distinct words, and 256 characters per word.
+
+Editor undo history starts fresh for each opened draft, while Vim preferences persist separately. Draft bodies remain plain Markdown; autosave, revision conflicts, attachments, and CLI/Neovim interoperability are unchanged. After installing a version that changes the bridge or asset allowlist, restart the bridge and open its new authenticated launch URL.
+
 ## Keys
 
 `j` / `k` navigate conversations; `o` or Enter opens; `u` returns to the list; `/` searches; `e` archives; `c` composes; `r` replies; `a` replies to all. `g i`, `g a`, `g s`, and `g d` open Inbox, All mail, Sent, and Drafts. `?` shows help. Ctrl+Enter or Cmd+Enter confirms sending a draft. Navigation keys do not fire while typing in inputs.
@@ -69,13 +85,13 @@ npm test
 CHROME_EXECUTABLE=/path/to/chromium npm test
 ```
 
-Rebuild the pinned Markdown, sanitizer, and diagram libraries plus their license notices:
+Rebuild the pinned editor, Markdown, sanitizer, and diagram libraries plus their license notices:
 
 ```sh
 npm run build
 npm audit --omit=dev --registry=https://registry.npmjs.org
 ```
 
-Commit `vendor.js`, `package-lock.json`, and `THIRD_PARTY_LICENSES.txt` together when updating dependencies. No runtime CDN requests are needed.
+Commit `vendor.js`, `composer-vendor.js`, `package-lock.json`, and `THIRD_PARTY_LICENSES.txt` together when updating dependencies. No runtime CDN requests are needed.
 
 Co-authored-by: AI Simoom Farrier (pi/openai/gpt-6-astra) @+simoom-farrier
