@@ -322,6 +322,34 @@ async function sendDraft() {
       );
   }
 }
+async function deleteDraft() {
+  if (!draft || busy) return;
+  if (uploading) throw new Error("Wait for the image upload before deleting.");
+  if (
+    !confirm(
+      "Delete this draft and discard its unsaved changes? This cannot be undone.",
+    )
+  )
+    return;
+  busy = true;
+  clearTimeout(timer);
+  const controls = [...document.querySelectorAll("button,input,textarea")].map(
+    (el) => [el, el.disabled],
+  );
+  controls.forEach(([el]) => (el.disabled = true));
+  try {
+    // A pending save may advance the revision; deletion still checks disk state if it failed.
+    await saving.catch(() => {});
+    await api("delete-draft", { key: draft.key, revision: draft.revision });
+    draft = null;
+    dirty = false;
+    await navigate("drafts");
+    status("Draft deleted.");
+  } finally {
+    busy = false;
+    controls.forEach(([el, disabled]) => (el.disabled = disabled));
+  }
+}
 async function attach() {
   const file = $("image").files[0];
   if (!file || uploading) return;
@@ -640,6 +668,7 @@ $("reply-all").onclick = () => newDraft("reply-all").catch(error);
 $("save-draft").onclick = () => saveDraft().catch(error);
 $("close-draft").onclick = () => navigate("drafts").catch(error);
 $("send").onclick = () => sendDraft().catch(error);
+$("delete-draft").onclick = () => deleteDraft().catch(error);
 for (const id of ["to", "subject", "body"])
   $(id).addEventListener("input", changed);
 $("image").onchange = () => attach().catch(error);

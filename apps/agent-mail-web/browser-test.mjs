@@ -123,8 +123,13 @@ try {
   page.on("request", (r) => {
     if (r.url().startsWith("https://")) remote.push(r.url());
   });
+  let cancelNextDialog = false;
   page.on("dialog", (d) => {
     dialogs.push(d.type() + ": " + d.message());
+    if (cancelNextDialog) {
+      cancelNextDialog = false;
+      return d.dismiss();
+    }
     return d.accept();
   });
   await page.goto(url);
@@ -291,6 +296,24 @@ try {
   await page.locator("#send").click();
   await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
   assert.equal(await page.locator("#reader").isVisible(), false);
+  const sentBeforeDelete = await readdir(join(humans, "josh/sent"));
+  await page.locator("#compose").click();
+  await page.locator("#body").fill("Disposable draft");
+  cancelNextDialog = true;
+  await page.locator("#delete-draft").click();
+  assert.equal(await page.locator("#editor").isVisible(), true);
+  assert.equal((await readdir(join(humans, "josh/drafts"))).length, 1);
+  await page.locator("#save-draft").click();
+  await page.locator("#body").fill("Unsaved changes while a save is in flight");
+  await page.locator("#delete-draft").click();
+  await page.getByText("Draft deleted.", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Drafts", exact: true }).waitFor();
+  assert.equal((await readdir(join(humans, "josh/drafts"))).length, 0);
+  assert.deepEqual(await readdir(join(humans, "josh/sent")), sentBeforeDelete);
+  assert.equal((await readdir(join(humans, "josh/inbox/cur"))).length, 1);
+  await page.reload();
+  await page.getByRole("button", { name: /^Drafts/ }).click();
+  await page.getByText("No messages here.", { exact: true }).waitFor();
   await page.evaluate(() => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "i" }));
@@ -305,7 +328,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, draft save race/reload, shortcuts, light/dark and mobile.",
+    "Browser tests passed: read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, reply navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

@@ -121,6 +121,17 @@ class WebTest(unittest.TestCase):
         self.assertNotIn('josh', reply['to'])
         self.assertEqual(len(self.box.listing('sent', '')['messages']), 1)
 
+    def test_delete_draft_is_revision_checked_and_draft_only(self):
+        draft = self.box.draft('compose')
+        saved = self.box.save(dict(draft, body='Changed in another window'))
+        self.assertEqual(self.request('/api/delete-draft', {'key': draft['key'], 'revision': draft['revision']})[0], 409)
+        self.assertEqual(self.box.message(saved['key'])['body'], 'Changed in another window')
+        self.assertEqual(self.request('/api/delete-draft', {'key': self.key, 'revision': self.box.message(self.key)['revision']})[0], 400)
+        self.assertTrue(self.box.path(self.key).exists())
+        self.assertEqual(self.request('/api/delete-draft', {'key': saved['key'], 'revision': saved['revision']})[0], 200)
+        self.assertEqual(self.box.listing('drafts', '')['messages'], [])
+        self.assertEqual(self.request('/api/delete-draft', {'key': saved['key'], 'revision': saved['revision']})[0], 404)
+
     def test_draft_conflict_and_header_injection(self):
         draft = self.box.draft('compose')
         self.box.path(draft['key']).write_text('From: josh\nTo: alder-turner\nSubject: CLI edit\n\nDifferent body')

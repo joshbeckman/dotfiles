@@ -379,6 +379,12 @@ class Handler(BaseHTTPRequestHandler):
             result = box.draft(data.get('mode'), data.get('key'))
         elif route == '/api/save':
             result = box.save(data)
+        elif route == '/api/delete-draft':
+            path = box.path(data.get('key'), 'drafts')
+            if box.message(data['key'])['revision'] != data.get('revision'):
+                raise MailError('Draft changed; reopen it before deleting.', 409)
+            path.unlink()
+            result = {'ok': True}
         elif route == '/api/send':
             path = box.path(data.get('key'), 'drafts')
             if box.message(data['key'])['revision'] != data.get('revision'):
