@@ -13,6 +13,8 @@ html.dark {
   --link: #9ab6ff;
 }
 body {
+  /* Keep child margins inside the body measured for the iframe's height. */
+  display: flow-root;
   margin: 0.5rem 0;
   padding: 0 0.75rem 1rem 0;
   color: var(--text);

@@ -13,6 +13,22 @@ import { join, resolve } from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
+async function assertReaderFits(reader) {
+  await reader.owner().evaluate((frame) => frame.scrollIntoView());
+  let size;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    size = await reader.locator("body").evaluate((body) => ({
+      viewport: document.documentElement.clientHeight,
+      document: document.documentElement.scrollHeight,
+      body: body.scrollHeight,
+      top: body.getBoundingClientRect().top,
+      bottom: body.getBoundingClientRect().bottom,
+    }));
+    if (size.document <= size.viewport) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail("Unexpected message scrollbar: " + JSON.stringify(size));
+}
 const root = resolve("../.."),
   tmp = await mkdtemp(join(tmpdir(), "agent-mail-browser-"));
 const bin = join(tmp, "bin"),
@@ -115,6 +131,11 @@ try {
   await reader.getByRole("heading", { name: "Fixture heading" }).waitFor();
   await reader.getByText("Mail", { exact: true }).waitFor();
   await reader.getByText("Reply", { exact: true }).waitFor();
+  await assertReaderFits(reader);
+  await page.setViewportSize({ width: 375, height: 850 });
+  await assertReaderFits(reader);
+  await page.setViewportSize({ width: 1200, height: 850 });
+  await assertReaderFits(reader);
   assert.equal(
     await page.evaluate(() => document.body.dataset.compromised),
     undefined,
@@ -127,7 +148,12 @@ try {
     await page.locator("#to").inputValue(),
     "alder-turner, birch-weaver",
   );
-  await page.locator("#body").fill("Reply with **Markdown**.");
+  await page
+    .locator("#body")
+    .fill(
+      "Reply with **Markdown**.\n\n" +
+        "A paragraph-only message should grow with its content.\n\n".repeat(12),
+    );
   await page.locator("#image").setInputFiles({
     name: "pixel.png",
     mimeType: "image/png",
@@ -144,8 +170,19 @@ try {
     .frameLocator("#preview iframe")
     .getByRole("img", { name: "pixel.png" })
     .waitFor();
+  await assertReaderFits(page.frameLocator("#preview iframe"));
   await page.locator("#send").click();
-  await page.getByText("Sent. A copy is retained in Sent.").waitFor();
+  await page
+    .getByText("Sent. A copy is retained in Sent.")
+    .waitFor()
+    .catch(async (error) => {
+      console.error(
+        "Send state:",
+        await page.locator("#status").textContent(),
+        await page.locator("#draft-status").textContent(),
+      );
+      throw error;
+    });
   const sent = await readdir(join(humans, "josh/sent"));
   assert.equal(sent.length, 1);
   const copy = await readFile(join(humans, "josh/sent", sent[0]), "utf8");
