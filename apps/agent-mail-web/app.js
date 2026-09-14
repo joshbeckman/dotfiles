@@ -341,38 +341,118 @@ async function attach() {
     uploading = false;
   }
 }
-async function getContacts() {
-  contacts = await api("contacts");
-  $("contact-options").replaceChildren(
-    ...contacts
-      .filter((c) => c.addressable)
-      .map((c) => {
-        const o = document.createElement("option");
-        o.value = c.handle;
-        return o;
-      }),
+let contactGeneration = 0;
+async function getContacts(query = "") {
+  const generation = ++contactGeneration;
+  $("contact-status").textContent = query
+    ? "Searching session transcripts…"
+    : "Loading contacts…";
+  try {
+    const results = await api("contacts?q=" + encodeURIComponent(query));
+    if (generation !== contactGeneration) return;
+    contacts = results;
+    if (!query)
+      $("contact-options").replaceChildren(
+        ...contacts
+          .filter((c) => c.addressable)
+          .map((c) => {
+            const option = document.createElement("option");
+            option.value = c.handle;
+            return option;
+          }),
+      );
+    $("contact-status").textContent = query
+      ? results.length +
+        " matching sessions · up to 30 results ranked by matching transcript lines"
+      : results.length + " contacts · expand a contact for agent-find details";
+    renderContacts();
+  } catch (e) {
+    if (generation === contactGeneration)
+      $("contact-status").textContent = e.message;
+    throw e;
+  }
+}
+function sessionDetails(session) {
+  const section = document.createElement("div");
+  const dl = document.createElement("dl");
+  dl.className = "session-details";
+  for (const [label, value] of [
+    ["Title", session.title],
+    ["Liveness", session.liveness],
+    ["Session", session.sessionId],
+    ["Started", session.started],
+    ["Matching lines", session.matches ?? "Not a topic search"],
+    ["Working directory", session.cwd],
+    ["Scratchpad", session.scratchpad || "No retained scratchpad"],
+    ["Transcript", session.sessionFile],
+  ]) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    dl.append(term, detail);
+  }
+  const resume = document.createElement("pre");
+  resume.className = "source";
+  resume.textContent = session.resume;
+  section.append(
+    dl,
+    resume,
+    button("Copy resume command", async () => {
+      await navigator.clipboard.writeText(session.resume);
+      status("Resume command copied; nothing was executed.");
+    }),
   );
-  renderContacts();
+  return section;
 }
 function renderContacts() {
-  const q = $("contact-search").value.toLowerCase();
   $("contact-list").replaceChildren();
-  for (const c of contacts.filter((c) => c.handle.toLowerCase().includes(q))) {
-    const row = document.createElement("div");
+  for (const contact of contacts) {
+    const row = document.createElement("details");
     row.className = "contact";
-    const b = button(c.handle, async () => {
+    const summary = document.createElement("summary");
+    summary.textContent =
+      contact.handle +
+      " · " +
+      contact.status +
+      (contact.session ? " · " + contact.session.title : "");
+    const content = document.createElement("div");
+    content.className = "contact-content";
+    const compose = button("Message " + contact.handle, async () => {
       await newDraft();
-      $("to").value = c.handle;
+      $("to").value = contact.handle;
       changed();
       $("body").focus();
     });
-    b.disabled = !c.addressable;
-    const meta = document.createElement("small");
-    meta.textContent =
-      c.status +
-      (c.lastSeen ? " · last heartbeat " + date(c.lastSeen * 1000) : "");
-    row.append(b, meta);
+    compose.disabled = !contact.addressable;
+    row.append(summary, compose, content);
+    let loaded = false;
+    row.addEventListener("toggle", async () => {
+      if (!row.open || loaded) return;
+      loaded = true;
+      content.textContent = "Loading session details…";
+      try {
+        const sessions = contact.session
+          ? [contact.session]
+          : await api("contact?handle=" + encodeURIComponent(contact.handle));
+        content.replaceChildren(...sessions.map(sessionDetails));
+        if (!sessions.length)
+          content.textContent =
+            "Historical contact; no registered session transcript is available.";
+        if (contact.lastSeen) {
+          const lastSeen = document.createElement("p");
+          lastSeen.className = "metadata";
+          lastSeen.textContent =
+            "Last heartbeat: " + date(contact.lastSeen * 1000);
+          content.append(lastSeen);
+        }
+      } catch (e) {
+        loaded = false;
+        content.textContent = e.message;
+      }
+    });
     $("contact-list").append(row);
+    if (contact.session) row.open = true;
   }
 }
 
@@ -554,12 +634,19 @@ $("contacts-button").onclick = async () => {
   try {
     if (view === "editor") await saveDraft();
     show("contacts");
-    await getContacts();
+    await getContacts($("contact-search").value);
   } catch (e) {
     error(e);
   }
 };
-$("contact-search").oninput = renderContacts;
+$("contact-search-form").onsubmit = (e) => {
+  e.preventDefault();
+  getContacts($("contact-search").value).catch(error);
+};
+$("all-contacts").onclick = () => {
+  $("contact-search").value = "";
+  getContacts().catch(error);
+};
 $("help-button").onclick = () => $("help").showModal();
 window.addEventListener("beforeunload", (e) => {
   if (dirty) {

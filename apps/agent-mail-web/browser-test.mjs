@@ -30,7 +30,22 @@ const env = {
   AGENT_MAIL_ROOT: agents,
   AGENT_HUMAN_MAIL_ROOT: humans,
   AGENT_IDENTITIES_DIR: join(tmp, "identities"),
+  PI_SESSIONS_DIR: join(tmp, "sessions"),
 };
+await mkdir(env.AGENT_IDENTITIES_DIR);
+await mkdir(env.PI_SESSIONS_DIR);
+const sid = "12345678-0000-0000-0000-000000000001";
+await writeFile(join(env.AGENT_IDENTITIES_DIR, "alder-turner"), sid + "\n");
+await writeFile(
+  join(env.PI_SESSIONS_DIR, "2026-01-01T00-00-00Z_" + sid + ".jsonl"),
+  [
+    { type: "session", cwd: "/fixture/orchard" },
+    { type: "session_info", name: "Investigate orchard migrations" },
+    { type: "message", message: { content: "orchard incident analysis" } },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n") + "\n",
+);
 const cli = (...args) =>
   execFileSync(join(root, "bin/agent-mail"), args, {
     env,
@@ -109,16 +124,14 @@ try {
     "alder-turner, birch-weaver",
   );
   await page.locator("#body").fill("Reply with **Markdown**.");
-  await page
-    .locator("#image")
-    .setInputFiles({
-      name: "pixel.png",
-      mimeType: "image/png",
-      buffer: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7ZkAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    });
+  await page.locator("#image").setInputFiles({
+    name: "pixel.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7ZkAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
   await page.waitForFunction(() =>
     document.getElementById("body").value.includes("file:"),
   );
@@ -148,7 +161,29 @@ try {
   assert.equal(await page.locator(".row").count(), 1);
   await page.getByRole("button", { name: "Contacts", exact: true }).click();
   await page
-    .getByRole("button", { name: "@+alder-turner", exact: true })
+    .locator(".contact summary")
+    .filter({ hasText: "@+alder-turner" })
+    .click();
+  await page
+    .getByText("Investigate orchard migrations", { exact: true })
+    .waitFor();
+  await page.getByText("/fixture/orchard", { exact: true }).waitFor();
+  await page
+    .getByRole("button", { name: "Copy resume command", exact: true })
+    .waitFor();
+  await page.locator("#contact-search").fill("orchard");
+  await page.locator("#contact-search").press("Enter");
+  await page.getByText(/1 matching sessions/).waitFor();
+  assert.equal(await page.locator(".contact").count(), 1);
+  await page.getByText(sid, { exact: true }).waitFor();
+  await page.locator("#contact-search").fill("no-such-fixture-topic");
+  await page.locator("#contact-search").press("Enter");
+  await page.getByText(/0 matching sessions/).waitFor();
+  assert.equal(await page.locator(".contact").count(), 0);
+  await page.locator("#all-contacts").click();
+  await page
+    .locator(".contact summary")
+    .filter({ hasText: "@+alder-turner" })
     .waitFor();
   await page.locator("#compose").click();
   await page.locator("#to").fill("@+alder-turner");

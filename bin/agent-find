@@ -1,114 +1,138 @@
-#!/bin/bash
-# agent-find: locate agent sessions by topic — "which agent worked on X?"
-#
-# Greps session transcripts, ranks by match count, and resolves each hit to
-# its identity, title, scratchpad, and a paste-ready resume command.
-#
-# Usage:
-#   agent-find bfcm
-#   agent-find 'rollout strategy' --limit 3
+#!/usr/bin/env python3
+"""Find agent sessions by transcript topic, or inspect one exact contact."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
 
-set -euo pipefail
 
-SESSIONS_DIR="${PI_SESSIONS_DIR:-$HOME/.pi/agent/sessions}"
-IDENTITIES_DIR="${AGENT_IDENTITIES_DIR:-$HOME/.pi/agent/identities/by-name}"
-MAIL_ROOT="${AGENT_MAIL_ROOT:-${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}}"
+def identities(root):
+    by_id = {}
+    if root.is_dir():
+        for path in sorted(root.iterdir()):
+            if path.is_file() and not path.name.startswith('.'):
+                sid = path.read_text().strip()
+                by_id.setdefault(sid, path.name)
+    return by_id
 
-usage() {
-    cat <<EOF
-Usage: $(basename "$0") <pattern> [--limit N]
 
-Find agent sessions whose transcript matches <pattern> (case-insensitive
-regex). Prints handle, title, working directory, liveness, scratchpad, and a
-resume command for each, ranked by match count.
+def ranked_sessions(root, pattern):
+    # NUL separates paths from counts, so spaces and colons in paths stay intact.
+    result = subprocess.run(['rg', '-c', '-i', '--null', '--glob', '*.jsonl', '--', pattern, str(root)], capture_output=True)
+    if result.returncode not in (0, 1):
+        raise ValueError(result.stderr.decode(errors='replace').strip() or 'ripgrep search failed')
+    data = result.stdout
+    ranked = []
+    while data:
+        path, sep, rest = data.partition(b'\0')
+        count, newline, data = rest.partition(b'\n')
+        if not sep or not newline:
+            raise ValueError('Unexpected ripgrep count output')
+        ranked.append((int(count), Path(os.fsdecode(path))))
+    return sorted(ranked, key=lambda item: (item[0], str(item[1])), reverse=True)
 
-Options:
-    --limit N    Maximum sessions to show (default 5)
-    -h, --help   Show this help
-EOF
-}
 
-pattern=""
-limit=5
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --limit) limit="$2"; shift 2 ;;
-        -h|--help) usage; exit 0 ;;
-        -*) echo "Unknown option: $1" >&2; exit 1 ;;
-        *)
-            if [[ -n "$pattern" ]]; then pattern="$pattern $1"; else pattern="$1"; fi
-            shift
-            ;;
-    esac
-done
-[[ -n "$pattern" ]] || { usage >&2; exit 2; }
+def hydrate(file, hits, claims, mail_root, pane_titles):
+    sid = file.stem.rpartition('_')[2]
+    handle = claims.get(sid, '')
+    cwd, title = '', ''
+    with file.open(errors='replace') as transcript:
+        try:
+            header = json.loads(next(transcript))
+            if isinstance(header, dict) and isinstance(header.get('cwd'), str):
+                cwd = header['cwd']
+        except (StopIteration, ValueError):
+            pass
+        # Most lines contain large tool results. Decode only session-title entries.
+        for line in transcript:
+            if not re.search(r'"type"\s*:\s*"session_info"', line):
+                continue
+            try:
+                record = json.loads(line)
+                if isinstance(record, dict) and record.get('type') == 'session_info' and isinstance(record.get('name'), str):
+                    title = record['name']
+            except ValueError:
+                pass
+    display = handle.replace('-', ' ').casefold()
+    live = 'RUNNING (tmux)' if display and display in pane_titles.casefold() else 'parked'
+    pad = mail_root / (handle + '-' + sid[:8]) if handle else None
+    pad = str(pad) if pad and pad.is_dir() else None
+    resume = f'cd {shlex.quote(cwd or "?")} && pi --session {shlex.quote(str(file))}'
+    return {'handle': '@+' + handle if handle else None, 'title': title or '(untitled)',
+            'sessionId': sid, 'sessionShort': sid[:8], 'started': file.name[:10],
+            'matches': hits, 'cwd': cwd or '?', 'liveness': live, 'scratchpad': pad,
+            'sessionFile': str(file), 'resume': resume}
 
-command -v rg >/dev/null 2>&1 || { echo "agent-find: ripgrep required" >&2; exit 1; }
-[[ -d "$SESSIONS_DIR" ]] || { echo "agent-find: no sessions at $SESSIONS_DIR" >&2; exit 1; }
 
-# When run from inside an agent session, that session's transcript already
-# contains the query text (typing the search wrote it there), so the caller
-# always self-matches. Exclude self; a human running this from a plain shell
-# has no scratchpad and skips nothing.
-self_sid8=""
-[[ -n "${AGENT_SCRATCHPAD:-}" ]] && self_sid8="${AGENT_SCRATCHPAD##*-}"
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('limit must be positive')
+    return number
 
-# Rank first, hydrate later: counting matches is one cheap rg pass, while
-# title/identity/liveness resolution costs several reads per file and is only
-# worth paying for the sessions that make the cut.
-ranked=$(rg -l -i --glob '*.jsonl' -- "$pattern" "$SESSIONS_DIR" 2>/dev/null | while IFS= read -r f; do
-    [[ -n "$self_sid8" && "$(basename "$f")" == *"_$self_sid8"* ]] && continue
-    printf '%s\t%s\n' "$(rg -c -i -- "$pattern" "$f" 2>/dev/null || echo 0)" "$f"
-done | sort -rn | awk -v n="$limit" 'NR<=n')  # awk reads to EOF; head would SIGPIPE sort under pipefail
 
-[[ -n "$ranked" ]] || { echo "No sessions match: $pattern"; exit 1; }
+def main():
+    parser = argparse.ArgumentParser(description='Find agent sessions whose transcripts match a case-insensitive regex, ranked by matching lines.')
+    parser.add_argument('pattern', nargs='*', help='transcript search pattern')
+    parser.add_argument('--limit', type=positive_int, default=5, help='maximum results (default: 5)')
+    parser.add_argument('--json', action='store_true', help='emit a JSON array instead of terminal text')
+    parser.add_argument('--agent', help='inspect an exact registry handle instead of searching transcripts')
+    args = parser.parse_intermixed_args()
+    pattern = ' '.join(args.pattern)
+    if bool(pattern) == bool(args.agent):
+        parser.error('provide either a search pattern or --agent HANDLE')
+    root = Path(os.environ.get('PI_SESSIONS_DIR', '~/.pi/agent/sessions')).expanduser()
+    registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
+    mail_root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()
+    try:
+        if not root.is_dir():
+            raise ValueError(f'no sessions at {root}')
+        claims = identities(registry)
+        if args.agent:
+            handle = args.agent.removeprefix('@').removeprefix('+')
+            sid = next((sid for sid, name in claims.items() if name == handle), None)
+            if sid and not re.fullmatch(r'[a-fA-F0-9-]+', sid):
+                raise ValueError('Invalid session ID in identity registry')
+            ranked = [(None, file) for file in sorted(root.rglob('*_' + sid + '.jsonl'))] if sid else []
+        else:
+            ranked = ranked_sessions(root, pattern)
+            # Human web searches unset AGENT_SCRATCHPAD so the launching agent is included.
+            pad = os.environ.get('AGENT_SCRATCHPAD', '')
+            if pad:
+                own_handle = Path(pad).name.rpartition('-')[0]
+                own_sid = next((sid for sid, name in claims.items() if name == own_handle), None)
+                if own_sid:
+                    ranked = [(hits, file) for hits, file in ranked if file.stem.rpartition('_')[2] != own_sid]
+        try:
+            pane_titles = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_title}'], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            pane_titles = ''
+        results = [hydrate(file, hits, claims, mail_root, pane_titles) for hits, file in ranked[:args.limit]]
+        if args.json:
+            print(json.dumps(results))
+        elif not results:
+            print('No sessions match: ' + (pattern or args.agent))
+            return 1
+        else:
+            for result in results:
+                print('─────')
+                identity = f'{result["handle"]}  [{result["liveness"]}]' if result['handle'] else '(pre-registry, unnamed)'
+                print(f'{"agent:":9} {identity}')
+                print(f'{"title:":9} {result["title"]}')
+                matches = 'metadata only' if result['matches'] is None else f'{result["matches"]} matches'
+                print(f'{"session:":9} {result["sessionShort"]}  ({matches}, started {result["started"]})')
+                print(f'{"cwd:":9} {result["cwd"]}')
+                print(f'{"pad:":9} {result["scratchpad"] or "-"}')
+                print(f'{"resume:":9} {result["resume"]}')
+        return 0
+    except (OSError, ValueError) as error:
+        print('agent-find: ' + str(error), file=sys.stderr)
+        return 2
 
-# One tmux call for all results; the titlebar extension stamps each live UI
-# session's pane with its display name. Process-table checks fail here: pi's
-# argv is bare and macOS hides other processes' environments.
-pane_titles=$(tmux list-panes -a -F '#{pane_title}' 2>/dev/null || true)
 
-json_field() { # file, key — last occurrence wins (titles are retitled; models switch)
-    rg -o "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | tail -1 | sed "s/\"$2\":\"//; s/\"\$//"
-}
-
-while IFS=$'\t' read -r hits file; do
-    sid=$(basename "$file" .jsonl | sed 's/.*_//')
-    sid8=${sid:0:8}
-    started=$(basename "$file" | cut -c1-10)
-    cwd=$(head -1 "$file" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')
-    title=$(rg -o '"type":"session_info"[^}]*' "$file" 2>/dev/null | tail -1 | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
-
-    handle=""
-    claim=$(grep -l "$sid" "$IDENTITIES_DIR"/* 2>/dev/null | head -1) && handle=$(basename "$claim")
-
-    live="parked"
-    if [[ -n "$handle" ]]; then
-        display=$(printf '%s' "$handle" | tr '-' ' ')
-        # Matched against the captured list, not a live pipe: grep -q's early
-        # exit would SIGPIPE tmux, which pipefail reads as "no match".
-        if grep -qi "$display" <<<"$pane_titles"; then
-            live="RUNNING (tmux)"
-        fi
-    fi
-
-    pad="-"
-    if [[ -n "$handle" ]]; then
-        # Match handle AND suffix. sid8 is UUIDv7 timestamp bits with zero
-        # entropy, shared by every session started in the same 65.5s window,
-        # so a suffix-only glob returns an arbitrary batch-sibling's pad.
-        [[ -d "$MAIL_ROOT/$handle-$sid8" ]] && pad="$MAIL_ROOT/$handle-$sid8"
-    fi
-
-    printf '%s\n' "─────"
-    if [[ -n "$handle" ]]; then
-        printf '%-9s @+%s  [%s]\n' "agent:" "$handle" "$live"
-    else
-        printf '%-9s (pre-registry, unnamed)\n' "agent:"
-    fi
-    printf '%-9s %s\n' "title:" "${title:-"(untitled)"}"
-    printf '%-9s %s  (%s matches, started %s)\n' "session:" "$sid8" "$hits" "$started"
-    printf '%-9s %s\n' "cwd:" "${cwd:-?}"
-    printf '%-9s %s\n' "pad:" "$pad"
-    printf '%-9s cd %s && pi --session %s\n' "resume:" "${cwd:-?}" "$file"
-done <<<"$ranked"
+if __name__ == '__main__':
+    sys.exit(main())

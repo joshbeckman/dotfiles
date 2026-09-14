@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import tempfile
+import unittest
+
+CLI = Path(__file__).resolve().parent.parent / 'bin/agent-find'
+
+
+class AgentFindTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.sessions = self.root / 'sessions with spaces: test'
+        self.identities = self.root / 'identities'
+        self.mail = self.root / 'mail'
+        self.bin = self.root / 'bin'
+        for p in (self.sessions, self.identities, self.mail, self.bin):
+            p.mkdir()
+        (self.bin / 'tmux').write_text('#!/bin/sh\nprintf "✓ Alder Turner · Session details\\n"\n')
+        (self.bin / 'tmux').chmod(0o755)
+        self.env = dict(os.environ, PI_SESSIONS_DIR=str(self.sessions), AGENT_IDENTITIES_DIR=str(self.identities), AGENT_MAIL_ROOT=str(self.mail), PATH=str(self.bin) + ':' + os.environ['PATH'])
+        self.env.pop('AGENT_SCRATCHPAD', None)
+        self.sid = '01234567-0000-0000-0000-000000000001'
+        self.other = '01234567-0000-0000-0000-000000000002'
+        self.make_session('alder-turner', self.sid, 3)
+        self.make_session('birch-weaver', self.other, 1)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def make_session(self, handle, sid, count):
+        (self.identities / handle).write_text(sid + '\n')
+        (self.mail / (handle + '-' + sid[:8])).mkdir()
+        path = self.sessions / ('2026-01-01T00-00-00Z_' + sid + '.jsonl')
+        entries = [{'type': 'session', 'cwd': "/work/a 'quoted' directory"}, {'type':'session_info','name':'Old title'}]
+        entries += [{'type':'message','message':{'role':'user','content':'persimmon migration'}} for _ in range(count)]
+        entries += [{'type':'session_info','name':'Latest "quoted" title'}]
+        path.write_text('\n'.join(json.dumps(e) for e in entries) + '\n' + '{"type":"session_info","name":')
+        return path
+
+    def run_cli(self, *args, env=None):
+        return subprocess.run([str(CLI), *args], env=env or self.env, text=True, capture_output=True)
+
+    def test_ranked_json_and_legacy_text(self):
+        result = self.run_cli('--json', 'persimmon')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = json.loads(result.stdout)
+        self.assertEqual([r['matches'] for r in records], [3, 1])
+        first = records[0]
+        self.assertEqual(first['handle'], '@+alder-turner')
+        self.assertEqual(first['title'], 'Latest "quoted" title')
+        self.assertEqual(first['liveness'], 'RUNNING (tmux)')
+        self.assertEqual(first['sessionId'], self.sid)
+        self.assertIn(shlex.quote(first['cwd']), first['resume'])
+        self.assertEqual(first['scratchpad'], str(self.mail / 'alder-turner-01234567'))
+        text = self.run_cli('persimmon', '--limit', '1').stdout
+        for field in ('agent:', 'title:', 'session:', 'cwd:', 'pad:', 'resume:'):
+            self.assertIn(field, text)
+        self.assertNotIn('birch-weaver', text)
+
+    def test_exact_agent_and_self_exclusion(self):
+        record = json.loads(self.run_cli('--agent', '@+birch-weaver', '--json').stdout)[0]
+        self.assertEqual(record['sessionId'], self.other)
+        env = dict(self.env, AGENT_SCRATCHPAD=str(self.mail / 'alder-turner-01234567'))
+        records = json.loads(self.run_cli('--json', 'persimmon', env=env).stdout)
+        self.assertEqual([r['sessionId'] for r in records], [self.other])
+
+    def test_empty_invalid_and_literal_option(self):
+        self.assertEqual(json.loads(self.run_cli('--json', 'absent-word').stdout), [])
+        self.assertEqual(self.run_cli('absent-word').returncode, 1)
+        self.assertNotEqual(self.run_cli('--json', '[').returncode, 0)
+        self.assertEqual(json.loads(self.run_cli('--json', '--', '--glob').stdout), [])
+        self.assertNotEqual(self.run_cli('persimmon', '--limit', '0').returncode, 0)
+        self.assertEqual(json.loads(self.run_cli('--agent', 'missing', '--json').stdout), [])
+
+
+if __name__ == '__main__':
+    unittest.main()

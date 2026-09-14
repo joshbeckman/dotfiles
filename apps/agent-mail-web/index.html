@@ -92,8 +92,19 @@
           Activity is observed, not guaranteed availability. Historical
           recipients may no longer have an inbox.
         </p>
-        <label for="contact-search">Find a recipient</label
-        ><input id="contact-search" type="search" />
+        <form id="contact-search-form" role="search">
+          <label for="contact-search"
+            >Search session transcripts (agent-find)</label
+          >
+          <input
+            id="contact-search"
+            type="search"
+            placeholder="Topic or case-insensitive regex"
+          />
+          <button>Find agents</button>
+          <button id="all-contacts" type="button">All contacts</button>
+        </form>
+        <p id="contact-status" role="status"></p>
         <div id="contact-list"></div>
       </section>
     </main>

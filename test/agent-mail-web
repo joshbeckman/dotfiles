@@ -31,9 +31,14 @@ class WebTest(unittest.TestCase):
         fake.mkdir()
         (fake / 'notify-josh').write_text('#!/bin/sh\nexit 0\n')
         (fake / 'notify-josh').chmod(0o755)
-        os.environ.update(AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PATH=str(fake) + ':' + os.environ['PATH'])
+        os.environ.update(AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PI_SESSIONS_DIR=str(self.root / 'sessions'), PATH=str(fake) + ':' + os.environ['PATH'])
         (self.root / 'agents/alder-turner-12345678').mkdir(parents=True)
         (self.root / 'agents/birch-weaver-87654321').mkdir()
+        (self.root / 'sessions').mkdir()
+        (self.root / 'identities').mkdir()
+        sid = '12345678-0000-0000-0000-000000000001'
+        (self.root / 'identities/alder-turner').write_text(sid + '\n')
+        (self.root / 'sessions' / ('2026-01-01T00-00-00Z_' + sid + '.jsonl')).write_text('\n'.join(json.dumps(entry) for entry in [{'type':'session','cwd':'/fixture/project'}, {'type':'session_info','name':'Alder session title'}, {'type':'message','message':{'content':'orchard migration topic'}}]) + '\n')
         self.box = web.Mailbox()
         self.id = web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--to', '@+birch-weaver', '--subject', 'A test thread', '--body', '**Hello**\n\nA searchable needle.\n')
         self.key = 'inbox:' + self.id + '.md'
@@ -169,6 +174,18 @@ class WebTest(unittest.TestCase):
         alder = next(c for c in contacts if c['handle']=='@+alder-turner')
         self.assertTrue(alder['addressable'])
         self.assertEqual(alder['status'], 'parked')
+        os.environ['AGENT_SCRATCHPAD'] = str(self.root / 'agents/alder-turner-12345678')
+        # Human searches must include the agent that happened to launch the bridge.
+        status, body = self.request('/api/contacts?q=orchard')
+        self.assertEqual(status, 200)
+        results = json.loads(body)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['session']['title'], 'Alder session title')
+        self.assertEqual(results[0]['session']['cwd'], '/fixture/project')
+        self.assertEqual(results[0]['session']['matches'], 1)
+        self.assertEqual(self.request('/api/contact?handle=alder-turner')[0], 200)
+        self.assertEqual(self.request('/api/contacts?q=%5B')[0], 400)
+        self.assertEqual(self.request('/api/contact?handle=../../secrets')[0], 400)
 
 
 if __name__ == '__main__':

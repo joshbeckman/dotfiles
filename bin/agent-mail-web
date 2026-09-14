@@ -184,7 +184,21 @@ class Mailbox:
         atomic_write(path, text.encode())
         return self.message(data['key'])
 
-    def contacts(self):
+    def find_sessions(self, query=None, handle=None):
+        if query is not None and (not isinstance(query, str) or len(query) > 512):
+            raise MailError('Search patterns must be at most 512 characters')
+        if handle is not None and not re.fullmatch(r'@?\+?[A-Za-z0-9._-]+', handle):
+            raise MailError('Invalid contact handle')
+        env = dict(os.environ)
+        env.pop('AGENT_SCRATCHPAD', None)
+        command = [str(ROOT / 'bin/agent-find'), '--json', '--limit', '30']
+        command += ['--agent', handle] if handle is not None else ['--', query]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30, env=env)
+        if result.returncode:
+            raise MailError(result.stderr.strip() or 'Agent search failed')
+        return json.loads(result.stdout)
+
+    def contacts(self, query=''):
         root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()
         registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
         contacts = {}
@@ -215,6 +229,15 @@ class Mailbox:
                 if not handle or handle == 'josh':
                     continue
                 contacts.setdefault(handle, {'handle': who.strip(), 'status': 'historical', 'addressable': False, 'lastSeen': None})
+        if query:
+            results = []
+            for session in self.find_sessions(query=query):
+                handle = session['handle']
+                contact = contacts.get(handle.lstrip('@+') if handle else '', {})
+                results.append(dict(contact, handle=handle or '(unnamed session)',
+                                    addressable=contact.get('addressable', False),
+                                    status=session['liveness'], lastSeen=contact.get('lastSeen'), session=session))
+            return results
         return sorted(contacts.values(), key=lambda c: (not c['status'].startswith('active'), not c['addressable'], c['handle']))
 
     def attachment(self, data):
@@ -328,7 +351,9 @@ class Handler(BaseHTTPRequestHandler):
             box.path(key, 'drafts')
             result = box.message(key)
         elif route == '/api/contacts':
-            result = box.contacts()
+            result = box.contacts(args.get('q', [''])[0])
+        elif route == '/api/contact':
+            result = box.find_sessions(handle=args.get('handle', [''])[0])
         elif route == '/api/attachment':
             name = args.get('name', [''])[0]
             if not re.fullmatch(r'[0-9a-f]{32}\.(png|jpg|gif|webp)', name):
