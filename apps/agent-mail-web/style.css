@@ -145,6 +145,21 @@ main {
 main > section {
   max-width: 100%;
 }
+.replying #reader > .actions,
+.replying #thread > .message > .render-tools {
+  display: none;
+}
+@media (min-width: 1000px) {
+  main.replying {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+  }
+  main.replying > section {
+    min-width: 0;
+  }
+}
 [hidden] {
   display: none !important;
 }

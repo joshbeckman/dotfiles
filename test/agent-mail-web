@@ -104,6 +104,7 @@ class WebTest(unittest.TestCase):
         draft = self.box.draft('reply-all', self.key)
         self.assertIn('birch-weaver', draft['to'])
         self.assertNotIn('josh', draft['to'])
+        self.assertEqual([message['id'] for message in self.box.thread(draft['key'])], [self.id])
         draft = self.box.save(dict(draft, body='My reply.'))
         status, body = self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})
         self.assertEqual(status, 200)

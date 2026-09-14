@@ -153,6 +153,42 @@ try {
   assert.deepEqual(remote, []);
   await page.locator("#reply-all").click();
   await page.locator("#editor").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#reader").isVisible(), true);
+  const panels = await page.evaluate(() => ({
+    reader: document.getElementById("reader").getBoundingClientRect().toJSON(),
+    editor: document.getElementById("editor").getBoundingClientRect().toJSON(),
+  }));
+  assert(panels.editor.left >= panels.reader.right);
+  const context = page.frameLocator("#thread iframe").last();
+  await context.getByRole("heading", { name: "Fixture heading" }).waitFor();
+  const quote = await context
+    .locator("p")
+    .first()
+    .evaluate((paragraph) => {
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return selection.toString();
+    });
+  assert(quote.includes("searchable persimmon"));
+  await context.locator("body").press("e");
+  assert.equal((await readdir(join(humans, "josh/inbox/new"))).length, 1);
+  await page.setViewportSize({ width: 375, height: 850 });
+  assert(
+    await page.evaluate(
+      () =>
+        document.getElementById("editor").getBoundingClientRect().top >=
+        document.getElementById("reader").getBoundingClientRect().bottom,
+    ),
+  );
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  await page.setViewportSize({ width: 1200, height: 850 });
   assert.equal(
     await page.locator("#to").inputValue(),
     "alder-turner, birch-weaver",
@@ -160,7 +196,9 @@ try {
   await page
     .locator("#body")
     .fill(
-      "Reply with **Markdown**.\n\n" +
+      "Reply with **Markdown**.\n\n> " +
+        quote +
+        "\n\n" +
         "A paragraph-only message should grow with its content.\n\n".repeat(12),
     );
   await page.locator("#image").setInputFiles({
@@ -232,6 +270,13 @@ try {
   await page.reload();
   await page.getByRole("button", { name: /^Drafts/ }).click();
   await page.locator(".row").click();
+  await page.locator("#editor").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#reader").isVisible(), true);
+  await page
+    .frameLocator("#thread iframe")
+    .last()
+    .getByText("Reply with Markdown.", { exact: true })
+    .waitFor();
   await page.locator("#send").click();
   await page.locator("#reader").waitFor({ state: "visible" });
   await page.waitForFunction(
@@ -328,7 +373,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, reply navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
+    "Browser tests passed: read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, inline reply context and navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

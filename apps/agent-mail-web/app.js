@@ -63,8 +63,10 @@ async function api(path, data) {
 }
 function show(name) {
   view = name;
+  const replying = name === "editor" && Boolean(draft?.parent);
+  document.querySelector("main").classList.toggle("replying", replying);
   for (const id of ["mail-list", "reader", "editor", "contacts"])
-    $(id).hidden = id !== name;
+    $(id).hidden = id !== name && !(replying && id === "reader");
 }
 function button(text, action) {
   const b = document.createElement("button");
@@ -161,8 +163,14 @@ async function openItem(index = selected) {
 async function openThread(m) {
   const generation = ++threadGeneration;
   const messages = await api("thread?key=" + encodeURIComponent(m.key));
-  if (generation !== threadGeneration) return;
-  current = { key: m.key, messages };
+  if (generation !== threadGeneration) return false;
+  const key =
+    m.folder === "drafts"
+      ? messages.find((message) => message.id === m.parent)?.key ||
+        messages.at(-1)?.key ||
+        m.key
+      : m.key;
+  current = { key, messages };
   $("thread-title").textContent = m.subject || "(no subject)";
   $("participants").textContent =
     "Participants: " +
@@ -181,7 +189,7 @@ async function openThread(m) {
   for (const [i, message] of messages.entries()) {
     const detail = document.createElement("details");
     detail.className = "message";
-    detail.open = message.key === m.key || i === messages.length - 1;
+    detail.open = message.key === key || i === messages.length - 1;
     const summary = document.createElement("summary");
     summary.innerHTML =
       "<time>" +
@@ -218,6 +226,10 @@ async function openThread(m) {
     );
     detail.append(actions);
   }
+  if (!messages.length)
+    $("thread").textContent =
+      "Earlier messages are not available for this draft.";
+  return true;
 }
 async function archiveThread() {
   if (busy) return;
@@ -240,9 +252,9 @@ async function archiveThread() {
 }
 async function newDraft(mode = "compose", key = current?.key) {
   if (view === "editor") await saveDraft();
-  loadDraft(await api("draft", { mode, key }));
+  return loadDraft(await api("draft", { mode, key }));
 }
-function loadDraft(value) {
+async function loadDraft(value) {
   draft = value;
   dirty = false;
   $("to").value = value.to;
@@ -251,6 +263,7 @@ function loadDraft(value) {
   $("preview").hidden = true;
   $("preview").replaceChildren();
   $("draft-status").textContent = "Saved on disk";
+  if (value.parent && !(await openThread(value))) return;
   show("editor");
   $(value.to ? "body" : "to").focus();
 }
