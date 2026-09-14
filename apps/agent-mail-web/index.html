@@ -56,7 +56,13 @@
         </div>
         <h2 id="thread-title" tabindex="-1"></h2>
         <p id="participants"></p>
-        <div id="thread"></div>
+        <div id="thread-layout">
+          <div id="thread"></div>
+          <aside id="thread-contacts" aria-label="Thread participants">
+            <h3>People in this thread</h3>
+            <div id="participant-cards"></div>
+          </aside>
+        </div>
       </section>
       <section id="editor" aria-label="Compose message" hidden>
         <div class="actions">

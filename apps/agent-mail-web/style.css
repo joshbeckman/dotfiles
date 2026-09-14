@@ -223,9 +223,46 @@ main > section {
   flex-wrap: wrap;
   margin: 1rem 0;
 }
-#reader,
 #editor {
   max-width: 78rem;
+}
+#thread-layout > * {
+  min-width: 0;
+}
+#thread-contacts {
+  border-top: 1px solid var(--c-border);
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+#participant-cards .session-details {
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+}
+#participant-cards .session-details dd {
+  margin-bottom: 0.75rem;
+}
+@media (min-width: 1000px) {
+  #thread-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    gap: 2rem;
+    align-items: start;
+  }
+  #thread-contacts {
+    border-top: 0;
+    border-left: 1px solid var(--c-border);
+    padding-left: 1rem;
+    margin-top: 0;
+  }
+  .replying #thread-layout {
+    display: block;
+  }
+  .replying #thread-contacts {
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+    padding-left: 0;
+    margin-top: 1rem;
+  }
 }
 #participants {
   color: var(--c-muted);

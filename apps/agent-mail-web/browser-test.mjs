@@ -189,6 +189,45 @@ try {
     await page.locator("#thread summary .avatar").first().getAttribute("src"),
     icons["alder-turner"],
   );
+  const sidebar = page.getByRole("complementary", {
+    name: "Thread participants",
+  });
+  await sidebar
+    .getByText("Investigate orchard migrations", { exact: true })
+    .waitFor();
+  await sidebar
+    .getByText("Your human inbox; not an agent session.", { exact: true })
+    .waitFor();
+  await sidebar
+    .getByText(
+      "Historical contact; no registered session transcript is available.",
+      { exact: true },
+    )
+    .waitFor();
+  assert.equal(await sidebar.locator(".contact").count(), 3);
+  await sidebar
+    .getByRole("button", { name: "Copy resume command", exact: true })
+    .waitFor();
+  await sidebar.getByText("More session details", { exact: true }).click();
+  await sidebar.getByText(sid, { exact: true }).waitFor();
+  await sidebar.getByText("More session details", { exact: true }).click();
+  assert(
+    await page.evaluate(
+      () =>
+        document.getElementById("thread-contacts").getBoundingClientRect()
+          .left >=
+        document.getElementById("thread").getBoundingClientRect().right,
+    ),
+  );
+  await page.evaluate(() =>
+    renderParticipantCards([
+      {
+        from: "alder-turner-12345678",
+        to: "@+alder-turner, josh, @josh, birch-weaver",
+      },
+    ]),
+  );
+  assert.equal(await sidebar.locator(".contact").count(), 3);
   const reader = page.frameLocator("#thread iframe").last();
   await reader.getByRole("heading", { name: "Fixture heading" }).waitFor();
   await reader.getByText("Mail", { exact: true }).waitFor();
@@ -196,6 +235,14 @@ try {
   await assertReaderFits(reader);
   await page.setViewportSize({ width: 375, height: 850 });
   await assertReaderFits(reader);
+  assert(
+    await page.evaluate(
+      () =>
+        document.getElementById("thread-contacts").getBoundingClientRect()
+          .top >=
+        document.getElementById("thread").getBoundingClientRect().bottom,
+    ),
+  );
   await page.setViewportSize({ width: 1200, height: 850 });
   await assertReaderFits(reader);
   assert.equal(
@@ -346,36 +393,37 @@ try {
     .waitFor();
   assert.equal(await page.locator("#archive").isDisabled(), true);
   await page.getByRole("button", { name: "Contacts", exact: true }).click();
-  await page
+  const directory = page.locator("#contact-list");
+  await directory
     .locator(".contact summary")
     .filter({ hasText: "@+alder-turner" })
     .click();
   assert.equal(
-    await page
+    await directory
       .locator(".contact summary")
       .filter({ hasText: "@+alder-turner" })
       .locator(".avatar")
       .getAttribute("src"),
     icons["alder-turner"],
   );
-  await page
+  await directory
     .getByText("Investigate orchard migrations", { exact: true })
     .waitFor();
-  await page.getByText("/fixture/orchard", { exact: true }).waitFor();
-  await page
+  await directory.getByText("/fixture/orchard", { exact: true }).waitFor();
+  await directory
     .getByRole("button", { name: "Copy resume command", exact: true })
     .waitFor();
   await page.locator("#contact-search").fill("orchard");
   await page.locator("#contact-search").press("Enter");
   await page.getByText(/1 matching sessions/).waitFor();
-  assert.equal(await page.locator(".contact").count(), 1);
-  await page.getByText(sid, { exact: true }).waitFor();
+  assert.equal(await directory.locator(".contact").count(), 1);
+  await directory.getByText(sid, { exact: true }).waitFor();
   await page.locator("#contact-search").fill("no-such-fixture-topic");
   await page.locator("#contact-search").press("Enter");
   await page.getByText(/0 matching sessions/).waitFor();
-  assert.equal(await page.locator(".contact").count(), 0);
+  assert.equal(await directory.locator(".contact").count(), 0);
   await page.locator("#all-contacts").click();
-  await page
+  await directory
     .locator(".contact summary")
     .filter({ hasText: "@+alder-turner" })
     .waitFor();
@@ -442,7 +490,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, inline reply context and navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
+    "Browser tests passed: local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

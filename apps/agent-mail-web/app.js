@@ -217,6 +217,7 @@ async function openThread(m) {
       ),
     ].join(", ");
   $("archive").disabled = !messages.some((v) => v.folder === "inbox");
+  renderParticipantCards(messages);
   $("thread").replaceChildren();
   show("reader");
   $("thread-title").focus();
@@ -465,32 +466,46 @@ async function getContacts(query = "") {
     throw e;
   }
 }
-function sessionDetails(session) {
+function sessionDetails(session, compact = false) {
   const section = document.createElement("div");
   const dl = document.createElement("dl");
-  dl.className = "session-details";
+  const extra = document.createElement("dl");
+  dl.className = extra.className = "session-details";
   for (const [label, value] of [
     ["Title", session.title],
     ["Liveness", session.liveness],
+    ["Working directory", session.cwd],
     ["Session", session.sessionId],
     ["Started", session.started],
-    ["Matching lines", session.matches ?? "Not a topic search"],
-    ["Working directory", session.cwd],
+    ["Matching lines", session.matches],
     ["Scratchpad", session.scratchpad || "No retained scratchpad"],
     ["Transcript", session.sessionFile],
   ]) {
+    if (value == null) continue;
     const term = document.createElement("dt");
     term.textContent = label;
     const detail = document.createElement("dd");
     detail.textContent = value;
-    dl.append(term, detail);
+    const target =
+      compact && !["Title", "Liveness", "Working directory"].includes(label)
+        ? extra
+        : dl;
+    target.append(term, detail);
   }
   const resume = document.createElement("pre");
   resume.className = "source";
   resume.textContent = session.resume;
+  section.append(dl);
+  if (compact) {
+    const more = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "More session details";
+    more.append(summary, extra, resume);
+    section.append(more);
+  } else {
+    section.append(resume);
+  }
   section.append(
-    dl,
-    resume,
     button("Copy resume command", async () => {
       await navigator.clipboard.writeText(session.resume);
       status("Resume command copied; nothing was executed.");
@@ -498,26 +513,26 @@ function sessionDetails(session) {
   );
   return section;
 }
-function renderContacts() {
-  $("contact-list").replaceChildren();
-  for (const contact of contacts) {
-    const row = document.createElement("details");
-    row.className = "contact";
-    const summary = document.createElement("summary");
-    summary.textContent =
-      contact.handle +
-      " · " +
-      contact.status +
-      (contact.session ? " · " + contact.session.title : "");
-    summary.prepend(
-      avatar(
-        contact.session && !contact.session.handle
-          ? contact.session.sessionId
-          : contact.handle,
-      ),
-    );
-    const content = document.createElement("div");
-    content.className = "contact-content";
+function contactCard(contact, { allowCompose = true, compact = false } = {}) {
+  const row = document.createElement("details");
+  row.className = "contact";
+  const summary = document.createElement("summary");
+  summary.textContent =
+    contact.handle +
+    " · " +
+    contact.status +
+    (contact.session ? " · " + contact.session.title : "");
+  summary.prepend(
+    avatar(
+      contact.session && !contact.session.handle
+        ? contact.session.sessionId
+        : contact.handle,
+    ),
+  );
+  const content = document.createElement("div");
+  content.className = "contact-content";
+  row.append(summary);
+  if (allowCompose) {
     const compose = button("Message " + contact.handle, async () => {
       await newDraft();
       $("to").value = contact.handle;
@@ -525,34 +540,73 @@ function renderContacts() {
       $("body").focus();
     });
     compose.disabled = !contact.addressable;
-    row.append(summary, compose, content);
-    let loaded = false;
-    row.addEventListener("toggle", async () => {
-      if (!row.open || loaded) return;
-      loaded = true;
-      content.textContent = "Loading session details…";
-      try {
-        const sessions = contact.session
-          ? [contact.session]
-          : await api("contact?handle=" + encodeURIComponent(contact.handle));
-        content.replaceChildren(...sessions.map(sessionDetails));
-        if (!sessions.length)
-          content.textContent =
-            "Historical contact; no registered session transcript is available.";
-        if (contact.lastSeen) {
-          const lastSeen = document.createElement("p");
-          lastSeen.className = "metadata";
-          lastSeen.textContent =
-            "Last heartbeat: " + date(contact.lastSeen * 1000);
-          content.append(lastSeen);
-        }
-      } catch (e) {
-        loaded = false;
-        content.textContent = e.message;
+    row.append(compose);
+  }
+  row.append(content);
+  let loaded = false;
+  row.addEventListener("toggle", async () => {
+    if (!row.open || loaded) return;
+    loaded = true;
+    if (contact.human) {
+      content.textContent =
+        contact.handle === "@josh"
+          ? "Your human inbox; not an agent session."
+          : "Human contact; no agent session details.";
+      return;
+    }
+    content.textContent = "Loading session details…";
+    try {
+      const sessions = contact.session
+        ? [contact.session]
+        : await api("contact?handle=" + encodeURIComponent(contact.handle));
+      content.replaceChildren(
+        ...sessions.map((session) => sessionDetails(session, compact)),
+      );
+      if (!sessions.length)
+        content.textContent =
+          "Historical contact; no registered session transcript is available.";
+      if (contact.lastSeen) {
+        const lastSeen = document.createElement("p");
+        lastSeen.className = "metadata";
+        lastSeen.textContent =
+          "Last heartbeat: " + date(contact.lastSeen * 1000);
+        content.append(lastSeen);
       }
+    } catch (e) {
+      loaded = false;
+      content.textContent = e.message;
+    }
+  });
+  return row;
+}
+function renderContacts() {
+  $("contact-list").replaceChildren();
+  for (const contact of contacts) {
+    const card = contactCard(contact);
+    $("contact-list").append(card);
+    if (contact.session) card.open = true;
+  }
+}
+function renderParticipantCards(messages) {
+  const people = new Map();
+  for (const address of messages.flatMap((message) => [
+    message.from,
+    ...message.to.split(","),
+  ])) {
+    if (!address.trim()) continue;
+    const key = avatarKey(address);
+    const human = key.startsWith("human:");
+    people.set(key, {
+      handle: (human ? "@" : "@+") + key.slice(6),
+      human,
+      status: human ? "Human" : "Agent",
     });
-    $("contact-list").append(row);
-    if (contact.session) row.open = true;
+  }
+  $("participant-cards").replaceChildren();
+  for (const contact of people.values()) {
+    const card = contactCard(contact, { allowCompose: false, compact: true });
+    $("participant-cards").append(card);
+    card.open = true;
   }
 }
 
