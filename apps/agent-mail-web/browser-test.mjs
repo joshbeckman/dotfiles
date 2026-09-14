@@ -153,8 +153,16 @@ try {
         "alder-turner-12345678",
         "birch-weaver",
         '<svg onload="alert(1)">',
-      ].map((address) => [address, avatar(address).src]),
+      ].map((address) => [address, avatar(address).getAttribute("src")]),
     ),
+  );
+  assert.equal(icons.josh, "/josh-avatar.png");
+  const personalIcon = await page.request.get(new URL(icons.josh, url).href);
+  assert.equal(personalIcon.status(), 200);
+  assert.equal(personalIcon.headers()["content-type"], "image/png");
+  assert.deepEqual(
+    await personalIcon.body(),
+    await readFile(join(root, "apps/agent-mail-web/josh-avatar.png")),
   );
   assert.equal(icons.josh, icons["@josh"]);
   assert.equal(icons.josh, icons["humans/josh"]);

@@ -328,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.get(url.path, parse_qs(url.query))
             if self.command != 'GET':
                 raise MailError('Unknown endpoint', 404)
-            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg')}}
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png')}}
             if url.path not in static:
                 raise MailError('Not found', 404)
             p = ASSETS / static[url.path]

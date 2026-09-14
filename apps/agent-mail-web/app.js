@@ -131,8 +131,18 @@ function avatarKey(address) {
   return "agent:" + value.replace(/^@\+|^\+/, "").replace(/-[0-9a-f]{8}$/, "");
 }
 function avatar(address) {
+  const image = document.createElement("img");
+  image.className = "avatar";
+  image.alt = "";
+  image.setAttribute("aria-hidden", "true");
+  image.width = image.height = 28;
+  const key = avatarKey(address);
+  if (key === "human:josh") {
+    image.src = "/josh-avatar.png";
+    return image;
+  }
   let hash = 2166136261;
-  for (const byte of new TextEncoder().encode(avatarKey(address)))
+  for (const byte of new TextEncoder().encode(key))
     hash = Math.imul(hash ^ byte, 16777619) >>> 0;
   const hue = (hash >>> 16) % 360;
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="hsl(${hue} 30% 93%)"/>`;
@@ -142,11 +152,6 @@ function avatar(address) {
         svg += `<rect x="${6 + x * 4}" y="${6 + y * 4}" width="3.5" height="3.5" rx="0.5" fill="hsl(${hue} 65% 35%)"/>`;
     }
   }
-  const image = document.createElement("img");
-  image.className = "avatar";
-  image.alt = "";
-  image.setAttribute("aria-hidden", "true");
-  image.width = image.height = 28;
   image.src =
     "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg + "</svg>");
   return image;
