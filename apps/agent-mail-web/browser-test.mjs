@@ -117,12 +117,16 @@ try {
     colorScheme: "light",
   });
   const errors = [],
-    remote = [];
+    remote = [],
+    dialogs = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("request", (r) => {
     if (r.url().startsWith("https://")) remote.push(r.url());
   });
-  page.on("dialog", (d) => d.accept());
+  page.on("dialog", (d) => {
+    dialogs.push(d.type() + ": " + d.message());
+    return d.accept();
+  });
   await page.goto(url);
   await page
     .getByRole("button", { name: /alder-turner Markdown conversation/ })
@@ -171,6 +175,8 @@ try {
     .getByRole("img", { name: "pixel.png" })
     .waitFor();
   await assertReaderFits(page.frameLocator("#preview iframe"));
+  // Settle the scroll after preview sizing before aiming the send click.
+  await page.locator("#send").scrollIntoViewIfNeeded();
   await page.locator("#send").click();
   await page
     .getByText("Sent. A copy is retained in Sent.")
@@ -180,6 +186,13 @@ try {
         "Send state:",
         await page.locator("#status").textContent(),
         await page.locator("#draft-status").textContent(),
+        {
+          editor: await page.locator("#editor").isVisible(),
+          reader: await page.locator("#reader").isVisible(),
+          sendDisabled: await page.locator("#send").isDisabled(),
+          sent: await readdir(join(humans, "josh/sent")),
+          dialogs,
+        },
       );
       throw error;
     });
@@ -188,7 +201,14 @@ try {
   const copy = await readFile(join(humans, "josh/sent", sent[0]), "utf8");
   assert(copy.includes("Thread-ID: " + id));
   assert(copy.includes("Reply with **Markdown**."));
-  await page.locator(".row").click();
+  await page.locator("#reader").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#mail-list").isVisible(), false);
+  await page
+    .frameLocator("#thread iframe")
+    .last()
+    .getByText("Reply with Markdown.", { exact: true })
+    .waitFor();
+  assert.equal(await page.locator("#archive").isEnabled(), true);
   await page.waitForFunction(
     () => document.querySelectorAll("#thread details.message").length === 2,
   );
@@ -200,6 +220,24 @@ try {
   await page.locator("#search").press("Enter");
   await page.locator(".row").waitFor();
   assert.equal(await page.locator(".row").count(), 1);
+  await page.locator(".row").click();
+  await page.locator("#reply").click();
+  await page.locator("#body").fill("Reply resumed from a saved draft.");
+  await page.locator("#close-draft").click();
+  await page.reload();
+  await page.getByRole("button", { name: /^Drafts/ }).click();
+  await page.locator(".row").click();
+  await page.locator("#send").click();
+  await page.locator("#reader").waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => document.querySelectorAll("#thread details.message").length === 3,
+  );
+  await page
+    .frameLocator("#thread iframe")
+    .last()
+    .getByText("Reply resumed from a saved draft.", { exact: true })
+    .waitFor();
+  assert.equal(await page.locator("#archive").isDisabled(), true);
   await page.getByRole("button", { name: "Contacts", exact: true }).click();
   await page
     .locator(".contact summary")
@@ -250,7 +288,9 @@ try {
   // Typing Gmail shortcut letters in the composer must not navigate or archive.
   await page.locator("#body").press("e");
   assert.equal(await page.locator("#editor").isVisible(), true);
-  await page.locator("#close-draft").click();
+  await page.locator("#send").click();
+  await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
+  assert.equal(await page.locator("#reader").isVisible(), false);
   await page.evaluate(() => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "i" }));

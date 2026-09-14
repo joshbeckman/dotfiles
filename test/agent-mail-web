@@ -105,9 +105,14 @@ class WebTest(unittest.TestCase):
         self.assertIn('birch-weaver', draft['to'])
         self.assertNotIn('josh', draft['to'])
         draft = self.box.save(dict(draft, body='My reply.'))
-        self.assertEqual(self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})[0], 200)
+        status, body = self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})
+        self.assertEqual(status, 200)
+        sent_key = json.loads(body)['key']
+        self.assertEqual(self.box.message(sent_key)['folder'], 'sent')
         self.assertEqual(len(self.box.listing('sent', '')['messages']), 1)
         self.assertEqual(len(self.box.thread(self.key)), 2)
+        self.assertEqual(self.request('/api/archive', {'key': self.key})[0], 200)
+        self.assertEqual(len(self.box.thread(sent_key)), 2)
         # A double click or lost response must not deliver a second message.
         self.assertEqual(self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})[0], 404)
         sent = self.box.listing('sent', '')['messages'][0]

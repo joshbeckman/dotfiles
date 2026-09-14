@@ -383,8 +383,8 @@ class Handler(BaseHTTPRequestHandler):
             path = box.path(data.get('key'), 'drafts')
             if box.message(data['key'])['revision'] != data.get('revision'):
                 raise MailError('Draft changed; reopen it before sending.', 409)
-            cli('deliver', path)
-            result = {'ok': True}
+            delivered = Path(cli('deliver', path))
+            result = {'ok': True, 'key': 'sent:' + delivered.name}
         elif route == '/api/attachment':
             result = box.attachment(data)
         else:

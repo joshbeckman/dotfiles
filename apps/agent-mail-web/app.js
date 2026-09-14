@@ -156,6 +156,9 @@ async function openItem(index = selected) {
   const m = items[index];
   if (m.folder === "drafts")
     return loadDraft(await api("draft?key=" + encodeURIComponent(m.key)));
+  await openThread(m);
+}
+async function openThread(m) {
   const generation = ++threadGeneration;
   const messages = await api("thread?key=" + encodeURIComponent(m.key));
   if (generation !== threadGeneration) return;
@@ -295,14 +298,28 @@ async function sendDraft() {
   controls.forEach(([el]) => (el.disabled = true));
   try {
     await saveDraft();
-    await api("send", { key: draft.key, revision: draft.revision });
+    const sent = await api("send", {
+      key: draft.key,
+      revision: draft.revision,
+    });
+    const reply = Boolean(draft.parent);
+    const message = { key: sent.key, subject: draft.subject };
     draft = null;
     dirty = false;
-    await navigate("sent");
+    if (reply) {
+      await refresh(true);
+      await openThread(message);
+    } else {
+      await navigate("sent");
+    }
     status("Sent. A copy is retained in Sent.");
   } finally {
     busy = false;
     controls.forEach(([el, disabled]) => (el.disabled = disabled));
+    if (view === "reader" && current)
+      $("archive").disabled = !current.messages.some(
+        (m) => m.folder === "inbox",
+      );
   }
 }
 async function attach() {
