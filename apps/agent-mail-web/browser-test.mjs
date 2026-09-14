@@ -133,9 +133,62 @@ try {
     return d.accept();
   });
   await page.goto(url);
+  assert.equal(
+    await page.locator('link[rel="icon"]').getAttribute("href"),
+    "/favicon.svg",
+  );
+  const favicon = await page.request.get(new URL("/favicon.svg", url).href);
+  assert.equal(favicon.status(), 200);
+  assert.equal(favicon.headers()["content-type"], "image/svg+xml");
+  const icons = await page.evaluate(() =>
+    Object.fromEntries(
+      [
+        "josh",
+        "@josh",
+        "humans/josh",
+        "josh@example.invalid",
+        "@+josh",
+        "alder-turner",
+        "@+alder-turner",
+        "alder-turner-12345678",
+        "birch-weaver",
+        '<svg onload="alert(1)">',
+      ].map((address) => [address, avatar(address).src]),
+    ),
+  );
+  assert.equal(icons.josh, icons["@josh"]);
+  assert.equal(icons.josh, icons["humans/josh"]);
+  assert.equal(icons.josh, icons["josh@example.invalid"]);
+  assert.notEqual(icons.josh, icons["@+josh"]);
+  assert.equal(icons["alder-turner"], icons["@+alder-turner"]);
+  assert.equal(icons["alder-turner"], icons["alder-turner-12345678"]);
+  assert.notEqual(icons["alder-turner"], icons["birch-weaver"]);
+  assert(
+    !decodeURIComponent(icons['<svg onload="alert(1)">']).includes("onload"),
+  );
+  assert.equal(
+    await page.locator("#current-user .avatar").getAttribute("src"),
+    icons.josh,
+  );
+  await page
+    .getByRole("button", { name: /alder-turner Markdown conversation/ })
+    .waitFor();
+  assert.equal(
+    await page.locator(".sender .avatar").first().getAttribute("src"),
+    icons["alder-turner"],
+  );
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll("img.avatar")].every(
+      (image) => image.complete && image.naturalWidth > 0,
+    ),
+  );
   await page
     .getByRole("button", { name: /alder-turner Markdown conversation/ })
     .click();
+  assert.equal(
+    await page.locator("#thread summary .avatar").first().getAttribute("src"),
+    icons["alder-turner"],
+  );
   const reader = page.frameLocator("#thread iframe").last();
   await reader.getByRole("heading", { name: "Fixture heading" }).waitFor();
   await reader.getByText("Mail", { exact: true }).waitFor();
@@ -245,6 +298,10 @@ try {
   assert(copy.includes("Thread-ID: " + id));
   assert(copy.includes("Reply with **Markdown**."));
   await page.locator("#reader").waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator("#thread summary .avatar").last().getAttribute("src"),
+    icons.josh,
+  );
   assert.equal(await page.locator("#mail-list").isVisible(), false);
   await page
     .frameLocator("#thread iframe")
@@ -293,6 +350,14 @@ try {
     .locator(".contact summary")
     .filter({ hasText: "@+alder-turner" })
     .click();
+  assert.equal(
+    await page
+      .locator(".contact summary")
+      .filter({ hasText: "@+alder-turner" })
+      .locator(".avatar")
+      .getAttribute("src"),
+    icons["alder-turner"],
+  );
   await page
     .getByText("Investigate orchard migrations", { exact: true })
     .waitFor();
@@ -359,6 +424,10 @@ try {
   await page.reload();
   await page.getByRole("button", { name: /^Drafts/ }).click();
   await page.getByText("No messages here.", { exact: true }).waitFor();
+  assert.equal(
+    await page.locator("#current-user .avatar").getAttribute("src"),
+    icons.josh,
+  );
   await page.evaluate(() => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "i" }));
@@ -373,7 +442,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, inline reply context and navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
+    "Browser tests passed: local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts, inline reply context and navigation, draft save/delete races and reload, shortcuts, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

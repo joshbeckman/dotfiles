@@ -118,6 +118,39 @@ async function refresh(quiet = false) {
         " · synced with local files",
     );
 }
+function avatarKey(address) {
+  const value = String(address || "unknown")
+    .trim()
+    .toLowerCase();
+  if (value === "josh") return "human:josh";
+  if (value.startsWith("humans/")) return "human:" + value.slice(7);
+  if (value.startsWith("@") && !value.startsWith("@+"))
+    return "human:" + value.slice(1);
+  if (!value.startsWith("@+") && value.includes("@"))
+    return "human:" + value.split("@")[0];
+  return "agent:" + value.replace(/^@\+|^\+/, "").replace(/-[0-9a-f]{8}$/, "");
+}
+function avatar(address) {
+  let hash = 2166136261;
+  for (const byte of new TextEncoder().encode(avatarKey(address)))
+    hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+  const hue = (hash >>> 16) % 360;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="hsl(${hue} 30% 93%)"/>`;
+  for (let y = 0; y < 5; y++) {
+    for (let x = 0; x < 5; x++) {
+      if ((hash >>> (y * 3 + Math.min(x, 4 - x))) & 1 || (x === 2 && y === 2))
+        svg += `<rect x="${6 + x * 4}" y="${6 + y * 4}" width="3.5" height="3.5" rx="0.5" fill="hsl(${hue} 65% 35%)"/>`;
+    }
+  }
+  const image = document.createElement("img");
+  image.className = "avatar";
+  image.alt = "";
+  image.setAttribute("aria-hidden", "true");
+  image.width = image.height = 28;
+  image.src =
+    "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg + "</svg>");
+  return image;
+}
 function renderList() {
   const rows = $("rows");
   rows.replaceChildren();
@@ -140,6 +173,7 @@ function renderList() {
       "</span></span><time>" +
       escape(date(m.date)) +
       "</time>";
+    row.querySelector(".sender").prepend(avatar(m.from || "josh"));
     rows.append(row);
   });
 }
@@ -198,6 +232,7 @@ async function openThread(m) {
       escape(message.from) +
       " · " +
       escape(message.folder);
+    summary.querySelector("time").after(avatar(message.from));
     detail.append(summary);
     const metadata = document.createElement("p");
     metadata.className = "metadata";
@@ -474,6 +509,13 @@ function renderContacts() {
       " · " +
       contact.status +
       (contact.session ? " · " + contact.session.title : "");
+    summary.prepend(
+      avatar(
+        contact.session && !contact.session.handle
+          ? contact.session.sessionId
+          : contact.handle,
+      ),
+    );
     const content = document.createElement("div");
     content.className = "contact-content";
     const compose = button("Message " + contact.handle, async () => {
@@ -784,6 +826,7 @@ document.addEventListener("keydown", (e) => {
     }
   }
 });
+$("current-user").prepend(avatar("@josh"));
 refresh().catch(error);
 getContacts().catch(error);
 setInterval(() => {

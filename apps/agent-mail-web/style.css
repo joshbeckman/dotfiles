@@ -60,6 +60,17 @@ h1 small {
   color: var(--c-muted);
   font-weight: 400;
 }
+.avatar {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-block;
+  vertical-align: middle;
+  margin-inline-end: 0.5rem;
+}
+#current-user .avatar {
+  width: 1.4rem;
+  height: 1.4rem;
+}
 h2 {
   font-size: 1.35rem;
 }

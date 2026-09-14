@@ -148,6 +148,9 @@ class WebTest(unittest.TestCase):
         self.assertEqual(len(self.box.listing('sent', '')['messages']), 0)
 
     def test_http_boundary(self):
+        status, icon = self.request('/favicon.svg', **{'X-Agent-Mail-Token': ''})
+        self.assertEqual(status, 200)
+        self.assertIn(b'<svg', icon)
         self.assertEqual(self.request('/api/messages', **{'X-Agent-Mail-Token': ''})[0], 403)
         self.assertEqual(self.request('/api/messages', Host='evil.example')[0], 403)
         self.assertEqual(self.request('/api/messages', Origin='https://evil.example')[0], 403)
