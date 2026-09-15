@@ -414,6 +414,16 @@ details.message summary time {
 .session-details dd {
   overflow-wrap: anywhere;
 }
+.team-memberships {
+  margin: 0.75rem 0;
+  overflow-wrap: anywhere;
+}
+.team-memberships h4 {
+  margin: 0 0 0.5rem;
+}
+.team-memberships details + details {
+  margin-top: 0.5rem;
+}
 .model-history {
   grid-template-columns: minmax(0, 1fr);
   overflow-wrap: anywhere;

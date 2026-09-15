@@ -550,6 +550,49 @@ function sessionDetails(session, compact = false) {
   resume.className = "source";
   resume.textContent = session.resume;
   section.append(dl);
+  const memberships = document.createElement("section");
+  memberships.className = "team-memberships";
+  memberships.setAttribute("aria-label", "Team memberships");
+  const teamTitle = document.createElement("h4");
+  teamTitle.textContent = "Teams";
+  memberships.append(teamTitle);
+  if (!Array.isArray(session.teams) || !session.teams.length) {
+    const message = document.createElement("p");
+    message.className = "metadata";
+    message.textContent = Array.isArray(session.teams)
+      ? "No active teams."
+      : "Team membership unavailable.";
+    memberships.append(message);
+    if (session.teamsWarning) {
+      const warning = document.createElement("p");
+      warning.className = "hint";
+      warning.textContent = session.teamsWarning;
+      memberships.append(warning);
+    }
+  } else {
+    for (const team of session.teams) {
+      const entry = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${team.handle} · ${team.name} · ${team.role}`;
+      const fields = document.createElement("dl");
+      fields.className = "session-details";
+      for (const [label, value] of [
+        ["Coordinator", team.coordinator],
+        ["Contribution", team.scope || "Not specified"],
+        ["Joined", observedTime(team.joinedAt)],
+        ["Shared scratchpad", team.scratchpad],
+      ]) {
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const detail = document.createElement("dd");
+        detail.textContent = value;
+        fields.append(term, detail);
+      }
+      entry.append(summary, fields);
+      memberships.append(entry);
+    }
+  }
+  section.append(memberships);
   if (compact) {
     const more = document.createElement("details");
     const summary = document.createElement("summary");

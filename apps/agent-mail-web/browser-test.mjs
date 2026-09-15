@@ -90,6 +90,36 @@ const cli = (...args) =>
     env,
     encoding: "utf8",
   }).trim();
+const team = (...args) =>
+  execFileSync(join(root, "bin/agent-team"), args, { env, encoding: "utf8" });
+await writeFile(
+  join(env.AGENT_IDENTITIES_DIR, "birch-weaver"),
+  "87654321-0000-0000-0000-000000000002\n",
+);
+team(
+  "create",
+  "orchard",
+  "--coordinator",
+  "@+alder-turner",
+  "--name",
+  "Orchard crew",
+);
+team(
+  "create",
+  "review",
+  "--coordinator",
+  "@+birch-weaver",
+  "--name",
+  "Review group",
+);
+team(
+  "join",
+  "review",
+  "--agent",
+  "@+alder-turner",
+  "--scope",
+  "Tooling review",
+);
 const id = cli(
   "send",
   "--from",
@@ -247,6 +277,86 @@ try {
       path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-models.png",
     });
   await sidebar.getByText("Models observed (2)", { exact: true }).click();
+  async function assertTeams(container) {
+    const memberships = container.getByRole("region", {
+      name: "Team memberships",
+      exact: true,
+    });
+    await memberships.locator("details").nth(1).waitFor();
+    assert.equal(await memberships.locator("details").count(), 2);
+    const orchard = memberships
+      .locator("details")
+      .filter({ hasText: "@team/orchard" });
+    const review = memberships
+      .locator("details")
+      .filter({ hasText: "@team/review" });
+    assert.match(
+      await orchard.locator("summary").textContent(),
+      /Orchard crew · coordinator/,
+    );
+    assert.match(
+      await review.locator("summary").textContent(),
+      /Review group · member/,
+    );
+    await orchard.locator("summary").click();
+    await orchard.getByText("@+alder-turner", { exact: true }).waitFor();
+    await orchard.getByText("Joined", { exact: true }).waitFor();
+    await orchard
+      .getByText(join(env.AGENT_TEAM_ROOT, "orchard/scratchpad"), {
+        exact: true,
+      })
+      .waitFor();
+    await review.locator("summary").click();
+    await review.getByText("@+birch-weaver", { exact: true }).waitFor();
+    await review.getByText("Tooling review", { exact: true }).waitFor();
+    if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+      await memberships.screenshot({
+        path:
+          process.env.AGENT_MAIL_TEST_SCREENSHOT +
+          (container === sidebar ? "-sidebar-teams.png" : "-contact-teams.png"),
+      });
+    await orchard.locator("summary").click();
+    await review.locator("summary").click();
+  }
+  await assertTeams(sidebar);
+  const teamStates = await page.evaluate(() => {
+    const base = { resume: "fixture", modelsUsed: [] };
+    const empty = sessionDetails({ ...base, teams: [] });
+    const unavailable = sessionDetails({
+      ...base,
+      teams: null,
+      teamsWarning: "Fixture registry unavailable",
+    });
+    const missing = sessionDetails(base);
+    const hostile = sessionDetails({
+      ...base,
+      teams: [
+        {
+          handle: "@team/example",
+          name: '<img src=x onerror="alert(1)">',
+          role: "member",
+          coordinator: "@+fixture-agent",
+          scope: "<script>bad()</script>",
+          scratchpad: "/fixture",
+          joinedAt: null,
+        },
+      ],
+    });
+    return {
+      empty: empty.textContent,
+      unavailable: unavailable.textContent,
+      missing: missing.textContent,
+      hostile: hostile.textContent,
+      unsafeElements: hostile.querySelectorAll("img,script").length,
+    };
+  });
+  assert(teamStates.empty.includes("No active teams."));
+  assert(teamStates.unavailable.includes("Team membership unavailable."));
+  assert(teamStates.unavailable.includes("Fixture registry unavailable"));
+  assert(!teamStates.unavailable.includes("No active teams."));
+  assert(teamStates.missing.includes("Team membership unavailable."));
+  assert(teamStates.hostile.includes("<script>bad()</script>"));
+  assert.equal(teamStates.unsafeElements, 0);
   await sidebar
     .getByRole("button", { name: "Copy resume command", exact: true })
     .waitFor();
@@ -452,6 +562,7 @@ try {
     .getByText("Investigate orchard migrations", { exact: true })
     .waitFor();
   await directory.getByText("/fixture/orchard", { exact: true }).waitFor();
+  await assertTeams(directory);
   await directory.getByText("Latest recorded model", { exact: true }).waitFor();
   await directory
     .getByText("fixture-provider/cedar-v2", { exact: true })
