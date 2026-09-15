@@ -43,6 +43,7 @@ await writeFile(join(bin, "notify-josh"), "#!/bin/sh\nexit 0\n", {
 const env = {
   ...process.env,
   PATH: bin + ":" + process.env.PATH,
+  AGENT_TEAM_ROOT: join(tmp, "teams"),
   AGENT_MAIL_ROOT: agents,
   AGENT_HUMAN_MAIL_ROOT: humans,
   AGENT_IDENTITIES_DIR: join(tmp, "identities"),

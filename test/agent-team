@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec python3 - "$root/bin/agent-team" <<'PY'
+import fcntl
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+CLI = sys.argv.pop()
+A, B, C = ('@+' + name for name in ('alder-turner-of-hearth', 'birch-weaver-of-hearth', 'cedar-potter-of-hearth'))
+
+
+class Teams(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.root = self.base / 'teams'
+        self.registry = self.base / 'identities' / 'by-name'
+        self.registry.mkdir(parents=True)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(('AGENT_', 'PI_'))}
+        self.env.update(HOME=str(self.base), AGENT_TEAM_ROOT=str(self.root),
+                        AGENT_IDENTITIES_DIR=str(self.registry), AGENT_SCRATCH_ROOT=str(self.base / 'pads'),
+                        AGENT_MAIL_ROOT=str(self.base / 'mail'), AGENT_HUMAN_MAIL_ROOT=str(self.base / 'humans'))
+        self.ids = {}
+        for index, handle in enumerate((A, B, C), 1):
+            self.register(handle, f'{index:08x}-1234-4567-89ab-123456789abc')
+
+    def register(self, handle, sid):
+        (self.registry / handle[2:]).write_text(sid + '\n')
+        self.ids[handle] = sid
+
+    def invoke(self, *args, env=None):
+        return subprocess.run([CLI, *args], env=env or self.env, text=True, capture_output=True, timeout=10)
+
+    def ok(self, *args, env=None):
+        result = self.invoke(*args, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def bad(self, *args, env=None):
+        result = self.invoke(*args, env=env)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertRegex(result.stderr, r'agent-team(?: [a-z]+)?:')
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(result.stdout, '')
+        return result.stderr
+
+    def create(self, name='sample', **kwargs):
+        return json.loads(self.ok('create', name, '--coordinator', A, '--json', **kwargs))
+
+    def show(self, name='sample'):
+        return json.loads(self.ok('show', name, '--json'))
+
+    def record(self, name='sample'):
+        return self.root / name / 'team.json'
+
+    def concurrent(self, commands):
+        # Holding the same root lock forces every real CLI process to overlap at its critical section.
+        self.root.mkdir(mode=0o700, exist_ok=True)
+        with (self.root / '.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            processes = [subprocess.Popen([CLI, *cmd], env=self.env, text=True,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) for cmd in commands]
+            try:
+                time.sleep(0.35)
+                self.assertTrue(all(p.poll() is None for p in processes), 'mutation escaped root lock')
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                results = []
+                for process in processes:
+                    out, err = process.communicate(timeout=15)
+                    results.append((process.returncode, out, err))
+                return results
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate()
+
+    def test_absent_root_reads_are_read_only(self):
+        for cmd in (('list', '--json'), ('search', 'anything', '--json')):
+            self.assertEqual(json.loads(self.ok(*cmd)), [])
+        self.assertEqual(self.ok('list'), 'No teams found.\n')
+        for command in ('show', 'members', 'scratchpad'):
+            self.bad(command, 'missing')
+        self.assertFalse(self.root.exists())
+
+    def test_failed_or_interrupted_creation_does_not_publish(self):
+        self.create('healthy')
+        for failure in ('tempfile.mkstemp', 'os.fsync', 'os.rename', 'interrupted'):
+            program = '''import os, runpy, sys
+from unittest.mock import patch
+cli = sys.argv[1]
+sys.argv = [cli, 'create', 'new-team', '--coordinator', sys.argv[2]]
+namespace = runpy.run_path(cli)
+'''
+            if failure == 'interrupted':
+                program += "with patch('os.fsync', side_effect=lambda *args: os._exit(19)):\n    namespace['main']()\n"
+            else:
+                program += f"with patch({failure!r}, side_effect=OSError('injected failure')):\n    sys.exit(namespace['main']())\n"
+            result = subprocess.run([sys.executable, '-c', program, CLI, A], env=self.env,
+                                    text=True, capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((self.root / 'new-team').exists())
+            self.assertEqual([t['handle'] for t in json.loads(self.ok('list', '--json'))], ['@team/healthy'])
+        self.assertTrue(list(self.root.glob('.creating-*')), 'hard exit should leave unpublished staging')
+        self.create('new-team')
+        self.assertEqual(len(json.loads(self.ok('list', '--json'))), 2)
+
+    def test_lifecycle_and_output(self):
+        team = json.loads(self.ok('create', 'sample', '--coordinator', A, '--name', 'Shared Cleanup',
+                                  '--purpose', 'Remove unused code', '--json'))
+        pad = Path(team['scratchpad'])
+        self.assertTrue(pad.is_absolute() and pad.is_dir())
+        self.assertNotIn('scratchpad', json.loads(self.record().read_text()))
+        (pad / 'notes').write_text('keep me')
+        for form in ('sample', '@team/sample', 'team/sample'):
+            self.assertEqual(self.show(form), team)
+        for query in ('SAMPLE', 'cleanup', 'unused'):
+            self.assertEqual(len(json.loads(self.ok('search', query, '--json'))), 1)
+        self.assertEqual(json.loads(self.ok('search', 'absent', '--json')), [])
+        self.ok('join', 'sample', '--agent', B, '--scope', 'reviewer', '--json')
+        before = self.record().read_bytes()
+        self.ok('join', 'sample', '--agent', B)
+        self.assertEqual(self.record().read_bytes(), before)
+        self.assertEqual(self.ok('members', 'sample').splitlines(), [A, B])
+        self.assertEqual(json.loads(self.ok('members', 'sample', '--json'))[1]['scope'], 'reviewer')
+        self.bad('leave', 'sample', '--agent', A)
+        self.bad('leave', 'sample', '--agent', C)
+        self.bad('transfer', 'sample', '--coordinator', B)
+        self.bad('transfer', 'sample', '--coordinator', C, '--accept')
+        self.assertEqual(self.record().read_bytes(), before)
+        self.ok('leave', 'sample', '--agent', B)
+        self.ok('join', 'sample', '--agent', B, '--scope', 'new interval')
+        self.assertEqual(len(self.show()['members']), 3)
+        self.assertIsNotNone(self.show()['members'][1]['leftAt'])
+        self.ok('transfer', 'sample', '--coordinator', B, '--accept')
+        self.ok('leave', 'sample', '--agent', A)
+        self.assertEqual(self.show()['coordinator'], B)
+        self.ok('join', 'sample', '--agent', C)
+        self.ok('archive', 'sample', '--json')
+        archived = self.record().read_bytes()
+        for cmd in (('join', '--agent', C), ('leave', '--agent', B), ('leave', '--agent', A), ('leave', '--agent', C),
+                    ('transfer', '--coordinator', B, '--accept'), ('archive',), ('members',),
+                    ('create', '--coordinator', A)):
+            self.bad(cmd[0], 'sample', *cmd[1:])
+            self.assertEqual(self.record().read_bytes(), archived)
+        self.assertEqual([e['type'] for e in self.show()['history']], ['created', 'transfer', 'archived'])
+        self.assertEqual(self.ok('scratchpad', 'sample').strip(), str(pad))
+        self.assertEqual((pad / 'notes').read_text(), 'keep me')
+        self.create('second')
+        self.assertEqual({t['status'] for t in json.loads(self.ok('list', '--json'))}, {'active', 'archived'})
+        self.assertIn('[archived]', self.ok('list'))
+        self.assertEqual(json.loads(self.ok('search', 'cleanup', '--json'))[0]['status'], 'archived')
+
+    def test_strict_slugs_and_literal_text(self):
+        self.create('valid.a_b-0')
+        for invalid in ('VALID.a_b-0', ' valid.a_b-0', 'valid!a_b-0', 'valid/a_b-0', '../outside',
+                        'x/../sample', '.', '..', 'a..b', '-a', 'a-', 'a' * 65, 'équipe', '', '@team/team/sample'):
+            with self.subTest(slug=invalid):
+                self.bad('create', '--coordinator', A, '--', invalid)
+        text = '$(touch should-not-exist); `false`\nPurpose: literal'
+        self.ok('create', 'literal', '--coordinator', A, '--purpose', text)
+        self.assertEqual(self.show('literal')['purpose'], text)
+
+    def test_identity_validation_and_calling_precedence(self):
+        self.create()
+        for handle in (B, C):
+            sid = self.ids[handle]
+            for alias in (handle[2:] + '-' + sid[:8], '@+' + handle[2:] + '-' + sid,
+                          handle[2:].rsplit('-of-', 1)[0] + '-' + sid[:8]):
+                self.ok('join', 'sample', '--agent', alias)
+                self.ok('leave', 'sample', '--agent', handle)
+        before = self.record().read_bytes()
+        (self.registry.parent / 'outside').write_text(self.ids[B] + '\n')
+        for invalid in ('@' + B[2:], '@+' + B[1:], '@josh', 'humans/alice', 'alice@example.org', '@+missing-agent-of-hearth',
+                        '../outside', '@+../outside', str(self.registry / B[2:]),
+                        B[2:] + '-deadbeef', B[2:] + '-000000', B[2:] + '-' + self.ids[C], B[2:] + '-anything'):
+            with self.subTest(identity=invalid):
+                self.bad('join', 'sample', '--agent', invalid)
+        self.bad('join', 'sample')
+        self.assertEqual(self.record().read_bytes(), before)
+        env = dict(self.env, AGENT_SCRATCHPAD=str(self.base / (B[2:] + '-' + self.ids[B][:8])), AGENT_HANDLE=C[2:])
+        self.ok('join', 'sample', env=env)
+        self.assertEqual(self.ok('members', 'sample').splitlines(), [A, B])
+        self.ok('leave', 'sample', env=env)
+        env.pop('AGENT_HANDLE')
+        self.ok('join', 'sample', env=env)
+        env = dict(self.env, AGENT_HANDLE=C[2:])
+        self.ok('join', 'sample', env=env)
+        self.assertEqual(self.ok('members', 'sample').splitlines(), [A, B, C])
+        self.bad('leave', 'sample', env=dict(env, AGENT_SCRATCHPAD=str(self.base / 'wrong-agent-deadbeef')))
+
+    def test_invalid_and_ambiguous_registry_claims(self):
+        for content in ('not-a-uuid', '', '00000001-1234-4567-89ab-123456789abc\nextra', 'x' * 129):
+            (self.registry / A[2:]).write_text(content)
+            self.bad('create', 'sample', '--coordinator', A)
+            self.assertFalse((self.root / 'sample').exists())
+        self.register(A, '00000001-1234-4567-89ab-123456789abc')
+        self.register('@+alder-turner-of-lantern', '00000001-9876-4567-89ab-123456789abc')
+        self.bad('create', 'sample', '--coordinator', 'alder-turner-00000001')
+        self.create()
+        claim = self.registry / B[2:]
+        claim.unlink()
+        claim.symlink_to(self.registry / A[2:])
+        self.bad('join', 'sample', '--agent', B)
+        claim.unlink()
+        claim.symlink_to(self.base / 'missing-claim')
+        self.bad('join', 'sample', '--agent', B)
+
+    def test_malformed_records_fail_without_mutation(self):
+        baseline = self.create()
+        baseline.pop('scratchpad')
+        corruptions = [None, [], {}, dict(baseline, version=True), dict(baseline, handle='@team/other'),
+                       dict(baseline, name=3), dict(baseline, purpose=[]), dict(baseline, status=[]),
+                       dict(baseline, status='missing'), dict(baseline, coordinator=B), dict(baseline, members=[]),
+                       dict(baseline, members='wrong'), dict(baseline, members=[None]),
+                       dict(baseline, history=[]), dict(baseline, history=[{}]),
+                       dict(baseline, createdAt='not-time'), dict(baseline, updatedAt='2000-01-01T00:00:00Z'),
+                       dict(baseline, scratchpad='/untrusted')]
+        for key, value in (('handle', '@human'), ('sessionId', 'fake'), ('scope', 3), ('leftAt', 'bad'),
+                           ('joinedAt', '2100-01-01T00:00:00Z'), ('leftAt', '2000-01-01T00:00:00Z')):
+            member = dict(baseline['members'][0], **{key: value})
+            corruptions.append(dict(baseline, members=[member]))
+        member = dict(baseline['members'][0])
+        del member['leftAt']
+        corruptions.append(dict(baseline, members=[member]))
+        corruptions.append(dict(baseline, members=baseline['members'] * 2))
+        corruptions.append(dict(baseline, members=baseline['members'] + [dict(baseline['members'][0], handle=B)]))
+        corruptions.append(dict(baseline, history=[dict(baseline['history'][0], coordinator=B)]))
+        later = '2100-01-01T00:00:00Z'
+        ended = dict(baseline['members'][0], leftAt=baseline['createdAt'])
+        successor = dict(baseline['members'][0], handle=B, sessionId=self.ids[B])
+        corruptions.append(dict(baseline, coordinator=B, updatedAt=later, members=[ended, successor],
+                                history=baseline['history'] + [{'type': 'transfer', 'from': A, 'to': B, 'at': later}]))
+        corruptions.append(dict(baseline, status='archived', updatedAt=later,
+                                history=baseline['history'] + [{'type': 'archived', 'coordinator': A, 'at': baseline['createdAt']}]))
+        for index, broken in enumerate(corruptions):
+            with self.subTest(corruption=index):
+                payload = json.dumps(broken)
+                self.record().write_text(payload)
+                for cmd in (('show', 'sample'), ('members', 'sample'), ('list', '--json'),
+                            ('search', 'nonmatching', '--json'), ('join', 'sample', '--agent', B)):
+                    self.bad(*cmd)
+                self.assertEqual(self.record().read_text(), payload)
+        for payload in ('not json', '{', '[' * 10000, ' ' * (1024 * 1024 + 1)):
+            self.record().write_text(payload)
+            self.bad('show', 'sample')
+        self.record().unlink()
+        self.bad('list', '--json')
+        self.bad('create', 'sample', '--coordinator', A)
+
+    def test_privacy_and_bounded_writes(self):
+        old = os.umask(0)
+        try:
+            self.create()
+            self.ok('join', 'sample', '--agent', B)
+        finally:
+            os.umask(old)
+        for path, mode in ((self.root, 0o700), (self.root / 'sample', 0o700),
+                           (self.root / 'sample/scratchpad', 0o700), (self.record(), 0o600),
+                           (self.root / '.lock', 0o600)):
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode, str(path))
+        self.assertEqual(sorted(p.name for p in (self.root / 'sample').iterdir()), ['scratchpad', 'team.json'])
+        team = self.show()
+        team.pop('scratchpad')
+        team['purpose'] = 'x' * (1024 * 1024 - len(json.dumps(team)) - 50)
+        compact = json.dumps(team)
+        self.assertLess(len(compact), 1024 * 1024)
+        self.record().write_text(compact)
+        self.bad('join', 'sample', '--agent', C, '--scope', 'x' * 1000)
+        self.assertEqual(self.record().read_text(), compact)
+
+    def test_symlink_root_never_followed_or_chmodded(self):
+        outside = self.base / 'outside'
+        outside.mkdir(mode=0o755)
+        outside.chmod(0o755)
+        for target in (outside, self.base / 'dangling'):
+            self.root.symlink_to(target)
+            for command in (('list',), ('search', 'x'), ('show', 'sample'), ('create', 'sample', '--coordinator', A)):
+                self.bad(*command)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o755)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((self.base / 'dangling').exists())
+            self.root.unlink()
+
+    def test_symlink_directories_records_and_lock(self):
+        self.create()
+        for relative in ('sample', 'sample/scratchpad', 'sample/team.json', '.lock'):
+            original = self.root / relative
+            saved = self.base / 'saved'
+            original.rename(saved)
+            saved.chmod(0o755 if saved.is_dir() else 0o644)
+            prior_mode = stat.S_IMODE(saved.stat().st_mode)
+            for target in (saved, self.base / 'dangling'):
+                original.symlink_to(target)
+                for command in (('show', 'sample'), ('list', '--json'), ('search', 'no-match'),
+                                ('scratchpad', 'sample'), ('join', 'sample', '--agent', B)):
+                    self.bad(*command)
+                self.assertEqual(stat.S_IMODE(saved.stat().st_mode), prior_mode)
+                self.assertFalse((self.base / 'dangling').exists())
+                original.unlink()
+            saved.rename(original)
+        for relative in ('sample/team.json', '.lock'):
+            path = self.root / relative
+            payload = path.read_bytes()
+            path.unlink()
+            os.mkfifo(path)
+            self.bad('join', 'sample', '--agent', B)
+            path.unlink()
+            path.write_bytes(payload)
+        legacy = self.root / 'sample/team.tmp'
+        target = self.base / 'unrelated'
+        target.write_text('do not overwrite')
+        target.chmod(0o644)
+        legacy.symlink_to(target)
+        self.ok('join', 'sample', '--agent', B)
+        self.assertTrue(legacy.is_symlink())
+        self.assertEqual(target.read_text(), 'do not overwrite')
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+        legacy.unlink()
+        legacy.symlink_to(self.base / 'absent-temp')
+        self.ok('join', 'sample', '--agent', C)
+        self.assertFalse((self.base / 'absent-temp').exists())
+
+    def test_concurrent_joins_and_idempotency(self):
+        self.create()
+        agents = []
+        for index in range(16):
+            handle = f'@+worker-{index}-of-hearth'
+            self.register(handle, f'{index + 100:08x}-1234-4567-89ab-123456789abc')
+            agents.append(handle)
+        results = self.concurrent([['join', 'sample', '--agent', handle] for handle in agents])
+        self.assertTrue(all(code == 0 for code, _, _ in results), results)
+        self.assertEqual(set(self.ok('members', 'sample').splitlines()), {A, *agents})
+        results = self.concurrent([['join', 'sample', '--agent', B]] * 12)
+        self.assertTrue(all(code == 0 for code, _, _ in results), results)
+        self.assertEqual(len(self.show()['members']), 18)
+        results = self.concurrent([['leave', 'sample', '--agent', handle] for handle in agents])
+        self.assertTrue(all(code == 0 for code, _, _ in results), results)
+        self.assertEqual(self.ok('members', 'sample').splitlines(), [A, B])
+        self.assertEqual(sum(m['leftAt'] is not None for m in self.show()['members']), 16)
+
+    def test_concurrent_create_and_root_scope(self):
+        results = self.concurrent([['create', 'same', '--coordinator', A]] * 8)
+        self.assertEqual(sum(code == 0 for code, _, _ in results), 1, results)
+        self.assertEqual(len(self.show('same')['members']), 1)
+        results = self.concurrent([['create', f'team-{i}', '--coordinator', A] for i in range(8)])
+        self.assertTrue(all(code == 0 for code, _, _ in results), results)
+        self.assertEqual(len(json.loads(self.ok('list', '--json'))), 9)
+
+    def test_concurrent_transfer_leave_and_archive_join(self):
+        for index in range(6):
+            name = f'race-{index}'
+            self.create(name)
+            self.ok('join', name, '--agent', B)
+            results = self.concurrent([['transfer', name, '--coordinator', B, '--accept'],
+                                       ['leave', name, '--agent', B]])
+            self.assertEqual(sum(code == 0 for code, _, _ in results), 1, results)
+            team = self.show(name)
+            self.assertEqual(team['coordinator'], B if results[0][0] == 0 else A)
+            self.assertIn(team['coordinator'], [m['handle'] for m in team['members'] if m['leftAt'] is None])
+            results = self.concurrent([['archive', name], ['join', name, '--agent', C]])
+            self.assertEqual(results[0][0], 0, results)
+            team = self.show(name)
+            self.assertEqual(team['status'], 'archived')
+            self.assertEqual(any(m['handle'] == C for m in team['members']), results[1][0] == 0)
+            self.bad('members', name)
+
+
+unittest.main(verbosity=2)
+PY

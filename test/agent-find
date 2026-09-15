@@ -22,7 +22,7 @@ class AgentFindTest(unittest.TestCase):
             p.mkdir()
         (self.bin / 'tmux').write_text('#!/bin/sh\nprintf "✓ Alder Turner · Session details\\n"\n')
         (self.bin / 'tmux').chmod(0o755)
-        self.env = dict(os.environ, PI_SESSIONS_DIR=str(self.sessions), AGENT_IDENTITIES_DIR=str(self.identities), AGENT_MAIL_ROOT=str(self.mail), PATH=str(self.bin) + ':' + os.environ['PATH'])
+        self.env = dict(os.environ, AGENT_TEAM_ROOT=str(self.root / 'teams'), PI_SESSIONS_DIR=str(self.sessions), AGENT_IDENTITIES_DIR=str(self.identities), AGENT_MAIL_ROOT=str(self.mail), PATH=str(self.bin) + ':' + os.environ['PATH'])
         self.env.pop('AGENT_SCRATCHPAD', None)
         self.sid = '01234567-0000-0000-0000-000000000001'
         self.other = '01234567-0000-0000-0000-000000000002'

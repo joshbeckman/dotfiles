@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Exercise the real team, mail, and discovery CLIs against private fixtures."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+BIN = Path(__file__).resolve().parent.parent / 'bin'
+
+
+class TeamIntegration(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.names = ['alder-turner', 'birch-weaver-of-hearth', 'cedar-fletcher-of-hearth']
+        self.env = dict(os.environ, AGENT_TEAM_ROOT=str(self.root / 'teams'),
+                        AGENT_IDENTITIES_DIR=str(self.root / 'identities'),
+                        AGENT_MAIL_ROOT=str(self.root / 'agents'),
+                        AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'),
+                        PI_SESSIONS_DIR=str(self.root / 'sessions'),
+                        AGENT_MAIL_FROM='josh', AGENT_SCRATCHPAD='', AGENT_HANDLE='')
+        fake = self.root / 'bin'
+        fake.mkdir()
+        for name in ('notify-josh', 'tmux'):
+            path = fake / name
+            path.write_text('#!/bin/sh\nexit 0\n')
+            path.chmod(0o755)
+        self.env['PATH'] = str(fake) + ':' + self.env['PATH']
+        for key in ('AGENT_IDENTITIES_DIR', 'AGENT_MAIL_ROOT', 'PI_SESSIONS_DIR'):
+            Path(self.env[key]).mkdir()
+        (self.root / 'humans/josh').mkdir(parents=True)
+        self.pads = []
+        for number, name in enumerate(self.names, 1):
+            sid = f'{number:08x}-0000-0000-0000-{number:012x}'
+            (self.root / 'identities' / name).write_text(sid + '\n')
+            pad = self.root / 'agents' / (name + '-' + sid[:8])
+            pad.mkdir()
+            self.pads.append(pad)
+            records = [{'type': 'session', 'cwd': str(self.root)},
+                       {'type': 'message', 'message': {'role': 'assistant', 'provider': 'fixture', 'model': 'cedar', 'content': 'project research'}}]
+            (self.root / 'sessions' / ('2026-01-01_' + sid + '.jsonl')).write_text('\n'.join(map(json.dumps, records)) + '\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def cli(self, tool, *args, ok=True):
+        result = subprocess.run([str(BIN / ('agent-' + tool)), *args], env=self.env,
+                                capture_output=True, text=True, timeout=20)
+        if ok:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+        return result
+
+    def team(self, *args, **kwargs):
+        return self.cli('team', *args, **kwargs)
+
+    def create(self, name='orchard'):
+        self.team('create', name, '--coordinator', '@+' + self.names[0])
+        self.team('join', name, '--agent', '@+' + self.names[1], '--scope', 'Review')
+
+    def test_broadcast_aliases_and_original_reply_roster(self):
+        self.create()
+        self.create('overlap')
+        first = self.cli('mail', 'send', '--to', '@team/orchard', '--to', 'team/overlap',
+                         '--to', '@+' + self.pads[0].name, '--body', 'Original roster').stdout.strip()
+        original = self.root / 'humans/josh/sent' / (first + '.md')
+        text = original.read_text()
+        self.assertIn('To: ' + self.names[0] + ', ' + self.names[1] + '\n', text)
+        self.assertIn('Team-To: @team/orchard, @team/overlap\n', text)
+        for pad in self.pads[:2]:
+            self.assertEqual((pad / 'inbox/new' / (first + '.md')).read_text(), text)
+        self.assertFalse((self.pads[2] / 'inbox').exists())
+        self.team('leave', 'orchard', '--agent', '@+' + self.names[1])
+        self.team('join', 'orchard', '--agent', '@+' + self.names[2])
+        self.env['AGENT_SCRATCHPAD'] = str(self.pads[0])
+        self.env['AGENT_HANDLE'] = '@+' + self.names[0]
+        reply = Path(self.cli('mail', 'reply-all', str(original)).stdout.strip())
+        self.assertIn('To: ' + self.names[0] + ', ' + self.names[1] + '\n', reply.read_text())
+        delivered = Path(self.cli('mail', 'deliver', str(reply)).stdout.strip()).stem
+        self.assertFalse(reply.exists())
+        self.assertTrue((self.pads[1] / 'inbox/new' / (delivered + '.md')).is_file())
+        self.assertFalse((self.pads[2] / 'inbox').exists())
+        current = self.cli('mail', 'send', '--to', '@team/orchard', '--body', 'Current roster').stdout.strip()
+        self.assertTrue((self.pads[2] / 'inbox/new' / (current + '.md')).is_file())
+        self.assertFalse((self.pads[1] / 'inbox/new' / (current + '.md')).exists())
+        (self.root / 'humans' / self.names[0]).mkdir()
+        before = {str(p) for p in self.root.rglob('*.md')}
+        collision = self.cli('mail', 'send', '--to', '@team/orchard', '--body', 'No human collision', ok=False)
+        self.assertIn('conflicts with a human', collision.stderr)
+        self.assertEqual({str(p) for p in self.root.rglob('*.md')}, before)
+
+    def test_draft_team_send_and_failed_preflight(self):
+        self.create()
+        draft = Path(self.cli('mail', 'compose').stdout.strip())
+        draft.write_text(draft.read_text().replace('To: \n', 'To: @team/orchard\n') + 'Team-To: this is body text\nTo: also body text')
+        message = Path(self.cli('mail', 'deliver', str(draft)).stdout.strip()).stem
+        text = (self.root / 'humans/josh/sent' / (message + '.md')).read_text()
+        self.assertTrue(text.endswith('Team-To: this is body text\nTo: also body text'))
+        self.assertIn('Team-To: @team/orchard\n', text.partition('\n\n')[0] + '\n')
+        self.team('join', 'orchard', '--agent', '@+' + self.names[2])
+        self.pads[2].rmdir()
+        before = {str(p) for p in self.root.rglob('*.md')}
+        self.cli('mail', 'send', '--to', '@team/orchard', '--body', 'Must not partially send', ok=False)
+        self.assertEqual({str(p) for p in self.root.rglob('*.md')}, before)
+        self.team('archive', 'orchard')
+        self.cli('mail', 'send', '--to', '@team/orchard', '--body', 'No archive broadcast', ok=False)
+        self.assertEqual({str(p) for p in self.root.rglob('*.md')}, before)
+
+    def test_discovery_uses_full_session_identity(self):
+        name = 'unrelated-session-of-hearth'
+        sid = '00000001-0000-0000-0000-000000000099'
+        (self.root / 'identities' / name).write_text(sid + '\n')
+        (self.root / 'sessions' / ('2026-01-01_' + sid + '.jsonl')).write_text(
+            json.dumps({'type': 'session', 'cwd': str(self.root)}) + '\n')
+        self.create()
+        enrolled = json.loads(self.cli('find', '--agent', '@+' + self.names[0], '--json').stdout)[0]
+        unrelated = json.loads(self.cli('find', '--agent', '@+' + name, '--json').stdout)[0]
+        self.assertEqual(enrolled['sessionShort'], unrelated['sessionShort'])
+        self.assertEqual([t['handle'] for t in enrolled['teams']], ['@team/orchard'])
+        self.assertEqual(unrelated['teams'], [])
+
+    def test_discovery_memberships_and_unavailable_state(self):
+        initial = json.loads(self.cli('find', '--agent', '@+' + self.names[0], '--json').stdout)[0]
+        self.assertEqual(initial['teams'], [])
+        self.assertFalse((self.root / 'teams').exists())
+        self.create()
+        self.create('second')
+        lead = json.loads(self.cli('find', '--agent', '@+' + self.names[0], '--json').stdout)[0]
+        self.assertEqual([t['handle'] for t in lead['teams']], ['@team/orchard', '@team/second'])
+        self.assertTrue(all(t['role'] == 'coordinator' for t in lead['teams']))
+        member = json.loads(self.cli('find', '--agent', '@+' + self.names[1], '--json').stdout)[0]
+        self.assertEqual(member['teams'][0]['scope'], 'Review')
+        self.assertEqual(member['teams'][0]['role'], 'member')
+        self.assertEqual(member['model'], 'cedar')
+        self.assertIn('team:', self.cli('find', '--agent', '@+' + self.names[1]).stdout)
+        self.team('leave', 'orchard', '--agent', '@+' + self.names[1])
+        self.team('archive', 'second')
+        member = json.loads(self.cli('find', '--agent', '@+' + self.names[1], '--json').stdout)[0]
+        self.assertEqual(member['teams'], [])
+        (self.root / 'teams/orchard/team.json').write_text('{bad json')
+        failed = self.cli('find', '--agent', '@+' + self.names[0], '--json')
+        member = json.loads(failed.stdout)[0]
+        self.assertIsNone(member['teams'])
+        self.assertTrue(member['teamsWarning'])
+        self.assertIn('membership unavailable', failed.stderr)
+        self.assertEqual(member['model'], 'cedar')
+
+
+if __name__ == '__main__':
+    unittest.main()

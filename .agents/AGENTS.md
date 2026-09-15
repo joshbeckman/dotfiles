@@ -41,6 +41,14 @@ Agents and I can leave messages for each other within one computer realm with `b
 - **Inbox browser.** `agent-mail inbox @josh` or `agent-mail inbox @+handle` opens the matching Maildir in Neovim. Mail Markdown buffers expose `:AgentMailArchive` for moving `new/` to `cur/` and `:AgentMailReply` for opening a reply draft; reply drafts expose `:AgentMailSend` for atomic delivery.
 - **Lifetime.** Agent-session and human inboxes persist across session exits and reboots. They are pruned explicitly rather than by operating-system temporary-file cleanup. Agent Mail is still a communication log, not a project system: durable decisions belong in repositories, issues, or project records.
 
+### Agent teams
+
+`agent-team` manages explicit teams with stable `@team/<slug>` handles, one coordinator, a roster, and a shared scratchpad. Use `agent-team search TOPIC`, `show TEAM`, and `scratchpad TEAM` to discover shared context; `agent-find` also reports active memberships. An agent may belong to multiple teams. Answering a question or sharing a surname does not create membership.
+
+Use `create`, `join`, `leave`, `transfer`, and `archive` to record agreed arrangements. Coordinate changes through Agent Mail first; `transfer --coordinator AGENT --accept` attests the incoming coordinator's agreement, rather than obtaining it. Team leadership does not override artifact ownership or grant publication/merge authority. Keep durable project decisions in project records, not just the team's working notes.
+
+`agent-mail send --to @team/SLUG --body-file FILE` expands the current roster, including its coordinator, and deduplicates overlapping recipients. An unreachable member fails preflight rather than being silently omitted. `To:` records the actual recipients; `Team-To:` is informational. Reply-all retains those original recipients even if the roster changes. Address the team explicitly again to use the current roster. Teams have no separate inbox or process to wake.
+
 ### Artifact ownership between agents
 
 A coordinator does not automatically own a worker's artifacts. Treat the agent named in a `Co-authored-by: AI` trailer, handoff, or active branch/worktree as the owner of that in-flight work.
@@ -152,3 +160,5 @@ When writing prose (blog posts, documentation, comments, descriptions, PR bodies
 ## Time and Date Handling
 
 You should use the josh-beckman-status get_current_time_of_day tool for determining what day it is (when doing things with calendars, reporting, etc.)
+
+Co-authored-by: AI Simoom Farrier (pi/openai/gpt-6-astra) @+simoom-farrier

@@ -55,7 +55,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Scripts (`bin/`)
 
-Many small utilities.
+Many small utilities. [Agent teams](docs/agent-teams.md) documents `agent-team`, shared scratchpads, roster broadcasts through `agent-mail`, and membership in `agent-find`.
 
 Run any script with `--help` or read the source — they're short.
 
@@ -80,3 +80,5 @@ This repo is **public** and used on both personal and work (Shopify) machines. I
 - **Anything credential-shaped** — tokens, cookies, session IDs, bearer headers
 
 **For agents:** run `git diff --cached` before proposing a commit on this repo. If any of the above patterns appear in the staged diff, stop and flag them to the user rather than stripping silently — an unfamiliar internal URL or path may be new work content that isn't on this list yet. When in doubt, ask before committing.
+
+Co-authored-by: AI Simoom Farrier (pi/openai/gpt-6-astra) @+simoom-farrier

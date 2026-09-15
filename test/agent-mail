@@ -2,11 +2,15 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-command="$root/bin/agent-mail"
 real_nvim="$(command -v nvim || true)"
 tmp="$(mktemp -d)"
+tmp="$(CDPATH= cd -- "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir "$tmp/bin"
+mkdir "$tmp/bin" "$tmp/path-bin" "$tmp/teams"
+command="$tmp/bin/agent-mail"
+# Use the test runner's Bash, including system Bash 3.2, for every invocation.
+{ printf '#!%s\n' "$BASH"; tail -n +2 "$root/bin/agent-mail"; } >"$command"
+chmod +x "$command"
 
 cat >"$tmp/bin/notify-josh" <<'EOF'
 #!/bin/sh
@@ -17,14 +21,35 @@ cat >"$tmp/bin/nvim" <<'EOF'
 printf '%s\n' "$*" >"$EDITOR_LOG"
 printf '%s\n' "$PWD" >"$EDITOR_CWD_LOG"
 EOF
-chmod +x "$tmp/bin/notify-josh" "$tmp/bin/nvim"
+cat >"$tmp/bin/agent-team" <<'EOF'
+#!/bin/sh
+set -eu
+[ "$#" -eq 2 ] && [ "$1" = members ] || exit 2
+case "$2" in @team/*) ;; *) exit 2 ;; esac
+printf '%s\n' "$2" >>"$TEAM_LOG"
+roster="$TEAM_FIXTURES/${2#@team/}"
+if [ ! -f "$roster" ]; then
+    echo 'agent-team: team not found' >&2
+    exit 1
+fi
+[ ! -f "$roster.stderr" ] || cat "$roster.stderr" >&2
+cat "$roster"
+[ ! -f "$roster.fail" ]
+EOF
+cat >"$tmp/path-bin/agent-team" <<'EOF'
+#!/bin/sh
+echo 'agent-mail must use its sibling, not PATH agent-team' >&2
+exit 99
+EOF
+chmod +x "$tmp/bin/notify-josh" "$tmp/bin/nvim" "$tmp/bin/agent-team" "$tmp/path-bin/agent-team"
+export TEAM_FIXTURES="$tmp/teams" TEAM_LOG="$tmp/team-calls"
 export AGENT_MAIL_ROOT="$tmp/mail"
 export AGENT_HUMAN_MAIL_ROOT="$tmp/humans"
 export NOTIFY_LOG="$tmp/notifications"
 export EDITOR_LOG="$tmp/editor"
 export EDITOR_CWD_LOG="$tmp/editor-cwd"
 export AGENT_MAIL_EDITOR=nvim
-export PATH="$tmp/bin:$PATH"
+export PATH="$tmp/path-bin:$tmp/bin:$PATH"
 
 mkdir -p "$tmp/shared/default-agent"
 default_id="$(env -u AGENT_MAIL_ROOT AGENT_SCRATCH_ROOT="$tmp/shared" "$command" send --to default-agent --from test-agent --subject 'Persistent root' --body 'Shared state.')"
@@ -238,5 +263,207 @@ EOF
         -S "$nvim_archive_script"
     [[ -f "$inbox/cur/nvim-archive.md" ]]
 fi
+
+alder=alder-turner-of-hearth
+birch=birch-weaver-of-hearth
+cedar=cedar-miller-of-hearth
+for member in "$alder" "$birch" "$cedar"; do mkdir "$mail_root/$member-session"; done
+printf '@+%s\n' "$alder" "$birch" >"$TEAM_FIXTURES/alpha"
+printf '@+%s\n' "$cedar" >"$TEAM_FIXTURES/beta"
+printf '@+%s\n' "$alder" "$cedar" >"$TEAM_FIXTURES/overlap"
+printf 'diagnostic only\n' >"$TEAM_FIXTURES/alpha.stderr"
+
+team_id="$("$command" send --to team/alpha --to @team/alpha --from @josh --subject 'Team snapshot' --body 'Original roster.' 2>"$tmp/diagnostic")"
+team_message="$mail_root/$alder-session/inbox/new/$team_id.md"
+grep -Fxq "To: $alder, $birch" "$team_message"
+grep -Fxq 'Team-To: @team/alpha' "$team_message"
+grep -Fxq 'diagnostic only' "$tmp/diagnostic"
+[[ "$(grep -c '^@team/alpha$' "$TEAM_LOG")" == 1 ]]
+cmp -s "$team_message" "$mail_root/$birch-session/inbox/new/$team_id.md"
+cmp -s "$team_message" "$human_root/josh/sent/$team_id.md"
+
+: >"$TEAM_LOG"
+overlap_id="$("$command" send --to "@+$alder-session" --to @team/alpha --to @team/overlap --to @team/alpha --from test-agent --body 'One copy each.' 2>/dev/null)"
+overlap_message="$mail_root/$alder-session/inbox/new/$overlap_id.md"
+grep -Fxq "To: $alder-session, $birch, $cedar" "$overlap_message"
+grep -Fxq 'Team-To: @team/alpha, @team/overlap' "$overlap_message"
+[[ "$("$command" receipt "$overlap_id" | wc -l | tr -d ' ')" == 3 ]]
+[[ "$(grep -c '^@team/alpha$' "$TEAM_LOG")" == 1 ]]
+[[ "$(grep -c '^@team/overlap$' "$TEAM_LOG")" == 1 ]]
+
+# Both reply APIs use the saved concrete To, not today's changed roster.
+printf '@+%s\n' "$cedar" >"$TEAM_FIXTURES/alpha"
+: >"$TEAM_LOG"
+reply_draft="$(AGENT_MAIL_FROM="$alder-session" AGENT_SCRATCHPAD="$mail_root/$alder-session" AGENT_HANDLE="$alder" "$command" reply-all "$team_message")"
+grep -Fxq 'From: josh' "$reply_draft"
+grep -Fxq "To: $alder, $birch" "$reply_draft"
+grep -Fxq "Thread-ID: $team_id" "$reply_draft"
+grep -Fxq "In-Reply-To: $team_id" "$reply_draft"
+! grep -q '^Team-To:' "$reply_draft"
+printf 'Human reply.\n' >>"$reply_draft"
+reply_delivery="$("$command" deliver "$reply_draft")"
+reply_id="$(basename "$reply_delivery" .md)"
+[[ ! -e "$reply_draft" && ! -f "$mail_root/$cedar-session/inbox/new/$reply_id.md" ]]
+cmp -s "$reply_delivery" "$mail_root/$birch-session/inbox/new/$reply_id.md"
+cmp -s "$reply_delivery" "$human_root/josh/sent/$reply_id.md"
+agent_reply_id="$(AGENT_MAIL_FROM="$alder-session" "$command" send --reply-all "$team_message" --body 'Agent reply.')"
+agent_reply="$mail_root/$birch-session/inbox/new/$agent_reply_id.md"
+grep -Fxq "To: josh, $birch" "$agent_reply"
+grep -Fxq "Thread-ID: $team_id" "$agent_reply"
+[[ ! -f "$mail_root/$alder-session/inbox/new/$agent_reply_id.md" ]]
+[[ ! -f "$mail_root/$cedar-session/inbox/new/$agent_reply_id.md" && ! -s "$TEAM_LOG" ]]
+
+make_team_draft() {
+    draft="$("$command" compose)"
+    printf 'From: josh\nTo: %s\nSubject: Team draft\n\n' "$1" >"$draft"
+}
+body_bytes() {
+    { while IFS= read -r line; do [ -n "$line" ] || break; done; cat; } <"$1"
+}
+assert_failed_delivery() {
+    cp "$draft" "$tmp/unchanged-draft"
+    find "$mail_root" "$human_root" -type f -print | sort >"$tmp/before-files"
+    if "$command" deliver "$draft" >"$tmp/delivery-output" 2>"$tmp/delivery-error"; then
+        echo 'invalid draft unexpectedly delivered' >&2; exit 1
+    fi
+    cmp -s "$draft" "$tmp/unchanged-draft"
+    find "$mail_root" "$human_root" -type f -print | sort >"$tmp/after-files"
+    cmp -s "$tmp/before-files" "$tmp/after-files"
+}
+assert_failed_send() {
+    find "$mail_root" "$human_root" -type f -print | sort >"$tmp/before-files"
+    if "$command" send "$@" --body no >"$tmp/send-output" 2>"$tmp/send-error"; then
+        echo 'invalid send unexpectedly delivered' >&2; exit 1
+    fi
+    find "$mail_root" "$human_root" -type f -print | sort >"$tmp/after-files"
+    cmp -s "$tmp/before-files" "$tmp/after-files"
+}
+
+# Rewriting must preserve body bytes, including header lookalikes and no newline.
+printf 'Team-To: body text\nTo: body recipient\nReply-To: @team/not-a-header\n\n  spaces\t\\literal' >"$tmp/body"
+make_team_draft '@team/beta, team/beta, @josh'
+printf 'From: josh\nTo: @team/beta, team/beta, @josh\nTeam-To: @team/obsolete\nSubject: Body preservation\n\n' >"$draft"
+cat "$tmp/body" >>"$draft"
+: >"$TEAM_LOG"
+delivered="$("$command" deliver "$draft")"
+delivered_id="$(basename "$delivered" .md)"
+[[ ! -e "$draft" ]]
+body_bytes "$delivered" >"$tmp/delivered-body"
+cmp -s "$tmp/body" "$tmp/delivered-body"
+grep -Fxq "To: $cedar, josh" "$delivered"
+grep -Fxq 'Team-To: @team/beta' "$delivered"
+! grep -q '@team/obsolete' "$delivered"
+[[ "$(grep -c '^@team/beta$' "$TEAM_LOG")" == 1 ]]
+cmp -s "$delivered" "$human_root/josh/sent/$delivered_id.md"
+cmp -s "$delivered" "$inbox/new/$delivered_id.md"
+
+# A failed copy retains the expanded snapshot for retry, not a mutable team To.
+cat >"$tmp/bin/cp" <<'EOF'
+#!/bin/sh
+[ "${FAIL_DRAFT_COPY:-}" != "$1" ] || exit 1
+exec /bin/cp "$@"
+EOF
+chmod +x "$tmp/bin/cp"
+make_team_draft '@team/beta'
+cat "$tmp/body" >>"$draft"
+if FAIL_DRAFT_COPY="$draft" "$command" deliver "$draft" >"$tmp/failed-copy" 2>&1; then
+    echo 'injected copy failure unexpectedly succeeded' >&2; exit 1
+fi
+grep -Fxq "To: $cedar" "$draft"
+grep -Fxq 'Team-To: @team/beta' "$draft"
+body_bytes "$draft" >"$tmp/retained-body"
+cmp -s "$tmp/body" "$tmp/retained-body"
+printf '@+%s\n' "$alder" >"$TEAM_FIXTURES/beta"
+: >"$TEAM_LOG"
+delivered="$("$command" deliver "$draft")"
+[[ ! -e "$draft" && ! -s "$TEAM_LOG" ]]
+grep -Fxq "To: $cedar" "$delivered"
+grep -Fxq 'Team-To: @team/beta' "$delivered"
+body_bytes "$delivered" >"$tmp/delivered-body"
+cmp -s "$tmp/body" "$tmp/delivered-body"
+cmp -s "$delivered" "$human_root/josh/sent/$(basename "$delivered")"
+printf '@+%s\n' "$cedar" >"$TEAM_FIXTURES/beta"
+
+for team in @team/alpha team/alpha; do
+    assert_failed_send --to @josh --from "$team"
+    assert_failed_send --to @josh --from test-agent --reply-to "$team"
+    for field in From Reply-To; do
+        make_team_draft '@josh'
+        printf 'From: %s\nTo: @josh\n' "$(if [ "$field" = From ]; then printf '%s' "$team"; else printf josh; fi)" >"$draft"
+        [ "$field" != Reply-To ] || printf 'Reply-To: %s\n' "$team" >>"$draft"
+        printf '\nbody\n' >>"$draft"
+        assert_failed_delivery
+    done
+done
+
+# An unreachable late member must prevent even the first delivery.
+mkdir "$mail_root/fresh-potter-of-hearth-session"
+printf '@+%s\n' fresh-potter-of-hearth "$alder" "$birch" absent-potter-of-hearth >"$TEAM_FIXTURES/unreachable"
+for team in unreachable empty bare short human nested decorated blank trailing archived missing; do
+    case "$team" in
+        empty) : >"$TEAM_FIXTURES/$team" ;;
+        bare) printf '%s\n' "$alder" >"$TEAM_FIXTURES/$team" ;;
+        short) printf '@+alder\n' >"$TEAM_FIXTURES/$team" ;;
+        human) printf '@josh\n' >"$TEAM_FIXTURES/$team" ;;
+        nested) printf '@team/alpha\n' >"$TEAM_FIXTURES/$team" ;;
+        decorated) printf '@+%s (coordinator)\n' "$alder" >"$TEAM_FIXTURES/$team" ;;
+        blank) printf '@+%s\n\n@+%s\n' "$alder" "$birch" >"$TEAM_FIXTURES/$team" ;;
+        trailing) printf '@+%s\n\n' "$alder" >"$TEAM_FIXTURES/$team" ;;
+        archived)
+            printf '@+%s\n' "$alder" >"$TEAM_FIXTURES/$team"
+            printf 'archived team\n' >"$TEAM_FIXTURES/$team.stderr"
+            touch "$TEAM_FIXTURES/$team.fail" ;;
+    esac
+    assert_failed_send --to @josh --to "@team/$team" --from test-agent
+    make_team_draft "@josh, @team/$team"
+    assert_failed_delivery
+    case "$team" in
+        unreachable) expected='has no scratchpad' ;;
+        empty) expected='has no members' ;;
+        archived) expected='archived team' ;;
+        missing) expected='not found' ;;
+        *) expected='invalid member' ;;
+    esac
+    grep -Fq "$expected" "$tmp/send-error"
+    grep -Fq "$expected" "$tmp/delivery-error"
+done
+[[ ! -d "$mail_root/fresh-potter-of-hearth-session/inbox" ]]
+chmod -x "$tmp/bin/agent-team"
+assert_failed_send --to @team/alpha --from test-agent
+make_team_draft '@team/alpha'
+assert_failed_delivery
+chmod +x "$tmp/bin/agent-team"
+
+# Missing To must not be borrowed from the body; missing separators also fail.
+for headers in $'From: josh\n\nTo: @team/beta' $'From: josh\nTo: @team/beta'; do
+    make_team_draft '@team/beta'
+    printf '%s\n' "$headers" >"$draft"
+    assert_failed_delivery
+done
+
+# Destination conflicts are preflight failures, before rewriting the draft.
+make_team_draft '@team/beta'
+printf 'From: josh\nTo: @team/beta\nMessage-ID: %s\n\nbody\n' "$delivered_id" >"$draft"
+assert_failed_delivery
+
+# Fifteen long recipients exceed NAME_MAX if concatenated into a filename.
+: >"$TEAM_FIXTURES/large"
+for ((i = 1; i <= 15; i++)); do
+    member="longnamedmember$i-longfamily-of-hearth"
+    mkdir "$mail_root/$member-session"
+    printf '@+%s\n' "$member" >>"$TEAM_FIXTURES/large"
+done
+large_id="$("$command" send --to @team/large --from @josh --subject 'Large roster' --body 'All fifteen.')"
+[[ ${#large_id} -le 240 ]]
+[[ "$("$command" receipt "$large_id" | wc -l | tr -d ' ')" == 15 ]]
+large_sent="$human_root/josh/sent/$large_id.md"
+grep -q 'longnamedmember15-longfamily-of-hearth' "$large_sent"
+[[ "$(head -n 2 "$large_sent" | tail -n 1 | wc -c | tr -d ' ')" -gt 255 ]]
+make_team_draft '@team/large'
+large_delivery="$("$command" deliver "$draft")"
+large_delivery_id="$(basename "$large_delivery" .md)"
+[[ ${#large_delivery_id} -le 240 && ! -e "$draft" ]]
+[[ "$("$command" receipt "$large_delivery_id" | wc -l | tr -d ' ')" == 15 ]]
+cmp -s "$large_delivery" "$human_root/josh/sent/$large_delivery_id.md"
 
 printf 'agent-mail tests passed\n'

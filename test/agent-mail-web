@@ -34,7 +34,7 @@ class WebTest(unittest.TestCase):
         fake.mkdir()
         (fake / 'notify-josh').write_text('#!/bin/sh\nexit 0\n')
         (fake / 'notify-josh').chmod(0o755)
-        os.environ.update(AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PI_SESSIONS_DIR=str(self.root / 'sessions'), PATH=str(fake) + ':' + os.environ['PATH'])
+        os.environ.update(AGENT_TEAM_ROOT=str(self.root / 'teams'), AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PI_SESSIONS_DIR=str(self.root / 'sessions'), PATH=str(fake) + ':' + os.environ['PATH'])
         (self.root / 'agents/alder-turner-12345678').mkdir(parents=True)
         (self.root / 'agents/birch-weaver-87654321').mkdir()
         (self.root / 'sessions').mkdir()

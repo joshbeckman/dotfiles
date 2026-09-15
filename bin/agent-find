@@ -116,6 +116,30 @@ def hydrate(file, hits, claims, mail_root, pane_titles):
             'modelsUsed': list(used.values())}
 
 
+def team_memberships():
+    try:
+        result = subprocess.run([str(Path(__file__).resolve().with_name('agent-team')), 'list', '--json'],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or 'team lookup failed')
+        teams = json.loads(result.stdout)
+        by_session = {}
+        for team in teams:
+            if team['status'] != 'active':
+                continue
+            for member in team['members']:
+                if member['leftAt'] is None:
+                    by_session.setdefault(member['sessionId'], []).append({
+                        'handle': team['handle'], 'name': team['name'], 'coordinator': team['coordinator'],
+                        'scope': member['scope'], 'joinedAt': member['joinedAt'], 'scratchpad': team['scratchpad'],
+                        'role': 'coordinator' if member['handle'] == team['coordinator'] else 'member'})
+        return by_session, None
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+        warning = str(error)
+        print('agent-find: team membership unavailable: ' + warning, file=sys.stderr)
+        return None, warning
+
+
 def positive_int(value):
     number = int(value)
     if number < 1:
@@ -160,6 +184,10 @@ def main():
         except (OSError, subprocess.TimeoutExpired):
             pane_titles = ''
         results = [hydrate(file, hits, claims, mail_root, pane_titles) for hits, file in ranked[:args.limit]]
+        memberships, team_warning = team_memberships() if results else ({}, None)
+        for result in results:
+            result['teams'] = memberships.get(result['sessionId'], []) if memberships is not None else None
+            result['teamsWarning'] = team_warning
         if args.json:
             print(json.dumps(results))
         elif not results:
@@ -171,6 +199,10 @@ def main():
                 identity = f'{result["handle"]}  [{result["liveness"]}]' if result['handle'] else '(pre-registry, unnamed)'
                 print(f'{"agent:":9} {identity}')
                 print(f'{"title:":9} {result["title"]}')
+                for team in result['teams'] or []:
+                    print(f'{"team:":9} {team["handle"]}  [{team["role"]}; coordinator {team["coordinator"]}]')
+                if result['teams'] is None:
+                    print(f'{"team:":9} unknown (team registry unavailable)')
                 print(f'{"harness:":9} {result["harness"] or "unknown"}')
                 model = f'{result["provider"]}/{result["model"]}' if result['model'] else 'unknown'
                 print(f'{"model:":9} {model}  (latest recorded)')

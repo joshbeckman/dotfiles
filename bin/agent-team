@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""Explicit teams with permanent handles and shared scratchpads."""
+import argparse
+from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+
+
+ROOT = Path(os.environ.get('AGENT_TEAM_ROOT', '~/.local/state/agent/teams')).expanduser().absolute()
+REGISTRY = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
+LIMIT = 1024 * 1024
+SLUG = r'[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?'
+AGENT = r'@\+[a-z0-9]+(?:-[a-z0-9]+)+'
+UUID = r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}'
+MUTATIONS = {'create', 'join', 'leave', 'transfer', 'archive'}
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def slug(raw):
+    value = raw[6:] if raw.startswith('@team/') else raw.removeprefix('team/')
+    require(re.fullmatch(SLUG, value) and '..' not in value, f'invalid team slug: {raw}')
+    return value
+
+
+def directory(path, create=False):
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if create:
+            os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+
+
+def normal_file(path, flags=os.O_RDONLY):
+    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(fd)
+        raise ValueError(f'not a regular single-link file: {path}')
+    return fd
+
+
+def bounded_read(path, limit=LIMIT):
+    with os.fdopen(normal_file(path), 'rb') as stream:
+        require(os.fstat(stream.fileno()).st_size <= limit, f'file too large: {path}')
+        data = stream.read(limit + 1)
+    require(len(data) <= limit, f'file too large: {path}')
+    return data.decode('utf-8')
+
+
+@contextmanager
+def locked(write):
+    if not os.path.lexists(ROOT) and not write:
+        yield False
+        return
+    directory(ROOT, create=write)
+    fd = None
+    try:
+        try:
+            fd = normal_file(ROOT / '.lock', os.O_RDWR | os.O_CREAT if write else os.O_RDONLY)
+        except FileNotFoundError:
+            if write:
+                raise
+        if fd is not None:
+            if write:
+                os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
+        yield True
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def identity(raw):
+    require(isinstance(raw, str) and len(raw) <= 256, 'invalid agent identity')
+    require(not raw.startswith('@') or raw.startswith('@+'), f'human identity is not an agent: {raw}')
+    value = raw[2:] if raw.startswith('@+') else raw.removeprefix('+')
+    require(re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)+', value), f'invalid agent identity: {raw}')
+    directory(REGISTRY)
+    matches = []
+    for claim in REGISTRY.iterdir():
+        name = claim.name
+        if not re.fullmatch(AGENT, '@+' + name):
+            continue
+        # Older scratchpads omit the realm suffix; never infer a session from a name prefix alone.
+        bases = {name, name.rsplit('-of-', 1)[0]}
+        if value != name and not any(value.startswith(base + '-') for base in bases):
+            continue
+        sid = bounded_read(claim, 128).strip()
+        require(re.fullmatch(UUID, sid), f'invalid session ID in registry: {name}')
+        aliases = {base + '-' + suffix for base in bases for suffix in (sid, sid[:8])}
+        if value == name or value in aliases:
+            matches.append(('@+' + name, sid))
+    require(len(matches) == 1, f'unknown or ambiguous agent identity: {raw}')
+    return matches[0]
+
+
+def calling_identity():
+    pad = os.environ.get('AGENT_SCRATCHPAD', '')
+    raw = (Path(pad).name if pad else '') or os.environ.get('AGENT_HANDLE', '')
+    require(raw, 'no calling agent identity; use --agent explicitly')
+    return identity(raw)
+
+
+def timestamp(value):
+    require(isinstance(value, str) and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|\+00:00)', value), 'invalid UTC timestamp')
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def validate(team, name):
+    require(isinstance(team, dict), 'record must be an object')
+    require(type(team.get('version')) is int and team['version'] == 1, 'invalid version')
+    require(team.get('handle') == '@team/' + name, 'record handle does not match directory')
+    require(all(isinstance(team.get(key), str) for key in ('name', 'purpose', 'coordinator')), 'invalid team fields')
+    require('scratchpad' not in team, 'scratchpad must not be stored in record')
+    require(team.get('status') in ('active', 'archived'), 'invalid status')
+    created, updated = timestamp(team.get('createdAt')), timestamp(team.get('updatedAt'))
+    require(created <= updated, 'updatedAt precedes createdAt')
+    members = team.get('members')
+    require(isinstance(members, list) and members, 'missing members')
+    active, sessions, handles, intervals = set(), {}, {}, {}
+    for member in members:
+        require(isinstance(member, dict), 'invalid member')
+        handle, sid = member.get('handle'), member.get('sessionId')
+        require(isinstance(handle, str) and re.fullmatch(AGENT, handle), 'invalid member handle')
+        require(isinstance(sid, str) and re.fullmatch(UUID, sid), 'invalid member session ID')
+        require(isinstance(member.get('scope'), str) and 'leftAt' in member, 'invalid membership fields')
+        joined = timestamp(member.get('joinedAt'))
+        left = timestamp(member['leftAt']) if member['leftAt'] is not None else None
+        require(created <= joined <= updated and (left is None or joined <= left <= updated), 'invalid membership times')
+        prior = intervals.setdefault(handle, [])
+        require(not prior or (prior[-1][1] is not None and prior[-1][1] <= joined), 'overlapping membership intervals')
+        require(sessions.get(sid, handle) == handle and handles.get(handle, sid) == sid, 'inconsistent permanent identity')
+        prior.append((joined, left))
+        sessions[sid], handles[handle] = handle, sid
+        if left is None:
+            require(handle not in active, 'duplicate active member')
+            active.add(handle)
+    require(team['coordinator'] in active, 'coordinator must be an active member')
+    history = team.get('history')
+    require(isinstance(history, list) and history, 'missing history')
+    coordinator, last, archived = None, created, False
+    for index, event in enumerate(history):
+        require(isinstance(event, dict) and not archived, 'invalid history event')
+        at = timestamp(event.get('at'))
+        require(last <= at <= updated, 'invalid history order')
+        kind = event.get('type')
+        if coordinator is not None:
+            require(any(start <= last and (end is None or at <= end) for start, end in intervals[coordinator]), 'coordinator left before transfer or archive')
+        if index == 0:
+            require(kind == 'created' and at == created, 'missing creation event')
+            coordinator = event.get('coordinator')
+        elif kind == 'transfer':
+            require(event.get('from') == coordinator, 'inconsistent transfer history')
+            coordinator = event.get('to')
+        else:
+            require(kind == 'archived' and event.get('coordinator') == coordinator and at == updated, 'invalid archive event')
+            archived = True
+        require(isinstance(coordinator, str) and coordinator in handles, 'unknown history coordinator')
+        require(any(start <= at and (end is None or at <= end) for start, end in intervals[coordinator]), 'history coordinator was not a member')
+        last = at
+    require(coordinator == team['coordinator'] and archived == (team['status'] == 'archived'), 'history does not match team state')
+    require(any(start <= last and end is None for start, end in intervals[coordinator]), 'coordinator has a membership gap')
+
+
+def read_team(name):
+    folder = ROOT / name
+    directory(folder)
+    directory(folder / 'scratchpad')
+    try:
+        team = json.loads(bounded_read(folder / 'team.json'))
+        validate(team, name)
+    except (ValueError, TypeError) as error:
+        raise ValueError(f'damaged team record {name}: {error}') from error
+    return team
+
+
+def write_team(name, team, create=False):
+    validate(team, name)
+    payload = (json.dumps(team, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    require(len(payload) <= LIMIT, 'team record too large')
+    # Publish new teams only when their record and scratchpad are both complete.
+    with (tempfile.TemporaryDirectory(prefix='.creating-', dir=ROOT) if create
+          else nullcontext(str(ROOT / name))) as location:
+        folder = Path(location)
+        directory(folder, create=True)
+        directory(folder / 'scratchpad', create=True)
+        fd, tmp = tempfile.mkstemp(prefix='.team-', dir=folder)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, folder / 'team.json')
+            if create:
+                os.rename(folder, ROOT / name)
+        finally:
+            if os.path.lexists(tmp):
+                os.unlink(tmp)
+
+
+def current(team):
+    return [m for m in team['members'] if m['leftAt'] is None]
+
+
+def membership(agent, scope, now):
+    return dict(handle=agent[0], sessionId=agent[1], scope=scope, joinedAt=now, leftAt=None)
+
+
+def mutate(args, name):
+    command = args.command
+    now = datetime.now(timezone.utc).isoformat()
+    if command == 'create':
+        require(not os.path.lexists(ROOT / name), f'team already exists: @team/{name}')
+        coordinator = identity(args.coordinator)
+        team = dict(version=1, handle='@team/' + name, name=args.name or name,
+                    purpose=args.purpose or '', status='active', coordinator=coordinator[0],
+                    members=[membership(coordinator, '', now)], createdAt=now,
+                    updatedAt=now, history=[dict(type='created', coordinator=coordinator[0], at=now)])
+    else:
+        team = read_team(name)
+        require(team['status'] == 'active', f'team is archived: @team/{name}')
+        if command in ('join', 'leave'):
+            agent = identity(args.agent) if args.agent else calling_identity()
+            member = next((m for m in current(team) if m['handle'] == agent[0]), None)
+            if command == 'join':
+                if member:
+                    require(member['sessionId'] == agent[1], 'registry identity changed')
+                    return team
+                team['members'].append(membership(agent, args.scope or '', now))
+            else:
+                require(agent[0] != team['coordinator'], 'coordinator cannot leave; transfer first')
+                require(member and member['sessionId'] == agent[1], 'agent is not an active member')
+                member['leftAt'] = now
+        elif command == 'transfer':
+            coordinator = identity(args.coordinator)
+            require(any((m['handle'], m['sessionId']) == coordinator for m in current(team)), 'new coordinator is not an active member')
+            if coordinator[0] == team['coordinator']:
+                return team
+            team['history'].append(dict(type='transfer', **{'from': team['coordinator'], 'to': coordinator[0]}, at=now))
+            team['coordinator'] = coordinator[0]
+        else:
+            team['status'] = 'archived'
+            team['history'].append(dict(type='archived', coordinator=team['coordinator'], at=now))
+        team['updatedAt'] = now
+    write_team(name, team, create=command == 'create')
+    return team
+
+
+def output_team(team):
+    return dict(team, scratchpad=str(ROOT / team['handle'][6:] / 'scratchpad'))
+
+
+def run(args):
+    command = args.command
+    name = slug(args.team) if hasattr(args, 'team') else None
+    with locked(command in MUTATIONS) as exists:
+        if command in ('list', 'search'):
+            teams = [read_team(slug(p.name)) for p in sorted(ROOT.iterdir()) if p.name != '.lock' and not p.name.startswith('.creating-')] if exists else []
+            if command == 'search':
+                teams = [t for t in teams if any(args.query.casefold() in t[k].casefold() for k in ('handle', 'name', 'purpose'))]
+            result = [output_team(t) for t in teams]
+        else:
+            require(exists, f'team not found: @team/{name}')
+            team = mutate(args, name) if command in MUTATIONS else read_team(name)
+            if command == 'members':
+                require(team['status'] == 'active', f'team is archived: @team/{name}')
+                result = current(team)
+            elif command == 'scratchpad':
+                print(output_team(team)['scratchpad'])
+                return
+            else:
+                result = output_team(team)
+    if args.json:
+        print(json.dumps(result, indent=2))
+    elif command == 'members':
+        print('\n'.join(m['handle'] for m in result))
+    elif command in ('list', 'search'):
+        print('\n'.join(f"{t['handle']} [{t['status']}] {t['name']}" for t in result) or 'No teams found.')
+    else:
+        print(f"Team: {result['handle']}\nName: {result['name']}\nStatus: {result['status']}\n"
+              f"Coordinator: {result['coordinator']}\nPurpose: {result['purpose']}\n"
+              f"Scratchpad: {result['scratchpad']}")
+        for member in current(result):
+            print(f"  {member['handle']} ({member['scope']})")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    for command in ('create', 'show', 'list', 'search', 'join', 'leave', 'transfer', 'archive', 'scratchpad', 'members'):
+        sub = commands.add_parser(command)
+        if command == 'search':
+            sub.add_argument('query')
+        elif command != 'list':
+            sub.add_argument('team', help='bare slug, team/slug, or @team/slug')
+        if command in ('create', 'transfer'):
+            sub.add_argument('--coordinator', required=True)
+        if command == 'create':
+            sub.add_argument('--name')
+            sub.add_argument('--purpose')
+        if command in ('join', 'leave'):
+            sub.add_argument('--agent', help='canonical handle or registered transport alias; defaults to calling agent')
+        if command == 'join':
+            sub.add_argument('--scope')
+        if command == 'transfer':
+            sub.add_argument('--accept', action='store_true', required=True, help='attest incoming coordinator agreement (not authorization)')
+        if command != 'scratchpad':
+            sub.add_argument('--json', action='store_true')
+    try:
+        run(parser.parse_args())
+        return 0
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        print(f'agent-team: {error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

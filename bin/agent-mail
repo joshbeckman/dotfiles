@@ -48,7 +48,10 @@ An ID is an agent as <name>-<sessionID>, or a human as `@josh`,
 `humans/<handle>`, or an email address. The @+name agent form and @name human
 form are accepted; sigils are stripped. Bare `josh` remains accepted. Agent
 inboxes resolve under AGENT_MAIL_ROOT; human inboxes persist under
-AGENT_HUMAN_MAIL_ROOT.
+AGENT_HUMAN_MAIL_ROOT. @team/<slug> recipients expand the current agent-team
+roster. To records concrete recipients; Team-To records addressed teams.
+Reply-all keeps the original recipients even after roster changes. Teams
+cannot be senders or Reply-To targets and have no separate inbox.
 
 Message filenames expose UTC creation time, sender, receiver, and a truncated
 subject before a collision-resistant suffix. Thread-ID names the root message;
@@ -75,6 +78,7 @@ sweep  Notify Josh about messages unread for --hours (default 4). Any live
        session can run it; a dead recipient cannot escalate for itself.
 
 Env:
+  AGENT_TEAM_ROOT Override team registry root (see agent-team).
   AGENT_MAIL_ROOT  Override agent inbox root (default AGENT_SCRATCH_ROOT or
                    ~/.local/state/agent/scratchpads).
   AGENT_SCRATCH_ROOT Persistent agent scratchpad and inbox root.
@@ -98,10 +102,42 @@ normalize_id() {
   printf '%s' "$id"
 }
 
+is_team_handle() {
+  local id="$1"
+  case "$id" in
+    @team/*|team/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+TEAM_MEMBERS=()
+expand_team_members() {
+  local team="$1" helper members_output member
+  local handle_pattern='^@\+[a-z0-9]+(-[a-z0-9]+)+$'
+  TEAM_MEMBERS=()
+  helper="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/agent-team"
+  [ -x "$helper" ] || die "sibling agent-team not found (required for team recipients)"
+  # Keep trailing blank lines visible for validation; substitution strips them.
+  members_output="$("$helper" members "$team" && printf '.')" || die "team expansion failed for '$team'"
+  members_output="${members_output%.}"
+  members_output="${members_output%$'\n'}"
+  [ -n "$members_output" ] || die "team '$team' has no members"
+  while IFS= read -r member; do
+    [[ "$member" =~ $handle_pattern ]] || die "invalid member from team '$team': $member"
+    member="$(normalize_id "$member")"
+    [ -z "$(human_handle "$member" || true)" ] || die "team member conflicts with a human address: $member"
+    TEAM_MEMBERS+=("$member")
+  done <<< "$members_output"
+}
+
 PARSED_RECIPIENTS=()
+PARSED_TEAMS=()
 parse_recipient_lists() {
   PARSED_RECIPIENTS=()
+  PARSED_TEAMS=()
   local raw recipient existing duplicate
+  local -a pre_expanded=()
+
   for raw in "$@"; do
     while :; do
       case "$raw" in
@@ -113,11 +149,34 @@ parse_recipient_lists() {
       [ -n "$recipient" ] || die "empty recipient in list"
       recipient="$(normalize_id "$recipient")"
       duplicate=0
-      for existing in "${PARSED_RECIPIENTS[@]}"; do
+      for existing in ${pre_expanded[@]+"${pre_expanded[@]}"}; do
         [ "$existing" = "$recipient" ] && duplicate=1
       done
-      [ "$duplicate" -eq 1 ] || PARSED_RECIPIENTS+=("$recipient")
+      [ "$duplicate" -eq 1 ] || pre_expanded+=("$recipient")
       [ -z "$raw" ] && break
+    done
+  done
+
+  local -a members=() seen_inboxes=()
+  local member inbox
+  for recipient in "${pre_expanded[@]}"; do
+    if is_team_handle "$recipient"; then
+      PARSED_TEAMS+=("@$recipient")
+      expand_team_members "@$recipient"
+      members=("${TEAM_MEMBERS[@]}")
+    else
+      members=("$recipient")
+    fi
+    for member in "${members[@]}"; do
+      inbox="$(resolve_inbox "$member")"
+      duplicate=0
+      for existing in ${seen_inboxes[@]+"${seen_inboxes[@]}"}; do
+        [ "$existing" = "$inbox" ] && duplicate=1
+      done
+      if [ "$duplicate" -eq 0 ]; then
+        seen_inboxes+=("$inbox")
+        PARSED_RECIPIENTS+=("$member")
+      fi
     done
   done
 }
@@ -298,10 +357,14 @@ gen_msgid() {
     "${subject:-no-subject}" "$$" "${RANDOM}${RANDOM}"
 }
 
+message_header() {
+  awk -v key="$2" '/^$/ { exit } index($0, key ": ") == 1 { print substr($0, length(key) + 3); exit }' "$1"
+}
+
 thread_id_for_message() {
   local path="$1" thread
-  thread="$(sed -n 's/^Thread-ID: //p' "$path" | head -1)"
-  [ -n "$thread" ] || thread="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
+  thread="$(message_header "$path" Thread-ID)"
+  [ -n "$thread" ] || thread="$(message_header "$path" Message-ID)"
   printf '%s' "$thread"
 }
 
@@ -365,14 +428,19 @@ cmd_send() {
   from="$(normalize_id "$from")"
   [ -n "$reply_to" ] && reply_to="$(normalize_id "$reply_to")"
 
+  # Reject team handles as sender or Reply-To
+  is_team_handle "$from" && die "send: team cannot be message sender (From)"
+  [ -n "$reply_to" ] && is_team_handle "$reply_to" && die "send: team cannot be Reply-To"
+
   if [ -n "$reply_all_file" ]; then
     local source_path source_sender source_to source_subject source_id self_inbox candidate candidate_inbox
     source_path="$(message_path "$reply_all_file")"
-    source_sender="$(sed -n 's/^Reply-To: //p' "$source_path" | head -1)"
-    [ -n "$source_sender" ] || source_sender="$(sed -n 's/^From: //p' "$source_path" | head -1)"
-    source_to="$(sed -n 's/^To: //p' "$source_path" | head -1)"
-    source_id="$(sed -n 's/^Message-ID: //p' "$source_path" | head -1)"
+    source_sender="$(message_header "$source_path" Reply-To)"
+    [ -n "$source_sender" ] || source_sender="$(message_header "$source_path" From)"
+    source_to="$(message_header "$source_path" To)"
+    source_id="$(message_header "$source_path" Message-ID)"
     [ -n "$source_sender" ] && [ -n "$source_id" ] || die "send: reply-all source is missing From or Message-ID"
+    is_team_handle "$source_sender" && die "send: team cannot be reply target"
     if [ -n "$source_to" ]; then
       parse_recipient_lists "$source_sender" "$source_to"
     else
@@ -386,7 +454,7 @@ cmd_send() {
     done
     [ "${#raw_recipients[@]}" -gt 0 ] || die "send: reply-all source has no other recipients"
     if [ -z "$subject" ]; then
-      source_subject="$(sed -n 's/^Subject: //p' "$source_path" | head -1)"
+      source_subject="$(message_header "$source_path" Subject)"
       case "$source_subject" in Re:\ *) subject="$source_subject" ;; *) subject="Re: ${source_subject:-(no subject)}" ;; esac
     fi
     [ -n "$in_reply_to" ] || in_reply_to="$source_id"
@@ -409,10 +477,10 @@ cmd_send() {
         echo "agent-mail: '$recipient' last active ${idle}h ago" >&2
       fi
     fi
-    ensure_maildir "$inbox"
     inboxes+=("$inbox")
     humans+=("$human")
   done
+  for inbox in "${inboxes[@]}"; do ensure_maildir "$inbox"; done
 
   local to_header="${recipients[0]}" to_filename="${recipients[0]}" i
   for ((i = 1; i < ${#recipients[@]}; i++)); do
@@ -427,9 +495,19 @@ cmd_send() {
   # A recipient may read/move its copy before we retain the sender's Sent copy.
   local source_tmp="${inboxes[0]}/tmp/$msgid.source"
 
+  # Build Team-To header if teams were addressed
+  local team_to_header=""
+  if [ ${#PARSED_TEAMS[@]} -gt 0 ]; then
+    team_to_header="${PARSED_TEAMS[0]}"
+    for ((i = 1; i < ${#PARSED_TEAMS[@]}; i++)); do
+      team_to_header+=", ${PARSED_TEAMS[$i]}"
+    done
+  fi
+
   {
     echo "From: $from"
     echo "To: $to_header"
+    [ -n "$team_to_header" ] && echo "Team-To: $team_to_header"
     [ -n "$reply_to" ] && echo "Reply-To: $reply_to"
     echo "Date: $(now_iso)"
     echo "Message-ID: $msgid"
@@ -640,9 +718,9 @@ cmd_compose() {
 
 create_reply_draft() {
   local path="$1" to="$2" subject in_reply_to thread_id msgid drafts draft to_filename
-  subject="$(sed -n 's/^Subject: //p' "$path" | head -1)"
+  subject="$(message_header "$path" Subject)"
   case "$subject" in Re:\ *) ;; *) subject="Re: ${subject:-(no subject)}" ;; esac
-  in_reply_to="$(sed -n 's/^Message-ID: //p' "$path" | head -1)"
+  in_reply_to="$(message_header "$path" Message-ID)"
   thread_id="$(thread_id_for_message "$path")"
   to_filename="${to//, /+}"
   msgid="$(gen_msgid josh "$to_filename" "$subject")"
@@ -667,9 +745,10 @@ cmd_reply() {
   local path; path="$(message_path "${1:-}")"
   [ $# -eq 1 ] || die "reply: expected one message file"
   local to
-  to="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
-  [ -n "$to" ] || to="$(sed -n 's/^From: //p' "$path" | head -1)"
+  to="$(message_header "$path" Reply-To)"
+  [ -n "$to" ] || to="$(message_header "$path" From)"
   [ -n "$to" ] || die "reply: message has no From or Reply-To header"
+  is_team_handle "$to" && die "reply: team cannot be reply target"
   create_reply_draft "$path" "$(normalize_id "$to")"
 }
 
@@ -677,10 +756,11 @@ cmd_reply_all() {
   local path; path="$(message_path "${1:-}")"
   [ $# -eq 1 ] || die "reply-all: expected one message file"
   local sender original_to recipient human to=""
-  sender="$(sed -n 's/^Reply-To: //p' "$path" | head -1)"
-  [ -n "$sender" ] || sender="$(sed -n 's/^From: //p' "$path" | head -1)"
-  original_to="$(sed -n 's/^To: //p' "$path" | head -1)"
+  sender="$(message_header "$path" Reply-To)"
+  [ -n "$sender" ] || sender="$(message_header "$path" From)"
+  original_to="$(message_header "$path" To)"
   [ -n "$sender" ] || die "reply-all: message has no From or Reply-To header"
+  is_team_handle "$sender" && die "reply-all: team cannot be reply target"
   if [ -n "$original_to" ]; then
     parse_recipient_lists "$sender" "$original_to"
   else
@@ -702,13 +782,24 @@ cmd_deliver() {
   dir="$(CDPATH= cd -- "$(dirname -- "$draft")" && pwd)"
   [ "$dir" = "$HUMAN_MAIL_ROOT/josh/drafts" ] || die "not a Josh agent-mail draft: $draft"
 
-  local to from subject msgid recipient inbox scratchpad human dst to_filename i
+  local to from reply_to subject msgid recipient inbox scratchpad human dst to_filename i
   local -a recipients=() inboxes=() humans=()
-  to="$(sed -n 's/^To: //p' "$draft" | head -1)"
-  from="$(sed -n 's/^From: //p' "$draft" | head -1)"
-  subject="$(sed -n 's/^Subject: //p' "$draft" | head -1)"
-  msgid="$(sed -n 's/^Message-ID: //p' "$draft" | head -1)"
+  to="$(message_header "$draft" To)"
+  from="$(message_header "$draft" From)"
+  reply_to="$(message_header "$draft" Reply-To)"
+  subject="$(message_header "$draft" Subject)"
+  msgid="$(message_header "$draft" Message-ID)"
+  awk '/^$/ { found=1; exit } END { exit !found }' "$draft" || die "draft has no header/body separator"
   [ -n "$to" ] && [ -n "$from" ] || die "draft is missing To or From"
+
+  # Reject team handles as sender or Reply-To
+  from="$(normalize_id "$from")"
+  is_team_handle "$from" && die "deliver: team cannot be message sender (From)"
+  if [ -n "$reply_to" ]; then
+    reply_to="$(normalize_id "$reply_to")"
+    is_team_handle "$reply_to" && die "deliver: team cannot be Reply-To"
+  fi
+
   parse_recipient_lists "$to"
   recipients=("${PARSED_RECIPIENTS[@]}")
   to_filename="${recipients[0]}"
@@ -720,32 +811,62 @@ cmd_deliver() {
     human="$(human_handle "$recipient" || true)"
     scratchpad="$(dirname "$inbox")"
     [ -n "$human" ] || [ -d "$scratchpad" ] || die "recipient '$recipient' has no scratchpad at $scratchpad (not created or pruned?)"
-    ensure_maildir "$inbox"
     inboxes+=("$inbox")
     humans+=("$human")
   done
-  if [ -z "$msgid" ]; then
-    local date tmp
-    date="$(now_iso)"
-    msgid="$(gen_msgid "$from" "$to_filename" "${subject:-(no subject)}")"
-    tmp="$draft.tmp-$$-$RANDOM"
-    awk -v date="$date" -v msgid="$msgid" '
-      /^To: / && !inserted {
-        print
-        print "Date: " date
-        print "Message-ID: " msgid
-        print "Thread-ID: " msgid
-        inserted=1
-        next
-      }
-      { print }
-    ' "$draft" >"$tmp"
-    mv "$tmp" "$draft"
+  # Build Team-To header if teams were addressed
+  local team_to_header=""
+  if [ ${#PARSED_TEAMS[@]} -gt 0 ]; then
+    team_to_header="${PARSED_TEAMS[0]}"
+    for ((i = 1; i < ${#PARSED_TEAMS[@]}; i++)); do
+      team_to_header+=", ${PARSED_TEAMS[$i]}"
+    done
   fi
+
+  # Update draft with expanded recipients and metadata
+  local expanded_to="${recipients[0]}"
+  for ((i = 1; i < ${#recipients[@]}; i++)); do
+    expanded_to+=", ${recipients[$i]}"
+  done
+
+  local had_msgid="$msgid"
+  [ -n "$msgid" ] || msgid="$(gen_msgid "$from" "$to_filename" "${subject:-(no subject)}")"
   for inbox in "${inboxes[@]}"; do
     dst="$inbox/new/$msgid.md"
     [ ! -e "$dst" ] || die "delivery destination already exists: $dst"
   done
+  for inbox in "${inboxes[@]}"; do ensure_maildir "$inbox"; done
+
+  if [ -z "$had_msgid" ] || [ -n "$team_to_header" ] || [ "$to" != "$expanded_to" ]; then
+    local tmp line thread_id
+    thread_id="$(message_header "$draft" Thread-ID)"
+    tmp="$(mktemp "$draft.tmp.XXXXXXXX")"
+    # Hand the remaining bytes to cat at the separator: line-oriented rewriting
+    # would change a body without a final newline (or its header-like lines).
+    {
+      while IFS= read -r line; do
+        if [ -z "$line" ]; then
+          printf '\n'
+          cat
+          break
+        fi
+        case "$line" in
+          To:\ *)
+            printf 'To: %s\n' "$expanded_to"
+            [ -z "$team_to_header" ] || printf 'Team-To: %s\n' "$team_to_header"
+            if [ -z "$had_msgid" ]; then
+              printf 'Date: %s\nMessage-ID: %s\n' "$(now_iso)" "$msgid"
+              [ -n "$thread_id" ] || printf 'Thread-ID: %s\n' "$msgid"
+            fi
+            ;;
+          Team-To:\ *) [ -n "$team_to_header" ] || printf '%s\n' "$line" ;;
+          Date:\ *|Message-ID:\ *) [ -z "$had_msgid" ] || printf '%s\n' "$line" ;;
+          *) printf '%s\n' "$line" ;;
+        esac
+      done
+    } <"$draft" >"$tmp"
+    mv "$tmp" "$draft"
+  fi
   local first_dst="" tmp_dst
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
     inbox="${inboxes[$i]}"
