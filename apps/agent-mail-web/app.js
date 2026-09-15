@@ -201,11 +201,11 @@ function renderList() {
     rows.append(row);
   });
 }
-async function navigate(target, clearSearch = true) {
+async function navigate(target, clearSearch = true, query = "") {
   if (view === "editor") await saveDraft();
   ++threadGeneration;
   folder = target;
-  if (clearSearch) $("search").value = "";
+  if (clearSearch) $("search").value = query;
   setFolderButtons();
   show("mail-list");
   await refresh();
@@ -605,6 +605,13 @@ function contactCard(contact, { allowCompose = true, compact = false } = {}) {
   const content = document.createElement("div");
   content.className = "contact-content";
   row.append(summary);
+  if (/^@?\+?[A-Za-z0-9._-]+$/.test(contact.handle)) {
+    row.append(
+      button("Show mail", () =>
+        navigate("all", true, "with:" + contact.handle),
+      ),
+    );
+  }
   if (allowCompose) {
     const compose = button("Message " + contact.handle, async () => {
       await newDraft();

@@ -73,6 +73,38 @@ class WebTest(unittest.TestCase):
         except urllib.error.HTTPError as r:
             return r.code, r.read()
 
+    def test_contact_search_matches_headers_and_aliases_across_folders(self):
+        fixtures = [
+            ('sent', 'outbound', 'josh', '@+birch-weaver, +alder-turner-12345678'),
+            ('archive', 'archived', '@+ALDER-TURNER', '@josh'),
+            ('drafts', 'draft', 'josh', '@+alder-turner'),
+            ('inbox', 'human', '@alder-turner', '@josh'),
+            ('inbox', 'prefix', '@+alder-turner-extra', '@josh'),
+            ('inbox', 'mention', '@+birch-weaver', '@josh'),
+        ]
+        for folder, name, sender, recipients in fixtures:
+            (self.box.directory(folder) / (name + '.md')).write_text(
+                f'From: {sender}\nTo: {recipients}\nSubject: Mentions @+alder-turner\nMessage-ID: {name}\n\nBody mentions @+alder-turner.\n')
+        original = self.box.path(self.key).read_bytes()
+        expected = {self.key, 'sent:outbound.md', 'archive:archived.md', 'drafts:draft.md'}
+        for address in ('@+alder-turner', '+alder-turner', 'alder-turner', '@+ALDER-TURNER-12345678'):
+            code, body = self.request('/api/messages?folder=all&q=' + quote('with:' + address))
+            self.assertEqual(code, 200)
+            self.assertEqual({m['key'] for m in json.loads(body)['messages']}, expected)
+        def keys(query, folder='all'):
+            return {m['key'] for m in self.box.listing(folder, query)['messages']}
+        self.assertEqual(keys('with:@+alder-turner needle'), {self.key})
+        self.assertEqual(keys('with:@+alder-turner', 'sent'), {'sent:outbound.md'})
+        self.assertEqual(keys('with:@alder-turner'), {'inbox:human.md'})
+        self.assertEqual(keys('with:@+alder-turner with:@+birch-weaver'), {self.key, 'sent:outbound.md'})
+        self.assertEqual(keys('with:@+missing'), set())
+        self.assertIn('inbox:mention.md', keys('@+alder-turner'))
+        self.assertEqual(self.request('/api/messages?folder=all&q=with:')[0], 400)
+        self.assertEqual(self.box.path(self.key).read_bytes(), original)
+        self.assertEqual(web.address_key('humans/josh'), web.address_key('@josh'))
+        self.assertEqual(web.address_key('josh'), web.address_key('@josh'))
+        self.assertNotEqual(web.address_key('@+josh'), web.address_key('@josh'))
+
     def test_contact_model_metadata_passes_through_to_web(self):
         session = next((self.root / 'sessions').glob('*.jsonl'))
         with session.open('a') as output:

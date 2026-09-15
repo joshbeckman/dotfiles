@@ -467,6 +467,45 @@ try {
   await directory
     .getByRole("button", { name: "Copy resume command", exact: true })
     .waitFor();
+  await directory
+    .getByRole("button", { name: "Show mail", exact: true })
+    .click();
+  await page.locator("#mail-list").waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator("#search").inputValue(),
+    "with:@+alder-turner",
+  );
+  assert.equal(
+    await page.locator('[data-folder="all"]').getAttribute("aria-current"),
+    "page",
+  );
+  await page.locator(".row").filter({ hasText: "(3)" }).waitFor();
+  await page.locator(".row").click();
+  await page.locator("#reply").click();
+  await page.locator("#body").fill("Contact navigation preserves this draft.");
+  await sidebar
+    .locator(".contact")
+    .filter({ hasText: "@+alder-turner" })
+    .getByRole("button", { name: "Show mail", exact: true })
+    .click();
+  await page.locator("#mail-list").waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator("#search").inputValue(),
+    "with:@+alder-turner",
+  );
+  const navigationDrafts = await readdir(join(humans, "josh/drafts"));
+  assert.equal(navigationDrafts.length, 1);
+  assert(
+    (
+      await readFile(join(humans, "josh/drafts", navigationDrafts[0]), "utf8")
+    ).includes("Contact navigation preserves this draft."),
+  );
+  await page.getByRole("button", { name: /^Drafts/ }).click();
+  await page.getByRole("heading", { name: "Drafts", exact: true }).waitFor();
+  await page.locator(".row").click();
+  await page.locator("#delete-draft").click();
+  await page.getByText("Draft deleted.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Contacts", exact: true }).click();
   await page.locator("#contact-search").fill("orchard");
   await page.locator("#contact-search").press("Enter");
   await page.getByText(/1 matching sessions/).waitFor();

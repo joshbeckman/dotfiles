@@ -91,6 +91,19 @@ def parse_mail(path):
             'revision': hashlib.sha256(raw).hexdigest()}
 
 
+def address_key(address):
+    value = address.strip().casefold()
+    if value == 'josh':
+        return ('human', 'josh')
+    if value.startswith('humans/'):
+        return ('human', value[7:])
+    if value.startswith('@') and not value.startswith('@+'):
+        return ('human', value[1:])
+    if not value.startswith('@+') and '@' in value:
+        return ('human', value.split('@')[0])
+    return ('agent', re.sub(r'-[0-9a-f]{8}$', '', re.sub(r'^@\+|^\+', '', value)))
+
+
 class Mailbox:
     def __init__(self):
         human_root = Path(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans')).expanduser()
@@ -154,9 +167,23 @@ class Mailbox:
         if folder not in (*FOLDERS, 'all'):
             raise MailError('Unknown folder')
         counts = {f: sum(m['folder'] == f for m in messages) for f in FOLDERS}
-        words = query.casefold().split()
-        matches = [m for m in messages if (folder == 'all' or m['folder'] == folder)
-                   and all(w in '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold() for w in words)]
+        words, people = [], []
+        for word in query.casefold().split():
+            if word.startswith('with:'):
+                address = word[5:]
+                if not re.fullmatch(r'@?\+?[A-Za-z0-9._-]+', address):
+                    raise MailError('Use with:@+agent-handle or with:@human for contact searches')
+                people.append(address_key(address))
+            else:
+                words.append(word)
+        matches = []
+        for m in messages:
+            if folder != 'all' and m['folder'] != folder:
+                continue
+            text = '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold()
+            participants = {address_key(a) for a in (m['from'] + ',' + m['to']).split(',') if a.strip()}
+            if all(w in text for w in words) and all(p in participants for p in people):
+                matches.append(m)
         return {'messages': [dict((k, v) for k, v in m.items() if k != 'body') |
                              {'excerpt': re.sub(r'\s+', ' ', m['body'])[:180]} for m in matches],
                 'counts': counts, 'warnings': warnings}
