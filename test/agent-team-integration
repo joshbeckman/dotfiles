@@ -61,7 +61,74 @@ class TeamIntegration(unittest.TestCase):
         self.team('create', name, '--coordinator', '@+' + self.names[0])
         self.team('join', name, '--agent', '@+' + self.names[1], '--scope', 'Review')
 
+    def test_registered_mail_routing_ignores_bare_shadow(self):
+        name = self.names[1]
+        shadow = self.root / 'agents' / name
+        shadow.mkdir()
+        expected = str(self.pads[1] / 'inbox')
+        for alias in ('@+' + name, name, 'birch-weaver', self.pads[1].name):
+            self.assertEqual(self.cli('mail', 'addr', alias).stdout.strip(), expected)
+        sent = self.cli('mail', 'send', '--to', '@+' + name, '--to', self.pads[1].name,
+                        '--body', 'One session, one copy').stdout.strip()
+        self.assertTrue((self.pads[1] / 'inbox/new' / (sent + '.md')).is_file())
+        self.assertFalse((shadow / 'inbox').exists())
+        text = (self.root / 'humans/josh/sent' / (sent + '.md')).read_text()
+        self.assertIn('To: ' + name + '\n', text)
+        read = self.cli('mail', 'read', '--to', '@+' + name)
+        self.assertIn('One session, one copy', read.stdout)
+        self.assertTrue((self.pads[1] / 'inbox/cur' / (sent + '.md')).is_file())
+
+    def test_registered_mail_missing_invalid_and_ambiguous_targets(self):
+        name = self.names[2]
+        shadow = self.root / 'agents' / name
+        shadow.mkdir()
+        self.pads[2].rmdir()
+        self.cli('mail', 'addr', '@+' + name, ok=False)
+        self.assertFalse((shadow / 'inbox').exists())
+        self.pads[2].mkdir()
+        legacy = self.root / 'agents/cedar-fletcher-00000003'
+        legacy.mkdir()
+        self.cli('mail', 'addr', '@+' + name, ok=False)
+        legacy.rmdir()
+        legacy.symlink_to(self.pads[2], target_is_directory=True)
+        self.assertEqual(self.cli('mail', 'addr', '@+' + name).stdout.strip(), str(self.pads[2] / 'inbox'))
+        sent = self.cli('mail', 'send', '--to', '@+' + name, '--to', legacy.name,
+                        '--body', 'Physical alias deduplication').stdout.strip()
+        self.assertIn('To: ' + name + '\n', (self.root / 'humans/josh/sent' / (sent + '.md')).read_text())
+        (self.root / 'identities' / name).write_text('../invalid\n')
+        self.cli('mail', 'addr', '@+' + name, ok=False)
+        (self.root / 'identities' / name).unlink()
+        (self.root / 'identities' / name).symlink_to(self.root / 'identities' / self.names[0])
+        self.cli('mail', 'addr', '@+' + name, ok=False)
+        self.env['AGENT_IDENTITIES_DIR'] = str(self.root / 'identities' / self.names[0])
+        self.cli('mail', 'addr', '@+' + name, ok=False)
+
+    def test_registered_mail_supports_legacy_pads_and_rejects_ambiguous_names(self):
+        name = self.names[1]
+        legacy = self.root / 'agents/birch-weaver-00000002'
+        self.pads[1].rename(legacy)
+        self.assertEqual(self.cli('mail', 'addr', '@+' + name).stdout.strip(), str(legacy / 'inbox'))
+        self.assertEqual(self.cli('mail', 'addr', 'birch-weaver').stdout.strip(), str(legacy / 'inbox'))
+        (self.root / 'identities/birch-weaver-of-lantern').write_text('00000009-0000-0000-0000-000000000009\n')
+        self.cli('mail', 'addr', 'birch-weaver', ok=False)
+        self.assertEqual(self.cli('mail', 'addr', '@+' + name).stdout.strip(), str(legacy / 'inbox'))
+        self.assertEqual(self.cli('mail', 'addr', '@+alder-turner-of-hearth').stdout.strip(), str(self.pads[0] / 'inbox'))
+        explicit = self.root / 'agents/alder-turner-of-hearth-00000099'
+        explicit.mkdir()
+        self.assertEqual(self.cli('mail', 'addr', explicit.name).stdout.strip(), str(explicit / 'inbox'))
+        full = self.root / 'agents/alder-turner-of-hearth-00000099-0000-0000-0000-000000000099'
+        full.mkdir()
+        self.assertEqual(self.cli('mail', 'addr', full.name).stdout.strip(), str(full / 'inbox'))
+        for pad in (explicit, full):
+            pad.rmdir()
+            self.assertEqual(self.cli('mail', 'addr', pad.name, ok=False).stdout, '')
+            before = set(self.root.rglob('*.md'))
+            self.cli('mail', 'send', '--to', '@josh', '--to', pad.name, '--body', 'Never retarget', ok=False)
+            self.assertEqual(set(self.root.rglob('*.md')), before)
+
     def test_broadcast_aliases_and_original_reply_roster(self):
+        for name in self.names:
+            (self.root / 'agents' / name).mkdir()
         self.create()
         self.create('overlap')
         first = self.cli('mail', 'send', '--to', '@team/orchard', '--to', 'team/overlap',
@@ -93,6 +160,8 @@ class TeamIntegration(unittest.TestCase):
         self.assertEqual({str(p) for p in self.root.rglob('*.md')}, before)
 
     def test_draft_team_send_and_failed_preflight(self):
+        for name in self.names:
+            (self.root / 'agents' / name).mkdir()
         self.create()
         draft = Path(self.cli('mail', 'compose').stdout.strip())
         draft.write_text(draft.read_text().replace('To: \n', 'To: @team/orchard\n') + 'Team-To: this is body text\nTo: also body text')

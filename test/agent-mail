@@ -43,6 +43,8 @@ exit 99
 EOF
 chmod +x "$tmp/bin/notify-josh" "$tmp/bin/nvim" "$tmp/bin/agent-team" "$tmp/path-bin/agent-team"
 export TEAM_FIXTURES="$tmp/teams" TEAM_LOG="$tmp/team-calls"
+export AGENT_IDENTITIES_DIR="$tmp/identities"
+mkdir -p "$AGENT_IDENTITIES_DIR"
 export AGENT_MAIL_ROOT="$tmp/mail"
 export AGENT_HUMAN_MAIL_ROOT="$tmp/humans"
 export NOTIFY_LOG="$tmp/notifications"

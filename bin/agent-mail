@@ -79,6 +79,7 @@ sweep  Notify Josh about messages unread for --hours (default 4). Any live
 
 Env:
   AGENT_TEAM_ROOT Override team registry root (see agent-team).
+  AGENT_IDENTITIES_DIR Override permanent identity claims (default ~/.pi/agent/identities/by-name).
   AGENT_MAIL_ROOT  Override agent inbox root (default AGENT_SCRATCH_ROOT or
                    ~/.local/state/agent/scratchpads).
   AGENT_SCRATCH_ROOT Persistent agent scratchpad and inbox root.
@@ -197,9 +198,8 @@ sender_id() {
   printf '%s' "$id"
 }
 
-# Resolve an ID to an inbox base path. Humans: humans/<handle>. Agents:
-# match <name>-* exactly, then fall back to a bare name dir. Ambiguity (two
-# live sessions of one name) fails loudly rather than guessing a recipient.
+# Human accounts retain their namespace; agent claims take precedence over
+# filesystem guesses so a stray bare-name directory cannot intercept mail.
 human_handle() {
   local id="$1" handle
   case "$id" in
@@ -225,6 +225,53 @@ resolve_inbox() {
     echo "$HUMAN_MAIL_ROOT/$handle/inbox"
     return 0
   fi
+  local registry="${AGENT_IDENTITIES_DIR:-$HOME/.pi/agent/identities/by-name}"
+  if [ -e "$registry" ] || [ -L "$registry" ]; then
+    [ -d "$registry" ] && [ -r "$registry" ] && [ -x "$registry" ] || die "identity registry is unavailable: $registry"
+  fi
+  local claim name sid base suffix candidate physical existing duplicate
+  local -a claims=() pads=()
+  local session_suffix='-[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$'
+  if [ -e "$registry/$id" ] || [ -L "$registry/$id" ]; then
+    claims+=("$registry/$id")
+  elif [[ "$id" =~ $session_suffix ]]; then
+    : # Explicit transport addresses must not be retargeted by a name alias.
+  elif [ "$id" != "${id%-of-*}" ]; then
+    base="${id%-of-*}"
+    if [ -e "$registry/$base" ] || [ -L "$registry/$base" ]; then
+      claims+=("$registry/$base")
+    fi
+  else
+    for claim in "$registry/$id"-of-*; do
+      if [ -e "$claim" ] || [ -L "$claim" ]; then claims+=("$claim"); fi
+    done
+  fi
+  [ "${#claims[@]}" -le 1 ] || die "ambiguous registered recipient '$id'"
+  if [ "${#claims[@]}" -eq 1 ]; then
+    claim="${claims[0]}"
+    [ -f "$claim" ] && [ ! -L "$claim" ] || die "invalid identity claim for '$id'"
+    sid="$(head -c 129 "$claim")" || die "cannot read identity claim for '$id'"
+    local uuid_pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    [[ "$sid" =~ $uuid_pattern ]] || die "invalid session ID in identity claim for '$id'"
+    name="${claim##*/}"
+    for base in "$name" "${name%-of-*}"; do
+      for suffix in "${sid:0:8}" "$sid"; do
+        candidate="$MAIL_ROOT/$base-$suffix"
+        [ -d "$candidate" ] || continue
+        physical="$(CDPATH= cd -- "$candidate" && pwd -P)" || die "cannot resolve scratchpad for '$id'"
+        duplicate=0
+        for existing in ${pads[@]+"${pads[@]}"}; do
+          [ "$existing" = "$physical" ] && duplicate=1
+        done
+        [ "$duplicate" -eq 1 ] || pads+=("$physical")
+      done
+    done
+    case "${#pads[@]}" in
+      1) echo "${pads[0]}/inbox"; return 0 ;;
+      0) die "registered recipient '$id' has no session-qualified scratchpad" ;;
+      *) die "ambiguous scratchpads for registered recipient '$id': ${pads[*]}" ;;
+    esac
+  fi
   # Match on the *scratchpad* existing, not inbox/ — a fresh recipient has a
   # scratchpad but no inbox until their first mail arrives, so keying off
   # inbox/ made bare-name first contact impossible (chicken-and-egg).
@@ -232,6 +279,10 @@ resolve_inbox() {
   # Names themselves contain hyphens, so we cannot infer "full ID" by counting
   # hyphens — match the filesystem instead.
   if [ -d "$MAIL_ROOT/$id" ]; then
+    physical="$(CDPATH= cd -- "$MAIL_ROOT/$id" && pwd -P)" || die "cannot resolve scratchpad for '$id'"
+    echo "$physical/inbox"; return 0
+  fi
+  if [[ "$id" =~ $session_suffix ]]; then
     echo "$MAIL_ROOT/$id/inbox"; return 0
   fi
   local -a hits=()
