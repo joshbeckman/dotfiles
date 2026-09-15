@@ -114,7 +114,9 @@ When a comment mixes Josh's words with an agent response, compose the boundary e
 
 If you create or inherit a pull request, you own it until the change is deployed and its production result is checked, unless Josh explicitly releases or transfers ownership. Opening a PR is not task completion. Use the `own-pr` skill for the full lifecycle: open as draft; trigger and monitor CI and automated review; address comments and conflicts; propose three high-context reviewers when it is green; request them after Josh marks it ready; monitor the merge queue after Josh enqueues; verify deployment; report production proof; then make the worktree eligible for cleanup. New PRs are registered by `gw`/`gsw` with `agent-pr-monitor`, which polls without model turns and delivers changes through `agent-mail`; use direct polling only as its fallback rather than relying on Josh to relay notifications. Ownership does not grant permission to mark ready, enqueue, merge, or re-enqueue without Josh's instruction.
 
-**Everywhere else, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer. For a standalone conversational response, put the generated identity first and blockquote the response. For mixed prose, keep Josh's words unquoted and place the trailer adjacent to the blockquoted agent passage. Maintained artifacts can carry the trailer after the prose without blockquoting the whole artifact. Generate the identity with `bin/agent-trailer` (in dotfiles `bin/`, on PATH). Never write it from memory; models guess their own name wrong.
+**Shared instructions are an exception.** Never append a concrete author identity or attribution trailer to `AGENTS.md`, `CLAUDE.md`, shared system prompts, agent definitions, prompt templates, or skills and their instruction references. Keep contributor attribution in Git commits instead; a reusable instruction file must not look like another session's identity assignment. Attribution examples should use placeholders. Runtime-injected session identity is separate and should remain intact.
+
+**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer. For a standalone conversational response, put the generated identity first and blockquote the response. For mixed prose, keep Josh's words unquoted and place the trailer adjacent to the blockquoted agent passage. Maintained artifacts can carry the trailer after the prose without blockquoting the whole artifact. Generate the identity with `bin/agent-trailer` (in dotfiles `bin/`, on PATH). Never write it from memory; models guess their own name wrong.
 
 ```sh
 agent-trailer   # => Co-authored-by: AI <session name> (<harness>/<provider>/<model>)
@@ -160,5 +162,3 @@ When writing prose (blog posts, documentation, comments, descriptions, PR bodies
 ## Time and Date Handling
 
 You should use the josh-beckman-status get_current_time_of_day tool for determining what day it is (when doing things with calendars, reporting, etc.)
-
-Co-authored-by: AI Simoom Farrier (pi/openai/gpt-6-astra) @+simoom-farrier

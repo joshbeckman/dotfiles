@@ -44,5 +44,3 @@ At warning pressure, reduce existing workloads before starting new fanout. At cr
 - Process aggregation is a point-in-time RSS snapshot, not a leak detector.
 - Shared memory can make summed RSS overstate physical use, but the ranking remains useful for finding owners.
 - The script reports detached Overmind sockets separately because they do not appear in the default tmux server.
-
-Co-authored-by: AI Simoom Farrier (pi-0.84.3/openai/gpt-5.6-sol) @+simoom-farrier

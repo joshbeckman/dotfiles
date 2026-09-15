@@ -108,5 +108,3 @@ Only then is the PR lifecycle complete. Run `agent-pr-monitor release PR_URL`; t
 When registered, the shared monitor polls without model turns and sends only state changes through `agent-mail`; do not duplicate it with conversational polling or a per-session background job. When monitoring is unavailable or unhealthy, poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often. Stop fallback polling when healthy monitoring resumes.
 
 Keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave the PR checklist with the current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.
-
-Co-authored-by: AI Simoom Farrier (pi/openai/gpt-6-astra) @+simoom-farrier
