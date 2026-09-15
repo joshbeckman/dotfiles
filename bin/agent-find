@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Find agent sessions by transcript topic, or inspect one exact contact."""
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -36,27 +37,69 @@ def ranked_sessions(root, pattern):
     return sorted(ranked, key=lambda item: (item[0], str(item[1])), reverse=True)
 
 
+def recorded_model(record):
+    kind = record.get('type')
+    message = record.get('message')
+    if kind == 'model_change':
+        provider, model, source = record.get('provider'), record.get('modelId'), 'model_change'
+    elif kind == 'message' and isinstance(message, dict) and message.get('role') == 'assistant':
+        provider, model, source = message.get('provider'), message.get('model'), 'assistant'
+    else:
+        return None
+    if not all(isinstance(value, str) and value for value in (provider, model)):
+        return None
+    timestamp = record.get('timestamp')
+    if not isinstance(timestamp, str):
+        timestamp = None
+        if isinstance(message, dict) and type(message.get('timestamp')) in (int, float):
+            try:
+                timestamp = datetime.fromtimestamp(message['timestamp'] / 1000, timezone.utc).isoformat()
+            except (ValueError, OverflowError, OSError):
+                pass
+    return {'provider': provider, 'model': model, 'observedAt': timestamp, 'source': source}
+
+
 def hydrate(file, hits, claims, mail_root, pane_titles):
     sid = file.stem.rpartition('_')[2]
     handle = claims.get(sid, '')
-    cwd, title = '', ''
+    cwd, title, harness = '', '', None
+    entries, used, leaf = {}, {}, None
     with file.open(errors='replace') as transcript:
-        try:
-            header = json.loads(next(transcript))
-            if isinstance(header, dict) and isinstance(header.get('cwd'), str):
-                cwd = header['cwd']
-        except (StopIteration, ValueError):
-            pass
-        # Most lines contain large tool results. Decode only session-title entries.
-        for line in transcript:
-            if not re.search(r'"type"\s*:\s*"session_info"', line):
-                continue
+        for index, line in enumerate(transcript):
             try:
                 record = json.loads(line)
-                if isinstance(record, dict) and record.get('type') == 'session_info' and isinstance(record.get('name'), str):
-                    title = record['name']
             except ValueError:
-                pass
+                continue
+            if not isinstance(record, dict):
+                continue
+            if index == 0:
+                if isinstance(record.get('cwd'), str):
+                    cwd = record['cwd']
+                if record.get('type') == 'session':
+                    harness = 'pi'
+            if record.get('type') == 'session':
+                continue
+            if record.get('type') == 'session_info' and isinstance(record.get('name'), str):
+                title = record['name']
+            model = recorded_model(record)
+            if model and model['source'] == 'assistant':
+                key = (model['provider'], model['model'])
+                item = used.setdefault(key, {'provider': key[0], 'model': key[1],
+                                            'firstObservedAt': model['observedAt'], 'lastObservedAt': None})
+                item['lastObservedAt'] = model['observedAt']
+            # Parent links from every entry prevent reporting an abandoned branch's model.
+            entry_id = record.get('id')
+            if not isinstance(entry_id, str):
+                entry_id = index
+            parent = record.get('parentId', leaf)
+            entries[entry_id] = (parent if type(parent) in (str, int) else None, model)
+            leaf = entry_id
+    current, seen = None, set()
+    while leaf in entries and leaf not in seen:
+        seen.add(leaf)
+        leaf, current = entries[leaf]
+        if current:
+            break
     display = handle.replace('-', ' ').casefold()
     live = 'RUNNING (tmux)' if display and display in pane_titles.casefold() else 'parked'
     pad = mail_root / (handle + '-' + sid[:8]) if handle else None
@@ -65,7 +108,12 @@ def hydrate(file, hits, claims, mail_root, pane_titles):
     return {'handle': '@+' + handle if handle else None, 'title': title or '(untitled)',
             'sessionId': sid, 'sessionShort': sid[:8], 'started': file.name[:10],
             'matches': hits, 'cwd': cwd or '?', 'liveness': live, 'scratchpad': pad,
-            'sessionFile': str(file), 'resume': resume}
+            'sessionFile': str(file), 'resume': resume, 'harness': harness,
+            'provider': current['provider'] if current else None,
+            'model': current['model'] if current else None,
+            'modelObservedAt': current['observedAt'] if current else None,
+            'modelSource': current['source'] if current else None,
+            'modelsUsed': list(used.values())}
 
 
 def positive_int(value):
@@ -79,7 +127,7 @@ def main():
     parser = argparse.ArgumentParser(description='Find agent sessions whose transcripts match a case-insensitive regex, ranked by matching lines.')
     parser.add_argument('pattern', nargs='*', help='transcript search pattern')
     parser.add_argument('--limit', type=positive_int, default=5, help='maximum results (default: 5)')
-    parser.add_argument('--json', action='store_true', help='emit a JSON array instead of terminal text')
+    parser.add_argument('--json', action='store_true', help='emit session metadata, latest recorded model, and observed-model history as JSON')
     parser.add_argument('--agent', help='inspect an exact registry handle instead of searching transcripts')
     args = parser.parse_intermixed_args()
     pattern = ' '.join(args.pattern)
@@ -123,6 +171,14 @@ def main():
                 identity = f'{result["handle"]}  [{result["liveness"]}]' if result['handle'] else '(pre-registry, unnamed)'
                 print(f'{"agent:":9} {identity}')
                 print(f'{"title:":9} {result["title"]}')
+                print(f'{"harness:":9} {result["harness"] or "unknown"}')
+                model = f'{result["provider"]}/{result["model"]}' if result['model'] else 'unknown'
+                print(f'{"model:":9} {model}  (latest recorded)')
+                if result['modelObservedAt']:
+                    print(f'{"observed:":9} {result["modelObservedAt"]}  [{result["modelSource"]}]')
+                for model in result['modelsUsed']:
+                    print(f'{"used:":9} {model["provider"]}/{model["model"]}  '
+                          f'(first: {model["firstObservedAt"] or "unknown time"}; last: {model["lastObservedAt"] or "unknown time"})')
                 matches = 'metadata only' if result['matches'] is None else f'{result["matches"]} matches'
                 print(f'{"session:":9} {result["sessionShort"]}  ({matches}, started {result["started"]})')
                 print(f'{"cwd:":9} {result["cwd"]}')

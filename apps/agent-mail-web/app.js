@@ -494,6 +494,12 @@ async function getContacts(query = "") {
   }
 }
 function sessionDetails(session, compact = false) {
+  const observedTime = (value) => {
+    const timestamp = value ? new Date(value) : null;
+    return timestamp && !Number.isNaN(+timestamp)
+      ? timestamp.toLocaleString()
+      : "Time not recorded";
+  };
   const section = document.createElement("div");
   const dl = document.createElement("dl");
   const extra = document.createElement("dl");
@@ -501,6 +507,20 @@ function sessionDetails(session, compact = false) {
   for (const [label, value] of [
     ["Title", session.title],
     ["Liveness", session.liveness],
+    ["Harness", session.harness || "Unknown"],
+    [
+      "Latest recorded model",
+      session.model ? `${session.provider}/${session.model}` : "Unknown",
+    ],
+    ["Model observed", observedTime(session.modelObservedAt)],
+    [
+      "Model evidence",
+      session.modelSource === "model_change"
+        ? "Recorded selection"
+        : session.modelSource === "assistant"
+          ? "Assistant message"
+          : "No model metadata",
+    ],
     ["Working directory", session.cwd],
     ["Session", session.sessionId],
     ["Started", session.started],
@@ -514,7 +534,14 @@ function sessionDetails(session, compact = false) {
     const detail = document.createElement("dd");
     detail.textContent = value;
     const target =
-      compact && !["Title", "Liveness", "Working directory"].includes(label)
+      compact &&
+      ![
+        "Title",
+        "Liveness",
+        "Harness",
+        "Latest recorded model",
+        "Working directory",
+      ].includes(label)
         ? extra
         : dl;
     target.append(term, detail);
@@ -532,6 +559,25 @@ function sessionDetails(session, compact = false) {
   } else {
     section.append(resume);
   }
+  const history = document.createElement("details");
+  const historyTitle = document.createElement("summary");
+  const models = session.modelsUsed || [];
+  historyTitle.textContent = `Models observed (${models.length})`;
+  const explanation = document.createElement("p");
+  explanation.className = "hint";
+  explanation.textContent =
+    "Stored assistant messages across all branches of this transcript. Unrecorded calls are not included; this is not a live-process probe.";
+  const modelList = document.createElement("dl");
+  modelList.className = "model-history";
+  for (const model of models) {
+    const name = document.createElement("dt");
+    name.textContent = `${model.provider}/${model.model}`;
+    const times = document.createElement("dd");
+    times.textContent = `First: ${observedTime(model.firstObservedAt)} · Last: ${observedTime(model.lastObservedAt)}`;
+    modelList.append(name, times);
+  }
+  history.append(historyTitle, explanation, modelList);
+  section.append(history);
   section.append(
     button("Copy resume command", async () => {
       await navigator.clipboard.writeText(session.resume);

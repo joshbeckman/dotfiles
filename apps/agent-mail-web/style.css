@@ -414,6 +414,13 @@ details.message summary time {
 .session-details dd {
   overflow-wrap: anywhere;
 }
+.model-history {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+.model-history dd {
+  margin-bottom: 0.75rem;
+}
 #contact-search-form {
   display: flex;
   gap: 0.5rem;

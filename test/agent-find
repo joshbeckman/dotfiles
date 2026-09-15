@@ -26,7 +26,7 @@ class AgentFindTest(unittest.TestCase):
         self.env.pop('AGENT_SCRATCHPAD', None)
         self.sid = '01234567-0000-0000-0000-000000000001'
         self.other = '01234567-0000-0000-0000-000000000002'
-        self.make_session('alder-turner', self.sid, 3)
+        self.file = self.make_session('alder-turner', self.sid, 3)
         self.make_session('birch-weaver', self.other, 1)
 
     def tearDown(self):
@@ -61,6 +61,70 @@ class AgentFindTest(unittest.TestCase):
         for field in ('agent:', 'title:', 'session:', 'cwd:', 'pad:', 'resume:'):
             self.assertIn(field, text)
         self.assertNotIn('birch-weaver', text)
+
+    def model_fixture(self, entries):
+        header = {'type': 'session', 'version': 3, 'id': self.sid, 'cwd': '/fixture'}
+        self.file.write_text('\n'.join(json.dumps(e) for e in [header, *entries]) + '\n')
+
+    def model_result(self):
+        result = self.run_cli('--agent', '@+alder-turner', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)[0]
+
+    def test_models_follow_branch_ancestry_but_usage_spans_branches(self):
+        records = [
+            {'type': 'model_change', 'id': 'm1', 'parentId': None, 'provider': 'north-ai', 'modelId': 'cedar', 'timestamp': '2026-01-01T00:00:00Z'},
+            {'type': 'message', 'id': 'a1', 'parentId': 'm1', 'timestamp': '2026-01-01T01:00:00Z', 'message': {'role': 'assistant', 'provider': 'north-ai', 'model': 'cedar'}},
+            {'type': 'model_change', 'id': 'm2', 'parentId': 'a1', 'provider': 'south', 'modelId': 'oak'},
+            {'type': 'message', 'id': 'a2', 'parentId': 'm2', 'timestamp': '2026-01-02T00:00:00Z', 'message': {'role': 'assistant', 'provider': 'south', 'model': 'oak'}},
+            {'type': 'branch_summary', 'id': 'b1', 'parentId': 'a1', 'fromId': 'a2'},
+            {'type': 'session_info', 'id': 'title', 'parentId': 'b1', 'name': 'Branched title'},
+        ]
+        self.model_fixture(records)
+        result = self.model_result()
+        self.assertEqual(result['harness'], 'pi')
+        self.assertEqual((result['provider'], result['model']), ('north-ai', 'cedar'))
+        self.assertEqual(result['modelObservedAt'], '2026-01-01T01:00:00Z')
+        self.assertEqual(result['modelSource'], 'assistant')
+        self.assertEqual([m['model'] for m in result['modelsUsed']], ['cedar', 'oak'])
+        records.append({'type': 'model_change', 'id': 'm3', 'parentId': 'title', 'provider': 'west', 'modelId': 'selected-only', 'timestamp': '2026-01-03T00:00:00Z'})
+        self.model_fixture(records)
+        result = self.model_result()
+        self.assertEqual(result['model'], 'selected-only')
+        self.assertEqual(result['modelSource'], 'model_change')
+        self.assertEqual([m['model'] for m in result['modelsUsed']], ['cedar', 'oak'])
+        text = self.run_cli('--agent', 'alder-turner').stdout
+        for field in ('harness:', 'model:', 'observed:', 'used:'):
+            self.assertIn(field, text)
+
+    def test_linear_history_deduplication_and_nested_metadata_is_ignored(self):
+        assistant = {'role': 'assistant', 'provider': 'north-ai', 'model': 'cedar', 'timestamp': 1767225600000}
+        self.model_fixture([
+            {'type': 'message', 'message': assistant},
+            {'type': 'message', 'timestamp': '2026-01-04T00:00:00Z', 'message': assistant},
+            {'type': 'message', 'message': {'role': 'toolResult', 'provider': 'fake', 'model': 'not-the-agent', 'content': [{'type': 'model_change', 'provider': 'fake', 'modelId': 'quoted'}]}},
+            {'type': 'message', 'message': ['malformed']},
+            [], None,
+        ])
+        with self.file.open('a') as output:
+            output.write('{"type":"model_change","provider":')
+        result = self.model_result()
+        self.assertEqual(result['model'], 'cedar')
+        self.assertEqual(len(result['modelsUsed']), 1)
+        self.assertEqual(result['modelsUsed'][0]['firstObservedAt'], '2026-01-01T00:00:00+00:00')
+        self.assertEqual(result['modelsUsed'][0]['lastObservedAt'], '2026-01-04T00:00:00Z')
+
+    def test_missing_model_and_broken_or_cyclic_ancestry(self):
+        self.assertIsNone(self.model_result()['model'])
+        for entries in [
+            [{'type': 'message', 'id': 'a', 'parentId': 'missing', 'message': {'role': 'user'}}],
+            [{'type': 'custom', 'id': 'a', 'parentId': 'b'}, {'type': 'custom', 'id': 'b', 'parentId': 'a'}],
+            [{'type': 'model_change', 'provider': [], 'modelId': 'invalid'}],
+        ]:
+            self.model_fixture(entries)
+            result = self.model_result()
+            self.assertIsNone(result['model'])
+            self.assertEqual(result['modelsUsed'], [])
 
     def test_exact_agent_and_self_exclusion(self):
         record = json.loads(self.run_cli('--agent', '@+birch-weaver', '--json').stdout)[0]

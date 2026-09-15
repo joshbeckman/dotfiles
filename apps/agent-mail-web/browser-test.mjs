@@ -61,6 +61,24 @@ await writeFile(
   [
     { type: "session", cwd: "/fixture/orchard" },
     { type: "session_info", name: "Investigate orchard migrations" },
+    {
+      type: "message",
+      timestamp: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant",
+        provider: "fixture-provider",
+        model: "oak-v1",
+      },
+    },
+    {
+      type: "message",
+      timestamp: "2026-01-02T00:00:00Z",
+      message: {
+        role: "assistant",
+        provider: "fixture-provider",
+        model: "cedar-v2",
+      },
+    },
     { type: "message", message: { content: "orchard incident analysis" } },
   ]
     .map((entry) => JSON.stringify(entry))
@@ -217,6 +235,17 @@ try {
     )
     .waitFor();
   assert.equal(await sidebar.locator(".contact").count(), 3);
+  await sidebar
+    .getByText("fixture-provider/cedar-v2", { exact: true })
+    .first()
+    .waitFor();
+  await sidebar.getByText("Models observed (2)", { exact: true }).click();
+  await sidebar.getByText("fixture-provider/oak-v1", { exact: true }).waitFor();
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await sidebar.screenshot({
+      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-models.png",
+    });
+  await sidebar.getByText("Models observed (2)", { exact: true }).click();
   await sidebar
     .getByRole("button", { name: "Copy resume command", exact: true })
     .waitFor();
@@ -422,6 +451,19 @@ try {
     .getByText("Investigate orchard migrations", { exact: true })
     .waitFor();
   await directory.getByText("/fixture/orchard", { exact: true }).waitFor();
+  await directory.getByText("Latest recorded model", { exact: true }).waitFor();
+  await directory
+    .getByText("fixture-provider/cedar-v2", { exact: true })
+    .first()
+    .waitFor();
+  await directory.getByText("Models observed (2)", { exact: true }).click();
+  await directory
+    .getByText("fixture-provider/oak-v1", { exact: true })
+    .waitFor();
+  await directory
+    .getByText(/First: .*Last:/)
+    .first()
+    .waitFor();
   await directory
     .getByRole("button", { name: "Copy resume command", exact: true })
     .waitFor();

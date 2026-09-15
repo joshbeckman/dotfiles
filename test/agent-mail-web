@@ -73,6 +73,19 @@ class WebTest(unittest.TestCase):
         except urllib.error.HTTPError as r:
             return r.code, r.read()
 
+    def test_contact_model_metadata_passes_through_to_web(self):
+        session = next((self.root / 'sessions').glob('*.jsonl'))
+        with session.open('a') as output:
+            output.write('\n' + json.dumps({'type': 'message', 'timestamp': '2026-01-01T00:00:00Z', 'message': {'role': 'assistant', 'provider': 'fixture-provider', 'model': 'cedar-v2'}}) + '\n')
+        code, body = self.request('/api/contact?handle=%40%2Balder-turner')
+        self.assertEqual(code, 200)
+        record = json.loads(body)[0]
+        self.assertEqual((record['harness'], record['provider'], record['model']), ('pi', 'fixture-provider', 'cedar-v2'))
+        self.assertEqual(record['modelSource'], 'assistant')
+        self.assertEqual(record['modelsUsed'][0]['firstObservedAt'], '2026-01-01T00:00:00Z')
+        records = json.loads(self.request('/api/contacts?q=orchard')[1])
+        self.assertEqual(records[0]['session']['model'], 'cedar-v2')
+
     def test_keywords_are_local_bounded_and_authenticated(self):
         self.assertEqual(json.loads(self.request('/api/keywords')[1]), {'available': False, 'words': []})
         path = self.root / 'config/nvim/keywords.txt'
