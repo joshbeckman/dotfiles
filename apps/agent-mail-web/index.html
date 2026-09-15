@@ -24,7 +24,7 @@
       </form>
       <button id="help-button" title="Keyboard shortcuts (?)">Shortcuts</button>
     </header>
-    <nav aria-label="Mail folders">
+    <nav aria-label="Mail navigation">
       <button id="compose">Compose</button
       ><button data-folder="inbox" aria-current="page">
         Inbox <span id="count-inbox"></span></button
@@ -35,6 +35,7 @@
         Drafts <span id="count-drafts"></span></button
       ><button data-folder="all">All mail</button
       ><button id="contacts-button">Contacts</button
+      ><button id="teams-button">Teams</button
       ><button id="refresh">Refresh</button>
     </nav>
     <p id="status" role="status" aria-live="polite">
@@ -119,6 +120,25 @@
         </form>
         <p id="contact-status" role="status"></p>
         <div id="contact-list"></div>
+      </section>
+      <section id="teams" aria-label="Teams" hidden>
+        <h2>Teams</h2>
+        <p class="hint">
+          Shared scratchpads and explicit rosters. Manage membership with
+          agent-team; sending a team message uses the roster at delivery time.
+        </p>
+        <form id="team-search-form" role="search">
+          <label for="team-search">Search teams</label>
+          <input
+            id="team-search"
+            type="search"
+            placeholder="Handle, name, or purpose"
+          />
+          <button>Find teams</button>
+          <button id="all-teams" type="button">All teams</button>
+        </form>
+        <p id="team-status" role="status"></p>
+        <div id="team-list"></div>
       </section>
     </main>
     <dialog id="vimrc-dialog" aria-labelledby="vimrc-title">

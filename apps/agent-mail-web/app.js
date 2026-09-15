@@ -84,8 +84,9 @@ function show(name) {
   view = name;
   const replying = name === "editor" && Boolean(draft?.parent);
   document.querySelector("main").classList.toggle("replying", replying);
-  for (const id of ["mail-list", "reader", "editor", "contacts"])
+  for (const id of ["mail-list", "reader", "editor", "contacts", "teams"])
     $(id).hidden = id !== name && !(replying && id === "reader");
+  setFolderButtons();
 }
 function button(text, action) {
   const b = document.createElement("button");
@@ -99,8 +100,15 @@ function setFolderButtons() {
     .forEach((b) =>
       b.setAttribute(
         "aria-current",
-        b.dataset.folder === folder ? "page" : "false",
+        b.dataset.folder === folder && !["contacts", "teams"].includes(view)
+          ? "page"
+          : "false",
       ),
+    );
+  for (const name of ["contacts", "teams"])
+    $(name + "-button").setAttribute(
+      "aria-current",
+      view === name ? "page" : "false",
     );
 }
 async function refresh(quiet = false) {
@@ -710,6 +718,112 @@ function renderContacts() {
     if (contact.session) card.open = true;
   }
 }
+let teamGeneration = 0;
+async function getTeams(query = "") {
+  const generation = ++teamGeneration;
+  $("team-status").textContent = "Loading teams…";
+  $("team-list").replaceChildren();
+  try {
+    const teams = await api("teams?q=" + encodeURIComponent(query));
+    if (generation !== teamGeneration) return;
+    $("team-list").replaceChildren(...teams.map(teamCard));
+    const active = teams.filter((team) => team.status === "active").length;
+    $("team-status").textContent = teams.length
+      ? `${teams.length} ${teams.length === 1 ? "team" : "teams"} · ${active} active · ${teams.length - active} archived`
+      : query
+        ? "No teams match this search."
+        : "No teams found. Create one with agent-team.";
+    if (view === "teams") status("Team directory refreshed.");
+  } catch (e) {
+    if (generation !== teamGeneration) return;
+    $("team-status").textContent = "Team lookup unavailable: " + e.message;
+    throw e;
+  }
+}
+function teamCard(team) {
+  const row = document.createElement("details");
+  row.className = "team-card";
+  const members = team.members.filter((member) => member.leftAt === null);
+  const summary = document.createElement("summary");
+  summary.textContent = `${team.handle} · ${team.name} · ${team.status} · ${members.length} ${members.length === 1 ? "member" : "members"}`;
+  row.append(summary);
+  const fields = document.createElement("dl");
+  fields.className = "session-details";
+  const when = (value) => {
+    const timestamp = value ? new Date(value) : null;
+    return timestamp && !Number.isNaN(+timestamp)
+      ? timestamp.toLocaleString()
+      : "Time not recorded";
+  };
+  for (const [label, value] of [
+    ["Purpose", team.purpose || "Not specified"],
+    ["Coordinator", team.coordinator],
+    ["Shared scratchpad", team.scratchpad],
+    ["Created", when(team.createdAt)],
+    ["Updated", when(team.updatedAt)],
+  ]) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    fields.append(term, detail);
+  }
+  row.append(fields);
+  const message = button("Message team", async () => {
+    await newDraft();
+    $("to").value = team.handle;
+    changed();
+    $("body").focus();
+  });
+  message.disabled = team.status !== "active";
+  row.append(message);
+  const heading = document.createElement("h3");
+  heading.textContent =
+    team.status === "active" ? "Current members" : "Retained roster";
+  row.append(heading);
+  for (const member of members) {
+    const entry = document.createElement("div");
+    const details = document.createElement("p");
+    details.className = "metadata";
+    details.textContent = `Contribution: ${member.scope || "Not specified"} · Joined: ${when(member.joinedAt)}`;
+    entry.append(
+      contactCard(
+        {
+          handle: member.handle,
+          status: member.handle === team.coordinator ? "Coordinator" : "Member",
+        },
+        { allowCompose: false },
+      ),
+      details,
+    );
+    row.append(entry);
+  }
+  const history = document.createElement("details");
+  const historyTitle = document.createElement("summary");
+  historyTitle.textContent = "Team history";
+  const events = document.createElement("ul");
+  for (const event of team.history) {
+    const entry = document.createElement("li");
+    const description =
+      event.type === "transfer"
+        ? `Coordinator: ${event.from} → ${event.to}`
+        : event.type === "created"
+          ? `Created; coordinator ${event.coordinator}`
+          : "Archived";
+    entry.textContent = `${when(event.at)} · ${description}`;
+    events.append(entry);
+  }
+  for (const member of team.members.filter(
+    (member) => member.leftAt !== null,
+  )) {
+    const entry = document.createElement("li");
+    entry.textContent = `${member.handle} · ${member.scope || "No contribution specified"} · Joined: ${when(member.joinedAt)} · Left: ${when(member.leftAt)}`;
+    events.append(entry);
+  }
+  history.append(historyTitle, events);
+  row.append(history);
+  return row;
+}
 function renderParticipantCards(messages) {
   const people = new Map();
   for (const address of messages.flatMap((message) => [
@@ -881,7 +995,15 @@ async function renderMarkdown(source, target, remote = false) {
 }
 
 $("compose").onclick = () => newDraft().catch(error);
-$("refresh").onclick = () => refresh().catch(error);
+$("refresh").onclick = () => {
+  const update =
+    view === "teams"
+      ? getTeams($("team-search").value)
+      : view === "contacts"
+        ? getContacts($("contact-search").value)
+        : refresh();
+  update.catch(error);
+};
 $("search-form").onsubmit = (e) => {
   e.preventDefault();
   navigate("all", false).catch(error);
@@ -923,6 +1045,24 @@ $("contact-search-form").onsubmit = (e) => {
 $("all-contacts").onclick = () => {
   $("contact-search").value = "";
   getContacts().catch(error);
+};
+$("teams-button").onclick = async () => {
+  try {
+    if (view === "editor") await saveDraft();
+    ++threadGeneration;
+    show("teams");
+    await getTeams($("team-search").value);
+  } catch (e) {
+    error(e);
+  }
+};
+$("team-search-form").onsubmit = (e) => {
+  e.preventDefault();
+  getTeams($("team-search").value).catch(error);
+};
+$("all-teams").onclick = () => {
+  $("team-search").value = "";
+  getTeams().catch(error);
 };
 $("help-button").onclick = () => $("help").showModal();
 window.addEventListener("beforeunload", (e) => {

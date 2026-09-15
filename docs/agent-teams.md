@@ -56,7 +56,7 @@ Team addresses also work in a draft’s `To:` field and through `agent-mail deli
 
 The `teams` array contains each team’s `handle`, `name`, `coordinator`, `scope`, `joinedAt`, `scratchpad`, and a derived `role` (`coordinator` or `member`). Archived teams and ended intervals are excluded. No membership is `[]`; an unreadable or damaged team registry produces `teams: null`, a `teamsWarning`, and a stderr warning while ordinary session discovery continues.
 
-The web inbox can send a manually entered team address through its composer. Contact and thread participant cards show active team handles, names, and roles; expand a membership for its coordinator, contribution scope, join time, and shared scratchpad. Unavailable metadata is shown separately from no active memberships. Refresh the page or repeat a contact search to get a new roster snapshot. A dedicated Teams directory is not included.
+The web inbox can send a manually entered team address through its composer. Contact and thread participant cards show active team handles, names, and roles; expand a membership for its coordinator, contribution scope, join time, and shared scratchpad. Unavailable metadata is shown separately from no active memberships. Refresh the page or repeat a contact search to get a new roster snapshot. The Teams page lists active and archived teams and searches handle, name, or purpose. Expand a team for its roster, scratchpad, coordinator history, and ended memberships; expand a roster contact for session details. Message team opens a draft for active teams, while archived teams remain read-only. Refresh reloads the selected directory. Creation, enrollment, transfers, and archival still use the CLI.
 
 ## Storage and boundaries
 

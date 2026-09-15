@@ -105,6 +105,36 @@ class WebTest(unittest.TestCase):
         self.assertEqual(web.address_key('josh'), web.address_key('@josh'))
         self.assertNotEqual(web.address_key('@+josh'), web.address_key('@josh'))
 
+    def test_teams_directory_is_authenticated_read_only_and_searchable(self):
+        self.assertEqual(json.loads(self.request('/api/teams')[1]), [])
+        self.assertFalse((self.root / 'teams').exists())
+        def team(*args):
+            subprocess.run([str(ROOT / 'bin/agent-team'), *args], check=True, capture_output=True, text=True)
+        team('create', 'orchard', '--coordinator', '@+alder-turner', '--name', 'Orchard crew', '--purpose', 'Migration review')
+        team('create', 'retired', '--coordinator', '@+alder-turner')
+        team('archive', 'retired')
+        records = {p: p.read_bytes() for p in (self.root / 'teams').glob('*/team.json')}
+        code, body = self.request('/api/teams')
+        self.assertEqual(code, 200)
+        result = json.loads(body)
+        self.assertEqual([t['handle'] for t in result], ['@team/orchard', '@team/retired'])
+        self.assertEqual([t['status'] for t in result], ['active', 'archived'])
+        self.assertEqual(result[0]['coordinator'], '@+alder-turner')
+        self.assertEqual(result[0]['members'][0]['handle'], '@+alder-turner')
+        self.assertEqual(result[0]['scratchpad'], str(self.root / 'teams/orchard/scratchpad'))
+        for query in ('ORCHARD', 'crew', 'migration'):
+            found = json.loads(self.request('/api/teams?q=' + quote(query))[1])
+            self.assertEqual([t['handle'] for t in found], ['@team/orchard'])
+        self.assertEqual(json.loads(self.request('/api/teams?q=--json')[1]), [])
+        self.assertEqual(self.request('/api/teams?q=' + 'x' * 513)[0], 400)
+        self.assertEqual(self.request('/api/teams', **{'X-Agent-Mail-Token': ''})[0], 403)
+        self.assertEqual(self.request('/api/teams', Origin='https://example.invalid')[0], 403)
+        self.assertTrue(all(p.read_bytes() == body for p, body in records.items()))
+        (self.root / 'teams/orchard/team.json').write_text('{broken')
+        code, body = self.request('/api/teams')
+        self.assertEqual(code, 503)
+        self.assertIn('damaged team record', json.loads(body)['error'])
+
     def test_contact_model_metadata_passes_through_to_web(self):
         subprocess.run([str(ROOT / 'bin/agent-team'), 'create', 'orchard', '--coordinator', '@+alder-turner'],
                        check=True, capture_output=True, text=True)

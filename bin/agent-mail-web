@@ -244,6 +244,16 @@ class Mailbox:
             raise MailError(result.stderr.strip() or 'Agent search failed')
         return json.loads(result.stdout)
 
+    def teams(self, query=''):
+        if not isinstance(query, str) or len(query) > 512:
+            raise MailError('Team searches must be at most 512 characters')
+        command = [str(ROOT / 'bin/agent-team')]
+        command += ['search', '--json', '--', query] if query else ['list', '--json']
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            raise MailError(result.stderr.strip() or 'Team lookup failed', 503)
+        return json.loads(result.stdout)
+
     def contacts(self, query=''):
         root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()
         registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
@@ -400,6 +410,8 @@ class Handler(BaseHTTPRequestHandler):
             if args:
                 raise MailError('Keyword dictionary paths are configured locally, not through the API')
             result = local_keywords()
+        elif route == '/api/teams':
+            result = box.teams(args.get('q', [''])[0])
         elif route == '/api/contacts':
             result = box.contacts(args.get('q', [''])[0])
         elif route == '/api/contact':

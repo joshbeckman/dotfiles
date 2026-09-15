@@ -393,19 +393,23 @@ details.message summary time {
   font-size: 0.85rem;
   color: var(--c-muted);
 }
-.contact {
+.contact,
+.team-card {
   padding: 0.75rem 0;
   border-bottom: 1px solid var(--c-border);
 }
-.contact summary {
+.contact summary,
+.team-card summary {
   cursor: pointer;
   overflow-wrap: anywhere;
 }
-.contact button {
+.contact button,
+.team-card > button {
   overflow-wrap: anywhere;
   margin-top: 0.75rem;
 }
-.contact-content {
+.contact-content,
+.team-card {
   max-width: 85ch;
 }
 .session-details {
@@ -431,13 +435,15 @@ details.message summary time {
 .model-history dd {
   margin-bottom: 0.75rem;
 }
-#contact-search-form {
+#contact-search-form,
+#team-search-form {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
   align-items: center;
 }
-#contact-search {
+#contact-search,
+#team-search {
   flex: 1;
   min-width: 12rem;
 }

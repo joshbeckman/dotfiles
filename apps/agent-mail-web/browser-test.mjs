@@ -820,6 +820,185 @@ try {
   await page.locator(".row").click();
   await page.getByText(/No local keywords.txt found/).waitFor();
   assert.equal(await page.locator("#body").isEditable(), true);
+
+  team("transfer", "review", "--coordinator", "@+alder-turner", "--accept");
+  team("leave", "review", "--agent", "@+birch-weaver");
+  team("archive", "review");
+  await body.fill("Teams navigation preserves this draft.");
+  await page.getByRole("button", { name: "Teams", exact: true }).click();
+  const teamsPage = page.getByRole("region", { name: "Teams", exact: true });
+  await teamsPage
+    .getByText("2 teams · 1 active · 1 archived", { exact: true })
+    .waitFor();
+  assert.equal(
+    await page.locator("#teams-button").getAttribute("aria-current"),
+    "page",
+  );
+  assert.equal(
+    await page.locator('[data-folder][aria-current="page"]').count(),
+    0,
+  );
+  assert.equal(await page.locator("#editor").isVisible(), false);
+  const savedTeamNavigation = await readdir(join(humans, "josh/drafts"));
+  assert(
+    (
+      await readFile(
+        join(humans, "josh/drafts", savedTeamNavigation[0]),
+        "utf8",
+      )
+    ).includes("Teams navigation preserves this draft."),
+  );
+  const orchardCard = teamsPage.locator(".team-card").filter({
+    has: page.locator("summary").filter({ hasText: "@team/orchard ·" }),
+  });
+  const retiredCard = teamsPage.locator(".team-card").filter({
+    has: page.locator("summary").filter({ hasText: "@team/review ·" }),
+  });
+  await retiredCard.locator(":scope > summary").click();
+  assert.equal(
+    await retiredCard
+      .getByRole("button", { name: "Message team", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await retiredCard.getByText("Retained roster", { exact: true }).waitFor();
+  await retiredCard.getByText("Team history", { exact: true }).click();
+  await retiredCard
+    .getByText(/Coordinator: @\+birch-weaver → @\+alder-turner/)
+    .waitFor();
+  await retiredCard.getByText(/@\+birch-weaver · .*Left:/).waitFor();
+  await retiredCard.locator(":scope > summary").click();
+  await orchardCard.locator(":scope > summary").click();
+  await orchardCard
+    .getByText(join(env.AGENT_TEAM_ROOT, "orchard/scratchpad"), { exact: true })
+    .waitFor();
+  await orchardCard.locator(".contact > summary").click();
+  await orchardCard
+    .getByText("Investigate orchard migrations", { exact: true })
+    .waitFor();
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  );
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({
+      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-teams-mobile.png",
+      fullPage: true,
+    });
+  await page.setViewportSize({ width: 1200, height: 850 });
+  await page.emulateMedia({ colorScheme: "light" });
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({
+      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-teams-desktop.png",
+      fullPage: true,
+    });
+  await orchardCard
+    .getByRole("button", { name: "Message team", exact: true })
+    .click();
+  await page.locator("#editor").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#to").inputValue(), "@team/orchard");
+  await page.locator("#delete-draft").click();
+  await page.getByText("Draft deleted.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Teams", exact: true }).click();
+  await teamsPage
+    .getByText("2 teams · 1 active · 1 archived", { exact: true })
+    .waitFor();
+  await page.locator("#team-search").fill("Orchard crew");
+  await page.locator("#team-search").press("Enter");
+  await teamsPage
+    .getByText("1 team · 1 active · 0 archived", { exact: true })
+    .waitFor();
+  assert.equal(await teamsPage.locator(".team-card").count(), 1);
+  await page.locator("#team-search").fill("no such team");
+  await page.locator("#team-search").press("Enter");
+  await teamsPage
+    .getByText("No teams match this search.", { exact: true })
+    .waitFor();
+  await page.locator("#all-teams").click();
+  await teamsPage
+    .getByText("2 teams · 1 active · 1 archived", { exact: true })
+    .waitFor();
+  await page.route("**/api/teams?*", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Fixture team registry failure" }),
+    }),
+  );
+  await page.locator("#refresh").click();
+  await teamsPage
+    .getByText("Team lookup unavailable: Fixture team registry failure", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await teamsPage.locator(".team-card").count(), 0);
+  await page.unroute("**/api/teams?*");
+  await page.route("**/api/teams?*", (route) =>
+    route.fulfill({ contentType: "application/json", body: "[]" }),
+  );
+  await page.locator("#refresh").click();
+  await teamsPage
+    .getByText("No teams found. Create one with agent-team.", { exact: true })
+    .waitFor();
+  await page.unroute("**/api/teams?*");
+  await page.locator("#refresh").click();
+  await teamsPage
+    .getByText("2 teams · 1 active · 1 archived", { exact: true })
+    .waitFor();
+  let releaseSlow, markSlowStarted;
+  const slowStarted = new Promise((resolve) => {
+    markSlowStarted = resolve;
+  });
+  const slowGate = new Promise((resolve) => {
+    releaseSlow = resolve;
+  });
+  const snapshot = team("list", "--json");
+  await page.route("**/api/teams?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("q") !== "slow")
+      return route.continue();
+    markSlowStarted();
+    await slowGate;
+    await route.fulfill({ contentType: "application/json", body: snapshot });
+  });
+  await page.locator("#team-search").fill("slow");
+  await page.locator("#team-search").press("Enter");
+  await slowStarted;
+  await page.locator("#team-search").fill("Orchard");
+  await page.locator("#team-search").press("Enter");
+  await teamsPage
+    .getByText("1 team · 1 active · 0 archived", { exact: true })
+    .waitFor();
+  const slowResponse = page.waitForResponse(
+    (response) => new URL(response.url()).searchParams.get("q") === "slow",
+  );
+  releaseSlow();
+  await (await slowResponse).finished();
+  await page.waitForTimeout(100);
+  assert.equal(await teamsPage.locator(".team-card").count(), 1);
+  assert.equal(
+    await page.locator("#team-status").textContent(),
+    "1 team · 1 active · 0 archived",
+  );
+  await page.unroute("**/api/teams?*");
+  const safeTeam = await page.evaluate(() => {
+    const element = teamCard({
+      handle: "@team/test",
+      name: '<img src=x onerror="alert(1)">',
+      purpose: "<script>bad()</script>",
+      status: "active",
+      coordinator: "@+fixture-agent",
+      members: [],
+      history: [],
+      scratchpad: "/fixture",
+    });
+    return {
+      text: element.textContent,
+      unsafe: element.querySelectorAll("img,script").length,
+    };
+  });
+  assert(safeTeam.text.includes("<script>bad()</script>"));
+  assert.equal(safeTeam.unsafe, 0);
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
