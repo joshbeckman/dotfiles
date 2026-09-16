@@ -1,147 +1,67 @@
 ---
 name: autoresearch
-description: Autonomous iteration loop inspired by Andrej Karpathy's autoresearch. Modify a file, evaluate, keep or revert, repeat forever. Use for any optimization task with a measurable metric — skills, prompts, configs, ML training, code. Use when the user mentions "autoresearch", wants to run autonomous experiments, wants to iterate on something overnight, says "optimize this", "run experiments on this", or wants to leave Claude running while they sleep. Also use when improving skills, prompts, or agents iteratively.
+description: Run an approved, bounded experiment loop against a fixed evaluator, keeping verified improvements and recording rejected trials. Use when the user requests autoresearch, repeated optimization experiments, or an overnight research run; ordinary edits do not authorize an experiment loop.
 ---
 
-# autoresearch
+# Autoresearch
 
-This is Andrej Karpathy's autoresearch pattern from https://github.com/karpathy/autoresearch, generalized. An autonomous loop where you modify files, evaluate the result, keep improvements, and discard failures — forever, until manually interrupted. Originally built for ML training; works for anything with a measurable metric.
+Adapted from [Andrej Karpathy’s autoresearch](https://github.com/karpathy/autoresearch): change a candidate, measure it against a fixed evaluator, keep improvements, and learn from rejected trials.
 
-## Setup
+## Agree on the run
 
-To set up a new experiment, work with the user to:
+Before running even a baseline, record the following in `run.md` under the session scratchpad and obtain approval for anything not already authorized:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar9`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
-2. **Create the branch**: `gt create autoresearch/<tag>` from the current branch.
-3. **Determine the scope**: Ask the user (if not already clear from the conversation):
-   - **Modifiable files** — what file(s) can you edit? This is your `train.py`. Everything within these files is fair game.
-   - **Frozen files** — what file(s) must you NOT touch? This is your `prepare.py`. These contain the evaluation harness, ground truth, test data, etc.
-   - **Evaluation command** — how do you run an experiment? A shell command, a skill invocation, an LLM-as-judge call, etc.
-   - **Metric extraction** — how do you get the number out? A grep pattern, JSON path, last line of stdout, a score you compute yourself, etc.
-   - **Metric direction** — is lower better (like loss) or higher better (like accuracy)?
-   - **Expected duration** — roughly how long does one evaluation take? (Needed for timeout: runs exceeding 2x this are killed.)
-4. **Read the in-scope files**: Read all modifiable and frozen files for full context. Understand what you're working with before changing anything.
-5. **Verify the evaluation works**: Run the evaluation command once. If it fails, fix the environment before proceeding. Don't start the loop with a broken harness.
-6. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
-7. **Confirm and go**: Confirm setup looks good.
+- An unused run tag and branch, an approved committed base, and the repository’s worktree/setup procedure.
+- Exact modifiable paths and frozen inputs: evaluator, metric extraction, tests, ground truth, dependencies, and configuration. Resolve symlinks; modifiable paths must not escape the isolated workspace.
+- The evaluation command, correctness checks, metric direction, acceptance threshold, and any tie-break rule. For noisy metrics, fix seeds and a repeat/aggregation policy before comparing candidates.
+- A finite iteration or elapsed-time limit, per-trial timeout, bounded retries, and a spending cap if calls cost money. An overnight request is not permission to run forever or spend without a limit.
+- Permitted side effects and outputs, process cleanup, and any required credentials. Use scoped secret injection; never record secret values in logs or the run manifest.
 
-Once you get confirmation, kick off the experimentation.
+Existing experiment pauses remain in force. This skill does not authorize paid/live model calls, new dependencies, publishing, merging, or writes to production/shared systems. Ask before widening the approved scope.
 
-## Experimentation
+## Isolate and establish the baseline
 
-**What you CAN do:**
+1. Create a dedicated run worktree and branch from the approved committed base. Do not stash, reset, or silently omit someone else’s uncommitted target work; obtain an approved baseline first. Follow repository-specific setup rules. Where plain Git worktrees are supported, with `RUN_BRANCH`, `RUN_DIR`, and `BASE` chosen above:
 
-- Modify the designated modifiable files. Everything within them is fair game: structure, logic, parameters, approach, style — whatever you think will improve the metric.
+   ```sh
+   git worktree add -b "$RUN_BRANCH" "$RUN_DIR/worktree" "$BASE"
+   ```
 
-**What you CANNOT do:**
+2. Keep `run.md`, `results.tsv`, patches, and per-trial logs in the private run directory, outside the worktree. Start from a clean index and worktree. Record the initial commit and frozen-input identities.
+3. Agent/model evaluations need private writable configuration as well as isolated workspaces and transcripts. `--no-session` alone is not isolation. Use the existing isolated runner, such as `pi-model-eval` when applicable; never disable live retry/compaction settings or save and restore shared configuration around trials. Isolation of files is not a sandbox for untrusted extensions or programs.
+4. Run the approved baseline unchanged. Require successful checks and a finite, parseable metric; record it as the initial best result. If setup, credentials, or the evaluator fail, stop rather than changing frozen files or pretending the failure is a score.
 
-- Modify frozen files. They are read-only. They contain the fixed evaluation, ground truth, and constraints.
-- Install new packages or add dependencies beyond what's already available.
-- Modify the evaluation harness or metric computation.
+## Experiment loop
 
-**The goal is simple: optimize the metric.** Everything within the modifiable files is fair game. The only constraint is that the evaluation runs without crashing.
+Continue without asking after every trial, but only within the approved limits. At each iteration:
 
-**Simplicity criterion**: All else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome — that's a simplification win. When evaluating whether to keep a change, weigh the complexity cost against the improvement magnitude. A tiny metric improvement that adds 20 lines of hacky code? Probably not worth it. A tiny metric improvement from deleting code? Definitely keep. An improvement of ~0 but much simpler code? Keep.
+1. Check the stop conditions and resource-pressure controls. Do not bypass blocked subagents or background execution. Verify the run branch, expected HEAD, clean index/worktree, and unchanged frozen inputs; stop on unexpected changes or another actor’s work.
+2. State one hypothesis. Change only allowed paths, inspect the diff, and stage those paths explicitly. Create a **new Conventional Commit** with a substantive body and runtime-generated attribution. Record its SHA as the candidate; never amend or rewrite earlier trials.
+3. Run the fixed evaluator and correctness checks with logs outside the worktree. Bound the trial by the remaining time/spending budget; do not start one that cannot fit. Apply the agreed timeout to this trial’s processes only. Check that evaluation did not alter tracked inputs or leave unexpected untracked files; stop and retain evidence if isolation was violated.
+4. Treat a failed check, timeout, missing metric, NaN, or infinity as a failed trial, not numeric zero. Record `NA` for an unavailable metric. Infrastructure failures pause the run; ordinary candidate failures may continue within the retry/failure budget.
+5. **Keep:** only when correctness passes and the pre-agreed acceptance rule holds. Record the candidate SHA and metric as the new best. Prefer simpler changes within the agreed tie-break rule, not by changing the scoring rule afterward.
+6. **Reject:** first save the candidate diff, logs, and reason. Only if HEAD is still this run’s candidate and the index/worktree are clean, undo that candidate with:
 
-**The first run**: Your very first run should always be to establish the baseline, so you will run the evaluation as-is without making any changes.
+   ```sh
+   git revert --no-commit "$CANDIDATE"
+   ```
 
-## Evaluation types
+   Inspect the inverse diff, then create a new attributed Conventional Commit explaining the rejection and naming the candidate SHA. Confirm its tree matches the last accepted tree before the next trial. Stop on conflicts or unexpected changes; never use a hard reset, broad clean, or forced worktree removal to recover.
+7. Append the outcome to `results.tsv` and update `run.md` with the best accepted SHA/metric and current branch HEAD. Accepted and rejected trials remain traceable without rewriting history.
 
-The evaluation can take several forms. Agree on one during setup.
+Do not repair or optimize the evaluator during the run. If it must change, end this run, get approval, and establish a new baseline. A model judging its own work is exploratory evidence, not independent validation; require the agreed external checks before claiming an improvement.
 
-**Shell command**: Run a command, extract metric from output. Redirect to `run.log` to avoid flooding context:
+## Record and finish
 
-```
-<command> > run.log 2>&1
-grep "<pattern>" run.log
-```
+Use one TSV row per evaluation. Record the evaluated candidate SHA, not the subsequent rejection commit:
 
-**Skill invocation**: Invoke another Claude skill (e.g., a healthcheck skill) against a test input. Parse its structured output into a numeric score. The skill invocation happens inline — just use the skill as you normally would, then parse its output.
-
-**LLM-as-judge**: Read the modified files and evaluate them against a rubric you define during setup. Score yourself on each criterion (e.g., 0-10), average them. This is fast but less grounded than real execution — use it when real execution is too slow. Note: you are scoring your own work, so there is an inherent bias. Prefer shell commands or skill invocations when possible, and treat LLM-as-judge scores as directional, not definitive.
-
-## Logging results
-
-When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
-
-The TSV has a header row and 4 columns:
-
-```
-commit	metric	status	description
+```text
+trial	candidate_sha	metric	status	description
+0	<base-sha>	0.42	baseline	Unchanged baseline
+1	<candidate-sha>	0.39	keep	Lower is better; correctness passed
+2	<candidate-sha>	NA	failed	Trial timed out; candidate reverted
 ```
 
-1. git commit hash (short, 7 chars)
-2. metric value achieved — use 0.000000 for crashes
-3. status: `keep`, `discard`, or `crash`
-4. short text description of what this experiment tried
+Stop at the agreed limit, on user cancellation, exhausted retries, unsafe resource conditions, or a scope/ownership/isolation problem. Terminate only processes owned by this run. Do not turn a pause into an unapproved repair project.
 
-Example:
-
-```
-commit	metric	status	description
-a1b2c3d	0.9979	keep	baseline
-b2c3d4e	0.9932	keep	increase learning rate to 0.04
-c3d4e5f	1.0050	discard	switch to GeLU activation
-d4e5f6g	0.0000	crash	doubled model width (OOM)
-```
-
-## The experiment loop
-
-The experiment runs on a dedicated branch (e.g. `autoresearch/mar9`).
-
-LOOP FOREVER:
-
-1. **Print status** so the user can see you're alive: `Experiment N: <what you're trying>`
-2. Look at the git state: the current branch/commit we're on
-3. Save the current commit: `BEFORE=$(git rev-parse HEAD)`
-4. Modify the in-scope file(s) with an experimental idea.
-5. `gt modify --commit` to amend the branch with your changes
-6. Run the evaluation (redirect output — do NOT use tee or let output flood your context)
-7. Extract the metric
-8. If the metric extraction is empty or the run crashed, check the logs. If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If you can't get things to work after more than a few attempts, give up.
-9. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
-10. If the metric improved, you "advance" the branch — the amended commit stays, update best metric. Print: `KEEP (N.NN -> N.NN): <description>`
-11. If the metric is equal or worse, discard: `git reset --hard $BEFORE` to revert to the pre-amend state. Print: `DISCARD (N.NN): <description>`
-
-The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
-
-**Timeout**: If a run exceeds 2x the expected duration, kill it and treat it as a failure (discard and revert).
-
-**Crashes**: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If you can't get things to work after more than a few attempts, give up, log "crash" as the status in the tsv, and move on.
-
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working _indefinitely_ until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read documentation and related code for new angles, re-read the in-scope files, try combining previous near-misses, try more radical changes, try simplifying. The loop runs until the human interrupts you, period.
-
-**Diversity**: After 5 consecutive discards, step back and try a fundamentally different approach rather than incremental tweaks on the same idea.
-
-As an example use case, a user might leave you running while they sleep. If each experiment takes ~5 minutes then you can run approx 12/hour, for a total of about 100 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
-
-**Context management**: During long runs, your conversation history grows. Keep each iteration lean — don't re-read files you already understand unless you need to. Use `results.tsv` as your memory of what you've tried. If you feel your context getting heavy, briefly review the TSV and the current state of the modifiable files rather than re-reading the entire history.
-
-## Recipes
-
-### Skill iteration
-
-```
-Modify: .claude/skills/my-skill/SKILL.md + rules/*.md
-Frozen: the evaluation harness (a companion skill, test cases, /skill-creator evals)
-Evaluate: run the companion skill or eval suite against test inputs
-Metric: completeness/quality score (higher is better)
-```
-
-### Prompt optimization
-
-```
-Modify: prompts/system-prompt.md
-Frozen: eval.py, test-cases/
-Evaluate: python eval.py --prompt prompts/system-prompt.md
-Metric: accuracy from stdout (higher is better)
-```
-
-### Agent improvement
-
-```
-Modify: .claude/agents/my-agent.md
-Frozen: test harness, evaluation criteria
-Evaluate: run agent against test scenarios, score outputs
-Metric: average quality score (higher is better)
-```
+Send Josh the baseline versus best result, validation limits, best accepted SHA, patch against the original base, and artifact paths through Agent Mail. Preserve failed-trial evidence. Integration, publication, and cleanup are separate actions subject to the usual permissions; do not automatically merge the experimental branch or delete its worktree. A resumed run must recheck its contract, remaining budget, and actual Git state before continuing.

@@ -1,5 +1,6 @@
 ---
 name: social-connector
+disable-model-invocation: true
 description: Facilitate strategic connections between people, ideas, or projects. Use for introductions, collaboration suggestions, partnership ideas, identifying synergies, or crafting connection-making messages.
 ---
 
