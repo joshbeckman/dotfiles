@@ -160,10 +160,19 @@ try {
       ).unref(),
     ),
   ]);
+  // Headless Chrome otherwise hides the scrollbars that drive resize feedback.
   browser = await chromium.launch(
     process.env.CHROME_EXECUTABLE
-      ? { executablePath: process.env.CHROME_EXECUTABLE, headless: true }
-      : { channel: "chrome", headless: true },
+      ? {
+          executablePath: process.env.CHROME_EXECUTABLE,
+          headless: true,
+          ignoreDefaultArgs: ["--hide-scrollbars"],
+        }
+      : {
+          channel: "chrome",
+          headless: true,
+          ignoreDefaultArgs: ["--hide-scrollbars"],
+        },
   );
   const page = await browser.newPage({
     viewport: { width: 1200, height: 850 },
@@ -186,6 +195,84 @@ try {
     return d.accept();
   });
   await page.goto(url);
+  await page.waitForSelector(".row");
+  await page.route("**/reader.css", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body:
+        (await response.text()) +
+        "\n::-webkit-scrollbar { width: 15px; height: 15px; }",
+    });
+  });
+  await page.evaluate(async () => {
+    const target = document.createElement("section");
+    target.id = "resize-fixture";
+    document.body.append(target);
+    window.readerResizeHeights = [];
+    window.recordReaderHeight = (event) => {
+      if (
+        event.source === target.querySelector("iframe")?.contentWindow &&
+        event.data?.type === "height"
+      )
+        window.readerResizeHeights.push(event.data.height);
+    };
+    window.addEventListener("message", window.recordReaderHeight);
+    await renderMarkdown(
+      Array.from({ length: 17 }, (_, i) =>
+        "A message should keep its size after the browser finishes wrapping these words. ".repeat(
+          2 + (i % 5),
+        ),
+      ).join("\n\n"),
+      target,
+    );
+  });
+  const resizingReader = page.frameLocator("#resize-fixture iframe");
+  await resizingReader.locator("p").last().waitFor();
+  for (const [zoom, width] of [
+    [0.8, 469],
+    [0.9, 423],
+    [1, 620],
+    [1.25, 469],
+  ]) {
+    await page.evaluate(
+      ({ zoom, width }) => {
+        window.readerResizeHeights = [];
+        document.body.style.zoom = zoom;
+        const frame = document.querySelector("#resize-fixture iframe");
+        frame.style.width = width + "px";
+        frame.scrollIntoView();
+      },
+      { zoom, width },
+    );
+    await page.waitForTimeout(250);
+    const settledCount = await page.evaluate(
+      () => window.readerResizeHeights.length,
+    );
+    assert.ok(
+      settledCount > 0,
+      "Reader should resize after changing its width",
+    );
+    await page.waitForTimeout(350);
+    const heights = await page.evaluate(() => window.readerResizeHeights);
+    assert.equal(
+      heights.length,
+      settledCount,
+      `Reader resize loop at zoom ${zoom}, width ${width}: ${heights.slice(-8)}`,
+    );
+    const gutter = await resizingReader
+      .locator("body")
+      .evaluate(() => window.innerWidth - document.documentElement.clientWidth);
+    assert.ok(gutter < 2, `Unexpected reader scrollbar: ${gutter}px`);
+  }
+  await page.evaluate(() => {
+    document.body.style.zoom = "";
+    document.getElementById("resize-fixture").remove();
+    window.removeEventListener("message", window.recordReaderHeight);
+    delete window.recordReaderHeight;
+    delete window.readerResizeHeights;
+  });
+  await page.unroute("**/reader.css");
   assert.equal(
     await page.locator('link[rel="icon"]').getAttribute("href"),
     "/favicon.svg",
@@ -1002,7 +1089,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

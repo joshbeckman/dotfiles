@@ -10,9 +10,13 @@ window.addEventListener("message", (event) => {
   document.documentElement.classList.toggle("dark", !!event.data.dark);
   document.body.innerHTML = event.data.html;
 });
+// scrollHeight can round down at fractional zoom, toggling scrollbars and reflowing text.
 new ResizeObserver(() =>
   parent.postMessage(
-    { type: "height", height: document.body.scrollHeight },
+    {
+      type: "height",
+      height: Math.ceil(document.body.getBoundingClientRect().height),
+    },
     location.origin,
   ),
 ).observe(document.body);
