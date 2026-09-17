@@ -148,8 +148,8 @@ def positive_int(value):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Find agent sessions whose transcripts match a case-insensitive regex, ranked by matching lines.')
-    parser.add_argument('pattern', nargs='*', help='transcript search pattern')
+    parser = argparse.ArgumentParser(description='Find agent sessions by case-insensitive transcript regex, or inspect an exact @+handle.')
+    parser.add_argument('pattern', nargs='*', help='transcript search pattern, or a single @+handle for exact lookup')
     parser.add_argument('--limit', type=positive_int, default=5, help='maximum results (default: 5)')
     parser.add_argument('--json', action='store_true', help='emit session metadata, latest recorded model, and observed-model history as JSON')
     parser.add_argument('--agent', help='inspect an exact registry handle instead of searching transcripts')
@@ -157,6 +157,8 @@ def main():
     pattern = ' '.join(args.pattern)
     if bool(pattern) == bool(args.agent):
         parser.error('provide either a search pattern or --agent HANDLE')
+    if not args.agent and re.fullmatch(r'@\+[a-z0-9][a-z0-9._-]*', pattern):
+        args.agent = pattern
     root = Path(os.environ.get('PI_SESSIONS_DIR', '~/.pi/agent/sessions')).expanduser()
     registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
     mail_root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()

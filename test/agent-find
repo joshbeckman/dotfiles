@@ -133,6 +133,37 @@ class AgentFindTest(unittest.TestCase):
         records = json.loads(self.run_cli('--json', 'persimmon', env=env).stdout)
         self.assertEqual([r['sessionId'] for r in records], [self.other])
 
+    def test_positional_handle_is_exact_even_without_transcript_mentions(self):
+        env = dict(self.env, AGENT_SCRATCHPAD=str(self.mail / 'alder-turner-01234567'))
+        result = self.run_cli('@+alder-turner', '--limit', '1', '--json', env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = json.loads(result.stdout)
+        self.assertEqual([r['sessionId'] for r in records], [self.sid])
+        self.assertIsNone(records[0]['matches'])
+        self.assertEqual(records, json.loads(self.run_cli('--agent', '@+alder-turner', '--json', env=env).stdout))
+        self.assertEqual(json.loads(self.run_cli('@+missing', '--json').stdout), [])
+        self.assertEqual(self.run_cli('@+missing').returncode, 1)
+        self.assertNotEqual(self.run_cli('@+alder-turner', '--agent', 'birch-weaver').returncode, 0)
+
+    def test_name_and_escaped_handle_queries_still_search_transcripts(self):
+        other = next(self.sessions.glob('*_' + self.other + '.jsonl'))
+        with other.open('a') as output:
+            output.write('\n' + json.dumps({'type': 'message', 'message': {'role': 'user', 'content': 'Ask @+alder-turner about persimmon'}}) + '\n')
+        for pattern in ('alder-turner', r'@\+alder-turner', 'alder.*turner'):
+            result = self.run_cli(pattern, '--json')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual([r['sessionId'] for r in json.loads(result.stdout)], [self.other])
+        self.assertEqual(json.loads(self.run_cli('@+alder-turner', 'persimmon', '--json').stdout), [])
+
+    def test_missing_scratchpad_does_not_hide_retained_session(self):
+        (self.mail / 'alder-turner-01234567').rmdir()
+        result = self.run_cli('@+alder-turner', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        record = json.loads(result.stdout)[0]
+        self.assertEqual(record['sessionId'], self.sid)
+        self.assertIsNone(record['scratchpad'])
+        self.assertTrue(Path(record['sessionFile']).is_file())
+
     def test_empty_invalid_and_literal_option(self):
         self.assertEqual(json.loads(self.run_cli('--json', 'absent-word').stdout), [])
         self.assertEqual(self.run_cli('absent-word').returncode, 1)
