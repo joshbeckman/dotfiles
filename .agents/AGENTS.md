@@ -121,8 +121,10 @@ If you create or inherit a pull request, you own it until the change is deployed
 
 **Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer. For a standalone conversational response, put the generated identity first and blockquote the response. For mixed prose, keep Josh's words unquoted and place the trailer adjacent to the blockquoted agent passage. Maintained artifacts can carry the trailer after the prose without blockquoting the whole artifact. Generate the identity with `bin/agent-trailer` (in dotfiles `bin/`, on PATH). Never write it from memory; models guess their own name wrong.
 
+Published trailers identify the agent, not its harness or model. Keep runtime details in session metadata; `agent-trailer --raw` remains available for diagnostics and tool detection.
+
 ```sh
-agent-trailer   # => Co-authored-by: AI <session name> (<harness>/<provider>/<model>)
+agent-trailer   # => Co-authored-by: AI <session name> @+<handle>
 ```
 
 One key on every surface, so `grep "Co-authored-by: AI"` turns up agent work in commits, comments, and documents alike.

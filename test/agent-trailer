@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/git" <<'SH'
+#!/bin/sh
+[ "$*" = 'config user.email' ] || exit 1
+printf '%s\n' "$TEST_GIT_EMAIL"
+SH
+chmod +x "$tmp/bin/git"
+
+checks=0
+check() {
+  local expected="$1" actual
+  shift
+  local -a settings=(TEST_GIT_EMAIL=person@example.org)
+  while [ "$1" != -- ]; do
+    settings+=("$1")
+    shift
+  done
+  shift
+  actual="$(env -i HOME="$tmp" PATH="$tmp/bin:$root/bin:/usr/bin:/bin" \
+    "${settings[@]}" /bin/bash "$root/bin/agent-trailer" "$@")"
+  if [ "$actual" != "$expected" ]; then
+    printf 'Expected: %s\nActual:   %s\n' "$expected" "$actual" >&2
+    return 1
+  fi
+  checks=$((checks + 1))
+}
+
+named=(AGENT_NAME='Test Agent' AGENT_HANDLE=test-agent)
+runtime=(PI_MODEL=model-one PI_PROVIDER=vendor-routing-hint PI_PACKAGE_DIR=/fixture/pi-test)
+check 'Co-authored-by: AI Test Agent @+test-agent' "${named[@]}" "${runtime[@]}" --
+check 'Co-authored-by: AI Test Agent <person+test-agent@example.org>' "${named[@]}" "${runtime[@]}" -- --email
+check 'pi-test/vendor/model-one' "${named[@]}" "${runtime[@]}" -- --raw
+check 'pi-test/vendor/model-one' "${named[@]}" "${runtime[@]}" -- --raw --email
+check 'Co-authored-by: AI Test Agent @+test-agent' "${named[@]}" "${runtime[@]}" PI_MODEL=model-two --
+check 'pi-test/vendor/model-two' "${runtime[@]}" PI_MODEL=model-two -- --raw
+check 'Co-authored-by: AI Test Agent @+test-agent' "${named[@]}" CLAUDECODE=1 ANTHROPIC_MODEL=fixture-model --
+check 'claude-code/anthropic/fixture-model' CLAUDECODE=1 ANTHROPIC_MODEL=fixture-model -- --raw
+check 'Co-authored-by: AI Test Agent @+test-agent' "${named[@]}" --
+check 'unknown/unknown/unknown' -- --raw
+check 'Co-authored-by: AI' --
+check 'Co-authored-by: AI <person+pi@example.org>' -- --email
+check 'Co-authored-by: AI Other Display Name @+test-agent' "${named[@]}" -- --name 'Other Display Name'
+check 'Co-authored-by: AI Test Agent of Example @+test-agent-of-example' AGENT_NAME='Test Agent of Example' --
+check 'Co-authored-by: AI Test Agent <josh+test-agent@joshbeckman.org>' "${named[@]}" TEST_GIT_EMAIL= -- --email
+
+cat >"$tmp/session.jsonl" <<'JSON'
+{"type":"model_change","provider":"first","modelId":"model-one"}
+{"type":"model_change","provider":"second-routing","modelId":"model-two"}
+JSON
+check 'pi-test/second/model-two' PI_CODING_AGENT=1 PI_PACKAGE_DIR=/fixture/pi-test \
+  PI_SESSION_ID=fixture-session PI_SESSION_FILE="$tmp/session.jsonl" -- --raw
+
+printf 'agent-trailer: %s checks passed\n' "$checks"

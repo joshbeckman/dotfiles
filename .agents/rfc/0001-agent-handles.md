@@ -133,9 +133,16 @@ know which hands typed it. Anything an agent writes that a person will read
 as the account's MUST carry the trailer:
 
 ```
-Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) <mailbox>
-Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) @+handle
+Co-authored-by: AI <Display Name> <mailbox>
+Co-authored-by: AI <Display Name> @+handle
 ```
+
+Published trailers identify the agent, not its implementation. Harness, provider,
+and model details MUST NOT be added to new trailers. Provider/model history
+remains in session records; `agent-trailer --raw` retains runtime identifiers
+for diagnostics and detection. A model change does not change an agent's
+identity. Naming the agent does not transfer responsibility away from the
+accountable human. Historical trailers remain unchanged.
 
 The address slot varies by surface. Commits carry the mailbox form in RFC-822
 angle brackets, because that is the one field GitHub parses for co-author
@@ -163,7 +170,7 @@ Presentation depends on the surface. A standalone conversational response MUST
 put the trailer before the response and render the response as a blockquote:
 
 ```
-Co-authored-by: AI <Display Name> (<harness>/<provider>/<model>) @+handle
+Co-authored-by: AI <Display Name> @+handle
 
 > Agent-authored response.
 ```
@@ -202,9 +209,9 @@ harness, active/retired) using only deployed standards. (Not implemented.)
   canonical handles are registrable username shapes. The realm suffix makes
   accidental collision unlikely, not impossible.
 - **Registry loss.** If a machine's registry is destroyed, its realm may
-  reissue names. Public artifacts remain correctly attributed (the trailer
-  captured harness and date), but a grepped handle may then span two
-  sessions. Disambiguate by date and harness tuple.
+  reissue names. Public artifacts retain their original attribution, but a
+  grepped handle may then span two sessions. Use artifact timestamps and
+  retained session records to disambiguate; the trailer alone is insufficient.
 - **Cross-account collisions.** Handle uniqueness is per realm. Two accounts
   can each have an agent named `foobar`; only the qualified and mailbox forms
   distinguish them.

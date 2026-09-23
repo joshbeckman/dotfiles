@@ -7,15 +7,16 @@ Usage: agent-trailer [--raw] [--email] [--name NAME]
 
 Print the trailer identifying the agent behind a commit, comment, or document:
 
-  Co-authored-by: AI <session name> (<harness>/<provider>/<model>) <address>
+  Co-authored-by: AI <session name> <address>
 
 The address slot varies by surface (RFC 0001 section 8): prose gets the
-relative handle (<@+handle>), commits get the +<handle> mailbox form via
+relative handle (@+handle), commits get the +<handle> mailbox form via
 --email. One grammar everywhere, so `grep "Co-authored-by: AI"` finds all
 agent work and `grep '+<handle>'` finds one agent's, on either surface. The
 name and address are omitted when unknown. Values come from the running
 harness's environment, not from the model's self-report (models routinely
-guess their own name wrong).
+guess their own name wrong). Harness/provider/model details remain available
+through --raw for diagnostics and runtime detection, not published attribution.
 
 Options:
   --raw         Print "<harness>/<provider>/<model>" without the trailer prefix.
@@ -203,4 +204,4 @@ elif [ -n "$name" ]; then
   [ -n "$slug" ] && suffix=" @+$slug"
 fi
 
-printf 'Co-authored-by: %s (%s)%s\n' "$who" "$id" "$suffix"
+printf 'Co-authored-by: %s%s\n' "$who" "$suffix"
