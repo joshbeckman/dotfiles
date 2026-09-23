@@ -343,7 +343,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Referrer-Policy', 'no-referrer')
         if urlsplit(self.path).path == '/reader.html':
             images = 'data: https:' if parse_qs(urlsplit(self.path).query).get('remote') == ['1'] else 'data:'
-            policy = f"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src {images}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+            # The reader is sandboxed without allow-same-origin, so it has an opaque
+            # origin. WebKit does not match 'self' from an opaque origin, which
+            # blocked reader.js and reader.css and left Safari's message body blank
+            # while Chromium, the only engine the browser test drives, passed. An
+            # explicit origin matches in every engine and grants nothing 'self' did not.
+            own = 'http://' + self.server.authority
+            policy = f"default-src 'none'; script-src {own}; style-src {own} 'unsafe-inline'; img-src {images}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
         else:
             policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         self.send_header('Content-Security-Policy', policy)
