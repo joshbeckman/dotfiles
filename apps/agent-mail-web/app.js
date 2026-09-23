@@ -375,7 +375,6 @@ function changed() {
 async function sendDraft() {
   if (!draft || busy) return;
   if (uploading) throw new Error("Wait for the image upload before sending.");
-  if (!confirm("Send this message to " + $("to").value + "?")) return;
   busy = true;
   const controls = [...document.querySelectorAll("button,input,textarea")].map(
     (el) => [el, el.disabled],

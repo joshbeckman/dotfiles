@@ -559,6 +559,7 @@ try {
   await assertReaderFits(page.frameLocator("#preview iframe"));
   // Settle the scroll after preview sizing before aiming the send click.
   await page.locator("#send").scrollIntoViewIfNeeded();
+  const dialogsBeforeClickSend = dialogs.length;
   await page.locator("#send").click();
   await page
     .getByText("Sent. A copy is retained in Sent.")
@@ -578,6 +579,11 @@ try {
       );
       throw error;
     });
+  assert.equal(
+    dialogs.length,
+    dialogsBeforeClickSend,
+    "Send should not open a dialog",
+  );
   const sent = await readdir(join(humans, "josh/sent"));
   assert.equal(sent.length, 1);
   const copy = await readFile(join(humans, "josh/sent", sent[0]), "utf8");
@@ -620,7 +626,8 @@ try {
     .last()
     .getByText("Reply with Markdown.", { exact: true })
     .waitFor();
-  await page.locator("#send").click();
+  const dialogsBeforeReplySend = dialogs.length;
+  await page.locator("#body").press("Meta+Enter");
   await page.locator("#reader").waitFor({ state: "visible" });
   await page.waitForFunction(
     () => document.querySelectorAll("#thread details.message").length === 3,
@@ -630,6 +637,11 @@ try {
     .last()
     .getByText("Reply resumed from a saved draft.", { exact: true })
     .waitFor();
+  assert.equal(
+    dialogs.length,
+    dialogsBeforeReplySend,
+    "Reply shortcut should not open a dialog",
+  );
   assert.equal(await page.locator("#archive").isDisabled(), true);
   await page.getByRole("button", { name: "Contacts", exact: true }).click();
   const directory = page.locator("#contact-list");
@@ -744,8 +756,22 @@ try {
   await page.locator("#body").press("e");
   assert.equal(await page.locator("#editor").isVisible(), true);
   const beforeSend = await page.evaluate(() => composer.value());
+  const dialogsBeforeShortcutSend = dialogs.length;
+  const countBeforeShortcutSend = (
+    await readdir(join(humans, "josh/sent"))
+  ).length;
   await page.locator("#body").press("Control+Enter");
+  await page.keyboard.press("Control+Enter");
   await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
+  assert.equal(
+    dialogs.length,
+    dialogsBeforeShortcutSend,
+    "Send shortcut should not open a dialog",
+  );
+  assert.equal(
+    (await readdir(join(humans, "josh/sent"))).length,
+    countBeforeShortcutSend + 1,
+  );
   assert.equal(await page.locator("#reader").isVisible(), false);
   assert.equal(await page.evaluate(() => composer.value()), beforeSend);
   const sentBeforeDelete = await readdir(join(humans, "josh/sent"));
@@ -1089,7 +1115,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, light/dark and mobile.",
   );
 } finally {
   await browser?.close();
