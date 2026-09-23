@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Exercise the configured alias without a model, editor, or real commit."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = Path(os.environ.get('GITCONFIG_UNDER_TEST', ROOT / '.gitconfig'))
+
+
+class PiCommitTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.alias = subprocess.check_output(
+            ['git', 'config', '--file', str(CONFIG), '--get', 'alias.pi-commit'], text=True).strip()
+        assert cls.alias.startswith('!')
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='git-pi-commit-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        (self.bin / 'python3').symlink_to(sys.executable)
+        self.env = {
+            'HOME': str(self.root),
+            'PATH': os.pathsep.join([str(self.bin), '/usr/bin', '/bin']),
+            'TMPDIR': str(self.root),
+            'COMMIT_LOG': str(self.root / 'commit.json'),
+            'MODEL_LOG': str(self.root / 'model.json'),
+            'PI_COMMIT_PROVIDER_EXT': str(self.root / 'missing-provider'),
+        }
+        self.executable('git', '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+if args == ['diff', '--cached']:
+    if not os.environ.get('EMPTY_DIFF'):
+        print('Synthetic staged changes')
+elif args == ['config', 'user.email']:
+    print('person@example.org')
+elif args and args[0] == 'commit':
+    pathlib.Path(os.environ['COMMIT_LOG']).write_text(json.dumps(args))
+else:
+    sys.exit('Unexpected git arguments: ' + repr(args))
+''')
+        self.executable('pi', '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+pathlib.Path(os.environ['MODEL_LOG']).write_text(json.dumps(sys.argv[1:]))
+print('fix: fixture commit\\n\\nVerify alias attribution without a real model or commit.')
+''')
+        self.helper = self.bin / 'agent-trailer'
+        self.helper.symlink_to(ROOT / 'bin/agent-trailer')
+
+    def executable(self, name, text):
+        path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o700)
+
+    def invoke(self, **environment):
+        return subprocess.run(['/bin/sh', '-c', self.alias[1:]], cwd=self.root,
+                              env={**self.env, **environment}, capture_output=True,
+                              text=True, timeout=10)
+
+    def assert_commit(self, expected, **environment):
+        result = self.invoke(**environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(Path(self.env['COMMIT_LOG']).read_text())
+        self.assertEqual(args.count('--trailer'), 1)
+        self.assertEqual(args[args.index('--trailer') + 1], expected)
+        self.assertIn('\n\nVerify alias attribution', args[args.index('-m') + 1])
+        self.assertTrue(Path(self.env['MODEL_LOG']).exists())
+
+    def test_named_agent_uses_canonical_identity(self):
+        self.assert_commit('Co-authored-by: AI Fixture Agent <person+fixture-agent@example.org>',
+                           AGENT_NAME='Fixture Agent', AGENT_HANDLE='fixture-agent',
+                           PI_CODING_AGENT='1', PI_PROVIDER='fixture', PI_MODEL='first-model')
+
+    def test_human_invocation_preserves_anonymous_ai_mailbox(self):
+        self.assert_commit('Co-authored-by: AI <person+pi@example.org>')
+
+    def test_legacy_model_override_cannot_change_attribution(self):
+        self.assert_commit('Co-authored-by: AI Fixture Agent <person+fixture-agent@example.org>',
+                           AGENT_NAME='Fixture Agent', AGENT_HANDLE='fixture-agent',
+                           PI_COMMIT_TRAILER_MODEL='must-not-appear', PI_COMMIT_MODEL='fixture/second-model')
+
+    def test_attribution_errors_stop_before_model_or_commit(self):
+        for helper in (None, '#!/bin/sh\nexit 7\n', '#!/bin/sh\nexit 0\n'):
+            with self.subTest(helper=helper):
+                self.helper.unlink(missing_ok=True)
+                if helper is not None:
+                    self.executable('agent-trailer', helper)
+                result = self.invoke()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Failed to generate agent attribution', result.stderr)
+                self.assertFalse(Path(self.env['MODEL_LOG']).exists())
+                self.assertFalse(Path(self.env['COMMIT_LOG']).exists())
+
+    def test_empty_staging_still_stops_early(self):
+        result = self.invoke(EMPTY_DIFF='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('No staged changes', result.stdout)
+        self.assertFalse(Path(self.env['MODEL_LOG']).exists())
+        self.assertFalse(Path(self.env['COMMIT_LOG']).exists())
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
