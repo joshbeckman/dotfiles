@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = Path(os.environ.get('KEYWORD_SCRIPT', ROOT / 'bin/gh-nvim-email-keywords'))
+
+FAKE_GH = '''#!/usr/bin/env python3
+import fcntl, json, os, re, sys, time
+from pathlib import Path
+args = sys.argv[1:]
+if args[:2] == ['search', 'prs']:
+    with open(os.environ['STATE'] + '.search', 'a') as f:
+        f.write('search\\n')
+    print(os.environ.get('TEST_REPOS', 'fixture/first\\nfixture/second\\nfixture/first\\nfixture/third'))
+    sys.exit(0)
+assert args[0] == 'api', args
+assert args[1:3] == ['--cache', '24h'], args
+repo, login = re.fullmatch(r'repos/(.+)/commits\\?author=([^&]+)&per_page=1', args[3]).groups()
+key = repo + ':' + login
+state_path = Path(os.environ['STATE'])
+def update(enter):
+    with state_path.open('r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        if enter:
+            state['calls'].append(key)
+            state['active'] += 1
+            state['max_active'] = max(state['active'], state['max_active'])
+        else:
+            state['active'] -= 1
+        f.seek(0)
+        json.dump(state, f)
+        f.truncate()
+update(True)
+time.sleep(0.06)
+update(False)
+value = json.loads(os.environ['RESPONSES']).get(key, '')
+if value == 'ERROR':
+    sys.exit(1)
+print(value)
+'''
+
+
+class KeywordsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='email-keywords-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        (self.bin / 'python3').symlink_to(sys.executable)
+        self.executable('gh', FAKE_GH)
+        self.executable('git', '#!/bin/sh\n[ "$*" = "config user.email" ] || exit 2\nprintf "%s\\n" "${TEST_EMAIL-person@example.org}"\n')
+        self.keywords = self.root / 'config/nvim/keywords.txt'
+        self.keywords.parent.mkdir(parents=True)
+        self.state = self.root / 'state.json'
+        self.state.write_text(json.dumps({'calls': [], 'active': 0, 'max_active': 0}))
+        self.env = {
+            'HOME': str(self.root), 'XDG_CONFIG_HOME': str(self.root / 'config'),
+            'PATH': os.pathsep.join([str(self.bin), '/usr/bin', '/bin']),
+            'STATE': str(self.state),
+            'RESPONSES': json.dumps({
+                'fixture/first:alice': 'alice.one@example.org',
+                'fixture/first:bob': 'bob@other.example',
+                'fixture/second:bob': 'bob@example.org',
+                'fixture/third:carol': 'carol-last@example.org',
+                'fixture/first:dave': 'ERROR',
+                'fixture/second:dave': 'dave.recovered@example.org',
+                'fixture/first:eve': 'eve@example.org',
+            }),
+        }
+
+    def executable(self, name, text):
+        path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o700)
+
+    def run_script(self, *args, **environment):
+        return subprocess.run(['/bin/bash', str(SCRIPT), *args], cwd=self.root,
+                              env={**self.env, **environment}, capture_output=True,
+                              text=True, timeout=15)
+
+    def test_parallel_lookups_keep_domain_fallback_and_single_writer(self):
+        original = '@alice\n@bob\n@carol\n@dave\n@eve\n@missing\n@+fixture-agent\n@invalid login\n#keep\nfixture/repo\n'
+        self.keywords.write_text(original)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.keywords.read_text(), original +
+                         'alice.one\nbob\ncarol-last\ndave.recovered\neve\n')
+        state = json.loads(self.state.read_text())
+        self.assertGreater(state['max_active'], 1)
+        self.assertLessEqual(state['max_active'], 4)
+        self.assertEqual(state['active'], 0)
+        self.assertNotIn('fixture/second:alice', state['calls'])
+        self.assertEqual(sum(x.endswith(':missing') for x in state['calls']), 3)
+        self.assertFalse(any('fixture-agent' in x or 'invalid' in x for x in state['calls']))
+
+    def test_repeated_runs_do_not_duplicate_plain_or_hyphenated_local_parts(self):
+        self.keywords.write_text('@alice\n@bob\n@carol\nZZZ\n')
+        for _ in range(2):
+            result = self.run_script()
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.keywords.read_text(), '@alice\n@bob\n@carol\nZZZ\nalice.one\nbob\ncarol-last\n')
+        self.assertIn('No new email usernames', result.stdout)
+
+    def test_dry_run_preserves_dictionary(self):
+        self.keywords.write_text('@alice\n')
+        result = self.run_script('--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Would add 1', result.stdout)
+        self.assertIn('alice.one', result.stdout)
+        self.assertEqual(self.keywords.read_text(), '@alice\n')
+
+    def test_empty_or_agent_only_dictionary_needs_no_github_calls(self):
+        for contents in ('', '@+fixture-agent\n#label\n'):
+            self.keywords.write_text(contents)
+            result = self.run_script()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(self.state.read_text())['calls'], [])
+            self.assertFalse(Path(str(self.state) + '.search').exists())
+            self.assertEqual(self.keywords.read_text(), contents)
+
+    def test_missing_dictionary_is_a_noop(self):
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertFalse(self.keywords.exists())
+
+    def test_no_repositories_or_email_domain_does_not_change_dictionary(self):
+        self.keywords.write_text('@alice\n')
+        for environment in ({'TEST_REPOS': ''}, {'TEST_EMAIL': ''}):
+            result = self.run_script(**environment)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.keywords.read_text(), '@alice\n')
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

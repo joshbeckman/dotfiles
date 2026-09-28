@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = Path(os.environ.get('SETUP_UNDER_TEST', ROOT / 'setup'))
+FAKE_COMMAND = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+record = {'command': name, 'args': args, 'cwd': os.getcwd(),
+          'no_ask': os.environ.get('HOMEBREW_NO_ASK'),
+          'no_sudo': os.environ.get('HOMEBREW_NO_SUDO'),
+          'git_prompt': os.environ.get('GIT_TERMINAL_PROMPT'),
+          'gh_prompt': os.environ.get('GH_PROMPT_DISABLED')}
+if name == 'brew':
+    record['stdin'] = sys.stdin.read()
+with open(os.environ['COMMAND_LOG'], 'a') as f:
+    f.write(json.dumps(record) + '\\n')
+if name == 'git' and args[0] == 'clone':
+    pathlib.Path(args[-1]).mkdir(parents=True, exist_ok=True)
+elif name == 'uname':
+    print('Linux fixture')
+elif name == 'lsb_release':
+    print('Distributor ID: ubuntu')
+elif name == 'dpkg':
+    print('amd64')
+elif name == 'defaults':
+    print('org.joshbeckman.agent-mail')
+if name == os.environ.get('FAIL_COMMAND') and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
+    sys.exit(7)
+'''
+
+
+@unittest.skipUnless(shutil.which('zsh'), 'setup requires zsh')
+class SetupTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='dotfiles-setup-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.repo = self.root / 'dotfiles with spaces'
+        self.home = self.root / 'home with spaces'
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        (self.bin / 'python3').symlink_to(sys.executable)
+        self.home.mkdir()
+        self.repo.mkdir()
+        self.script = self.repo / 'setup'
+        shutil.copyfile(SOURCE, self.script)
+        (self.repo / 'Brewfile').touch()
+        (self.repo / '.config/nvim').mkdir(parents=True)
+        (self.repo / 'apps/Agent Mail.app').mkdir(parents=True)
+        for path in ('.agents/AGENTS.md', '.agents/pi/settings.json', '.agents/pi/keybindings.json'):
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('{}')
+        for path in ('.agents/prompts', '.agents/skills'):
+            (self.repo / path).mkdir()
+        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'defaults'):
+            self.executable(self.bin / name)
+        for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
+                     'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
+            self.executable(self.repo / 'bin' / name)
+        self.log = self.root / 'commands.jsonl'
+        self.env = {'HOME': str(self.home), 'ZDOTDIR': str(self.home),
+                    'PATH': os.pathsep.join([str(self.bin), '/usr/bin', '/bin']),
+                    'COMMAND_LOG': str(self.log)}
+
+    def executable(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(FAKE_COMMAND)
+        path.chmod(0o700)
+
+    def run_setup(self, platform='darwin', **environment):
+        if platform == 'darwin' and not Path('/usr/bin/ditto').exists():
+            self.skipTest('macOS application-copy integration requires ditto')
+        return subprocess.run([shutil.which('zsh'), '-f', '-c',
+                               'OSTYPE=$1; source "$2"', 'setup-test', platform, str(self.script)],
+                              cwd=self.repo, env={**self.env, **environment},
+                              input='this must not reach a child prompt\n', capture_output=True,
+                              text=True, timeout=20)
+
+    def records(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def test_brew_is_noninteractive_and_does_not_repeat_upgrade(self):
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = self.records()
+        brew = [c for c in commands if c['command'] == 'brew']
+        self.assertEqual([c['args'] for c in brew], [
+            ['update'], ['upgrade', '--no-ask', '--no-quit'], ['cleanup'],
+            ['bundle', 'install', '--no-upgrade', '--file', str(self.repo / 'Brewfile')]])
+        for call in brew:
+            self.assertEqual(call['no_ask'], '1')
+            self.assertEqual(call['no_sudo'], '1')
+            self.assertEqual(call['stdin'], '')
+        self.assertTrue(all(c['git_prompt'] == '0' and c['gh_prompt'] == '1' for c in commands))
+        self.assertEqual(commands[-1]['command'], 'pi')
+        self.assertIsNone(commands[-1]['no_sudo'])
+
+    def test_refresh_uses_fast_forward_only_without_changing_cwd(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        self.log.write_text('')
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        git = [c for c in self.records() if c['command'] == 'git']
+        self.assertGreater(len(git), 0)
+        for call in git:
+            self.assertEqual(call['args'][0], '-C')
+            self.assertEqual(call['args'][2:], ['pull', '--ff-only'])
+            self.assertEqual(call['cwd'], str(self.repo))
+
+    def test_failed_upgrade_stops_setup(self):
+        result = self.run_setup(FAIL_COMMAND='brew', FAIL_ARG='upgrade')
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(self.records()[-1]['args'][0], 'upgrade')
+
+    def test_failed_plugin_update_does_not_continue_to_package_updates(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        self.log.write_text('')
+        result = self.run_setup(FAIL_COMMAND='git', FAIL_ARG='pull')
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertFalse(any(c['command'] == 'brew' for c in self.records()))
+
+    def test_optional_keyword_failures_still_continue(self):
+        result = self.run_setup(FAIL_COMMAND='gh-nvim-email-keywords')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('email keyword generation failed', result.stdout)
+        self.assertEqual(self.records()[-1]['command'], 'pi')
+
+    def test_linux_sudo_cannot_prompt(self):
+        result = self.run_setup(platform='linux', FAIL_COMMAND='sudo')
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(self.records()[-1]['command'], 'sudo')
+        self.assertEqual(self.records()[-1]['args'][:2], ['-n', 'apt-get'])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

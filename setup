@@ -1,4 +1,9 @@
 #!/bin/zsh
+set -euo pipefail
+
+# A refresh must fail rather than wait for a terminal or open a merge editor.
+exec </dev/null
+export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1
 
 DOTFILES_DIR="${0:A:h}"
 
@@ -6,10 +11,10 @@ DOTFILES_DIR="${0:A:h}"
 function git_clone_or_update() {
         if [ -d "$2" ]; then
                 echo "  ======  updating $2"
-                cd $2 && git pull && cd -
+                git -C "$2" pull --ff-only
         else
                 echo "  ======  cloning $1 into $2"
-                git clone --depth 1 $1 $2
+                git clone --depth 1 "$1" "$2"
         fi
 }
 
@@ -114,7 +119,7 @@ echo '  ======  generated nvim completion keywords'
 __setup_ubuntu(){
         if [ "$(dpkg --print-architecture)" = "amd64" ]; then
                 echo "Ubuntu detected"
-                sudo apt-get install -y ripgrep fzf exuberant-ctags xsel bat
+                sudo -n apt-get install -y ripgrep fzf exuberant-ctags xsel bat
                 append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
                 append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
         else
@@ -164,10 +169,14 @@ __setup_mac(){
 
         if command -v brew &> /dev/null
         then
+                # Privileged installers need a separate manual run; never quit running apps.
+                local -x HOMEBREW_NO_ASK=1 HOMEBREW_NO_SUDO=1
                 echo "Refreshing your brew"
-                brew update && brew upgrade && brew cleanup
+                brew update
+                brew upgrade --no-ask --no-quit
+                brew cleanup
                 echo "Installing basics with brew bundle"
-                brew bundle install --file ~/Brewfile
+                brew bundle install --no-upgrade --file "$DOTFILES_DIR/Brewfile"
         else
                 echo "Could not find brew"
         fi

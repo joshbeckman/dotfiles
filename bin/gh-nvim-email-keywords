@@ -10,7 +10,8 @@
 # empty, but commit author emails are public in git itself. Only addresses on
 # your own email domain (from git config user.email) are kept, which drops
 # noreply and bot addresses and keeps the list to actual teammates. Entries
-# are the bare local part (paul.nuschke).
+# are the bare local part (paul.nuschke). Lookups run four at a time and use
+# gh's authenticated HTTP cache for 24 hours, including successful empty results.
 #
 # Usage:
 #   gh-nvim-email-keywords              # Append new email usernames
@@ -31,6 +32,7 @@ Usage: $(basename "$0") [--dry-run]
 
 Resolve the @username entries in $KEYWORDS_FILE
 to email local parts via commit metadata and append the new ones.
+Uses four concurrent lookups and caches successful API responses for 24 hours.
 
 Options:
     --dry-run    Show what would be added without writing
@@ -44,6 +46,9 @@ done
 
 [[ -f "$KEYWORDS_FILE" ]] || { echo "No keywords file at $KEYWORDS_FILE" >&2; exit 0; }
 
+logins=$(grep -E '^@[A-Za-z0-9][A-Za-z0-9-]*$' "$KEYWORDS_FILE" | sed 's/^@//' | sort -fu || true)
+[[ -n "$logins" ]] || { echo "No GitHub usernames to resolve."; exit 0; }
+
 domain=$(git config user.email 2>/dev/null | sed -n 's/.*@//p')
 [[ -n "$domain" ]] || { echo "No git user.email domain to filter by" >&2; exit 1; }
 
@@ -54,14 +59,12 @@ repos=$(gh search prs --involves=@me --sort=updated --limit 25 \
     awk '!seen[$0]++' | head -n "$REPO_LIMIT" || true)
 [[ -n "$repos" ]] || { echo "No repos discovered to resolve emails from" >&2; exit 1; }
 
-logins=$(grep -E '^@[A-Za-z0-9]' "$KEYWORDS_FILE" | grep -v '^@+' | sed 's/^@//' | sort -fu)
-
-existing=$(grep -E '^[a-z0-9]+(\.[a-z0-9-]+)+$' "$KEYWORDS_FILE" | sort -fu || true)
+existing=$(LC_ALL=C sort -u "$KEYWORDS_FILE")
 
 resolve_email() { # login -> local part on our domain, or nothing
     local login="$1" repo email
     while IFS= read -r repo; do
-        email=$(gh api "repos/$repo/commits?author=$login&per_page=1" \
+        email=$(gh api --cache 24h "repos/$repo/commits?author=$login&per_page=1" \
             --jq '.[0].commit.author.email // empty' 2>/dev/null) || continue
         case "$email" in
             *@"$domain") printf '%s\n' "${email%@*}"; return 0 ;;
@@ -70,11 +73,15 @@ resolve_email() { # login -> local part on our domain, or nothing
     return 0
 }
 
-discovered=$(while IFS= read -r login; do
-    [[ -n "$login" ]] && resolve_email "$login"
-done <<<"$logins" | sort -fu)
+# Batched GraphQL history queries can time out on large repositories. Bound
+# independent REST lookups instead, keeping dictionary writes in this parent.
+# Cache empty successes too: otherwise inactive peers cost three requests every run.
+export repos domain
+export -f resolve_email
+discovered=$(printf '%s\n' "$logins" |
+    xargs -n 1 -P 4 /bin/bash -c 'resolve_email "$1"' _ | LC_ALL=C sort -u)
 
-new_entries=$(comm -23 <(echo "$discovered") <(echo "$existing") | grep -v '^$' || true)
+new_entries=$(LC_ALL=C comm -23 <(echo "$discovered") <(echo "$existing") | grep -v '^$' || true)
 
 if [[ -z "$new_entries" ]]; then
     echo "No new email usernames to add."

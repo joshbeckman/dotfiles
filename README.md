@@ -12,6 +12,10 @@ git clone git@github.com:joshbeckman/dotfiles.git .dotfiles
 
 The [`setup`](setup) script handles everything: symlinking dotfiles via `dfm install`, installing Homebrew formulae from `Brewfile`, and cloning plugins for zsh, tmux, and Neovim. It detects macOS vs. Linux and adjusts accordingly.
 
+Refreshes are noninteractive: plugin updates must fast-forward, Homebrew upgrades do not ask for confirmation or quit running apps, and privileged Homebrew installers are refused. Required-step failures stop the run; optional completion-keyword failures are reported and skipped. Perform any required privileged installation manually, then retry. No recurring schedule is installed.
+
+GitHub email-completion lookups run four at a time and reuse GitHub CLI's HTTP cache for 24 hours, including successful empty results. The dictionary remains append-only; newly discovered GitHub usernames are resolved on the next run rather than waiting for a whole-dictionary refresh interval.
+
 To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ```sh
