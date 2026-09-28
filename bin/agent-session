@@ -161,10 +161,17 @@ def pad_state(fd, handle, sid, session_file, cwd):
             values = [line[len(key) + 4:] for line in text.splitlines() if line.startswith(f'- {key}: ')]
             if values != [value]:
                 raise ValueError(f'existing session.md has conflicting {key} metadata')
-        with child_directory(pad, 'inbox') as inbox:
-            for name in ('new', 'cur'):
-                with child_directory(inbox, name):
-                    pass
+        # agent-mail creates inbox directories on first delivery; absent is valid, linked is not.
+        try:
+            with child_directory(pad, 'inbox') as inbox:
+                for name in ('new', 'cur'):
+                    try:
+                        with child_directory(inbox, name):
+                            pass
+                    except FileNotFoundError:
+                        pass
+        except FileNotFoundError:
+            pass
     return 'existing'
 
 
@@ -451,7 +458,7 @@ def memory_pressure():
                               capture_output=True, text=True, check=True).stdout)
 
 
-def resume(handle, tmux_session, dry_run):
+def resume(handle, tmux_session, dry_run, extensions=()):
     import shlex
     import subprocess
     locations = roots()
@@ -482,7 +489,8 @@ def resume(handle, tmux_session, dry_run):
                   f"you stopped and your notes. Then read your mail with `agent-mail read --to {mailbox}`. "
                   'Restart a job only if it is still needed.')
         command = ['tmux', 'new-window', '-d', '-t', tmux_session + ':', '-n', handle, '-c', evidence['cwd'],
-                   shlex.join(['pi', '--session', evidence['sessionFile'], prompt])]
+                   shlex.join(['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
+                               '--session', evidence['sessionFile'], prompt])]
         if dry_run:
             return dict(record, status='would-wake', command=command)
         if subprocess.run(['tmux', 'has-session', '-t', tmux_session], capture_output=True).returncode:
@@ -514,6 +522,8 @@ def main():
     command.add_argument('handle')
     command.add_argument('--tmux-session', required=True)
     command.add_argument('--dry-run', action='store_true')
+    # Until session-park is loaded globally, a woken pilot must load it to park again.
+    command.add_argument('--extension', action='append', default=[], help='extra Pi extension to load')
     commands.add_parser('retire', help='never wake this session again').add_argument('handle')
     for name in ('started', 'exited', 'park'):
         # Called by the Pi extension for its own process, not by hand.
@@ -532,7 +542,7 @@ def main():
                 result = repair(handle, locations, result) if args.apply else dict(result, status='would-reconstruct')
             result = {key: result[key] for key in ('handle', 'sessionId', 'status', 'scratchpad', 'cwd', 'cwdExists')}
         elif args.command == 'resume':
-            result = resume(exact_handle(args.handle), args.tmux_session, args.dry_run)
+            result = resume(exact_handle(args.handle), args.tmux_session, args.dry_run, args.extension)
         elif args.command == 'retire':
             result = retire(exact_handle(args.handle))
         elif args.command == 'started':

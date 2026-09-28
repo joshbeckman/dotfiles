@@ -252,7 +252,7 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.restore()['status'], 'reconstructed')
         self.assertEqual(snapshot(peer), before)
 
-    def test_empty_and_partial_existing_pads_are_not_repaired(self):
+    def test_empty_pads_are_refused_but_mail_created_lazily_is_valid(self):
         self.pad.mkdir()
         self.refused()
         (self.pad / 'session.md').write_text('Existing unrelated work.\n')
@@ -261,6 +261,11 @@ class SessionTest(unittest.TestCase):
         self.pad.rmdir()
         self.restore()
         (self.pad / 'inbox/cur').rmdir()
+        self.assertEqual(self.call()['status'], 'existing')
+        (self.pad / 'inbox/new').rmdir()
+        (self.pad / 'inbox').rmdir()
+        self.assertEqual(self.call()['status'], 'existing')
+        (self.pad / 'inbox').write_text('not a directory')
         self.refused()
 
     def test_existing_metadata_must_agree(self):
@@ -541,6 +546,9 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
         self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
         self.assertIn('parked.md', plan['command'][9])
+        extension = self.root / 'park ext.ts'
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run', '--extension', str(extension))
+        self.assertTrue(plan['command'][9].startswith(f"pi -e '{extension}' --session {self.transcript} "))
         self.assertEqual(before, snapshot(self.root))
 
     def test_resume_launches_once_then_new_process_marks_awake(self):
