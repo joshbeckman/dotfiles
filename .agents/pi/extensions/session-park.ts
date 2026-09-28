@@ -2,9 +2,6 @@ import { spawnSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-// Not auto-loaded: parking stays opt-in until a live pilot is agreed. Enable per
-// session with `pi -e ~/.agents/pi/optional/session-park.ts`.
-//
 // All parking state lives in bin/agent-session so the lease, records, and
 // resume checks have one implementation. This extension only reports its own
 // process and exposes the park tool.

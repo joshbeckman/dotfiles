@@ -506,6 +506,68 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         return dict(record, status='waking')
 
 
+WAKES_PER_HOUR = 4
+
+
+def unread(pad, human_root):
+    """Unread message names and whether any came from a human."""
+    try:
+        names = sorted(n for n in os.listdir(pad / 'inbox/new') if not n.startswith('.'))
+    except FileNotFoundError:
+        return [], set()
+    humans = {n for n in os.listdir(human_root) if not n.startswith('.')} if human_root.is_dir() else set()
+    from_human = set()
+    for name in names:
+        try:
+            head = (pad / 'inbox/new' / name).read_text(encoding='utf-8', errors='replace')[:4096]
+        except OSError:
+            continue
+        sender = next((line[6:].strip() for line in head.splitlines() if line.startswith('From: ')), '')
+        if sender.removeprefix('@') in humans:
+            from_human.add(name)
+    return names, from_human
+
+
+def wake_mail(tmux_session, dry_run):
+    """Wake at most one parked session per run for mail it has not been woken for."""
+    import subprocess
+    scratch = roots()[2]
+    human_root = absolute(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans'))
+    root = state_root()
+    for path in sorted(root.glob('*.json')):
+        record = load(path) or {}
+        if record.get('state') not in ('parked', 'waking') or not record.get('wake'):
+            continue
+        sid, handle = record['sessionId'], record['handle'][2:]
+        names, from_human = unread(scratch / f'{handle}-{sid[:8]}', human_root)
+        fresh = [n for n in names if n not in record.get('wokeFor', [])]
+        if not fresh:
+            continue
+        cutoff = datetime.now().astimezone().timestamp() - 3600
+        recent = [t for t in record.get('wakes', []) if datetime.fromisoformat(t).timestamp() > cutoff]
+        # Josh's mail bypasses the autonomous budget, matching in-process wakes.
+        if len(recent) >= WAKES_PER_HOUR and not from_human.intersection(fresh):
+            continue
+        if not dry_run and subprocess.run(['tmux', 'has-session', '-t', tmux_session], capture_output=True).returncode:
+            subprocess.run(['tmux', 'new-session', '-d', '-s', tmux_session], check=True, capture_output=True)
+        try:
+            result = resume(handle, tmux_session, dry_run)
+        except ValueError as error:
+            # One session's refusal (pressure, missing cwd) must not hide others' mail.
+            print(f'agent-session: skipped @+{handle}: {error}', file=sys.stderr)
+            if 'memory pressure' in str(error):
+                break
+            continue
+        if not dry_run:
+            with locked(sid):
+                record = load(path)
+                record['wakes'] = recent + [now()]
+                record['wokeFor'] = sorted(set(record.get('wokeFor', [])) | set(fresh))[-200:]
+                save(path, record)
+        return dict(result, messages=fresh)
+    return dict(status='idle')
+
+
 def exact_handle(value):
     if not value.startswith('@+') or not HANDLE.fullmatch(value[2:]):
         raise ValueError('expected an exact @+handle')
@@ -522,9 +584,12 @@ def main():
     command.add_argument('handle')
     command.add_argument('--tmux-session', required=True)
     command.add_argument('--dry-run', action='store_true')
-    # Until session-park is loaded globally, a woken pilot must load it to park again.
+    # For sessions launched without the global extensions directory.
     command.add_argument('--extension', action='append', default=[], help='extra Pi extension to load')
     commands.add_parser('retire', help='never wake this session again').add_argument('handle')
+    command = commands.add_parser('wake-mail', help='wake one parked session with new unread mail (for launchd)')
+    command.add_argument('--tmux-session', required=True)
+    command.add_argument('--dry-run', action='store_true')
     for name in ('started', 'exited', 'park'):
         # Called by the Pi extension for its own process, not by hand.
         command = commands.add_parser(name)
@@ -543,6 +608,10 @@ def main():
             result = {key: result[key] for key in ('handle', 'sessionId', 'status', 'scratchpad', 'cwd', 'cwdExists')}
         elif args.command == 'resume':
             result = resume(exact_handle(args.handle), args.tmux_session, args.dry_run, args.extension)
+        elif args.command == 'wake-mail':
+            result = wake_mail(args.tmux_session, args.dry_run)
+            if result['status'] == 'idle' and not args.json:
+                return 0
         elif args.command == 'retire':
             result = retire(exact_handle(args.handle))
         elif args.command == 'started':

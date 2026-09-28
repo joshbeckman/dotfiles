@@ -598,5 +598,73 @@ class LifecycleTest(unittest.TestCase):
         self.assertIn('scratchpad is missing', self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
 
 
+    def mail(self, sender='fixture-sender-12345678', name=None):
+        inbox = self.pad / 'inbox/new'
+        inbox.mkdir(parents=True, exist_ok=True)
+        name = name or f'{len(list(inbox.iterdir())):03d}-message.md'
+        (inbox / name).write_text(f'From: {sender}\nTo: {HANDLE}\nSubject: fixture\n\nBody.\n')
+        return name
+
+    def wake(self, expected=0):
+        return self.run_cli('wake-mail', '--tmux-session', 'agents', expected=expected)
+
+    def launches(self):
+        return sum(line.startswith('new-window') for line in self.tmux_log.read_text().splitlines()) if self.tmux_log.exists() else 0
+
+    def test_watcher_wakes_once_per_new_message(self):
+        self.parked()
+        self.assertEqual(self.wake()['status'], 'idle')
+        first = self.mail()
+        woken = self.wake()
+        self.assertEqual((woken['status'], woken['messages']), ('waking', [first]))
+        self.assertEqual(self.record()['wokeFor'], [first])
+        self.assertEqual(len(self.record()['wakes']), 1)
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.park()
+        self.run_cli('exited', SID, '--pid', str(self.live))
+        self.assertEqual(self.wake()['status'], 'idle')
+        self.mail()
+        self.assertEqual(self.wake()['status'], 'waking')
+        self.assertEqual(self.launches(), 2)
+
+    def test_watcher_budget_exempts_human_mail(self):
+        (self.root / 'humans/josh').mkdir()
+        self.parked()
+        record = self.record()
+        record['wakes'] = [API['now']()] * 4
+        (self.state / f'{SID}.json').write_text(json.dumps(record))
+        self.mail()
+        self.assertEqual(self.wake()['status'], 'idle')
+        self.mail(sender='josh')
+        self.assertEqual(self.wake()['status'], 'waking')
+        self.assertEqual(self.launches(), 1)
+
+    def test_watcher_skips_retired_running_and_high_pressure(self):
+        self.parked()
+        self.mail()
+        self.env['PRESSURE'] = '2'
+        self.assertEqual(self.wake()['status'], 'idle')
+        self.env.pop('PRESSURE')
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual(self.wake()['status'], 'idle')
+        self.run_cli('exited', SID, '--pid', str(self.live))
+        self.run_cli('retire', '@+' + HANDLE)
+        self.assertEqual(self.wake()['status'], 'idle')
+        self.assertEqual(self.launches(), 0)
+
+    def test_watcher_creates_missing_tmux_session_and_dry_run_changes_nothing(self):
+        self.parked()
+        self.mail()
+        before = snapshot(self.root)
+        self.assertEqual(self.run_cli('wake-mail', '--tmux-session', 'agents', '--dry-run')['status'], 'would-wake')
+        self.assertEqual(before, snapshot(self.root))
+        self.env['TMUX_HAS'] = '1'
+        self.stub('tmux', '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TMUX_LOG"\n'
+                  'if [ "$1" = has-session ]; then [ -e "$TMUX_LOG.created" ]; exit; fi\n'
+                  '[ "$1" = new-session ] && touch "$TMUX_LOG.created"\nexit 0\n')
+        self.assertEqual(self.wake()['status'], 'waking')
+        self.assertIn('new-session -d -s agents', self.tmux_log.read_text())
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
