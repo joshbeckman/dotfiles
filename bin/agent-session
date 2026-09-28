@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""Change agent session lifecycle state; `agent-find @+handle` is the read-only view.
+
+repair-inbox validates retained identity evidence, then previews or explicitly
+reconstructs an empty inbox. No liveness inference, transcript hydration, or execution.
+A killed --apply can leave a hidden .agent-session-* staging directory in the
+scratchpad root; it is never published and can be removed by hand.
+Roots must already exist, be absolute, and contain no symlink components.
+"""
+import argparse
+from contextlib import contextmanager
+import ctypes
+from datetime import datetime
+import errno
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import sys
+import uuid
+
+
+UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+HANDLE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+LIMIT = 65536
+DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def absolute(value, expand=True):
+    # Header-derived paths are stored verbatim, so a `~` there must not be reinterpreted.
+    value = os.path.expanduser(value) if expand else value
+    if (not value.startswith('/') or any(ord(c) < 32 or ord(c) == 127 for c in value)
+            or value.splitlines() != [value]
+            or any(part in ('.', '..') for part in value.split('/'))):
+        raise ValueError(f'unsafe absolute path: {value!r}')
+    return Path(value)
+
+
+@contextmanager
+def directory(path):
+    # Component-wise opens pin directories, rather than check then follow a link.
+    fd = os.open('/', DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            child = os.open(part, DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        yield fd
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def child_directory(fd, name):
+    child = os.open(name, DIRECTORY, dir_fd=fd)
+    try:
+        yield child
+    finally:
+        os.close(child)
+
+
+def read_bounded(fd, name, first_line=False, limit=LIMIT):
+    file = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    with os.fdopen(file, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError(f'not a regular file: {name}')
+        data = stream.readline(limit + 1) if first_line else stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f'metadata exceeds {limit} bytes: {name}')
+    return data.decode('utf-8')
+
+
+def unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'duplicate JSON key: {key}')
+        result[key] = value
+    return result
+
+
+def identity(fd, handle):
+    sid = read_bounded(fd, handle, limit=128).rstrip('\n')
+    if not UUID.fullmatch(sid):
+        raise ValueError('identity claim must contain one complete UUID')
+    for name in os.listdir(fd):
+        if name.startswith('.') or name == handle:
+            continue
+        other = read_bounded(fd, name, limit=128).rstrip('\n')
+        if other.lower() == sid.lower():
+            raise ValueError(f'ambiguous identity: {handle} and {name}')
+    return sid
+
+
+def transcripts(fd, prefix=Path()):
+    for name in sorted(os.listdir(fd)):
+        mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
+        if stat.S_ISLNK(mode):
+            raise ValueError(f'linked session evidence: {prefix / name}')
+        if stat.S_ISDIR(mode):
+            with child_directory(fd, name) as child:
+                yield from transcripts(child, prefix / name)
+        elif name.endswith('.jsonl'):
+            header = json.loads(read_bounded(fd, name, first_line=True), object_pairs_hook=unique_keys)
+            if not isinstance(header, dict) or header.get('type') != 'session':
+                raise ValueError(f'invalid session header: {prefix / name}')
+            yield prefix / name, header
+
+
+def retained_session(fd, sid):
+    matches = []
+    for path, header in transcripts(fd):
+        file_id = path.stem.rpartition('_')[2]
+        header_id = header.get('id')
+        if sid.lower() not in (file_id.lower(), header_id.lower() if isinstance(header_id, str) else ''):
+            continue
+        if not isinstance(header_id, str) or not UUID.fullmatch(header_id):
+            raise ValueError(f'invalid header UUID: {path}')
+        if file_id != sid or header_id != sid:
+            raise ValueError(f'header/filename/registry UUID mismatch: {path}')
+        version = header.get('version', 1)
+        if type(version) is not int or version not in (1, 2, 3):
+            raise ValueError(f'unsupported session version: {path}')
+        timestamp = header.get('timestamp')
+        if not isinstance(timestamp, str):
+            raise ValueError(f'missing session timestamp: {path}')
+        parsed = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        if parsed.tzinfo is None or path.name != f"{timestamp.replace(':', '-').replace('.', '-')}_{sid}.jsonl":
+            raise ValueError(f'header/filename timestamp mismatch: {path}')
+        cwd = header.get('cwd')
+        if not isinstance(cwd, str):
+            raise ValueError(f'missing session cwd: {path}')
+        absolute(cwd, expand=False)
+        matches.append((path, header))
+    if len(matches) != 1:
+        raise ValueError(f'expected exactly one retained transcript; found {len(matches)}')
+    return matches[0]
+
+
+def pad_state(fd, handle, sid, session_file, cwd):
+    canonical = f'{handle}-{sid[:8]}'
+    bases = {handle, handle.rpartition('-of-')[0] or handle}
+    candidates = []
+    for name in os.listdir(fd):
+        if (any(name == base or name.startswith(base + '-') for base in bases)
+                or name.endswith('-' + sid)):
+            candidates.append(name)
+    if not candidates:
+        return 'missing'
+    if candidates != [canonical]:
+        raise ValueError(f'conflicting scratchpads/aliases: {sorted(candidates)}')
+    with child_directory(fd, canonical) as pad:
+        text = read_bounded(pad, 'session.md')
+        for key, value in [('session', sid), ('session file', str(session_file)), ('cwd', cwd)]:
+            values = [line[len(key) + 4:] for line in text.splitlines() if line.startswith(f'- {key}: ')]
+            if values != [value]:
+                raise ValueError(f'existing session.md has conflicting {key} metadata')
+        with child_directory(pad, 'inbox') as inbox:
+            for name in ('new', 'cur'):
+                with child_directory(inbox, name):
+                    pass
+    return 'existing'
+
+
+def roots():
+    scratch = absolute(os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))
+    mail = absolute(os.environ.get('AGENT_MAIL_ROOT', str(scratch)))
+    if mail != scratch:
+        raise ValueError('AGENT_MAIL_ROOT and AGENT_SCRATCH_ROOT must agree for this command')
+    return (absolute(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')),
+            absolute(os.environ.get('PI_SESSIONS_DIR', '~/.pi/agent/sessions')), scratch)
+
+
+def collect_evidence(handle, registry, sessions, scratch):
+    with directory(registry) as claims:
+        sid = identity(claims, handle)
+    with directory(sessions) as retained:
+        path, header = retained_session(retained, sid)
+    session_file = absolute(str(sessions / path), expand=False)
+    cwd = header['cwd']
+    try:
+        with directory(absolute(cwd, expand=False)):
+            cwd_exists = True
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        # macOS reports O_NOFOLLOW|O_DIRECTORY on a link as ENOTDIR; links remain refused.
+        if any(os.path.islink(p) for p in (cwd, *map(str, Path(cwd).parents))):
+            raise ValueError(f'linked session cwd: {cwd}')
+        cwd_exists = False
+    with directory(scratch) as pads:
+        status = pad_state(pads, handle, sid, session_file, cwd)
+    pad = scratch / f'{handle}-{sid[:8]}'
+    return dict(handle='@+' + handle, sessionId=sid, sessionFile=str(session_file),
+                version=header.get('version', 1), timestamp=header['timestamp'], cwd=cwd,
+                cwdExists=cwd_exists, scratchpad=str(pad), inbox=str(pad / 'inbox'),
+                status=status)
+
+
+def publisher():
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == 'darwin':
+        # macOS SDK sys/stdio.h: RENAME_EXCL = 0x00000004 (including directories).
+        function, flag = getattr(libc, 'renameatx_np', None), 4
+    elif sys.platform.startswith('linux'):
+        # Linux renameat2(2): RENAME_NOREPLACE = (1 << 0).
+        function, flag = getattr(libc, 'renameat2', None), 1
+    else:
+        function = None
+    if function is None or not shutil.rmtree.avoids_symlink_attacks:
+        raise ValueError('safe no-clobber directory publication is unsupported on this platform')
+    function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    function.restype = ctypes.c_int
+
+    def publish(source_fd, source, target_fd, target):
+        if function(source_fd, os.fsencode(source), target_fd, os.fsencode(target), flag):
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), target)
+    return publish
+
+
+def repair(handle, locations, evidence):
+    publish = publisher()
+
+    def recheck():
+        current = collect_evidence(handle, *locations)
+        if dict(current, status=evidence['status']) != evidence:
+            raise ValueError('session evidence changed during repair; retry inspection')
+        return current
+
+    scratch = locations[2]
+    canonical = Path(evidence['scratchpad']).name
+    with directory(scratch) as root:
+        info = os.fstat(root)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('repair requires an owned, private scratchpad root (mode 0700)')
+        # Existing prune discovery looks for session.md directly below the root.
+        stage = '.agent-session-' + uuid.uuid4().hex
+        os.mkdir(stage, 0o700, dir_fd=root)
+        try:
+            with child_directory(root, stage) as holder:
+                os.mkdir('ready', 0o700, dir_fd=holder)
+                with child_directory(holder, 'ready') as pad:
+                    os.mkdir('inbox', 0o700, dir_fd=pad)
+                    with child_directory(pad, 'inbox') as inbox:
+                        os.mkdir('new', 0o700, dir_fd=inbox)
+                        os.mkdir('cur', 0o700, dir_fd=inbox)
+                    # No invented display name: recoverName treats a '# ' heading as an assignment.
+                    text = ('Empty reconstruction by agent-session. No messages or notes were recovered.\n'
+                            'No heartbeat, live process, or authorization to execute is implied.\n\n'
+                            f"- handle: {evidence['handle']}\n- session: {evidence['sessionId']}\n"
+                            f"- session file: {evidence['sessionFile']}\n- cwd: {evidence['cwd']}\n")
+                    file = os.open('session.md', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=pad)
+                    with os.fdopen(file, 'w', encoding='utf-8') as stream:
+                        stream.write(text)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    # A crash must not publish a pad whose metadata was never written.
+                    with child_directory(pad, 'inbox') as inbox:
+                        for name in ('new', 'cur'):
+                            with child_directory(inbox, name) as synced:
+                                os.fsync(synced)
+                        os.fsync(inbox)
+                    os.fsync(pad)
+                current = recheck()
+                if current['status'] == 'existing':
+                    return current
+                with directory(scratch) as current_root:
+                    if not os.path.samestat(info, os.fstat(current_root)):
+                        raise ValueError('scratchpad root changed during repair')
+                # Startup/pruning do not share a lock. EXCL prevents replacing even an
+                # empty destination; it cannot serialize concurrent alias creation or prune.
+                try:
+                    publish(holder, 'ready', root, canonical)
+                    os.fsync(root)
+                except OSError as error:
+                    if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                        raise
+                    current = recheck()
+                    if current['status'] != 'existing':
+                        raise ValueError('competing destination disappeared during repair')
+                    return current
+        finally:
+            shutil.rmtree(stage, dir_fd=root)
+    try:
+        result = recheck()
+    except ValueError as error:
+        raise ValueError(f"published {evidence['scratchpad']}, but {error}; rerun to verify") from error
+    if result['status'] != 'existing':
+        raise ValueError('published pad disappeared; concurrent pruning may be active')
+    result['status'] = 'reconstructed'
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    command = commands.add_parser('repair-inbox', help='preview or reconstruct a missing empty inbox')
+    command.add_argument('handle', help='exact registered @+handle; aliases are not resolved')
+    command.add_argument('--json', action='store_true')
+    command.add_argument('--apply', action='store_true', help='publish an empty private pad without replacing anything')
+    args = parser.parse_args()
+    try:
+        if not args.handle.startswith('@+') or not HANDLE.fullmatch(args.handle[2:]):
+            raise ValueError('expected an exact @+handle')
+        handle = args.handle[2:]
+        locations = roots()
+        result = collect_evidence(handle, *locations)
+        if result['status'] == 'missing':
+            result = repair(handle, locations, result) if args.apply else dict(result, status='would-reconstruct')
+        result = {key: result[key] for key in ('handle', 'sessionId', 'status', 'scratchpad', 'cwd', 'cwdExists')}
+        if args.json:
+            print(json.dumps(result, sort_keys=True))
+        else:
+            for key, value in result.items():
+                print(f'{key}: {value}')
+        return 0
+    except (OSError, ValueError, RecursionError) as error:
+        print(f'agent-session: {error}', file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

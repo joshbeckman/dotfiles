@@ -1,0 +1,461 @@
+#!/usr/bin/env python3
+"""Isolated tests; never address a real identity, mailbox, or Pi process."""
+import errno
+import json
+import os
+from pathlib import Path
+import runpy
+import stat
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+REPO = Path(__file__).resolve().parents[1]
+CLI = REPO / 'bin/agent-session'
+API = runpy.run_path(str(CLI))
+HANDLE = 'fixture-farrier-of-test'
+SID = '12345678-1234-4321-8765-123456789abc'
+OTHER = '87654321-1234-4321-8765-123456789abc'
+TIMESTAMP = '2026-01-02T03:04:05.678Z'
+
+
+def snapshot(root):
+    result = {}
+    for path in [root, *sorted(root.rglob('*'))]:
+        info = path.lstat()
+        content = os.readlink(path) if path.is_symlink() else path.read_bytes() if path.is_file() else None
+        result[str(path.relative_to(root))] = (info.st_ino, info.st_mode, info.st_mtime_ns,
+                                              info.st_ctime_ns, content)
+    return result
+
+
+class SessionTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='agent-session-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.claims = self.root / 'identities/by-name'
+        self.sessions = self.root / 'sessions'
+        self.pads = self.root / 'pads'
+        self.cwd = self.root / 'project'
+        for path in (self.claims, self.sessions / '--project--', self.pads, self.cwd,
+                     self.root / 'home', self.root / 'humans', self.root / 'teams'):
+            path.mkdir(parents=True, mode=0o700)
+        self.claim = self.claims / HANDLE
+        self.claim.write_text(SID + '\n')
+        self.header = dict(type='session', version=3, id=SID, timestamp=TIMESTAMP, cwd=str(self.cwd))
+        filename = TIMESTAMP.replace(':', '-').replace('.', '-') + '_' + SID + '.jsonl'
+        self.transcript = self.sessions / '--project--' / filename
+        self.save_header()
+        self.pad = self.pads / (HANDLE + '-' + SID[:8])
+        self.env = {key: value for key, value in os.environ.items()
+                    if not key.startswith(('AGENT_', 'PI_', 'XDG_'))}
+        self.env.update(HOME=str(self.root / 'home'), AGENT_IDENTITIES_DIR=str(self.claims),
+                        PI_SESSIONS_DIR=str(self.sessions), AGENT_SCRATCH_ROOT=str(self.pads),
+                        AGENT_MAIL_ROOT=str(self.pads), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'),
+                        AGENT_TEAM_ROOT=str(self.root / 'teams'), PYTHONDONTWRITEBYTECODE='1')
+
+    def save_header(self, body=b'{"type":"message","fixture":true}\n'):
+        self.transcript.write_bytes(json.dumps(self.header).encode() + b'\n' + body)
+
+    def call(self, command='repair-inbox', *options, handle='@+' + HANDLE, expected=0):
+        result = subprocess.run([str(CLI), command, handle, *options, '--json'], env=self.env,
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, expected, result.stderr)
+        return json.loads(result.stdout) if expected == 0 else result.stderr
+
+    def refused(self, **kwargs):
+        before = snapshot(self.root)
+        error = self.call('repair-inbox', '--apply', expected=2, **kwargs)
+        self.assertEqual(before, snapshot(self.root))
+        return error
+
+    def restore(self):
+        return self.call('repair-inbox', '--apply')
+
+    def test_preview_is_read_only_and_reports_only_repair_state(self):
+        before = snapshot(self.root)
+        info = self.call()
+        self.assertEqual(info, {'handle': '@+' + HANDLE, 'sessionId': SID, 'status': 'would-reconstruct',
+                                'scratchpad': str(self.pad), 'cwd': str(self.cwd), 'cwdExists': True})
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_read_only_inspection_belongs_to_agent_find(self):
+        result = subprocess.run([str(CLI), 'inspect', '@+' + HANDLE], env=self.env,
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('invalid choice', result.stderr)
+
+    def test_reconstruction_private_minimal_and_preserves_evidence(self):
+        before_claims, before_sessions = snapshot(self.claims), snapshot(self.sessions)
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+        expected = {'session.md', 'inbox', 'inbox/new', 'inbox/cur'}
+        self.assertEqual({str(p.relative_to(self.pad)) for p in self.pad.rglob('*')}, expected)
+        for path in [self.pad, *self.pad.rglob('*')]:
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
+        text = (self.pad / 'session.md').read_text()
+        self.assertIn('Empty reconstruction', text)
+        self.assertIn('No messages or notes were recovered.', text)
+        self.assertNotIn('# ', text)
+        self.assertNotIn('- started:', text)
+        self.assertNotIn('- git:', text)
+        self.assertEqual(before_claims, snapshot(self.claims))
+        self.assertEqual(before_sessions, snapshot(self.sessions))
+
+    def test_idempotence_preserves_existing_notes_messages_and_permissions(self):
+        self.restore()
+        (self.pad / 'notes.md').write_text('Keep my work.\n')
+        (self.pad / 'inbox/new/original.md').write_text('Original message.\n')
+        (self.pad / 'session.md').chmod(0o640)
+        before = snapshot(self.root)
+        self.assertEqual(self.restore()['status'], 'existing')
+        self.assertEqual(self.call()['status'], 'existing')
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_existing_startup_metadata_is_accepted_without_modification(self):
+        self.restore()
+        (self.pad / 'session.md').write_text(
+            '# Fixture Farrier of Test\n\n' + f'- session: {SID}\n'
+            f'- session file: {self.transcript}\n- cwd: {self.cwd}\n'
+            '- git: main\n- started: 2026-01-02T03:05:00.000Z\n')
+        before = snapshot(self.root)
+        self.assertEqual(self.restore()['status'], 'existing')
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_missing_cwd_is_not_recreated(self):
+        self.cwd.rmdir()
+        self.assertFalse(self.call()['cwdExists'])
+        self.assertFalse(self.restore()['cwdExists'])
+        self.assertFalse(self.cwd.exists())
+        self.assertEqual(self.transcript.read_bytes().splitlines()[0], json.dumps(self.header).encode())
+
+    def test_unusable_cwd_is_reported_without_blocking_repair(self):
+        self.cwd.rmdir()
+        self.cwd.write_text('not a directory')
+        self.assertFalse(self.call()['cwdExists'])
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+
+    def test_home_relative_header_cwd_is_refused(self):
+        self.header['cwd'] = '~/project'
+        self.save_header()
+        self.assertIn('unsafe absolute path', self.refused())
+
+    def test_non_ascii_metadata_round_trips_under_c_locale(self):
+        project = self.root / 'caf\u00e9 project'
+        project.mkdir()
+        self.header['cwd'] = str(project)
+        self.save_header()
+        self.env.update(LC_ALL='C', LANG='C', PYTHONUTF8='0', PYTHONIOENCODING='ascii:backslashreplace')
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+        self.assertIn(str(project), (self.pad / 'session.md').read_text(encoding='utf-8'))
+        self.assertEqual(self.restore()['status'], 'existing')
+
+    def test_body_is_not_parsed_or_hydrated(self):
+        self.save_header(b'not JSON\n' + b'x' * 2_000_000)
+        self.assertEqual(self.call()['sessionId'], SID)
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+
+    def test_legacy_documented_header_versions(self):
+        for version in (None, 1, 2, 3):
+            with self.subTest(version=version):
+                self.header.pop('version', None)
+                if version is not None:
+                    self.header['version'] = version
+                self.save_header()
+                self.assertEqual(self.call()['status'], 'would-reconstruct')
+
+    def test_unknown_invalid_and_alias_handles(self):
+        for handle in ('@+unknown', HANDLE, '@' + HANDLE, '@+../escape', '@+foo/bar',
+                       '@+foo\nbar', '@+fixture-farrier', '@+' + HANDLE + '-' + SID[:8]):
+            with self.subTest(handle=handle):
+                self.refused(handle=handle)
+
+    def test_malformed_registry_uuid_and_duplicate_claim(self):
+        for sid in (SID[:8], '1234-1234', '../escape', SID + '\n' + OTHER, 'subagent:' + SID):
+            with self.subTest(sid=sid):
+                self.claim.write_text(sid + '\n')
+                self.assertIn('complete UUID', self.refused())
+        self.claim.write_text(SID + '\n')
+        (self.claims / 'second-identity').write_text(SID.upper() + '\n')
+        self.assertIn('ambiguous identity', self.refused())
+
+    def test_unrelated_synthetic_child_claim_does_not_block_inspection(self):
+        (self.claims / 'child-fixture').write_text('subagent:' + OTHER + '\n')
+        self.assertEqual(self.call()['status'], 'would-reconstruct')
+
+    def test_unrelated_synthetic_transcript_does_not_block_inspection(self):
+        fixture = self.sessions / 'scratchpad-smoke-1.jsonl'
+        fixture.write_text(json.dumps(dict(self.header, id='scratchpad-smoke-1')) + '\n')
+        self.assertEqual(self.call()['status'], 'would-reconstruct')
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+
+    def test_existing_artifact_links_are_not_traversed_or_changed(self):
+        self.restore()
+        (self.pad / 'notes-link').symlink_to(self.root / 'outside')
+        (self.pad / 'parent-link').symlink_to(self.pad, target_is_directory=True)
+        before = snapshot(self.root)
+        self.assertEqual(self.call()['status'], 'existing')
+        self.assertEqual(self.restore()['status'], 'existing')
+        self.assertEqual(snapshot(self.root), before)
+
+    def test_header_registry_filename_mismatches(self):
+        for key, value in (('id', OTHER), ('id', SID[:8]), ('type', 'message'), ('version', 4),
+                           ('version', True), ('timestamp', 'not-a-date'), ('timestamp', '2026-01-03T03:04:05.678Z'),
+                           ('cwd', '../escape'), ('cwd', str(self.cwd) + '/../../escape')):
+            with self.subTest(key=key, value=value):
+                original = self.header[key]
+                self.header[key] = value
+                self.save_header()
+                self.refused()
+                self.header[key] = original
+        self.save_header()
+        renamed = self.transcript.with_name(self.transcript.name.replace(SID, OTHER))
+        self.transcript.rename(renamed)
+        self.assertIn('mismatch', self.refused())
+
+    def test_duplicate_and_missing_transcripts(self):
+        other_dir = self.sessions / '--other--'
+        other_dir.mkdir()
+        duplicate = other_dir / self.transcript.name
+        duplicate.write_bytes(self.transcript.read_bytes())
+        self.assertIn('found 2', self.refused())
+        duplicate.unlink()
+        self.transcript.unlink()
+        self.assertIn('found 0', self.refused())
+
+    def test_malformed_duplicate_key_and_oversized_headers(self):
+        for data in (b'not json\n', b'[]\n', b'{"type":"session","type":"message"}\n', b'x' * 65537 + b'\n'):
+            with self.subTest(size=len(data)):
+                self.transcript.write_bytes(data)
+                self.refused()
+
+    def test_conflicting_alias_pads_are_never_modified(self):
+        for name in (HANDLE, 'fixture-farrier-' + SID[:8], HANDLE + '-' + SID,
+                     HANDLE + '-deadbeef', 'other-name-' + SID):
+            with self.subTest(name=name):
+                alias = self.pads / name
+                alias.mkdir()
+                self.assertIn('conflicting', self.refused())
+                alias.rmdir()
+        self.restore()
+        (self.pads / ('fixture-farrier-' + SID)).mkdir()
+        self.assertIn('conflicting', self.refused())
+
+    def test_distinct_agents_can_share_a_short_uuid_prefix(self):
+        peer = self.pads / ('other-agent-of-test-' + SID[:8])
+        peer.mkdir()
+        (peer / 'notes.md').write_text('Unrelated work sharing a timestamp prefix.\n')
+        before = snapshot(peer)
+        self.assertEqual(self.call()['status'], 'would-reconstruct')
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+        self.assertEqual(snapshot(peer), before)
+
+    def test_empty_and_partial_existing_pads_are_not_repaired(self):
+        self.pad.mkdir()
+        self.refused()
+        (self.pad / 'session.md').write_text('Existing unrelated work.\n')
+        self.refused()
+        (self.pad / 'session.md').unlink()
+        self.pad.rmdir()
+        self.restore()
+        (self.pad / 'inbox/cur').rmdir()
+        self.refused()
+
+    def test_existing_metadata_must_agree(self):
+        self.restore()
+        metadata = self.pad / 'session.md'
+        original = metadata.read_text()
+        for text in (original.replace(SID, OTHER), original + f'\n- session: {SID}\n',
+                     original.replace(str(self.cwd), '/missing/project')):
+            with self.subTest(text=text):
+                metadata.write_text(text)
+                self.refused()
+
+    def test_symlinks_are_not_followed(self):
+        for path in (self.claim, self.transcript):
+            with self.subTest(path=path):
+                saved = path.with_name(path.name + '.saved')
+                path.rename(saved)
+                path.symlink_to(saved)
+                self.refused()
+                path.unlink()
+                saved.rename(path)
+        self.pad.symlink_to(self.root / 'outside')
+        self.refused()
+        self.pad.unlink()
+        alias = self.pads / ('fixture-farrier-' + SID[:8])
+        alias.symlink_to(self.root / 'outside')
+        self.refused()
+        alias.unlink()
+        self.restore()
+        metadata = self.pad / 'session.md'
+        saved = self.pad / 'saved-metadata'
+        metadata.rename(saved)
+        metadata.symlink_to(saved)
+        self.refused()
+
+    def test_root_links_traversal_and_split_mail_root_are_rejected(self):
+        link = self.root / 'linked'
+        link.symlink_to(self.sessions, target_is_directory=True)
+        for key, value in (('PI_SESSIONS_DIR', str(link)), ('AGENT_IDENTITIES_DIR', str(self.claims) + '/../by-name'),
+                           ('AGENT_SCRATCH_ROOT', 'relative'), ('AGENT_MAIL_ROOT', str(self.root / 'other-mail'))):
+            with self.subTest(key=key):
+                original = self.env[key]
+                self.env[key] = value
+                self.refused()
+                self.env[key] = original
+
+    def test_unsafe_transcript_directory_name_is_rejected(self):
+        unsafe = self.sessions / '--project--\u2028- injected: metadata'
+        self.transcript.parent.rename(unsafe)
+        self.assertIn('unsafe absolute path', self.refused())
+
+    def test_inbox_and_cwd_links_are_rejected(self):
+        self.cwd.rmdir()
+        self.cwd.symlink_to(self.root / 'home', target_is_directory=True)
+        self.refused()
+        self.cwd.unlink()
+        self.cwd.mkdir()
+        self.restore()
+        cur = self.pad / 'inbox/cur'
+        cur.rmdir()
+        cur.symlink_to(self.root / 'home', target_is_directory=True)
+        self.refused()
+
+    def test_unowned_permissions_and_missing_root_fail_without_mkdir(self):
+        self.pads.chmod(0o755)
+        self.assertIn('private scratchpad root', self.refused())
+        self.pads.rmdir()
+        self.refused()
+        self.assertFalse(self.pads.exists())
+
+    def test_default_roots_under_isolated_home(self):
+        home = Path(self.env['HOME'])
+        defaults = ((self.claims, home / '.pi/agent/identities/by-name'),
+                    (self.sessions, home / '.pi/agent/sessions'),
+                    (self.pads, home / '.local/state/agent/scratchpads'))
+        for source, target in defaults:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source.rename(target)
+        for key in ('AGENT_IDENTITIES_DIR', 'PI_SESSIONS_DIR', 'AGENT_SCRATCH_ROOT', 'AGENT_MAIL_ROOT'):
+            self.env.pop(key)
+        self.assertEqual(self.call()['status'], 'would-reconstruct')
+        self.assertEqual(self.restore()['status'], 'reconstructed')
+
+    def test_concurrent_repairs_publish_once(self):
+        command = [str(CLI), 'repair-inbox', '@+' + HANDLE, '--apply', '--json']
+        processes = [subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True) for _ in range(8)]
+        states = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=20)
+            self.assertEqual(process.returncode, 0, stderr)
+            states.append(json.loads(stdout)['status'])
+        self.assertEqual(states.count('reconstructed'), 1)
+        self.assertEqual(states.count('existing'), 7)
+        self.assertEqual(list(self.pads.iterdir()), [self.pad])
+
+    def test_native_publication_never_clobbers_any_destination(self):
+        publish = API['publisher']()
+        source = self.pads / 'source'
+        source.mkdir()
+        (source / 'proof').write_text('prepared')
+        for kind in ('empty', 'nonempty', 'file', 'link'):
+            with self.subTest(kind=kind):
+                target = self.pads / kind
+                if kind == 'file':
+                    target.write_text('keep')
+                elif kind == 'link':
+                    target.symlink_to(self.root / 'outside')
+                else:
+                    target.mkdir()
+                    if kind == 'nonempty':
+                        (target / 'proof').write_text('keep')
+                before = snapshot(self.root)
+                with API['directory'](self.pads) as fd:
+                    with self.assertRaises(OSError) as error:
+                        publish(fd, 'source', fd, kind)
+                self.assertIn(error.exception.errno, (errno.EEXIST, errno.ENOTEMPTY))
+                self.assertEqual(before, snapshot(self.root))
+
+    def test_startup_winning_publication_race_is_not_overwritten(self):
+        real_publisher = API['publisher']()
+        captured = []
+
+        def publisher():
+            def publish(*args):
+                self.pad.mkdir()
+                captured.append(self.pad.stat().st_ino)
+                real_publisher(*args)
+            return publish
+
+        with patch.dict(os.environ, self.env, clear=True), patch.dict(API['repair'].__globals__, publisher=publisher):
+            locations = API['roots']()
+            evidence = API['collect_evidence'](HANDLE, *locations)
+            with self.assertRaises(OSError):
+                API['repair'](HANDLE, locations, evidence)
+        self.assertEqual(self.pad.stat().st_ino, captured[0])
+        self.assertEqual(list(self.pad.iterdir()), [])
+        self.assertEqual(list(self.pads.iterdir()), [self.pad])
+
+    def test_changed_evidence_aborts_and_removes_only_own_staging(self):
+        with patch.dict(os.environ, self.env, clear=True):
+            locations = API['roots']()
+            evidence = API['collect_evidence'](HANDLE, *locations)
+            real_inspect = API['collect_evidence']
+
+            def changed_inspect(*args):
+                self.header['cwd'] = str(self.root / 'another-missing-project')
+                self.save_header()
+                return real_inspect(*args)
+
+            with patch.dict(API['repair'].__globals__, collect_evidence=changed_inspect):
+                with self.assertRaisesRegex(ValueError, 'evidence changed'):
+                    API['repair'](HANDLE, locations, evidence)
+        self.assertEqual(list(self.pads.iterdir()), [])
+
+    def test_root_replacement_aborts_without_publishing_to_either_root(self):
+        with patch.dict(os.environ, self.env, clear=True):
+            locations = API['roots']()
+            evidence = API['collect_evidence'](HANDLE, *locations)
+            real_inspect = API['collect_evidence']
+            moved = self.root / 'moved-pads'
+
+            def changed_inspect(*args):
+                result = real_inspect(*args)
+                self.pads.rename(moved)
+                self.pads.mkdir(mode=0o700)
+                return result
+
+            with patch.dict(API['repair'].__globals__, collect_evidence=changed_inspect):
+                with self.assertRaisesRegex(ValueError, 'root changed'):
+                    API['repair'](HANDLE, locations, evidence)
+        self.assertEqual(list(self.pads.iterdir()), [])
+        self.assertEqual(list(moved.iterdir()), [])
+
+    def test_real_mail_delivery_to_synthetic_restored_pad(self):
+        stub = self.root / 'bin'
+        stub.mkdir()
+        notify = stub / 'notify-josh'
+        notify.write_text('#!/bin/sh\nexit 93\n')
+        notify.chmod(0o700)
+        self.env['PATH'] = str(stub) + os.pathsep + self.env['PATH']
+        self.restore()
+        claims, sessions = snapshot(self.claims), snapshot(self.sessions)
+        result = subprocess.run([str(REPO / 'bin/agent-mail'), 'send', '--from', 'fixture-sender',
+                                 '--to', '@+' + HANDLE, '--subject', 'Synthetic restoration',
+                                 '--body', 'Isolated delivery only.'], env=self.env,
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        messages = list((self.pad / 'inbox/new').iterdir())
+        self.assertEqual(len(messages), 1)
+        self.assertIn('Isolated delivery only.', messages[0].read_text())
+        self.assertEqual(claims, snapshot(self.claims))
+        self.assertEqual(sessions, snapshot(self.sessions))
+        self.assertEqual(self.call()['status'], 'existing')
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
