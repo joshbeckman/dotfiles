@@ -33,6 +33,18 @@ type NameContext = {
 	sessionManager: { getSessionId: () => string | undefined; getSessionFile: () => string | undefined };
 };
 
+// A package update can remove the directory inherited by a long-running Pi
+// process. Leaving the dead override in child env makes every headless spawn
+// crash before extensions load; without it, Pi uses its bundled resources.
+function dropDeadPackageDir() {
+	if (!process.env.PI_PACKAGE_DIR) return;
+	try {
+		statSync(process.env.PI_PACKAGE_DIR);
+	} catch {
+		delete process.env.PI_PACKAGE_DIR;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	let name: string | undefined;
 	let realm: string | undefined;
@@ -49,16 +61,7 @@ export default function (pi: ExtensionAPI) {
 	const announced = new Set<string>();
 
 	pi.on("session_start", (_event, ctx: NameContext) => {
-		// A package update can remove the directory inherited by a months-old Pi
-		// process. Leaving the dead override in child env makes every headless spawn
-		// crash before extensions load; without it, Pi uses its bundled resources.
-		if (process.env.PI_PACKAGE_DIR) {
-			try {
-				statSync(process.env.PI_PACKAGE_DIR);
-			} catch {
-				delete process.env.PI_PACKAGE_DIR;
-			}
-		}
+		dropDeadPackageDir();
 
 		const preferredSurname = inheritedSurname;
 		inheritedSurname = undefined; // applies only to the first session in this child process, never /new
@@ -121,6 +124,14 @@ export default function (pi: ExtensionAPI) {
 	// tool calls would otherwise look idle and get "woken" mid-stride.
 	pi.on("tool_call", () => {
 		activeAt = Date.now();
+		// The launcher can prune this session's package link while it is still
+		// running, so a check at session start alone misses later child spawns.
+		dropDeadPackageDir();
+		return undefined;
+	});
+
+	pi.on("user_bash", () => {
+		dropDeadPackageDir();
 		return undefined;
 	});
 
