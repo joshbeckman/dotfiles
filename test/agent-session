@@ -457,5 +457,138 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.call()['status'], 'existing')
 
 
+
+class LifecycleTest(unittest.TestCase):
+    # Borrow fixtures without rerunning every SessionTest case.
+    save_header, call, restore = SessionTest.save_header, SessionTest.call, SessionTest.restore
+
+    def setUp(self):
+        SessionTest.setUp(self)
+        self.state = self.root / 'state'
+        self.bin = self.root / 'stub-bin'
+        self.bin.mkdir()
+        self.tmux_log = self.root / 'tmux.log'
+        self.stub('tmux', '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TMUX_LOG"\n[ "$1" = has-session ] && exit "${TMUX_HAS:-0}"\nexit "${TMUX_FAIL:-0}"\n')
+        self.stub('sysctl', '#!/bin/sh\necho "${PRESSURE:-1}"\n')
+        self.env.update(AGENT_SESSION_STATE=str(self.state), TMUX_LOG=str(self.tmux_log),
+                        PATH=str(self.bin) + os.pathsep + self.env['PATH'])
+        self.live = os.getpid()
+        dead = subprocess.Popen(['true'])
+        dead.wait()
+        self.dead = dead.pid
+        self.restore()
+
+    def stub(self, name, text):
+        path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o700)
+
+    def run_cli(self, *args, stdin=None, expected=0):
+        result = subprocess.run([str(CLI), *args, '--json'], env=self.env, input=stdin,
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, expected, result.stderr)
+        return json.loads(result.stdout) if result.stdout else result.stderr
+
+    def record(self):
+        return json.loads((self.state / f'{SID}.json').read_text())
+
+    def park(self, pid=None, jobs=None, expected=0):
+        request = json.dumps({'jobs': [] if jobs is None else jobs, 'notes': 'Check PR 42 first.'})
+        return self.run_cli('park', SID, '--pid', str(pid or self.live), stdin=request, expected=expected)
+
+    def parked(self):
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.park()
+        self.run_cli('exited', SID, '--pid', str(self.live))
+
+    def test_lease_conflicts_with_a_live_process_but_replaces_a_dead_one(self):
+        self.assertEqual(self.run_cli('started', SID, '--pid', str(self.dead))['status'], 'leased')
+        self.assertEqual(self.run_cli('started', SID, '--pid', str(self.live))['status'], 'leased')
+        conflict = self.run_cli('started', SID, '--pid', '1', expected=3)
+        self.assertEqual(conflict['leaseHolder'], self.live)
+        self.run_cli('exited', SID, '--pid', '1')
+        self.assertTrue((self.state / f'{SID}.lease').exists())
+        self.run_cli('exited', SID, '--pid', str(self.live))
+        self.assertFalse((self.state / f'{SID}.lease').exists())
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
+
+    def test_only_the_lease_holder_can_park_and_notes_are_written(self):
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertIn('holds the lease', self.park(pid=1, expected=2))
+        jobs = [{'command': 'bin/rails test', 'cwd': str(self.cwd), 'reason': 'full suite', 'restart': True}]
+        record = self.park(jobs=jobs)
+        self.assertEqual((record['state'], record['wake'], record['jobs']), ('parked', True, 1))
+        notes = (self.pad / 'parked.md').read_text()
+        self.assertIn('restart=yes · `bin/rails test`', notes)
+        self.assertIn('Check PR 42 first.', notes)
+        self.assertIn('never replayed automatically', notes)
+        self.assertEqual(stat.S_IMODE((self.pad / 'parked.md').stat().st_mode), 0o600)
+
+    def test_park_requires_an_explicit_job_account_and_notes(self):
+        self.run_cli('started', SID, '--pid', str(self.live))
+        for request in ({'notes': 'x'}, {'jobs': [{'command': 'x'}], 'notes': 'x'},
+                        {'jobs': [{'command': 'x', 'cwd': 'y', 'reason': 'z', 'restart': 'yes'}], 'notes': 'x'},
+                        {'jobs': [], 'notes': ' '}):
+            with self.subTest(request=request):
+                self.run_cli('park', SID, '--pid', str(self.live), stdin=json.dumps(request), expected=2)
+        self.assertFalse((self.state / f'{SID}.json').exists())
+
+    def test_resume_dry_run_is_exact_and_changes_nothing(self):
+        self.parked()
+        before = snapshot(self.root)
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
+        self.assertEqual(plan['status'], 'would-wake')
+        self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
+        self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
+        self.assertIn('parked.md', plan['command'][9])
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_resume_launches_once_then_new_process_marks_awake(self):
+        self.parked()
+        self.assertEqual(self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents')['status'], 'waking')
+        self.assertIn('a wake is already in progress',
+                      self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+        self.assertEqual(sum(line.startswith('new-window') for line in self.tmux_log.read_text().splitlines()), 1)
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'awake')
+
+    def test_resume_refusals_leave_the_parked_record(self):
+        self.parked()
+        cases = [({'PRESSURE': '2'}, 'memory pressure is 2'), ({'TMUX_HAS': '1'}, 'tmux session does not exist'),
+                 ({'TMUX_FAIL': '1'}, 'tmux launch failed')]
+        for environment, message in cases:
+            with self.subTest(message=message):
+                self.env.update(environment)
+                self.assertIn(message, self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+                for key in environment:
+                    self.env.pop(key)
+                self.assertEqual(self.record()['state'], 'parked')
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.park()
+        self.assertIn('already running', self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+
+    def test_missing_cwd_and_unparked_sessions_do_not_wake(self):
+        self.assertIn('state: none', self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+        self.parked()
+        self.cwd.rmdir()
+        self.assertIn('cwd is missing', self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+        self.assertFalse(self.tmux_log.exists())
+
+    def test_retired_sessions_cannot_park_or_wake(self):
+        self.parked()
+        self.assertEqual(self.run_cli('retire', '@+' + HANDLE)['state'], 'retired')
+        self.assertIn('state: retired', self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'retired')
+        self.assertIn('retired', self.park(expected=2))
+
+    def test_parking_state_survives_scratchpad_pruning(self):
+        self.parked()
+        import shutil
+        shutil.rmtree(self.pad)
+        self.assertEqual(self.record()['state'], 'parked')
+        self.assertIn('scratchpad is missing', self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
