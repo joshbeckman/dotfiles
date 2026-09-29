@@ -190,7 +190,53 @@ class WebTest(unittest.TestCase):
                 factory.assert_called_once_with(('127.0.0.1', port), web.Handler)
                 factory.return_value.server_close.assert_called_once()
 
+    def test_running_bridge_is_reused_with_the_persistent_token(self):
+        token = web.load_token(self.box.home)
+        with patch.object(sys, 'argv', ['agent-mail-web', '--no-open', '--port', str(self.server.server_port)]), patch('sys.stdout', new_callable=io.StringIO) as stdout:
+            web.main()
+        self.assertIn('already running', stdout.getvalue())
+        self.assertIn(f'{self.url}/#{token}', stdout.getvalue())
+
+    def test_token_persists_privately_and_refuses_unsafe_files(self):
+        first = web.load_token(self.box.home)
+        path = self.box.home / '.web-token'
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(web.load_token(self.box.home), first)
+        self.assertGreaterEqual(len(first), 32)
+        path.chmod(0o644)
+        with self.assertRaisesRegex(SystemExit, 'must be private'):
+            web.load_token(self.box.home)
+        path.chmod(0o600)
+        path.write_text('short\n')
+        with self.assertRaisesRegex(SystemExit, 'malformed'):
+            web.load_token(self.box.home)
+        path.unlink()
+        path.symlink_to(self.root / 'elsewhere')
+        with self.assertRaises(OSError):
+            web.load_token(self.box.home)
+        self.assertFalse((self.root / 'elsewhere').exists())
+
+    def test_installable_app_assets_are_public_and_allowed_by_csp(self):
+        with urllib.request.urlopen(self.url + '/', timeout=5) as r:
+            policy = r.headers['Content-Security-Policy']
+        self.assertIn("manifest-src 'self'", policy)
+        self.assertIn("worker-src 'self'", policy)
+        with urllib.request.urlopen(self.url + '/manifest.webmanifest', timeout=5) as r:
+            self.assertEqual(r.headers['Content-Type'], 'application/manifest+json')
+            manifest = json.load(r)
+        self.assertEqual((manifest['id'], manifest['display'], manifest['start_url']), ('/agent-mail', 'standalone', '/'))
+        for icon in manifest['icons']:
+            status, _ = self.request(icon['src'], **{'X-Agent-Mail-Token': ''})
+            self.assertEqual(status, 200, icon['src'])
+        with urllib.request.urlopen(self.url + '/sw.js', timeout=5) as r:
+            self.assertIn('javascript', r.headers['Content-Type'])
+            self.assertNotIn(b'"fetch"', r.read())
+
     def test_occupied_or_invalid_port_fails(self):
+        with patch.object(web, 'existing_bridge', return_value=False):
+            self._occupied_or_invalid_port_fails()
+
+    def _occupied_or_invalid_port_fails(self):
         for port in (self.server.server_port, -1, 65536):
             with self.subTest(port=port), patch.object(sys, 'argv', ['agent-mail-web', '--no-open', '--port', str(port)]), patch('sys.stderr', new_callable=io.StringIO) as stderr:
                 with self.assertRaises(SystemExit) as stopped:

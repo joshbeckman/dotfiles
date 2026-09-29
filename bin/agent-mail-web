@@ -18,6 +18,7 @@ import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlsplit
+import urllib.request
 import webbrowser
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -351,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
             own = 'http://' + self.server.authority
             policy = f"default-src 'none'; script-src {own}; style-src {own} 'unsafe-inline'; img-src {images}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
         else:
-            policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+            policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         self.send_header('Content-Security-Policy', policy)
         self.end_headers()
         self.wfile.write(body)
@@ -390,11 +391,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.get(url.path, parse_qs(url.query))
             if self.command != 'GET':
                 raise MailError('Unknown endpoint', 404)
-            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png')}}
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
             if url.path not in static:
                 raise MailError('Not found', 404)
             p = ASSETS / static[url.path]
-            self.reply(200, p.read_bytes(), mimetypes.guess_type(p)[0] or 'application/octet-stream')
+            mime = 'application/manifest+json' if p.suffix == '.webmanifest' else mimetypes.guess_type(p)[0]
+            self.reply(200, p.read_bytes(), mime or 'application/octet-stream')
         except MailError as e:
             self.reply(e.status, {'error': str(e)})
         except (ValueError, KeyError, TypeError):
@@ -469,6 +471,36 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = handle_request
 
 
+def load_token(home):
+    # Persistent so an installed app, which launches without the URL fragment,
+    # stays authorized across bridge restarts. Delete the file to rotate it.
+    path = home / '.web-token'
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd) as f:
+            info = os.fstat(f.fileno())
+            if info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise SystemExit(f'agent-mail-web: {path} must be private (mode 0600)')
+            token = f.read().strip()
+        if len(token) < 32:
+            raise SystemExit(f'agent-mail-web: {path} is malformed; delete it to create a new token')
+        return token
+    token = secrets.token_urlsafe(32)
+    with os.fdopen(fd, 'w') as f:
+        f.write(token + '\n')
+    return token
+
+
+def existing_bridge(authority):
+    try:
+        with urllib.request.urlopen(f'http://{authority}/manifest.webmanifest', timeout=2) as response:
+            return json.load(response).get('id') == '/agent-mail'
+    except (OSError, ValueError):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765, help='loopback port (default: 8765; 0 chooses a free port)')
@@ -477,12 +509,20 @@ def main():
     if not 0 <= args.port <= 65535:
         parser.error('--port must be between 0 and 65535')
     box = Mailbox()
+    token = load_token(box.home)
     try:
         server = HTTPServer(('127.0.0.1', args.port), Handler)
     except OSError as error:
+        # A background bridge (see its LaunchAgent) shares the same token file.
+        if args.port and existing_bridge(f'127.0.0.1:{args.port}'):
+            url = f'http://127.0.0.1:{args.port}/#{token}'
+            print('Agent Mail web inbox is already running (keep this launch URL private):\n' + url, flush=True)
+            if not args.no_open:
+                webbrowser.open(url)
+            return
         parser.error(f'Cannot listen on 127.0.0.1:{args.port}: {error}. Stop the existing listener or choose another --port.')
     server.box = box
-    server.token = secrets.token_urlsafe(32)
+    server.token = token
     server.authority = '127.0.0.1:' + str(server.server_port)
     url = 'http://' + server.authority + '/#' + server.token
     print('Agent Mail web inbox (keep this launch URL private):\n' + url, flush=True)

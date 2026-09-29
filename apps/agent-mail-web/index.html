@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Agent Mail</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <meta name="theme-color" content="#002fa7" />
     <link rel="stylesheet" href="/style.css" />
     <script defer src="/vendor.js"></script>
     <script defer src="/composer-vendor.js"></script>
@@ -22,6 +25,7 @@
           autocomplete="off"
         /><button>Search</button>
       </form>
+      <button id="notify-button" hidden>Enable notifications</button>
       <button id="help-button" title="Keyboard shortcuts (?)">Shortcuts</button>
     </header>
     <nav aria-label="Mail navigation">

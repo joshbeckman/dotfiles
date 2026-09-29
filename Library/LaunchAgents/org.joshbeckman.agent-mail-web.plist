@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.joshbeckman.agent-mail-web</string>
+	<!-- Keeps the loopback bridge running so the installed Agent Mail app
+	     opens without first running `agent-mail web`. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/joshbeckman/dotfiles/bin/agent-mail-web</string>
+		<string>--no-open</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- ~/bin for agent-mail and agent-find; Homebrew python before the
+		     system python3, which is too old for the bridge. -->
+		<key>PATH</key>
+		<string>/Users/joshbeckman/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Restart on crashes only. When a manually started bridge already holds
+	     the port, this exits 0 and stays down instead of retrying forever. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<!-- The bridge prints its private launch URL; keep the log owner-only. -->
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/joshbeckman/.local/state/agent-mail/web.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/joshbeckman/.local/state/agent-mail/web.log</string>
+</dict>
+</plist>

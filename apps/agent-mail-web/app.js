@@ -2,11 +2,16 @@
 const $ = (id) => document.getElementById(id);
 const { marked, DOMPurify, mermaid } = MailRenderers;
 const launchToken = location.hash.slice(1);
+// localStorage, not sessionStorage: an installed app launches at "/" without
+// the fragment, so the token must outlive the tab. The bridge keeps it stable.
 if (launchToken) {
-  sessionStorage.setItem("agent-mail-token", launchToken);
+  localStorage.setItem("agent-mail-token", launchToken);
   history.replaceState(null, "", "/");
 }
-const token = sessionStorage.getItem("agent-mail-token") || "";
+const token =
+  localStorage.getItem("agent-mail-token") ||
+  sessionStorage.getItem("agent-mail-token") ||
+  "";
 let folder = "inbox",
   view = "mail-list",
   items = [],
@@ -1147,6 +1152,61 @@ getContacts().catch(error);
 setInterval(() => {
   if (!document.hidden && view === "mail-list") refresh(true).catch(error);
 }, 10000);
+
+// Notifications need a running bridge and an open app window (even in the
+// background); nothing here can deliver mail while the app is closed.
+const worker =
+  "serviceWorker" in navigator
+    ? navigator.serviceWorker.register("/sw.js").catch(() => null)
+    : Promise.resolve(null);
+let seenInbox = null;
+function notifyState() {
+  const b = $("notify-button");
+  b.hidden = !("Notification" in window) || Notification.permission !== "default";
+}
+async function checkNewMail() {
+  const { messages } = await api("messages?folder=inbox&q=");
+  const keys = new Set(messages.map((m) => m.key));
+  const fresh = seenInbox ? messages.filter((m) => !seenInbox.has(m.key)) : [];
+  seenInbox = keys;
+  const focused = !document.hidden && document.hasFocus();
+  const allowed =
+    typeof Notification !== "undefined" && Notification.permission === "granted";
+  if (!fresh.length || focused || !allowed) return;
+  const registration = await worker;
+  for (const m of fresh.slice(0, 5)) {
+    const title = "Mail from " + (m.from || "unknown sender");
+    const options = {
+      body: m.subject || "(no subject)",
+      tag: m.key,
+      data: { key: m.key, subject: m.subject },
+      icon: "/icon-192.png",
+    };
+    if (registration) await registration.showNotification(title, options);
+    else
+      new Notification(title, options).onclick = () =>
+        openMail(options.data).catch(error);
+  }
+}
+async function openMail(message) {
+  window.focus();
+  if (view === "editor") await saveDraft();
+  await openThread(message);
+}
+navigator.serviceWorker?.addEventListener("message", (event) => {
+  if (event.data?.type === "open") openMail(event.data).catch(error);
+});
+$("notify-button").onclick = () =>
+  Notification.requestPermission().then(notifyState).catch(error);
+notifyState();
+checkNewMail().catch(() => {});
+// Background windows are throttled to about once a minute, which is enough here.
+setInterval(() => checkNewMail().catch(() => {}), 30000);
+const opening = new URLSearchParams(location.search).get("open");
+if (opening) {
+  history.replaceState(null, "", "/");
+  openMail({ key: opening }).catch(error);
+}
 
 window.addEventListener("message", (event) => {
   const frame = [...document.querySelectorAll("iframe.rendered")].find(

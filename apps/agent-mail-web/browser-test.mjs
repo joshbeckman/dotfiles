@@ -1112,10 +1112,60 @@ try {
   });
   assert(safeTeam.text.includes("<script>bad()</script>"));
   assert.equal(safeTeam.unsafe, 0);
+  // Installed app: the token must survive a launch at "/" without the fragment,
+  // and new inbox mail must notify only while the window lacks focus.
+  const app = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+  await app.grantPermissions(["notifications"], { origin: new URL(url).origin });
+  await app.addInitScript(() => {
+    window.__notes = [];
+    window.__focused = true;
+    Document.prototype.hasFocus = () => window.__focused;
+    ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+      window.__notes.push({ title, ...options });
+      return Promise.resolve();
+    };
+  });
+  const installed = await app.newPage();
+  const appErrors = [];
+  installed.on("pageerror", (e) => appErrors.push(e.message));
+  await installed.goto(url);
+  await installed.getByText("No messages here.").waitFor();
+  await installed.goto(new URL("/", url).href);
+  await installed.getByText("No messages here.").waitFor();
+  // Throws if the relaunched page lost its authorization.
+  await installed.evaluate(() => api("messages?folder=inbox&q="));
+  const manifest = await installed.evaluate(async () => {
+    const link = document.querySelector('link[rel="manifest"]').href;
+    const worker = await navigator.serviceWorker.ready;
+    return { manifest: await (await fetch(link)).json(), scope: worker.scope };
+  });
+  assert.equal(manifest.manifest.display, "standalone");
+  assert.equal(manifest.scope, new URL("/", url).href);
+  assert.equal(await installed.locator("#notify-button").isHidden(), true);
+  await installed.evaluate(() => checkNewMail());
+  cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Focused arrival", "--body", "Seen already.");
+  await installed.evaluate(() => checkNewMail());
+  assert.deepEqual(await installed.evaluate(() => window.__notes), []);
+  await installed.evaluate(() => (window.__focused = false));
+  cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Background arrival", "--body", "Notify me.");
+  await installed.evaluate(() => checkNewMail());
+  await installed.evaluate(() => checkNewMail());
+  const notes = await installed.evaluate(() => window.__notes);
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].body, "Background arrival");
+  assert.match(notes[0].title, /alder-turner/);
+  assert.match(notes[0].tag, /^inbox:/);
+  await installed.evaluate((data) => openMail(data), notes[0].data);
+  await installed.getByRole("heading", { name: "Background arrival" }).waitFor();
+  await installed.goto(new URL("/?open=" + encodeURIComponent(notes[0].tag), url).href);
+  await installed.locator("#reader").waitFor({ state: "visible" });
+  assert.equal(new URL(installed.url()).search, "");
+  assert.deepEqual(appErrors, []);
+  await app.close();
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

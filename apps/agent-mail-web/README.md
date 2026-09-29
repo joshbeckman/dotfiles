@@ -8,9 +8,19 @@ agent-mail web
 agent-mail-web
 ```
 
-The bridge binds to `http://127.0.0.1:8765`, opens the browser, and runs until Ctrl-C. Keep its terminal open. `--no-open` prints the launch URL instead; `--port 8799` chooses another fixed port and `--port 0` chooses a free port for an isolated instance. If the requested port is occupied, startup fails rather than silently changing the address. No hostname or proxy configuration is needed.
+The bridge binds to `http://127.0.0.1:8765`, opens the browser, and runs until Ctrl-C. Keep its terminal open. `--no-open` prints the launch URL instead; `--port 8799` chooses another fixed port and `--port 0` chooses a free port for an isolated instance. If Agent Mail already holds the requested port, the command opens that bridge instead of starting another. Any other occupant makes startup fail rather than silently changing the address. No hostname or proxy configuration is needed.
 
-Treat the launch URL as private: its fragment authorizes that browser tab for this server lifetime. The default address stays fixed, but authentication still rotates on restart. Refreshing the tab works; restarting the bridge requires its new launch URL.
+Treat the launch URL as private. Its fragment authorizes the browser, which keeps the token in local storage so an installed app can relaunch at `/`. The token lives in the human mailbox as `.web-token` (mode 0600) and persists across bridge restarts. Delete it and restart the bridge to rotate it; every browser then needs the new launch URL.
+
+### Installed app and notifications
+
+`Library/LaunchAgents/org.joshbeckman.agent-mail-web.plist` keeps the bridge running in the background; `dfm install` links it. Load it after stopping any manual bridge on port 8765:
+
+```sh
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.agent-mail-web.plist
+```
+
+Open the launch URL once, then install: in Chrome, use the install button in the address bar; in Safari, use File › Add to Dock. Click **Enable notifications** in the app header to allow alerts. While any Agent Mail window is open, including in the background, new inbox mail raises a notification when the window isn't focused. Clicking it opens the thread. Nothing is delivered while the app is closed; the existing `notify-josh` alerts still cover that. A phone cannot reach this loopback-only bridge.
 
 Requires Python 3.10+ (tracked in `Brewfile`) and a modern browser. Runtime assets are bundled locally; Node/npm are needed only to rebuild or run browser tests. The existing `agent-mail inbox @josh`, Neovim mappings, and macOS launcher remain unchanged.
 
@@ -46,7 +56,7 @@ nnoremap <leader>x dd
 
 Completion uses `$XDG_CONFIG_HOME/nvim/keywords.txt`, defaulting to `~/.config/nvim/keywords.txt`. The authenticated bridge rereads it when a draft opens. The dictionary stays on your machine and is not included in browser assets or this repository. Handles such as `@+name-of-realm`, dotted names, and underscores complete as whole tokens. Ctrl+n / Ctrl+p open or navigate completions in insert mode (or with Vim disabled); Tab accepts and Escape dismisses. With Vim enabled, another Escape returns to normal mode. Missing or invalid dictionaries leave the editor usable with an explanatory status. Dictionaries are limited to 1 MiB, 10,000 distinct words, and 256 characters per word.
 
-Editor undo history starts fresh for each opened draft, while Vim preferences persist separately. Draft bodies remain plain Markdown; autosave, revision conflicts, attachments, and CLI/Neovim interoperability are unchanged. After installing a version that changes the bridge or asset allowlist, restart the bridge and open its new authenticated launch URL.
+Editor undo history starts fresh for each opened draft, while Vim preferences persist separately. Draft bodies remain plain Markdown; autosave, revision conflicts, attachments, and CLI/Neovim interoperability are unchanged. After installing a version that changes the bridge or asset allowlist, restart the bridge and refresh; the token is unchanged.
 
 ## Keys
 
@@ -67,7 +77,7 @@ JSON includes `harness`, `provider`, `model`, `modelObservedAt`, `modelSource`, 
 
 ## Local boundary
 
-The bridge checks Host and Origin, rejects cross-site API requests, and requires a per-run token header for **all** API reads and mutations. Mutations require same-origin JSON requests. There is no arbitrary path or command endpoint. Message keys are confined to mailbox folders; symlinked files and attachment paths are rejected. Static reader assets contain no private data.
+The bridge checks Host and Origin, rejects cross-site API requests, and requires the bridge's token header for **all** API reads and mutations. Mutations require same-origin JSON requests. There is no arbitrary path or command endpoint. Message keys are confined to mailbox folders; symlinked files and attachment paths are rejected. Static reader assets contain no private data.
 
 Mail content cannot access the parent page or its token. The sandboxed reader has no API credentials and cannot submit forms or execute inline scripts. Markdown HTML is sanitized, Mermaid runs in strict mode, and CSP restricts resource loading. Only the trusted reader script runs to size the frame and forward keyboard shortcuts. These safeguards are for untrusted mail and unrelated websites, not a malicious process running as the same OS user.
 
