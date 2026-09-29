@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.joshbeckman.dotfiles-refresh</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/joshbeckman/dotfiles/bin/dotfiles-refresh</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>9</integer>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>21</integer>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- launchd's own PATH is /usr/bin:/bin:/usr/sbin:/sbin. The wrapper
+		     re-exports this too, so a manual run and a scheduled run behave
+		     identically; duplicated deliberately rather than relied upon. -->
+		<key>PATH</key>
+		<string>/Users/joshbeckman/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Users/joshbeckman/dotfiles</string>
+	<key>StandardOutPath</key>
+	<string>/Users/joshbeckman/Library/Logs/dotfiles-refresh.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/joshbeckman/Library/Logs/dotfiles-refresh.log</string>
+	<!-- Aqua so terminal-notifier can reach the window server when you are
+	     present; ProcessType Background keeps a refresh from competing with
+	     interactive work. -->
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>

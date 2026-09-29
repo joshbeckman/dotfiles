@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# dotfiles-refresh: run ./setup unattended and report only when it breaks.
+#
+# Scheduled twice daily by Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist.
+# Kept as a script rather than a long ProgramArguments so the failure path can be
+# tested on demand, without waiting for launchd or sending a real notification.
+
+set -euo pipefail
+
+DOTFILES="${DOTFILES_DIR:-$HOME/dotfiles}"
+LOG="${DOTFILES_REFRESH_LOG:-$HOME/Library/Logs/dotfiles-refresh.log}"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-refresh"
+LOCK="$STATE/refresh.lock"
+NOTIFIER="${DOTFILES_REFRESH_NOTIFIER:-notify-josh}"
+
+# launchd hands jobs a minimal PATH, and this repo's own tools (dfm, s,
+# notify-josh) live in ~/bin, which only interactive shells add. Without this the
+# job fails at its first step and cannot report that failure either.
+PATH="$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+mkdir -p "$STATE" "$(dirname "$LOG")"
+
+# A twice-daily job that never rotates its log is a slow disk leak; keep one
+# previous file so a failure can still be compared against the run before it.
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" | tr -d ' ')" -gt 524288 ]; then
+  mv -f "$LOG" "$LOG.old"
+fi
+
+# shlock rather than a plain mkdir lock: it records the pid, so a run killed at
+# the wrong moment cannot leave a lock that silently blocks every future run.
+if ! /usr/bin/shlock -f "$LOCK" -p $$; then
+  printf '%s  skipped: a refresh is already running\n' "$(date -u +%FT%TZ)" >> "$LOG"
+  exit 0
+fi
+trap 'rm -f "$LOCK"' EXIT INT TERM
+
+# Everything this run writes lands after this line, so the failure message can be
+# read back from the offset instead of from the tail of a shared, append-only log
+# (which would quote a previous run's "ok" or a concurrent run's skip).
+printf '\n=== %s dotfiles-refresh starting\n' "$(date -u +%FT%TZ)" >> "$LOG"
+run_start=$(($(wc -l < "$LOG" | tr -d ' ') + 1))
+
+set +e
+( cd "$DOTFILES" && ./setup ) >> "$LOG" 2>&1
+status=$?
+set -e
+
+if [ "$status" -eq 0 ]; then
+  printf '%s  ok\n' "$(date -u +%FT%TZ)" >> "$LOG"
+  exit 0
+fi
+
+# Name the step, not just the exit code: setup prints "  ======  <step>" markers,
+# so the last marker before the failure is the useful half of the message.
+this_run="$(tail -n +"$run_start" "$LOG" 2>/dev/null || true)"
+step="$(printf '%s\n' "$this_run" | grep '======' | tail -1 | sed 's/^[[:space:]]*=*[[:space:]]*//; s/[[:space:]]*=*[[:space:]]*$//' || true)"
+last="$(printf '%s\n' "$this_run" | grep -v '^[[:space:]]*$' | tail -1 || true)"
+printf '%s  FAILED (exit %s) during "%s"\n' "$(date -u +%FT%TZ)" "$status" "${step:-unknown step}" >> "$LOG"
+
+"$NOTIFIER" --from dotfiles-refresh --execute "open '$LOG'" \
+  "dotfiles refresh failed" \
+  "setup exited ${status} during \"${step:-unknown step}\". Last line: ${last:-none}" || true
+
+exit "$status"
