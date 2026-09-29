@@ -89,7 +89,7 @@ h1 small {
   border-radius: 0.4rem;
   border: 1.5px solid var(--c-bg);
   color: #fff;
-  font: 700 0.5rem/1 system-ui, sans-serif;
+  font: 700 0.5rem/1 "IBM Plex Sans", system-ui, sans-serif;
   vertical-align: middle;
 }
 .team-badges .team-badge + .team-badge {
@@ -418,7 +418,7 @@ details.message summary time {
   display: inline-block;
 }
 #vimrc-input {
-  font-family: monospace;
+  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
 }
 #body {
   font:
@@ -509,7 +509,7 @@ dl {
 }
 dt,
 kbd {
-  font-family: "Berkeley Mono", monospace;
+  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
 }
 dd {
   margin: 0;
