@@ -341,7 +341,13 @@ notify_human_delivery() {
   local handle="$1" inbox="$2" msgid="$3" from="$4" subject="$5" click_command
   [ "$handle" = josh ] && command -v notify-josh >/dev/null 2>&1 || return 0
   click_command="$(inbox_click_command "$handle")"
-  if notify-josh --from agent-mail --execute "$click_command" "Agent mail: $subject" \
+  local mode=()
+  # An open web app polls within a minute (background tabs are throttled) and
+  # shows its own notification; banner only when it isn't running. Away pushes stay.
+  if [ -n "$(find "$HUMAN_MAIL_ROOT/$handle/.web-notifier" -newermt '-150 seconds' 2>/dev/null)" ]; then
+    mode=(--away-only)
+  fi
+  if notify-josh "${mode[@]+"${mode[@]}"}" --from agent-mail --execute "$click_command" "Agent mail: $subject" \
     "From $from. Read with: agent-mail read --to @josh" >/dev/null 2>&1; then
     mkdir "$inbox/.escalated-$msgid" 2>/dev/null || true
   else

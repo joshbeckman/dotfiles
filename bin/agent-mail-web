@@ -408,6 +408,11 @@ class Handler(BaseHTTPRequestHandler):
         box = self.server.box
         key = args.get('key', [''])[0]
         if route == '/api/messages':
+            if self.headers.get('X-Agent-Mail-Notifier') == '1':
+                # agent-mail reads this mtime to skip its duplicate desktop banner.
+                fd = os.open(box.home / '.web-notifier', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                os.utime(fd)
+                os.close(fd)
             result = box.listing(args.get('folder', ['inbox'])[0], args.get('q', [''])[0])
         elif route == '/api/thread':
             result = box.thread(key)

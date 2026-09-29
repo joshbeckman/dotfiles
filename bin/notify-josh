@@ -3,14 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] [--execute COMMAND] TITLE MESSAGE...
-       notify-josh [--push|--local] [--from NAME] [--pane-title TITLE] [--execute COMMAND] MESSAGE...
+Usage: notify-josh [--push|--local|--away-only] [--from NAME] [--pane-title TITLE] [--execute COMMAND] TITLE MESSAGE...
+       notify-josh [--push|--local|--away-only] [--from NAME] [--pane-title TITLE] [--execute COMMAND] MESSAGE...
 
 Notify Josh using the local notification ladder when possible, otherwise push.
 
 Options:
   --push              Force the Josh Status MCP push path.
   --local             Force the local terminal-notifier path.
+  --away-only         Push only when the display is inactive; otherwise do nothing.
   --from NAME         Sender for push notifications. Default: agent
   --pane-title TITLE  Deprecated compatibility option; pane titles are preserved.
   --execute COMMAND   Shell command to run when a local notification is clicked.
@@ -145,6 +146,10 @@ while [ $# -gt 0 ]; do
       mode=local
       shift
       ;;
+    --away-only)
+      mode=away
+      shift
+      ;;
     --from)
       from=${2:?--from requires a value}
       shift 2
@@ -188,6 +193,9 @@ case "$mode" in
     ;;
   push)
     push_notify "$title" "$message" "$from"
+    ;;
+  away)
+    display_active || push_notify "$title" "$message" "$from"
     ;;
   auto)
     if display_active && local_notify "$title" "$message" "$execute"; then

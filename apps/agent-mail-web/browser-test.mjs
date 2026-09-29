@@ -1142,6 +1142,10 @@ try {
   assert.equal(manifest.manifest.display, "standalone");
   assert.equal(manifest.scope, new URL("/", url).href);
   assert.equal(await installed.locator("#notify-button").isHidden(), true);
+  const notifier = join(humans, "josh/.web-notifier");
+  await rm(notifier, { force: true });
+  await installed.evaluate(() => checkNewMail());
+  await readFile(notifier);
   await installed.evaluate(() => checkNewMail());
   cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Focused arrival", "--body", "Seen already.");
   await installed.evaluate(() => checkNewMail());

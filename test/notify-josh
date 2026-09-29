@@ -60,4 +60,10 @@ export TMUX=fake
 grep -Fq -- '-title Mail delivered' "$LOCAL_LOG"
 grep -Fq -- '-execute echo clicked' "$LOCAL_LOG"
 
+rm -f "$LOCAL_LOG" "$PUSH_LOG"
+"$root/bin/notify-josh" --away-only 'Mail delivered' 'A web app shows this.'
+[[ ! -e "$LOCAL_LOG" && ! -e "$PUSH_LOG" ]]
+NOTIFY_JOSH_FORCE_PUSH=1 "$root/bin/notify-josh" --away-only 'Mail delivered' 'Away from the desk.' || true
+[[ ! -e "$LOCAL_LOG" && -s "$PUSH_LOG" ]]
+
 printf 'notify-josh tests passed\n'

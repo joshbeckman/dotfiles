@@ -72,9 +72,10 @@ async function loadKeywords() {
       "Keyword completion unavailable: " + e.message;
   }
 }
-async function api(path, data) {
+async function api(path, data, extra = {}) {
   const response = await fetch("/api/" + path, {
     headers: {
+      ...extra,
       "X-Agent-Mail-Token": token,
       ...(data ? { "Content-Type": "application/json" } : {}),
     },
@@ -1165,13 +1166,18 @@ function notifyState() {
   b.hidden = !("Notification" in window) || Notification.permission !== "default";
 }
 async function checkNewMail() {
-  const { messages } = await api("messages?folder=inbox&q=");
+  const allowed =
+    typeof Notification !== "undefined" && Notification.permission === "granted";
+  // Tells the bridge this window will notify, so terminal banners stand down.
+  const { messages } = await api(
+    "messages?folder=inbox&q=",
+    undefined,
+    allowed ? { "X-Agent-Mail-Notifier": "1" } : {},
+  );
   const keys = new Set(messages.map((m) => m.key));
   const fresh = seenInbox ? messages.filter((m) => !seenInbox.has(m.key)) : [];
   seenInbox = keys;
   const focused = !document.hidden && document.hasFocus();
-  const allowed =
-    typeof Notification !== "undefined" && Notification.permission === "granted";
   if (!fresh.length || focused || !allowed) return;
   const registration = await worker;
   for (const m of fresh.slice(0, 5)) {

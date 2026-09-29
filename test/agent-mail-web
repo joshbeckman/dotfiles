@@ -216,6 +216,18 @@ class WebTest(unittest.TestCase):
             web.load_token(self.box.home)
         self.assertFalse((self.root / 'elsewhere').exists())
 
+    def test_notifying_window_records_a_private_heartbeat(self):
+        marker = self.box.home / '.web-notifier'
+        self.assertEqual(self.request('/api/messages?folder=inbox&q=')[0], 200)
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.request('/api/messages?folder=inbox&q=', **{'X-Agent-Mail-Notifier': '1', 'X-Agent-Mail-Token': 'wrong'})[0], 403)
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.request('/api/messages?folder=inbox&q=', **{'X-Agent-Mail-Notifier': '1'})[0], 200)
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+        os.utime(marker, (0, 0))
+        self.request('/api/messages?folder=inbox&q=', **{'X-Agent-Mail-Notifier': '1'})
+        self.assertGreater(marker.stat().st_mtime, 1)
+
     def test_installable_app_assets_are_public_and_allowed_by_csp(self):
         with urllib.request.urlopen(self.url + '/', timeout=5) as r:
             policy = r.headers['Content-Security-Policy']

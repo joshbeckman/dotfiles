@@ -77,6 +77,16 @@ grep -Fq 'agent-mail\ inbox\ @josh' "$NOTIFY_LOG"
 [[ "$(wc -l <"$NOTIFY_LOG" | tr -d ' ')" == 1 ]]
 
 "$command" read --to @josh | grep -Fq 'Please review this.'
+
+# A web app that polled recently shows its own notification; only away pushes remain.
+touch "$human_root/josh/.web-notifier"
+"$command" send --to @josh --from test-agent --subject 'App is open' --body 'One banner.' >/dev/null
+tail -n 1 "$NOTIFY_LOG" | grep -Eq -- '^--away-only .*Agent mail: App is open'
+touch -t 202601010000 "$human_root/josh/.web-notifier"
+"$command" send --to @josh --from test-agent --subject 'App is closed' --body 'Terminal banner.' >/dev/null
+tail -n 1 "$NOTIFY_LOG" | grep -Eq -- '^--from agent-mail .*Agent mail: App is closed'
+"$command" read --to @josh >/dev/null
+"$command" read --to @josh >/dev/null
 message="$inbox/cur/$msgid.md"
 [[ -f "$message" ]]
 [[ ! -e "$inbox/.escalated-$msgid" ]]
