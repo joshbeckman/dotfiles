@@ -8,21 +8,10 @@
 	<array>
 		<string>/Users/joshbeckman/dotfiles/bin/dotfiles-refresh</string>
 	</array>
-	<key>StartCalendarInterval</key>
-	<array>
-		<dict>
-			<key>Hour</key>
-			<integer>9</integer>
-			<key>Minute</key>
-			<integer>0</integer>
-		</dict>
-		<dict>
-			<key>Hour</key>
-			<integer>21</integer>
-			<key>Minute</key>
-			<integer>0</integer>
-		</dict>
-	</array>
+	<!-- An interval rather than calendar times: missed while asleep are skipped,
+	     and launchd never overlaps this job with itself. -->
+	<key>StartInterval</key>
+	<integer>7200</integer>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<!-- launchd's own PATH is /usr/bin:/bin:/usr/sbin:/sbin. The wrapper

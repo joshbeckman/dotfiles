@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dotfiles-refresh: run ./setup unattended and report only when it breaks.
 #
-# Scheduled twice daily by Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist.
+# Scheduled every two hours by Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist.
 # Kept as a script rather than a long ProgramArguments so the failure path can be
 # tested on demand, without waiting for launchd or sending a real notification.
 
@@ -15,8 +15,13 @@ NOTIFIER="${DOTFILES_REFRESH_NOTIFIER:-notify-josh}"
 
 # launchd hands jobs a minimal PATH, and this repo's own tools (dfm, s,
 # notify-josh) live in ~/bin, which only interactive shells add. Without this the
-# job fails at its first step and cannot report that failure either.
-PATH="$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# job fails at its first step and cannot report that failure either. The
+# interactive login shell's PATH adds machine-specific toolchains (pi and the
+# credential helper it needs, a managed brew) without naming them in this public
+# repo; a non-interactive shell misses some, which would silently skip updates.
+# The marker keeps any shell greeting out of the captured value.
+login_path="$("${SHELL:-/bin/zsh}" -lic 'printf "\n__PATH__=%s\n" "$PATH"' </dev/null 2>/dev/null | sed -n 's/^__PATH__=//p' | tail -1 || true)"
+PATH="$HOME/bin:${login_path:+$login_path:}/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
 mkdir -p "$STATE" "$(dirname "$LOG")"
