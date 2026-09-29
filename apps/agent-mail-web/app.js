@@ -163,7 +163,66 @@ function avatarKey(address) {
     return "human:" + value.split("@")[0];
   return "agent:" + value.replace(/^@\+|^\+/, "").replace(/-[0-9a-f]{8}$/, "");
 }
+function hashOf(text) {
+  let hash = 2166136261;
+  for (const byte of new TextEncoder().encode(text))
+    hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+  return hash;
+}
+// Active team memberships by avatar key, from the read-only team directory.
+let teamsByMember = new Map();
+function teamBadge(team) {
+  const badge = document.createElement("span");
+  badge.className = "team-badge";
+  badge.style.background = `hsl(${(hashOf(team.handle) >>> 16) % 360} 60% 38%)`;
+  badge.textContent = (team.handle.replace(/^@team\//, "")[0] || "?").toUpperCase();
+  badge.setAttribute("aria-hidden", "true");
+  return badge;
+}
+function decorateAvatar(wrap) {
+  wrap.querySelectorAll(".team-badges").forEach((b) => b.remove());
+  const teams = teamsByMember.get(wrap.dataset.key) || [];
+  wrap.title = teams.length
+    ? "Teams: " + teams.map((t) => `${t.name} (${t.handle})`).join(", ")
+    : "";
+  if (!teams.length) return;
+  const badges = document.createElement("span");
+  badges.className = "team-badges";
+  badges.setAttribute("role", "img");
+  badges.setAttribute("aria-label", wrap.title);
+  badges.append(teamBadge(teams[0]));
+  if (teams.length === 2) badges.append(teamBadge(teams[1]));
+  if (teams.length > 2) {
+    const more = document.createElement("span");
+    more.className = "team-badge more";
+    more.textContent = "+" + (teams.length - 1);
+    more.setAttribute("aria-hidden", "true");
+    badges.append(more);
+  }
+  wrap.append(badges);
+}
+async function loadTeamBadges() {
+  const next = new Map();
+  for (const team of await api("teams?q="))
+    if (team.status === "active")
+      for (const member of team.members)
+        if (member.leftAt === null) {
+          const key = avatarKey(member.handle);
+          if (!next.has(key)) next.set(key, []);
+          next.get(key).push(team);
+        }
+  teamsByMember = next;
+  document.querySelectorAll(".avatar-wrap").forEach(decorateAvatar);
+}
 function avatar(address) {
+  const wrap = document.createElement("span");
+  wrap.className = "avatar-wrap";
+  wrap.dataset.key = avatarKey(address);
+  wrap.append(avatarImage(address));
+  decorateAvatar(wrap);
+  return wrap;
+}
+function avatarImage(address) {
   const image = document.createElement("img");
   image.className = "avatar";
   image.alt = "";
@@ -174,9 +233,7 @@ function avatar(address) {
     image.src = "/josh-avatar.png";
     return image;
   }
-  let hash = 2166136261;
-  for (const byte of new TextEncoder().encode(key))
-    hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+  const hash = hashOf(key);
   const hue = (hash >>> 16) % 360;
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="hsl(${hue} 30% 93%)"/>`;
   for (let y = 0; y < 5; y++) {
@@ -751,6 +808,7 @@ function teamCard(team) {
   const members = team.members.filter((member) => member.leftAt === null);
   const summary = document.createElement("summary");
   summary.textContent = `${team.handle} · ${team.name} · ${team.status} · ${members.length} ${members.length === 1 ? "member" : "members"}`;
+  summary.prepend(teamBadge(team));
   row.append(summary);
   const fields = document.createElement("dl");
   fields.className = "session-details";
@@ -1150,6 +1208,9 @@ document.addEventListener("keydown", (e) => {
 $("current-user").prepend(avatar("@josh"));
 refresh().catch(error);
 getContacts().catch(error);
+// Badges are decoration: a failed team lookup leaves plain avatars.
+loadTeamBadges().catch(() => {});
+setInterval(() => loadTeamBadges().catch(() => {}), 300000);
 setInterval(() => {
   if (!document.hidden && view === "mail-list") refresh(true).catch(error);
 }, 10000);

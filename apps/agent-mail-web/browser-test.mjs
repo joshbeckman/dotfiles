@@ -293,10 +293,32 @@ try {
         "alder-turner-12345678",
         "birch-weaver",
         '<svg onload="alert(1)">',
-      ].map((address) => [address, avatar(address).getAttribute("src")]),
+      ].map((address) => [address, avatarImage(address).getAttribute("src")]),
     ),
   );
   assert.equal(icons.josh, "/josh-avatar.png");
+  // Team badges: current memberships only, at most two badges then "+N".
+  const alderBadges = page.locator('.sender .avatar-wrap[data-key="agent:alder-turner"] .team-badge');
+  await alderBadges.first().waitFor();
+  const badged = await page.evaluate(() => {
+    const wrap = document.querySelector('.avatar-wrap[data-key="agent:alder-turner"]');
+    const make = (n) => Array.from({ length: n }, (_, i) => ({ handle: "@team/t" + i, name: "Team " + i }));
+    teamsByMember.set("agent:fixture-busy", make(4));
+    const busy = avatar("@+fixture-busy");
+    return {
+      badges: [...wrap.querySelectorAll(".team-badge")].map((b) => b.textContent),
+      title: wrap.title,
+      label: wrap.querySelector(".team-badges").getAttribute("aria-label"),
+      josh: document.querySelector("#current-user .avatar-wrap .team-badge"),
+      busy: [...busy.querySelectorAll(".team-badge")].map((b) => b.textContent),
+    };
+  });
+  assert.deepEqual(badged.badges.sort(), ["O", "R"]);
+  assert.match(badged.title, /@team\/orchard/);
+  assert.match(badged.title, /@team\/review/);
+  assert.equal(badged.label, badged.title);
+  assert.equal(badged.josh, null);
+  assert.deepEqual(badged.busy, ["T", "+3"]);
   const personalIcon = await page.request.get(new URL(icons.josh, url).href);
   assert.equal(personalIcon.status(), 200);
   assert.equal(personalIcon.headers()["content-type"], "image/png");
@@ -1169,7 +1191,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();
