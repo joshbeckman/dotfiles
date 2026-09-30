@@ -26,6 +26,12 @@ export default function (pi: ExtensionAPI) {
 		const isGit = containsUnquoted(cmd, GIT_COMMIT_RE);
 		const isGt = containsUnquoted(cmd, GT_COMMIT_RE);
 		if (!isGit && !isGt) return undefined;
+		// An agent that composes its own trailer via $(agent-trailer) hides the
+		// literal from the check above; injecting too would add a second line.
+		if (/\bagent-trailer\b/.test(cmd)) {
+			event.input.command = emailTrailerForCommit(cmd);
+			return undefined;
+		}
 		if (isGt && /(?:^|\s)--ai(?:\s|$)/.test(cmd)) return undefined;
 		if (isGit && cmd.includes("--amend") && cmd.includes("--no-edit") && !cmd.includes("-m")) return undefined;
 
@@ -34,6 +40,12 @@ export default function (pi: ExtensionAPI) {
 		event.input.command = isGit ? injectGitTrailer(cmd, trailer) : injectGtTrailer(cmd, trailer);
 		return undefined;
 	});
+}
+
+// Commits need the mailbox form GitHub parses; the prose form names the
+// handle but no address, so rewrite bare and flag-less agent-trailer calls.
+export function emailTrailerForCommit(cmd: string): string {
+	return cmd.replace(/\bagent-trailer\b(?![\t ]+--(?:email|raw)\b)/g, "agent-trailer --email");
 }
 
 export function hasCoAuthoredBy(cmd: string): boolean {
