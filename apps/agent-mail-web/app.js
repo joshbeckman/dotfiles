@@ -353,6 +353,21 @@ async function openThread(m) {
       : m.key;
   current = { key, messages };
   $("thread-title").textContent = m.subject || "(no subject)";
+  threadSummary(messages);
+  $("thread").replaceChildren();
+  show("reader");
+  $("thread-title").focus();
+  for (const [i, message] of messages.entries())
+    appendThreadMessage(
+      message,
+      message.key === key || i === messages.length - 1,
+    );
+  if (!messages.length)
+    $("thread").textContent =
+      "Earlier messages are not available for this draft.";
+  return true;
+}
+function threadSummary(messages) {
   $("participants").textContent =
     "Participants: " +
     [
@@ -365,54 +380,66 @@ async function openThread(m) {
     ].join(", ");
   $("archive").disabled = !messages.some((v) => v.folder === "inbox");
   renderParticipantCards(messages);
-  $("thread").replaceChildren();
-  show("reader");
-  $("thread-title").focus();
-  for (const [i, message] of messages.entries()) {
-    const detail = document.createElement("details");
-    detail.className = "message";
-    detail.open = message.key === key || i === messages.length - 1;
-    const summary = document.createElement("summary");
-    summary.innerHTML =
-      "<time>" +
-      escape(date(message.date)) +
-      "</time>" +
-      escape(message.from) +
-      " · " +
-      escape(message.folder);
-    summary.querySelector("time").after(avatar(message.from));
-    detail.append(summary);
-    const metadata = document.createElement("p");
-    metadata.className = "metadata";
-    metadata.textContent =
-      "To: " +
-      message.to +
-      (message.parent ? " · In reply to " + message.parent : "");
-    detail.append(metadata);
-    const content = document.createElement("div");
-    detail.append(content);
-    $("thread").append(detail);
-    let rendered = false;
-    const render = () => {
-      if (!rendered && detail.open) {
-        rendered = true;
-        renderMarkdown(message.body, content).catch(error);
-      }
-    };
-    detail.addEventListener("toggle", render);
-    render();
-    const actions = document.createElement("div");
-    actions.className = "render-tools";
-    actions.append(
-      button("Reply to this message", () => newDraft("reply", message.key)),
-      button("Reply all", () => newDraft("reply-all", message.key)),
-    );
-    detail.append(actions);
-  }
-  if (!messages.length)
-    $("thread").textContent =
-      "Earlier messages are not available for this draft.";
-  return true;
+}
+// Appends replies that arrived while the thread is open. Existing messages
+// stay in place, so open/closed state, scroll, selection, and an inline
+// reply draft survive.
+async function refreshThread() {
+  const open = current;
+  const generation = threadGeneration;
+  const messages = await api("thread?key=" + encodeURIComponent(open.key));
+  if (open !== current || generation !== threadGeneration) return;
+  const known = new Set(open.messages.map((v) => v.key));
+  const fresh = messages.filter((v) => !known.has(v.key));
+  if (!fresh.length) return;
+  if (!open.messages.length) $("thread").replaceChildren();
+  for (const message of fresh) appendThreadMessage(message, true);
+  current = { ...open, messages };
+  threadSummary(messages);
+  const senders = [...new Set(fresh.map((v) => v.from))].join(", ");
+  status(`New ${fresh.length === 1 ? "message" : "messages"} from ${senders}.`);
+}
+// Attach before rendering: the sandboxed reader frame sizes itself once loaded.
+function appendThreadMessage(message, open) {
+  const detail = document.createElement("details");
+  detail.className = "message";
+  detail.open = open;
+  const summary = document.createElement("summary");
+  summary.innerHTML =
+    "<time>" +
+    escape(date(message.date)) +
+    "</time>" +
+    escape(message.from) +
+    " · " +
+    escape(message.folder);
+  summary.querySelector("time").after(avatar(message.from));
+  detail.append(summary);
+  const metadata = document.createElement("p");
+  metadata.className = "metadata";
+  metadata.textContent =
+    "To: " +
+    message.to +
+    (message.parent ? " · In reply to " + message.parent : "");
+  detail.append(metadata);
+  const content = document.createElement("div");
+  detail.append(content);
+  $("thread").append(detail);
+  let rendered = false;
+  const render = () => {
+    if (!rendered && detail.open) {
+      rendered = true;
+      renderMarkdown(message.body, content).catch(error);
+    }
+  };
+  detail.addEventListener("toggle", render);
+  render();
+  const actions = document.createElement("div");
+  actions.className = "render-tools";
+  actions.append(
+    button("Reply to this message", () => newDraft("reply", message.key)),
+    button("Reply all", () => newDraft("reply-all", message.key)),
+  );
+  detail.append(actions);
 }
 async function archiveThread() {
   if (busy) return;
@@ -1269,7 +1296,10 @@ getContacts().catch(error);
 loadTeamBadges().catch(() => {});
 setInterval(() => loadTeamBadges().catch(() => {}), 300000);
 setInterval(() => {
-  if (!document.hidden && view === "mail-list") refresh(true).catch(error);
+  if (document.hidden) return;
+  if (view === "mail-list") refresh(true).catch(error);
+  // The thread stays visible beside an inline reply draft.
+  else if (current && !$("reader").hidden) refreshThread().catch(error);
 }, 10000);
 
 // Notifications need a running bridge and an open app window (even in the

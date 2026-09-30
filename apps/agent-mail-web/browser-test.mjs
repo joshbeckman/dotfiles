@@ -1173,7 +1173,7 @@ try {
   await installed.evaluate(() => checkNewMail());
   assert.deepEqual(await installed.evaluate(() => window.__notes), []);
   await installed.evaluate(() => (window.__focused = false));
-  cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Background arrival", "--body", "Notify me.");
+  const backgroundId = cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Background arrival", "--body", "Notify me.");
   await installed.evaluate(() => checkNewMail());
   await installed.evaluate(() => checkNewMail());
   const notes = await installed.evaluate(() => window.__notes);
@@ -1186,12 +1186,31 @@ try {
   await installed.goto(new URL("/?open=" + encodeURIComponent(notes[0].tag), url).href);
   await installed.locator("#reader").waitFor({ state: "visible" });
   assert.equal(new URL(installed.url()).search, "");
+  // A reply arriving while the thread is open appends without disturbing it.
+  await installed.locator("#thread details.message").first().waitFor();
+  await installed.locator("#reply").click();
+  await installed.locator("#editor").waitFor({ state: "visible" });
+  await installed.locator("#body").fill("Draft in progress.");
+  await installed.evaluate(() => (document.querySelector("#thread details.message").open = false));
+  cli("send", "--from", "birch-weaver", "--to", "@josh", "--in-reply-to", backgroundId, "--subject", "Re: Background arrival", "--body", "Live reply.");
+  await installed.evaluate(() => refreshThread());
+  await installed.frameLocator("#thread iframe").last().getByText("Live reply.").waitFor();
+  const live = await installed.evaluate(() => ({
+    count: document.querySelectorAll("#thread details.message").length,
+    firstOpen: document.querySelector("#thread details.message").open,
+    body: composer.value(),
+    status: document.getElementById("status").textContent,
+    editor: !document.getElementById("editor").hidden,
+  }));
+  assert.deepEqual(live, { count: 2, firstOpen: false, body: "Draft in progress.", status: "New message from birch-weaver.", editor: true });
+  await installed.evaluate(() => refreshThread());
+  assert.equal(await installed.locator("#thread details.message").count(), 2);
   assert.deepEqual(appErrors, []);
   await app.close();
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();
