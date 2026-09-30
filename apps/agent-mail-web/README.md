@@ -10,7 +10,9 @@ agent-mail-web
 
 The bridge binds to `http://127.0.0.1:8765`, opens the browser, and runs until Ctrl-C. Keep its terminal open. `--no-open` prints the launch URL instead; `--port 8799` chooses another fixed port and `--port 0` chooses a free port for an isolated instance. If Agent Mail already holds the requested port, the command opens that bridge instead of starting another. Any other occupant makes startup fail rather than silently changing the address. No hostname or proxy configuration is needed.
 
-Treat the launch URL as private. Its fragment authorizes the browser, which keeps the token in local storage so an installed app can relaunch at `/`. The token lives in the human mailbox as `.web-token` (mode 0600) and persists across bridge restarts. Delete it and restart the bridge to rotate it; every browser then needs the new launch URL.
+Treat the launch URL as private. Its fragment authorizes that window, which keeps the token in local storage so it can relaunch at `/`. The token lives in the human mailbox as `.web-token` (mode 0600) and persists across bridge restarts. Delete it and restart the bridge to rotate it; every window then needs the new launch URL.
+
+Storage belongs to the app container, not the origin. Chrome's installed app shares the browser profile, so it already sees the token a tab stored. Safari gives a Dock web app its own container, which never sees it. So any window that has no usable token, or gets a 403 from the bridge, shows an **Authorize this app** panel: paste the launch URL or the token once per container. The app verifies it against the bridge before storing it, so a stale token cannot displace a working one.
 
 ### Installed app and notifications
 
@@ -20,7 +22,13 @@ Treat the launch URL as private. Its fragment authorizes the browser, which keep
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.agent-mail-web.plist
 ```
 
-Open the launch URL once, then install: in Chrome, use the install button in the address bar; in Safari, use File › Add to Dock. Click **Enable notifications** in the app header to allow alerts. While any Agent Mail window is open, including in the background, new inbox mail raises a notification when the window isn't focused. Clicking it opens the thread. Nothing is delivered while the app is closed; the existing `notify-josh` alerts still cover that. A phone cannot reach this loopback-only bridge.
+Open the launch URL once, then install: in Chrome, use the install button in the address bar; in Safari, use File › Add to Dock. Safari needs one more step, because a Safari web app starts with its own empty storage container. Copy the token to the clipboard and paste it into the app's **Authorize this app** panel:
+
+```sh
+pbcopy < "$(agent-mail addr @josh | sed 's|/inbox$||')/.web-token"
+```
+
+Click **Enable notifications** in the app header to allow alerts. While any Agent Mail window is open, including in the background, new inbox mail raises a notification when the window isn't focused. Clicking it opens the thread. Nothing is delivered while the app is closed; the existing `notify-josh` alerts still cover that. A phone cannot reach this loopback-only bridge.
 
 Requires Python 3.10+ (tracked in `Brewfile`) and a modern browser. Runtime assets are bundled locally; Node/npm are needed only to rebuild or run browser tests. The existing `agent-mail inbox @josh`, Neovim mappings, and macOS launcher remain unchanged.
 

@@ -185,6 +185,41 @@ nav span {
 #status.error {
   color: var(--c-red);
 }
+/* A Dock-launched app cannot inherit the token a browser tab stored, so this
+   panel is the only way in for an installed window. */
+#authorize {
+  margin: 0 1.5rem 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--c-border);
+  border-radius: 0.5rem;
+  background: var(--c-bg-alt);
+}
+#authorize h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+#authorize p {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  color: var(--c-muted);
+}
+#authorize form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+#authorize label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--c-muted);
+}
+#authorize input {
+  min-width: 22rem;
+}
+#authorize-status {
+  margin: 0.5rem 0 0;
+}
 main {
   padding: 0 1.5rem 2rem;
   max-width: 100rem;

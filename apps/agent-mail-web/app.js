@@ -8,7 +8,7 @@ if (launchToken) {
   localStorage.setItem("agent-mail-token", launchToken);
   history.replaceState(null, "", "/");
 }
-const token =
+let token =
   localStorage.getItem("agent-mail-token") ||
   sessionStorage.getItem("agent-mail-token") ||
   "";
@@ -33,7 +33,55 @@ const status = (text, error = false) => {
   $("status").textContent = text;
   $("status").classList.toggle("error", error);
 };
-const error = (e) => status(e.message || String(e), true);
+const error = (e) => {
+  status(e.message || String(e), true);
+  // A 403 means this window holds no usable token, which is the normal state
+  // for an installed app: Safari gives a Dock web app its own storage, so the
+  // token a Safari tab stored never reaches it. Offer the paste instead of
+  // leaving the server's instruction as a dead end.
+  if (e.status === 403) showAuthorize();
+};
+// Accepts the whole launch URL or a bare token: people paste whichever they
+// have to hand, and the fragment is the only part that is not guessable.
+function tokenFromInput(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  const hash = text.indexOf("#");
+  if (hash >= 0) return text.slice(hash + 1).trim();
+  return /^[A-Za-z0-9._~-]{20,}$/.test(text) ? text : "";
+}
+function showAuthorize() {
+  $("authorize").hidden = false;
+}
+function hideAuthorize() {
+  $("authorize").hidden = true;
+}
+async function authorize(raw) {
+  const candidate = tokenFromInput(raw);
+  if (!candidate) {
+    $("authorize-status").textContent =
+      "That does not look like a launch URL or token.";
+    return;
+  }
+  const previous = token;
+  token = candidate;
+  try {
+    // Prove it before keeping it, so a stale token does not silently replace a
+    // working one and leave the window looking authorized but broken.
+    await api("messages?folder=inbox&q=");
+  } catch (e) {
+    token = previous;
+    $("authorize-status").textContent =
+      e.status === 403
+        ? "That token was rejected. Restart the bridge and use its new launch URL."
+        : "Could not reach the bridge: " + (e.message || String(e));
+    return;
+  }
+  localStorage.setItem("agent-mail-token", candidate);
+  $("authorize-status").textContent = "Authorized.";
+  hideAuthorize();
+  await refresh().catch(error);
+}
 const escape = (value) =>
   String(value).replace(
     /[&<>"']/g,
@@ -83,7 +131,11 @@ async function api(path, data, extra = {}) {
     body: data ? JSON.stringify(data) : undefined,
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "Local bridge unavailable");
+  if (!response.ok) {
+    const failure = new Error(result.error || "Local bridge unavailable");
+    failure.status = response.status;
+    throw failure;
+  }
   return result;
 }
 function show(name) {
@@ -1206,6 +1258,11 @@ document.addEventListener("keydown", (e) => {
   }
 });
 $("current-user").prepend(avatar("@josh"));
+if (!token) showAuthorize();
+$("authorize-form").onsubmit = (event) => {
+  event.preventDefault();
+  authorize($("authorize-input").value).catch(error);
+};
 refresh().catch(error);
 getContacts().catch(error);
 // Badges are decoration: a failed team lookup leaves plain avatars.
