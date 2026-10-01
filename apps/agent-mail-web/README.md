@@ -30,7 +30,7 @@ pbcopy < "$(agent-mail addr @josh | sed 's|/inbox$||')/.web-token"
 
 Click **Enable notifications** in the app header to allow alerts. While any Agent Mail window is open, including in the background, new inbox mail raises a notification when the window isn't focused. Clicking it opens the thread. Nothing is delivered while the app is closed; the existing `notify-josh` alerts still cover that. A phone cannot reach this loopback-only bridge.
 
-Requires Python 3.10+ (tracked in `Brewfile`) and a modern browser. Runtime assets are bundled locally; Node/npm are needed only to rebuild or run browser tests. The existing `agent-mail inbox @josh`, Neovim mappings, and macOS launcher remain unchanged.
+Requires Python 3.10+ (tracked in `Brewfile`) and a modern browser. Runtime assets are bundled locally; Node/npm are needed only to rebuild or run browser tests. The existing `agent-mail inbox @josh` and Neovim mappings remain unchanged. No application bundle is installed: `~/Applications/Agent Mail.app` belongs to the Safari web app, and setup no longer writes to that path.
 
 ## Behavior
 

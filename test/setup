@@ -31,8 +31,6 @@ elif name == 'lsb_release':
     print('Distributor ID: ubuntu')
 elif name == 'dpkg':
     print('amd64')
-elif name == 'defaults':
-    print('org.joshbeckman.agent-mail')
 if name == os.environ.get('FAIL_COMMAND') and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
     sys.exit(7)
 '''
@@ -55,14 +53,13 @@ class SetupTest(unittest.TestCase):
         shutil.copyfile(SOURCE, self.script)
         (self.repo / 'Brewfile').touch()
         (self.repo / '.config/nvim').mkdir(parents=True)
-        (self.repo / 'apps/Agent Mail.app').mkdir(parents=True)
         for path in ('.agents/AGENTS.md', '.agents/pi/settings.json', '.agents/pi/keybindings.json'):
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('{}')
         for path in ('.agents/prompts', '.agents/skills'):
             (self.repo / path).mkdir()
-        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'defaults'):
+        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo'):
             self.executable(self.bin / name)
         for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
                      'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
@@ -78,8 +75,6 @@ class SetupTest(unittest.TestCase):
         path.chmod(0o700)
 
     def run_setup(self, platform='darwin', **environment):
-        if platform == 'darwin' and not Path('/usr/bin/ditto').exists():
-            self.skipTest('macOS application-copy integration requires ditto')
         return subprocess.run([shutil.which('zsh'), '-f', '-c',
                                'OSTYPE=$1; source "$2"', 'setup-test', platform, str(self.script)],
                               cwd=self.repo, env={**self.env, **environment},

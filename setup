@@ -155,17 +155,11 @@ __setup_linux(){
 __setup_mac(){
         echo "Detected Mac!"
 
-        echo '  ======  installing Agent Mail application launcher'
-        mkdir -p "$HOME/Applications"
-        agent_mail_app="$HOME/Applications/Agent Mail.app"
-        if [ -L "$agent_mail_app" ]; then
-                rm -f "$agent_mail_app"
-        elif [ -e "$agent_mail_app" ] && [ "$(defaults read "$agent_mail_app/Contents/Info" CFBundleIdentifier 2>/dev/null)" != "org.joshbeckman.agent-mail" ]; then
-                backup_path="${agent_mail_app}.backup.$(date +%s)"
-                echo "  ======  moving existing $agent_mail_app to $backup_path"
-                mv "$agent_mail_app" "$backup_path"
-        fi
-        /usr/bin/ditto "$DOTFILES_DIR/apps/Agent Mail.app" "$agent_mail_app"
+        # No application bundle is installed here. ~/Applications/Agent Mail.app is
+        # also where Safari puts a Dock web app of that name, and setup used to move
+        # the foreign bundle aside and copy its own launcher over it, which broke the
+        # installed app's Dock entry on every refresh. The bridge's LaunchAgent plus
+        # the web app cover this; do not reintroduce a bundle at that path.
 
         if command -v brew &> /dev/null
         then
