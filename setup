@@ -117,15 +117,31 @@ fi
 echo '  ======  generated nvim completion keywords'
 
 __setup_ubuntu(){
-        if [ "$(dpkg --print-architecture)" = "amd64" ]; then
-                echo "Ubuntu detected"
-                sudo -n apt-get install -y ripgrep fzf exuberant-ctags xsel bat
-                append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
-                append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
-        else
-                echo "Ubuntu detected, but not amd64"
-                __setup_unsupported
-        fi
+        # Checked architectures only: arm64 was verified on Debian 13 (trixie),
+        # where every package below exists for it. An unlisted architecture stops
+        # here rather than failing partway through an apt install. The nix block
+        # below still runs either way, since it does not go through apt.
+        arch="$(dpkg --print-architecture)"
+        case "$arch" in
+                amd64 | arm64)
+                        echo "Ubuntu detected ($arch)"
+                        # exuberant-ctags was dropped after Debian 12 in favour of
+                        # universal-ctags, and naming a package apt does not know
+                        # fails the whole apt-get call rather than just that one.
+                        if apt-cache show universal-ctags > /dev/null 2>&1; then
+                                ctags_package=universal-ctags
+                        else
+                                ctags_package=exuberant-ctags
+                        fi
+                        sudo -n apt-get install -y ripgrep fzf "$ctags_package" xsel bat
+                        append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
+                        append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
+                        ;;
+                *)
+                        echo "Ubuntu detected, but not a checked architecture ($arch)"
+                        __setup_unsupported
+                        ;;
+        esac
         if command -v nix-env &> /dev/null
         then
                 echo "Nix detected"
