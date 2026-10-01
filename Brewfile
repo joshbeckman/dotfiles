@@ -33,5 +33,3 @@ cask "ghostty"
 cask "keycastr" if OS.mac?
 cask "raycast" if OS.mac?
 cask "shortcat" if OS.mac?
-# Headings in agent-mail-web and published styles; Plex Sans/Mono are installed separately.
-cask "font-ibm-plex-sans-condensed"
