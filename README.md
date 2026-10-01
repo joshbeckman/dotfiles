@@ -59,6 +59,8 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Tools
 
+- **`apps/raycast/`** — Raycast script commands; add this directory under Raycast Settings › Extensions › Script Commands. **Preview Markdown** runs `preview-md` on a typed path or the Finder selection.
+
 - **`Brewfile`** — Homebrew dependencies (bat, fzf, gh, ripgrep, neovim, tmux, etc.)
 - **`.psqlrc`** — PostgreSQL client preferences
 - **`.irbrc`** — Ruby REPL config

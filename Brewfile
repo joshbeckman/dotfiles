@@ -13,6 +13,7 @@ brew "gh"
 brew "git"
 brew "git-delta"
 brew "neovim"
+brew "pandoc"
 brew "perl"
 brew "python"
 brew "pinentry-mac" if OS.mac?
