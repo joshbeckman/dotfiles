@@ -350,7 +350,10 @@ class Handler(BaseHTTPRequestHandler):
             # while Chromium, the only engine the browser test drives, passed. An
             # explicit origin matches in every engine and grants nothing 'self' did not.
             own = 'http://' + self.server.authority
-            policy = f"default-src 'none'; script-src {own}; style-src {own} 'unsafe-inline'; img-src {images}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+            # font-src is required here: without it fonts fall back to default-src
+            # 'none', so message bodies rendered in this frame would use system
+            # fonts while the surrounding app used the self-hosted ones.
+            policy = f"default-src 'none'; script-src {own}; style-src {own} 'unsafe-inline'; img-src {images}; font-src {own}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
         else:
             policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         self.send_header('Content-Security-Policy', policy)
@@ -391,10 +394,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.get(url.path, parse_qs(url.query))
             if self.command != 'GET':
                 raise MailError('Unknown endpoint', 404)
-            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
-            if url.path not in static:
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'fonts.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
+            if url.path.startswith('/fonts/'):
+                # Self-hosted so the app does not depend on fonts installed on the
+                # machine; the name is whitelisted rather than joined, because a
+                # path segment from the client must never reach the filesystem.
+                name = url.path[len('/fonts/'):]
+                if not re.fullmatch(r'[a-z0-9-]+\.woff2', name):
+                    raise MailError('Not found', 404)
+                p = ASSETS / 'fonts' / name
+                # An absent font is a 404, not the 503 that a failed read would
+                # produce; and never follow a symlink out of the asset tree.
+                if p.is_symlink() or not p.is_file():
+                    raise MailError('Not found', 404)
+            elif url.path in static:
+                p = ASSETS / static[url.path]
+            else:
                 raise MailError('Not found', 404)
-            p = ASSETS / static[url.path]
             mime = 'application/manifest+json' if p.suffix == '.webmanifest' else mimetypes.guess_type(p)[0]
             self.reply(200, p.read_bytes(), mime or 'application/octet-stream')
         except MailError as e:
