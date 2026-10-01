@@ -333,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass  # Request paths can contain private search terms.
 
-    def reply(self, status, body, mime='application/json'):
+    def reply(self, status, body, mime='application/json', extra_headers=None):
         if mime == 'application/json':
             body = json.dumps(body).encode()
         self.send_response(status)
@@ -357,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
         else:
             policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         self.send_header('Content-Security-Policy', policy)
+        for header, value in (extra_headers or {}).items():
+            self.send_header(header, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -366,8 +368,15 @@ class Handler(BaseHTTPRequestHandler):
                 raise MailError('Invalid Host', 403)
             url = urlsplit(self.path)
             origin = self.headers.get('Origin')
-            # Opaque-origin reader frames load these two public, data-free assets.
-            reader_asset = self.command == 'GET' and url.path in ('/reader.js', '/reader.css')
+            # Opaque-origin reader frames load these public, data-free assets. The
+            # frame's origin is "null", which makes its font request cross-origin
+            # and its fonts.css request carry that null Origin; without the font
+            # paths here both were rejected as an invalid Origin, so every message
+            # body fell back to system fonts while the surrounding app used Plex.
+            reader_asset = self.command == 'GET' and (
+                url.path in ('/reader.js', '/reader.css', '/fonts.css')
+                or re.fullmatch(r'/fonts/[a-z0-9-]+\.woff2', url.path) is not None
+            )
             if not reader_asset:
                 if origin and origin != 'http://' + self.server.authority:
                     raise MailError('Invalid Origin', 403)
@@ -412,7 +421,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 raise MailError('Not found', 404)
             mime = 'application/manifest+json' if p.suffix == '.webmanifest' else mimetypes.guess_type(p)[0]
-            self.reply(200, p.read_bytes(), mime or 'application/octet-stream')
+            # Fonts are always fetched in CORS mode, and from the reader frame that
+            # origin is opaque, so the allowance has to be explicit. These are
+            # public OFL files, so a wildcard gives nothing away.
+            extra = {'Access-Control-Allow-Origin': '*'} if p.suffix == '.woff2' else None
+            self.reply(200, p.read_bytes(), mime or 'application/octet-stream', extra)
         except MailError as e:
             self.reply(e.status, {'error': str(e)})
         except (ValueError, KeyError, TypeError):
