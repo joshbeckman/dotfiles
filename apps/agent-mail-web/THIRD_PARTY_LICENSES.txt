@@ -1,5 +1,8 @@
 Bundled third-party editor and renderers. Rebuild with npm ci --ignore-scripts && npm run build.
 
+IBM Plex fonts are self-hosted in fonts/ under the SIL Open Font License 1.1,
+with the licence text alongside them in fonts/LICENSE.txt.
+
 
 === @antfu/install-pkg 2.0.1 (MIT) ===
 

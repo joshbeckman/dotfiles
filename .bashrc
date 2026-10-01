@@ -68,13 +68,26 @@ wake_me_in()
 }
 
 generate_readme() {
-    cp ~/.dotfiles/commond-readme.md ./README.md
+    # Both layouts are supported by dfm, and the clone is not always ~/.dotfiles.
+    local source
+    for source in "$HOME/dotfiles/commond-readme.md" "$HOME/.dotfiles/commond-readme.md"; do
+        if [ -f "$source" ]; then
+            cp "$source" ./README.md
+            return 0
+        fi
+    done
+    echo "generate_readme: commond-readme.md not found; clone dotfiles to ~/dotfiles or ~/.dotfiles" >&2
+    return 1
 }
 
-source ~/src/github.com/jdxcode/gh/bash/gh.bash
-source ~/src/github.com/jdxcode/gh/bash/gl.bash
-source ~/src/github.com/jdxcode/gh/completions/gh.bash
-source ~/src/github.com/jdxcode/gh/completions/gl.bash
+# An optional local checkout, absent on most machines. Unguarded, each missing
+# file printed an error on every interactive shell.
+for gh_completion in ~/src/github.com/jdxcode/gh/bash/gh.bash \
+                    ~/src/github.com/jdxcode/gh/bash/gl.bash \
+                    ~/src/github.com/jdxcode/gh/completions/gh.bash \
+                    ~/src/github.com/jdxcode/gh/completions/gl.bash; do
+    [ -f "$gh_completion" ] && source "$gh_completion"
+done
 
 # heroku autocomplete setup
 HEROKU_AC_BASH_SETUP_PATH=/Users/josh/Library/Caches/heroku/autocomplete/bash_setup && test -f $HEROKU_AC_BASH_SETUP_PATH && source $HEROKU_AC_BASH_SETUP_PATH;

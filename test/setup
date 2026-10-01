@@ -30,9 +30,7 @@ elif name == 'uname':
 elif name == 'lsb_release':
     print('Distributor ID: ubuntu')
 elif name == 'dpkg':
-    print('amd64')
-elif name == 'defaults':
-    print('org.joshbeckman.agent-mail')
+    print(os.environ.get('FAKE_ARCH', 'amd64'))
 if name == os.environ.get('FAIL_COMMAND') and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
     sys.exit(7)
 '''
@@ -55,14 +53,13 @@ class SetupTest(unittest.TestCase):
         shutil.copyfile(SOURCE, self.script)
         (self.repo / 'Brewfile').touch()
         (self.repo / '.config/nvim').mkdir(parents=True)
-        (self.repo / 'apps/Agent Mail.app').mkdir(parents=True)
         for path in ('.agents/AGENTS.md', '.agents/pi/settings.json', '.agents/pi/keybindings.json'):
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('{}')
         for path in ('.agents/prompts', '.agents/skills'):
             (self.repo / path).mkdir()
-        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'defaults'):
+        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache'):
             self.executable(self.bin / name)
         for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
                      'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
@@ -78,8 +75,6 @@ class SetupTest(unittest.TestCase):
         path.chmod(0o700)
 
     def run_setup(self, platform='darwin', **environment):
-        if platform == 'darwin' and not Path('/usr/bin/ditto').exists():
-            self.skipTest('macOS application-copy integration requires ditto')
         return subprocess.run([shutil.which('zsh'), '-f', '-c',
                                'OSTYPE=$1; source "$2"', 'setup-test', platform, str(self.script)],
                               cwd=self.repo, env={**self.env, **environment},
@@ -140,6 +135,37 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(self.records()[-1]['command'], 'sudo')
         self.assertEqual(self.records()[-1]['args'][:2], ['-n', 'apt-get'])
+
+    def apt_get_args(self):
+        for record in self.records():
+            if record['command'] == 'sudo' and record['args'][:2] == ['-n', 'apt-get']:
+                return record['args']
+        return None
+
+    def test_arm64_installs_packages(self):
+        # Debian 13 on arm64 has every package in the list; the amd64-only guard
+        # used to skip the install entirely and leave the box without ripgrep.
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
+        self.assertNotIn('not a checked architecture', result.stdout)
+        args = self.apt_get_args()
+        self.assertIsNotNone(args, result.stdout + result.stderr)
+        self.assertIn('ripgrep', args)
+        self.assertIn('fzf', args)
+        self.assertIn('bat', args)
+
+    def test_ctags_uses_the_name_apt_knows(self):
+        # exuberant-ctags is gone after Debian 12; naming it fails the whole
+        # apt-get call, so the available package is probed first.
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
+        args = self.apt_get_args()
+        self.assertIsNotNone(args, result.stdout + result.stderr)
+        self.assertIn('universal-ctags', args)
+        self.assertNotIn('exuberant-ctags', args)
+
+    def test_unchecked_architecture_stops_before_apt(self):
+        result = self.run_setup(platform='linux', FAKE_ARCH='riscv64')
+        self.assertIn('not a checked architecture (riscv64)', result.stdout)
+        self.assertIsNone(self.apt_get_args())
 
 
 if __name__ == '__main__':

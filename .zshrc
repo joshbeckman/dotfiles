@@ -397,7 +397,9 @@ unset zcompdump_file zcompdump_stat
 # source ~/src/github.com/jdxcode/gh/bash/gl.bash
 # source ~/src/github.com/jdxcode/gh/completions/gl.bash
 
-export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
+# Homebrew's path and the work-machine toolchain below only exist on some
+# machines; unguarded they just put dead entries in PATH on Linux.
+[ -d /opt/homebrew/opt/ruby/bin ] && export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
 
 # wtp — worktree pool manager (installed via `tec tools install //areas/tools/wtp`)
 if command -v _wtp >/dev/null 2>&1; then
@@ -432,13 +434,13 @@ if [ -e /Users/joshbeckman/.nix-profile/etc/profile.d/nix.sh ]; then . /Users/jo
 export GPG_TTY=$(tty)
 
 alias python=/usr/bin/python3
-export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
+[ -d /opt/homebrew/opt/ruby/bin ] && export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
 source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
 # Created by `pipx` on 2024-05-29 17:50:16
-export PATH="$PATH:/Users/joshbeckman/.local/bin"
+[ -d "$HOME/.local/bin" ] && export PATH="$PATH:$HOME/.local/bin"
 # support for deno
-export PATH="/Users/joshbeckman/.deno/bin:$PATH"
+[ -d "$HOME/.deno/bin" ] && export PATH="$HOME/.deno/bin:$PATH"
 # Secrets live in the encrypted store managed by `s` (bin/s), not in sourced
 # env files: ambient exports hand every subprocess (including agents) every
 # secret. The Keychain command below is the decryption password source; the
@@ -451,9 +453,12 @@ source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 # cloudplatform: add Shopify clusters to your local kubernetes config
 export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}/Users/joshbeckman/.kube/config:/Users/joshbeckman/.kube/config.shopify.cloudplatform
 
-# Added by tec agent
-path=(/Users/joshbeckman/.local/state/nix/profiles/tec/bin /Users/joshbeckman/.local/state/tec/profiles/base/current/global/bin ${path:#/Users/joshbeckman/.local/state/nix/profiles/tec/bin})
-path=(/Users/joshbeckman/.local/state/tec/profiles/base/current/global/bin ${path:#/Users/joshbeckman/.local/state/tec/profiles/base/current/global/bin})
+# Added by tec agent. Only present on the work machine, so the block is guarded
+# rather than adding two dead directories to PATH elsewhere.
+if [ -d "$HOME/.local/state/tec/profiles/base/current/global/bin" ]; then
+  path=("$HOME/.local/state/nix/profiles/tec/bin" "$HOME/.local/state/tec/profiles/base/current/global/bin" ${path:#$HOME/.local/state/nix/profiles/tec/bin})
+  path=("$HOME/.local/state/tec/profiles/base/current/global/bin" ${path:#$HOME/.local/state/tec/profiles/base/current/global/bin})
+fi
 _tec_init_once () {
   preexec_functions=("${preexec_functions:#_tec_init_once}")
   [[ -x /Users/joshbeckman/.local/state/tec/profiles/base/current/global/init ]] && eval "$(/Users/joshbeckman/.local/state/tec/profiles/base/current/global/init zsh)"

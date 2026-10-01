@@ -117,15 +117,31 @@ fi
 echo '  ======  generated nvim completion keywords'
 
 __setup_ubuntu(){
-        if [ "$(dpkg --print-architecture)" = "amd64" ]; then
-                echo "Ubuntu detected"
-                sudo -n apt-get install -y ripgrep fzf exuberant-ctags xsel bat
-                append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
-                append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
-        else
-                echo "Ubuntu detected, but not amd64"
-                __setup_unsupported
-        fi
+        # Checked architectures only: arm64 was verified on Debian 13 (trixie),
+        # where every package below exists for it. An unlisted architecture stops
+        # here rather than failing partway through an apt install. The nix block
+        # below still runs either way, since it does not go through apt.
+        arch="$(dpkg --print-architecture)"
+        case "$arch" in
+                amd64 | arm64)
+                        echo "Ubuntu detected ($arch)"
+                        # exuberant-ctags was dropped after Debian 12 in favour of
+                        # universal-ctags, and naming a package apt does not know
+                        # fails the whole apt-get call rather than just that one.
+                        if apt-cache show universal-ctags > /dev/null 2>&1; then
+                                ctags_package=universal-ctags
+                        else
+                                ctags_package=exuberant-ctags
+                        fi
+                        sudo -n apt-get install -y ripgrep fzf "$ctags_package" xsel bat
+                        append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.vimrc
+                        append_to_file_if_not_present "source /usr/share/doc/fzf/examples/fzf.vim" ~/.config/nvim/init.vim
+                        ;;
+                *)
+                        echo "Ubuntu detected, but not a checked architecture ($arch)"
+                        __setup_unsupported
+                        ;;
+        esac
         if command -v nix-env &> /dev/null
         then
                 echo "Nix detected"
@@ -155,17 +171,11 @@ __setup_linux(){
 __setup_mac(){
         echo "Detected Mac!"
 
-        echo '  ======  installing Agent Mail application launcher'
-        mkdir -p "$HOME/Applications"
-        agent_mail_app="$HOME/Applications/Agent Mail.app"
-        if [ -L "$agent_mail_app" ]; then
-                rm -f "$agent_mail_app"
-        elif [ -e "$agent_mail_app" ] && [ "$(defaults read "$agent_mail_app/Contents/Info" CFBundleIdentifier 2>/dev/null)" != "org.joshbeckman.agent-mail" ]; then
-                backup_path="${agent_mail_app}.backup.$(date +%s)"
-                echo "  ======  moving existing $agent_mail_app to $backup_path"
-                mv "$agent_mail_app" "$backup_path"
-        fi
-        /usr/bin/ditto "$DOTFILES_DIR/apps/Agent Mail.app" "$agent_mail_app"
+        # No application bundle is installed here. ~/Applications/Agent Mail.app is
+        # also where Safari puts a Dock web app of that name, and setup used to move
+        # the foreign bundle aside and copy its own launcher over it, which broke the
+        # installed app's Dock entry on every refresh. The bridge's LaunchAgent plus
+        # the web app cover this; do not reintroduce a bundle at that path.
 
         if command -v brew &> /dev/null
         then
