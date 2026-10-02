@@ -1,6 +1,6 @@
 {
-  "defaultProvider": "openai",
-  "defaultModel": "gpt-5.5",
+  "defaultProvider": "fireworks",
+  "defaultModel": "accounts/fireworks/models/deepseek-v4p1-flash",
   "npmCommand": [
     "pnpm"
   ],
@@ -12,9 +12,7 @@
   "themes": [
     "~/.agents/pi/themes"
   ],
-  "packages": [
-    "https://github.com/shopify-playground/shop-pi-fy"
-  ],
+  "packages": [],
   "lastChangelogVersion": "0.75.5",
   "retry": {
     "enabled": true,
