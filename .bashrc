@@ -1,6 +1,11 @@
 # this file is executed for interactive non-login shells
 # (when you open a new window/session)
 
+# Sourced here rather than appended by `dfm install`, which writes through the
+# ~/.bashrc symlink into this repo and leaves it dirty. dfm skips the append when
+# the line is already present, so this is what keeps the tree clean.
+. $HOME/.shellrc.load
+
 export CLICOLOR=1
 
 # custom prompt
