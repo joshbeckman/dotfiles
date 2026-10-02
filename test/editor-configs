@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# The editor configs must actually load. Nothing checked this before, so .vimrc
+# spent months erroring on every machine (pathogen and PaperColor are installed
+# nowhere) without anyone noticing.
+#
+# Asserting silence is not enough on its own: `vim -es` exits 0 without sourcing
+# the file at all, and `nvim --headless` exits 0 even when the config errors. So
+# this asserts a setting the config sets, which proves the file was read, and
+# checks stderr separately, which proves it was read cleanly.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+nvim="$(command -v nvim || true)"
+[ -n "$nvim" ] || { echo "skip: nvim not installed"; exit 0; }
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+# expandtab comes from line 5 of init.vim and is not a nvim default.
+"$nvim" --headless -u "$root/.config/nvim/init.vim" \
+  -c "call writefile(['expandtab=' . &expandtab], '$tmp/state')" \
+  -c 'qa!' 2>"$tmp/stderr" || true
+
+if [ ! -f "$tmp/state" ]; then
+  echo "FAIL: init.vim did not run to the end (no state written)" >&2
+  exit 1
+fi
+
+if ! grep -qx 'expandtab=1' "$tmp/state"; then
+  echo "FAIL: init.vim was not applied (expected expandtab=1, got $(cat "$tmp/state"))" >&2
+  exit 1
+fi
+
+if [ -s "$tmp/stderr" ]; then
+  echo "FAIL: init.vim reported errors:" >&2
+  sed 's/^/  /' "$tmp/stderr" >&2
+  exit 1
+fi
+
+# .vimrc is deliberately not asserted. It errors on two dependencies that nothing
+# installs (pathogen at line 1, the PaperColor colorscheme at line 23) and that
+# predates this test; whether to guard or drop them is an open decision. Once it
+# is settled, assert it here too, using a pty rather than -es:
+#   script -q /dev/null vim -c '<cmd>' -c 'qa!'          # macOS
+#   script -qec "vim -c '<cmd>' -c 'qa!'" /dev/null      # Linux
+
+echo "ok: nvim config loads cleanly"
