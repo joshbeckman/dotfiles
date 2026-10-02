@@ -62,7 +62,13 @@ set autoread
 " :set termguicolors
 
 " configure fuzzy-finder
+" The plugin lives in different places per platform. Committed here rather than
+" appended by setup, which wrote through the ~/.vimrc symlink into this repo and
+" left it dirty after every run on Linux.
 set rtp+=/opt/homebrew/opt/fzf
+if filereadable('/usr/share/doc/fzf/examples/fzf.vim')
+  source /usr/share/doc/fzf/examples/fzf.vim
+endif
 
 " configure ripgrep for faster grepping
 set grepprg=rg\ --vimgrep
