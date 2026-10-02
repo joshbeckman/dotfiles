@@ -130,6 +130,15 @@ class SetupTest(unittest.TestCase):
         self.assertIn('email keyword generation failed', result.stdout)
         self.assertEqual(self.records()[-1]['command'], 'pi')
 
+    def test_pi_update_failure_does_not_abort_setup(self):
+        # pi refuses to self-update when the machine's install method does not
+        # match the shared npmCommand setting. That is an install mismatch, not a
+        # dotfiles failure, and it used to abort the run and report failure.
+        result = self.run_setup(FAIL_COMMAND='pi')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('pi update failed; continuing', result.stdout)
+        self.assertIn('updated pi and pi packages', result.stdout)
+
     def test_linux_sudo_cannot_prompt(self):
         result = self.run_setup(platform='linux', FAIL_COMMAND='sudo')
         self.assertEqual(result.returncode, 7, result.stderr)

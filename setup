@@ -213,7 +213,12 @@ fi
 # pi — update after config is linked and package managers have had a chance to install it
 if command -v pi &> /dev/null; then
         echo '  ======  updating pi and pi packages'
-        pi update
+        # Non-fatal: pi refuses to self-update when this machine's install method
+        # does not match the npmCommand in .agents/pi/settings.json, which is
+        # shared across machines. That is an install mismatch rather than a
+        # dotfiles failure, and letting it abort the run made a working setup
+        # report failure on every scheduled refresh.
+        pi update || echo 'pi update failed; continuing (check npmCommand in .agents/pi/settings.json)'
         echo '  ======  updated pi and pi packages'
 fi
 
