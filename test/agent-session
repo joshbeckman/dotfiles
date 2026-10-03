@@ -517,21 +517,42 @@ class LifecycleTest(unittest.TestCase):
         self.assertFalse((self.state / f'{SID}.lease').exists())
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
 
-    def test_a_direct_relaunch_recovers_a_session_stranded_while_awake(self):
-        # `resume` refuses an `awake` record and `wake_mail` skips it, so a session
-        # whose pi exited while awake has no automatic route back. A direct
-        # `pi --session <file>` still works, because `started` only refuses a lease
-        # held by another live process and leaves the state alone. That is what makes
-        # the failure "no automatic recovery" rather than "lost session", and this
-        # pins it: the recovery path is manual, so it has to keep working.
+    def test_a_session_that_never_parked_gets_a_record(self):
+        # wake-mail reads records, so a session with none was invisible to it: four of the
+        # five running sessions here had no record at all. A record that cannot describe
+        # the session well enough to resume later would be worse than none, so this also
+        # checks the fields resume needs.
+        self.assertFalse((self.state / f'{SID}.json').exists())
+        self.assertEqual(self.run_cli('started', SID, '--pid', str(self.live))['state'], 'awake')
+        record = self.record()
+        self.assertEqual(record['state'], 'awake')
+        self.assertTrue(record['wake'])
+        self.assertEqual(record['sessionFile'], str(self.transcript))
+        self.assertEqual(record['cwd'], str(self.cwd))
+        self.assertTrue(Path(record['notes']).is_file())
+        before = (self.state / f'{SID}.json').read_bytes()
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual((self.state / f'{SID}.json').read_bytes(), before)
+
+    def test_an_unclean_exit_leaves_a_session_wakable(self):
+        # exited repairs a clean exit, but a killed process or a shutdown never runs the
+        # exit handler, so the record stays awake. The lease is then the only signal that
+        # the process is gone, and resume uses it. Without this, a reboot strands a
+        # session permanently: no automatic route back, and a manual relaunch the only way.
         self.parked()
         self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'awake')
         self.run_cli('exited', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'parked')
+        # Unclean exit: the lease vanishes and nothing reports it.
+        self.run_cli('started', SID, '--pid', str(self.live))
+        (self.state / f'{SID}.lease').unlink()
         self.assertEqual(self.record()['state'], 'awake')
-        self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2)  # refuses: not parked
-        self.assertEqual(self.run_cli('started', SID, '--pid', str(self.live))['status'], 'leased')
-        self.assertTrue((self.state / f'{SID}.lease').exists())
-        self.assertEqual(self.record()['state'], 'awake')
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
+        self.assertEqual(plan['status'], 'would-wake')
+        # A session that really is running still refuses, because it holds the lease.
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2)
 
     def test_only_the_lease_holder_can_park_and_notes_are_written(self):
         self.run_cli('started', SID, '--pid', str(self.live))
@@ -552,7 +573,9 @@ class LifecycleTest(unittest.TestCase):
                         {'jobs': [], 'notes': ' '}):
             with self.subTest(request=request):
                 self.run_cli('park', SID, '--pid', str(self.live), stdin=json.dumps(request), expected=2)
-        self.assertFalse((self.state / f'{SID}.json').exists())
+        # `started` now writes a record for a session that never parked, so the file exists;
+        # what a rejected park must not do is change it.
+        self.assertEqual(self.record()['state'], 'awake')
 
     def test_resume_dry_run_is_exact_and_changes_nothing(self):
         self.parked()
