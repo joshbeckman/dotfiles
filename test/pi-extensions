@@ -8,7 +8,10 @@
 // so a resolution hook maps it to a stub. Schemas are never validated here, only
 // the behaviour around them.
 
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -18,7 +21,7 @@ const EXTENSIONS = join(root, ".agents/pi/extensions");
 const STUB =
   "export const Type = { Object: (p, o) => ({ type: 'object', properties: p, ...o })," +
   " String: () => ({ type: 'string' }), Optional: (s) => s, Boolean: () => ({ type: 'boolean' })," +
-  " Literal: (v) => ({ const: v }), Union: (s) => ({ anyOf: s }) };";
+  " Literal: (v) => ({ const: v }), Union: (s) => ({ anyOf: s }), Number: () => ({ type: 'number' }) };";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -117,6 +120,23 @@ function contextFor(current = CURRENT, available = MODELS, authed = AUTHED) {
   };
 }
 
+// The benchmark snapshot path is read when the extension module loads, so the
+// fixture has to exist before that import, not before the assertions.
+const SNAPSHOT_DIR = mkdtempSync(join(tmpdir(), "pi-ext-benchmarks-"));
+const SNAPSHOT = join(SNAPSHOT_DIR, "snapshot.json");
+const SNAPSHOT_MODELS = [
+  { id: "claude-opus-5.5::max", benchmarks: { aa_livecodebench: 0.8, aa_coding_index: 80 } },
+  { id: "claude-haiku-4.5::reasoning", benchmarks: { aa_livecodebench: 0.5, aa_coding_index: 40 } },
+  { id: "glm-5.3::max", benchmarks: { aa_livecodebench: 0.6, aa_coding_index: 60 } },
+  { id: "gpt-6-sol::max", benchmarks: { aa_livecodebench: 0.7, aa_coding_index: 70 } },
+  // One of two coding benchmarks: still ranked, but its coverage must show.
+  { id: "half-covered::max", benchmarks: { aa_livecodebench: 0.65 } },
+];
+const writeSnapshot = (generatedAt = new Date().toISOString()) =>
+  writeFileSync(SNAPSHOT, JSON.stringify({ generated_at: generatedAt, models: SNAPSHOT_MODELS }));
+writeSnapshot();
+process.env.PI_MODEL_BENCHMARKS = SNAPSHOT;
+
 const load = async (file) => (await import(pathToFileURL(join(EXTENSIONS, file)).href)).default;
 const modelSwitch = await load("model-switch.ts");
 const sessionReload = await load("session-reload.ts");
@@ -205,6 +225,103 @@ async function switchModel(params, options = {}) {
 {
   const { pi } = await switchModel({ model: "test/cheapest", reason: "and quieter", thinking: "low", requestedByJosh: false });
   check("the thinking level is applied with the switch", pi.modelCalls.includes("thinking:low"), pi.modelCalls.join(", "));
+}
+
+// --- benchmark recommendation -----------------------------------------------
+
+const BENCH_MODELS = [
+  model("claude-opus-5-5", 4, 20),
+  model("claude-haiku-4-5", 0.25, 1),
+  model("accounts/fireworks/models/glm-5p3", 0.4, 1.2), // pi path-prefixes it and spells the dot as "p"
+  model("gpt-6-sol", 2, 8),
+  model("half-covered", 0.1, 0.1), // mapped, but only one of two benchmarks
+  model("nemotron-3-ultra-nvfp4", 0.1, 0.1), // absent from the catalog entirely
+];
+
+async function recommend(params, options = {}) {
+  const pi = fakePi();
+  modelSwitch(pi.api);
+  const result = await pi.tools.switch_model.execute("call-1", params, undefined, undefined,
+    contextFor(options.current ?? model("claude-opus-5-5", 4, 20), options.available ?? BENCH_MODELS, new Set(BENCH_MODELS.map((m) => m.id))));
+  return { pi, result, text: result.content.map((part) => part.text).join("\n") };
+}
+
+{
+  const { text } = await recommend({ class: "coding", topPercent: 50 });
+  const lines = text.split("\n");
+  const ranked = lines.filter((line) => line.startsWith("| ") && !line.includes("---") && !line.startsWith("| Model"));
+  check("the recommendation names the class and the cutoff", text.includes("coding candidates") && text.includes("top 50%"), lines[0]);
+  const prices = ranked.map((line) => Number(line.split("|")[4].trim().replace("$", "").split("/")[0]));
+  check("rows are cheapest first", prices.every((value, index) => index === 0 || value >= prices[index - 1]), ranked.join(" | "));
+  const cutoff = Number(text.match(/score >= (\d+)/)?.[1]);
+  const scores = ranked.map((line) => Number(line.split("|")[2].trim()));
+  check("every listed row clears the stated cutoff", scores.every((score) => score >= cutoff), `${scores} vs ${cutoff}`);
+  check("the most capable qualifying model is listed", ranked.some((l) => l.includes("claude-opus-5-5")), ranked.join(" | "));
+  check("a model below the tier is left out", !ranked.some((l) => l.includes("haiku")), ranked.join(" | "));
+  check("a model measured on one of the class's inputs is still ranked", ranked.some((l) => l.includes("half-covered")), ranked.join(" | "));
+  check("and its partial coverage is visible", /half-covered\D+\d+ \| 1\/2/.test(text), ranked.find((l) => l.includes("half-covered")));
+  check("a model below the cutoff is not reported as unmapped", !text.includes("no benchmark data: ") || !text.includes("glm-5p3"), text);
+  check("models the catalog lacks are reported", text.includes("nemotron-3-ultra-nvfp4") && text.includes("no benchmark data"), text.split("\n").pop());
+  check("the snapshot date and price basis are stated", text.includes("Snapshot:") && text.includes("pi's list price"), text);
+}
+
+{
+  // Wide enough that every scored model ranks, which is what proves the mapping:
+  // pi spells this one glm-5p3 while the catalog says glm-5.3.
+  const { text } = await recommend({ class: "coding", topPercent: 100 });
+  const ranked = text.split("\n").filter((line) => line.startsWith("| ") && !line.includes("---") && !line.startsWith("| Model"));
+  check("a path-prefixed id with the dot spelled p is matched", ranked.some((l) => l.includes("glm-5p3")), ranked.join(" | "));
+  check("every scored model is ranked at the widest tier", ranked.length === 5, ranked.join(" | "));
+}
+
+{
+  const { text } = await recommend({ class: "coding" }); // default tier is the top 5%
+  const ranked = text.split("\n").filter((line) => line.startsWith("| ") && !line.includes("---") && !line.startsWith("| Model"));
+  check("the default tier keeps only the top scorers", ranked.every((l) => Number(l.split("|")[2].trim()) >= 100), ranked.join(" | "));
+  check("a mid-scoring model is not in the default tier", !ranked.some((l) => l.includes("haiku")), ranked.join(" | "));
+}
+
+{
+  const { text } = await recommend({ class: "coding", topPercent: 100, minContext: 500_000 });
+  check("a context constraint empties the list rather than ignoring it", text.includes("no model clears that tier"), text.split("\n").slice(-2).join(" "));
+}
+
+{
+  const small = [model("gpt-6-sol", 2, 8, { input: ["text"] }), model("claude-opus-5-5", 4, 20)];
+  const { text } = await recommend({ class: "coding", topPercent: 100, needsImages: true },
+    { current: model("gpt-6-sol", 2, 8), available: small });
+  check("an image constraint drops models that cannot take images", !text.includes("gpt-6-sol") && text.includes("claude-opus-5-5"), text.split("\n").slice(0, 5).join(" "));
+}
+
+{
+  writeSnapshot(new Date(Date.now() - 72 * 3600 * 1000).toISOString());
+  const { text } = await recommend({ class: "coding", topPercent: 50 });
+  check("a stale snapshot still answers and says so", text.includes("stale") && text.includes("gpt-6-sol"), text.split("\n")[2]);
+  writeSnapshot();
+}
+
+{
+  // The no-cache path cannot be reached in this process, since the path is fixed
+  // at import, so it runs in a child with a snapshot path that does not exist.
+  const driver = join(SNAPSHOT_DIR, "missing-snapshot.mjs");
+  writeFileSync(driver, `
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, next) {
+  if (specifier === "typebox") return { url: "data:text/javascript," + encodeURIComponent(${JSON.stringify(STUB)}), shortCircuit: true };
+  return next(specifier, context);
+} });
+const ext = (await import(${JSON.stringify(pathToFileURL(join(EXTENSIONS, "model-switch.ts")).href)})).default;
+const tools = {};
+ext({ registerTool: (t) => { tools[t.name] = t; }, registerCommand: () => {}, on: () => {} });
+const ctx = { model: null, thinkingLevel: "medium", modelRegistry: { getAvailable: () => [], hasConfiguredAuth: () => true, find: () => undefined } };
+const result = await tools.switch_model.execute("c", { class: "coding" }, undefined, undefined, ctx);
+process.stdout.write(result.content.map((p) => p.text).join("\\n"));
+`);
+  const output = execFileSync(process.execPath, [driver], {
+    encoding: "utf8",
+    env: { ...process.env, PI_MODEL_BENCHMARKS: join(SNAPSHOT_DIR, "absent.json") },
+  });
+  check("a missing snapshot explains itself instead of throwing", output.includes("No benchmark snapshot yet"), output);
 }
 
 // --- session reload ---------------------------------------------------------
