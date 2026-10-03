@@ -643,8 +643,19 @@ cmd_scan() {
 # and restamping rewrites it, so any timestamp here would be fiction, and
 # recording a real one means the mutable flag file this design does without.
 cmd_receipt() {
-  local id="${1:-}"
+  local id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      # Accepted for symmetry with read and scan, which require it, but not used:
+      # receipt searches every inbox, so naming one would only narrow the answer.
+      --to) [ -n "${2:-}" ] || die "receipt: --to requires a value"; shift 2 ;;
+      -*) die "receipt: unknown arg $1" ;;
+      *) [ -n "$id" ] && die "receipt: unexpected arg $1"; id="$1"; shift ;;
+    esac
+  done
   [ -n "$id" ] || die "receipt: MSGID required"
+  # Safe now that a leading dash is rejected: basename read `--to` as its own flag
+  # and reported "illegal option -- -" while the command still exited 0.
   id="$(basename "$id" .md)"
 
   local inbox recipient state="" found=0

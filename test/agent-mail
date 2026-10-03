@@ -91,6 +91,12 @@ message="$inbox/cur/$msgid.md"
 [[ -f "$message" ]]
 [[ ! -e "$inbox/.escalated-$msgid" ]]
 "$command" receipt "$msgid" | grep -Fq $'read\t'
+# read and scan take --to, so callers write it here too. It used to reach basename,
+# which reported "illegal option -- -" while the command still exited 0.
+"$command" receipt --to @josh "$msgid" | grep -Fq $'read\t'
+if "$command" receipt --nonsense "$msgid" >/dev/null 2>&1; then
+  echo 'receipt accepted an unknown flag' >&2; exit 1
+fi
 
 mkdir -p "$mail_root/test-agent-session" "$mail_root/other-agent-session"
 
