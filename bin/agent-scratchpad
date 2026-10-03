@@ -29,9 +29,13 @@ Options:
 EOF
 }
 
-mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
-}
+# GNU stat treats -f as "filesystem status" and still exits 0, so trying the
+# BSD form first silently returns the wrong thing. Probe the flavor once.
+if stat -c %Y . >/dev/null 2>&1; then
+  mtime() { stat -c %Y "$1" 2>/dev/null; }
+else
+  mtime() { stat -f %m "$1" 2>/dev/null; }
+fi
 
 newest_activity() {
   local dir="$1" newest=0 stamp file session_file
