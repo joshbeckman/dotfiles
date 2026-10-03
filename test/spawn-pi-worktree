@@ -26,7 +26,15 @@ cat >"$tmp/login-shell" <<'EOF'
 [ "$1" = -lic ] || exit 2
 printf '/fake/bin/pi\n'
 EOF
-chmod +x "$tmp/bin/tmux" "$tmp/bin/uname" "$tmp/login-shell"
+cat >"$tmp/bin/s" <<'EOF'
+#!/bin/sh
+# Present only so the launcher's `command -v s` check succeeds; the dry run
+# never executes it.
+exit 0
+EOF
+chmod +x "$tmp/bin/tmux" "$tmp/bin/uname" "$tmp/login-shell" "$tmp/bin/s"
+
+printf '{"defaultProvider": "fireworks"}\n' >"$tmp/settings.json"
 
 mkdir "$tmp/repo"
 git -C "$tmp/repo" init -q
@@ -38,7 +46,8 @@ git -C "$tmp/repo" commit -qm fixture
 git -C "$tmp/repo" worktree add -q -b child "$tmp/worktree"
 
 run() {
-  (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/login-shell" "$launcher" "$@")
+  (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/login-shell" \
+    PI_SETTINGS="$tmp/settings.json" "$launcher" "$@")
 }
 
 output="$(run --dry-run --approve --tmux-session test --title child \
@@ -50,6 +59,29 @@ grep -Fq 'pi: /fake/bin/pi' <<<"$output"
 grep -Fq -- '--approve' <<<"$output"
 grep -Fq -- '--approve\ --\ ' <<<"$output"
 grep -Fq -- 'inspect' <<<"$output"
+# The provider key comes from settings.json, and `s` is present in the fixture
+# PATH, so the window command must be wrapped with it.
+grep -Fq 'secrets: FIREWORKS_API_KEY' <<<"$output"
+grep -Fq -- 's\ FIREWORKS_API_KEY\ --\ /fake/bin/pi' <<<"$output"
+
+# An explicit --secret overrides the provider-derived name.
+output="$(run --dry-run --secret OPENAI_API_KEY --tmux-session test --title override \
+  --cwd "$tmp/worktree" --prompt test)"
+grep -Fq 'secrets: OPENAI_API_KEY' <<<"$output"
+grep -Fq -- 's\ OPENAI_API_KEY\ --\ /fake/bin/pi' <<<"$output"
+
+# Without the secret store on PATH the command is left unwrapped. The fake s
+# lives in the same directory as the fake tmux, so move it aside rather than
+# dropping that directory from PATH.
+mv "$tmp/bin/s" "$tmp/bin/s.off"
+output="$(cd "$tmp/repo" && PATH="$tmp/bin:/usr/bin:/bin" SHELL="$tmp/login-shell" \
+  PI_SETTINGS="$tmp/settings.json" "$launcher" --dry-run --tmux-session test \
+  --title bare --cwd "$tmp/worktree" --prompt test)"
+mv "$tmp/bin/s.off" "$tmp/bin/s"
+if grep -Fq 'secrets:' <<<"$output"; then
+  printf 'expected no secret wrapping without s on PATH\n' >&2
+  exit 1
+fi
 
 if run --dry-run --tmux-session test --title missing-prompt --cwd "$tmp/worktree" \
   >"$tmp/out" 2>"$tmp/err"; then

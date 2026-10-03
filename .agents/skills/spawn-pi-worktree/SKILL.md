@@ -39,6 +39,13 @@ spawn-pi-worktree --approve --tmux-session <session> --title <task> \
   --cwd /absolute/worktree/path --prompt "<reviewed prompt>"
 ```
 
+On a machine that keeps the provider key in the `s` secret store, the launcher
+injects it automatically. The key name comes from `--secret KEY` (repeatable),
+then `$SPAWN_PI_SECRETS`, then `<defaultProvider>_API_KEY` read from
+`~/.pi/agent/settings.json`. Pass `--secret` when Pi needs a key other than the
+one its configured provider implies. A dry run prints `secrets:` when it will
+wrap the launch.
+
 The launcher rejects duplicate window titles and elevated macOS memory pressure. Launch tasks separately, then verify the exact window:
 
 ```sh
