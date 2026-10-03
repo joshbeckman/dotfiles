@@ -546,6 +546,9 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
         self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
         self.assertIn('parked.md', plan['command'][9])
+        # A wake is otherwise one-way: the session stays awake holding its memory,
+        # which makes the next wake likelier to be deferred by the pressure gate.
+        self.assertIn('park_session', plan['command'][9])
         extension = self.root / 'park ext.ts'
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run', '--extension', str(extension))
         self.assertTrue(plan['command'][9].startswith(f"pi -e '{extension}' --session {self.transcript} "))

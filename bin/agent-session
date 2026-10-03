@@ -487,7 +487,9 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         mailbox = Path(evidence['scratchpad']).name
         prompt = (f"You were parked and have been woken by agent-session. Read {record['notes']} for the jobs "
                   f"you stopped and your notes. Then read your mail with `agent-mail read --to {mailbox}`. "
-                  'Restart a job only if it is still needed.')
+                  'Restart a job only if it is still needed. Once the mail is dealt with and nothing else '
+                  'needs doing, call the park_session tool with no jobs: a session left awake holds its '
+                  'memory, and every wake makes the next one more likely to be deferred by the pressure gate.')
         command = ['tmux', 'new-window', '-d', '-t', tmux_session + ':', '-n', handle, '-c', evidence['cwd'],
                    shlex.join(['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
                                '--session', evidence['sessionFile'], prompt])]
