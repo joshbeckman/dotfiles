@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.joshbeckman.agent-mail-wake</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/joshbeckman/dotfiles/bin/agent-session</string>
+		<string>wake-mail</string>
+		<string>--tmux-session</string>
+		<string>dotfiles</string>
+	</array>
+	<!-- Every five minutes. A parked session has no process, so nothing else can
+	     wake it: the in-process wake only covers a running pi. Each run wakes at
+	     most one session, so three waiting sessions take about a quarter of an
+	     hour, and agent-session's own per-session hourly budget still applies. -->
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- launchd's PATH is /usr/bin:/bin:/usr/sbin:/sbin. This job needs
+		     python3 and tmux, both under /opt/homebrew. -->
+		<key>PATH</key>
+		<string>/Users/joshbeckman/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Users/joshbeckman/dotfiles</string>
+	<key>StandardOutPath</key>
+	<string>/Users/joshbeckman/Library/Logs/agent-mail-wake.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/joshbeckman/Library/Logs/agent-mail-wake.log</string>
+	<!-- Aqua so a resumed session inherits the logged-in session's environment;
+	     Background so a wake never competes with interactive work. -->
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>
