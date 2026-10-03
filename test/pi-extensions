@@ -1,0 +1,271 @@
+#!/usr/bin/env node
+// Drives the pi extensions with a fake pi API, so their guardrails are pinned
+// down rather than assumed: the model switch refuses a price rise unless Josh
+// asked for it, and a reload is deferred to the end of the turn with its
+// continuation note crossing the runtime swap.
+//
+// The extensions import "typebox" at runtime, which this repo does not install,
+// so a resolution hook maps it to a stub. Schemas are never validated here, only
+// the behaviour around them.
+
+import { registerHooks } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const EXTENSIONS = join(root, ".agents/pi/extensions");
+
+const STUB =
+  "export const Type = { Object: (p, o) => ({ type: 'object', properties: p, ...o })," +
+  " String: () => ({ type: 'string' }), Optional: (s) => s, Boolean: () => ({ type: 'boolean' })," +
+  " Literal: (v) => ({ const: v }), Union: (s) => ({ anyOf: s }) };";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "typebox") {
+      return { url: "data:text/javascript," + encodeURIComponent(STUB), shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+let passed = 0;
+const failures = [];
+function check(name, condition, detail = "") {
+  if (condition) {
+    passed += 1;
+    console.log(`ok   ${name}`);
+  } else {
+    failures.push(name);
+    console.log(`FAIL ${name}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+function eq(name, actual, expected) {
+  check(name, actual === expected, `got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+}
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+// --- fixtures ---------------------------------------------------------------
+
+function model(id, input, output, extra = {}) {
+  return {
+    provider: "test",
+    id,
+    cost: input === undefined ? undefined : { input, output },
+    contextWindow: 200_000,
+    reasoning: true,
+    input: ["text", "image"],
+    ...extra,
+  };
+}
+
+const CURRENT = model("cheap", 0.5, 1.5); // 2.0 per million, in and out
+const MODELS = [
+  CURRENT,
+  model("cheapest", 0.1, 0.3), // cheaper than current
+  model("same", 0.5, 1.5), // equal
+  model("dear", 3, 15), // dearer
+  model("mystery", undefined, undefined), // unpriced
+  model("nokey", 0.1, 0.1), // authenticated check fails
+];
+const AUTHED = new Set(["cheap", "cheapest", "same", "dear", "mystery"]);
+
+function fakePi() {
+  const tools = {};
+  const commands = {};
+  const handlers = {};
+  const sent = [];
+  const modelCalls = [];
+  return {
+    tools,
+    commands,
+    sent,
+    modelCalls,
+    api: {
+      registerTool: (tool) => {
+        tools[tool.name] = tool;
+      },
+      registerCommand: (name, definition) => {
+        commands[name] = definition;
+      },
+      on: (event, handler) => {
+        (handlers[event] ||= []).push(handler);
+      },
+      sendUserMessage: (text, options) => sent.push({ text, options }),
+      setModel: async (target) => {
+        modelCalls.push(`${target.provider}/${target.id}`);
+        return true;
+      },
+      setThinkingLevel: (level) => modelCalls.push(`thinking:${level}`),
+      getThinkingLevel: () => "high",
+    },
+    async emit(event, payload = {}) {
+      for (const handler of handlers[event] || []) await handler(payload);
+    },
+  };
+}
+
+function contextFor(current = CURRENT, available = MODELS, authed = AUTHED) {
+  return {
+    model: current,
+    thinkingLevel: "medium",
+    modelRegistry: {
+      getAvailable: () => available,
+      hasConfiguredAuth: (target) => authed.has(target.id),
+      find: (provider, id) => available.find((m) => m.provider === provider && m.id === id),
+    },
+  };
+}
+
+const load = async (file) => (await import(pathToFileURL(join(EXTENSIONS, file)).href)).default;
+const modelSwitch = await load("model-switch.ts");
+const sessionReload = await load("session-reload.ts");
+
+// The tool requires requestedByJosh to be passed explicitly, true or false, so a
+// caller cannot leave the question unanswered and have it read as consent. These
+// tests therefore always pass it.
+async function switchModel(params, options = {}) {
+  const pi = fakePi();
+  modelSwitch(pi.api);
+  const result = await pi.tools.switch_model.execute("call-1", params, undefined, undefined, contextFor(
+    options.current ?? CURRENT,
+    options.available ?? MODELS,
+    options.authed ?? AUTHED,
+  ));
+  return { pi, result, text: result.content.map((part) => part.text).join("\n") };
+}
+
+// --- model switching --------------------------------------------------------
+
+{
+  const { text } = await switchModel({ list: true });
+  const lineFor = (id) => text.split("\n").find((line) => line.includes(`test/${id}`)) ?? "";
+  check("list names the current model and thinking level", text.includes("Current: test/cheap at medium thinking."), text.split("\n")[0]);
+  check("list marks a cheaper model as switchable", lineFor("cheapest").includes("| yes |"), lineFor("cheapest"));
+  check("list marks a dearer model as needing Josh", lineFor("dear").includes("ask Josh"), lineFor("dear"));
+  check("list marks an unpriced model as needing Josh", lineFor("mystery").includes("ask Josh"), lineFor("mystery"));
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/cheapest", reason: "cheaper", requestedByJosh: false });
+  check("a cheaper model switches without Josh", result.isError !== true, result.content?.[0]?.text);
+  eq("setModel called with the cheaper model", pi.modelCalls[0], "test/cheapest");
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/same", reason: "same price", requestedByJosh: false });
+  check("an equally priced model switches without Josh", result.isError !== true, result.content?.[0]?.text);
+  eq("setModel called with the equal model", pi.modelCalls[0], "test/same");
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/dear", reason: "smarter", requestedByJosh: false });
+  check("a dearer model is refused without Josh", result.isError === true, "it switched anyway");
+  check("the refusal says why", result.content[0].text.includes("Refused"), result.content[0].text);
+  eq("no model was set on refusal", pi.modelCalls.length, 0);
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/mystery", reason: "unknown cost", requestedByJosh: false });
+  check("an unpriced model is refused without Josh", result.isError === true, "it switched anyway");
+  eq("no model was set for the unpriced refusal", pi.modelCalls.length, 0);
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/dear", reason: "Josh asked", requestedByJosh: true });
+  check("a dearer model switches when Josh asked", result.isError !== true, result.content?.[0]?.text);
+  eq("setModel called for the dearer model", pi.modelCalls[0], "test/dear");
+}
+
+{
+  const { result } = await switchModel({ model: "test/cheapest" });
+  check("a switch without a reason is refused", result.isError === true);
+  check("the refusal names the missing fields", result.content[0].text.includes("model, reason, and requestedByJosh"), result.content[0].text);
+}
+
+{
+  const { result } = await switchModel({ model: "test/ghost", reason: "typo", requestedByJosh: true });
+  check("an unknown model is refused", result.isError === true && result.content[0].text.includes("Unknown model"), result.content[0].text);
+}
+
+{
+  const { result } = await switchModel({ model: "nonsense", reason: "typo", requestedByJosh: true });
+  check(
+    "a model without a provider is refused",
+    result.isError === true && result.content[0].text.includes("provider/model-id"),
+    result.content[0].text,
+  );
+}
+
+{
+  const { result } = await switchModel({ model: "test/nokey", reason: "no credentials", requestedByJosh: true });
+  check("a model without credentials is refused", result.isError === true && result.content[0].text.includes("no configured credentials"), result.content[0].text);
+}
+
+{
+  const { pi } = await switchModel({ model: "test/cheapest", reason: "and quieter", thinking: "low", requestedByJosh: false });
+  check("the thinking level is applied with the switch", pi.modelCalls.includes("thinking:low"), pi.modelCalls.join(", "));
+}
+
+// --- session reload ---------------------------------------------------------
+
+{
+  const pi = fakePi();
+  sessionReload(pi.api);
+  check("the reload command is registered", typeof pi.commands["reload-session"]?.handler === "function");
+  check("the reload tool is registered", typeof pi.tools.reload_session?.execute === "function");
+
+  let reloaded = 0;
+  await pi.commands["reload-session"].handler([], { reload: async () => { reloaded += 1; } });
+  eq("the command reloads", reloaded, 1);
+}
+
+{
+  delete globalThis.__piReloadContinuation;
+  const pi = fakePi();
+  sessionReload(pi.api);
+
+  const result = await pi.tools.reload_session.execute("call-1", { continuation: "then read the plan" });
+  check("the tool reports a queued reload", result.content[0].text.includes("Reload queued"), result.content[0].text);
+  eq("the tool does not send anything itself", pi.sent.length, 0);
+  check(
+    "the continuation note is parked on a process global",
+    String(globalThis.__piReloadContinuation).includes("then read the plan"),
+    String(globalThis.__piReloadContinuation),
+  );
+
+  await pi.emit("agent_settled");
+  eq("settling submits the reload command", pi.sent.length, 1);
+  eq("the reload is submitted as a command", pi.sent[0].text, "/reload-session");
+  eq("prompt templates are expanded", pi.sent[0].options?.expandPromptTemplates, true);
+
+  await pi.emit("agent_settled");
+  eq("a second settle does not reload again", pi.sent.length, 1);
+
+  await pi.emit("session_start", { reason: "reload" });
+  await tick();
+  eq("the continuation note is delivered after the reload", pi.sent.length, 2);
+  check("the note says what to do next", pi.sent[1].text.includes("then read the plan"), pi.sent[1].text);
+  eq("the parked note is consumed", globalThis.__piReloadContinuation, undefined);
+}
+
+{
+  delete globalThis.__piReloadContinuation;
+  const pi = fakePi();
+  sessionReload(pi.api);
+
+  await pi.emit("session_start", { reason: "startup" });
+  await tick();
+  eq("a normal start sends nothing", pi.sent.length, 0);
+
+  await pi.emit("agent_settled");
+  eq("settling without a request sends nothing", pi.sent.length, 0);
+}
+
+// --- result -----------------------------------------------------------------
+
+console.log(`\n${passed} passed, ${failures.length} failed`);
+if (failures.length) {
+  console.log("failed: " + failures.join("; "));
+  process.exit(1);
+}
