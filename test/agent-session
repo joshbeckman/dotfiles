@@ -517,6 +517,22 @@ class LifecycleTest(unittest.TestCase):
         self.assertFalse((self.state / f'{SID}.lease').exists())
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
 
+    def test_a_direct_relaunch_recovers_a_session_stranded_while_awake(self):
+        # `resume` refuses an `awake` record and `wake_mail` skips it, so a session
+        # whose pi exited while awake has no automatic route back. A direct
+        # `pi --session <file>` still works, because `started` only refuses a lease
+        # held by another live process and leaves the state alone. That is what makes
+        # the failure "no automatic recovery" rather than "lost session", and this
+        # pins it: the recovery path is manual, so it has to keep working.
+        self.parked()
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.run_cli('exited', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'awake')
+        self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2)  # refuses: not parked
+        self.assertEqual(self.run_cli('started', SID, '--pid', str(self.live))['status'], 'leased')
+        self.assertTrue((self.state / f'{SID}.lease').exists())
+        self.assertEqual(self.record()['state'], 'awake')
+
     def test_only_the_lease_holder_can_park_and_notes_are_written(self):
         self.run_cli('started', SID, '--pid', str(self.live))
         self.assertIn('holds the lease', self.park(pid=1, expected=2))
