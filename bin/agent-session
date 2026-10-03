@@ -506,11 +506,14 @@ def retire(handle):
 
 
 def memory_pressure():
-    if sys.platform != 'darwin':
-        return 1
     import subprocess
-    return int(subprocess.run(['sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
-                              capture_output=True, text=True, check=True).stdout)
+    try:
+        return int(subprocess.run(['sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
+                                  capture_output=True, text=True, check=True).stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # The gate is macOS-only, and probing the key answers "is this macOS?"
+        # and "what is the level?" in one call on every platform.
+        return 1
 
 
 def resume(handle, tmux_session, dry_run, extensions=()):
@@ -633,7 +636,20 @@ def exact_handle(value):
     return value[2:]
 
 
+def use_utf8_filesystem():
+    # A C locale makes Python encode path arguments as ASCII, so a non-ASCII
+    # scratchpad or cwd raises instead of round-tripping. UTF-8 mode fixes every
+    # path call at once; the alternative is encoding each os.* argument by hand.
+    if sys.getfilesystemencoding().lower().replace('-', '') == 'utf8':
+        return
+    if os.environ.get('PYTHONUTF8') == '1':
+        return
+    os.environ['PYTHONUTF8'] = '1'
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 def main():
+    use_utf8_filesystem()
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     command = commands.add_parser('repair-inbox', help='preview or reconstruct a missing empty inbox')
