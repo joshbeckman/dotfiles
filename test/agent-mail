@@ -94,6 +94,16 @@ message="$inbox/cur/$msgid.md"
 # read and scan take --to, so callers write it here too. It used to reach basename,
 # which reported "illegal option -- -" while the command still exited 0.
 "$command" receipt --to @josh "$msgid" | grep -Fq $'read\t'
+# A shortened id is what people paste when they trim the descriptive middle, and it
+# used to report "never delivered" with exit 1. The <pid>-<rand> tail is unique, so a
+# suffix resolves; the timestamp and the pair are what survive trimming.
+short_id="$(printf '%s' "$msgid" | cut -d- -f1)-$(printf '%s' "$msgid" | awk -F- '{print $(NF-1)"-"$NF}')"
+[[ "$short_id" != "$msgid" ]]
+"$command" receipt "$short_id" | grep -Fq $'read\t'
+"$command" read --to @josh --id "$short_id" >/dev/null
+if "$command" discard --to @josh --id "19700101T000000Z-1-1" >/dev/null 2>&1; then
+  echo 'discard reported success for an id that matches nothing' >&2; exit 1
+fi
 if "$command" receipt --nonsense "$msgid" >/dev/null 2>&1; then
   echo 'receipt accepted an unknown flag' >&2; exit 1
 fi

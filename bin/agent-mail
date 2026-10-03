@@ -355,6 +355,37 @@ notify_human_delivery() {
   fi
 }
 
+# Resolve a message id inside one inbox, printing the message file. The canonical id
+# is the Message-ID, which is the filename stem, but the trailing <pid>-<rand> pair is
+# unique, so an id that is only a suffix of the stem resolves too: that is what someone
+# pastes when they shorten it, and it is the tail of the filename. Matching the raw
+# string would not work, since the descriptive middle sits between the timestamp and
+# that pair. Callers read the state from the path rather than parsing a second field.
+message_in_inbox() {
+  local inbox="$1" id; id="$(basename "$2" .md)"
+  local state path rand rest pair
+  for state in new cur; do
+    if [ -f "$inbox/$state/$id.md" ]; then
+      printf '%s\n' "$inbox/$state/$id.md"; return 0
+    fi
+  done
+  rand="${id##*-}"; rest="${id%-*}"; pair="-${rest##*-}-${rand}"
+  local -a hits=()
+  for state in new cur; do
+    for path in "$inbox/$state/"*"$pair.md"; do
+      [ -f "$path" ] && hits+=("$path")
+    done
+  done
+  case ${#hits[@]} in
+    1) printf '%s\n' "${hits[0]}"; return 0 ;;
+    0) return 1 ;;
+    *) die "ambiguous message id '$2'; ${#hits[@]} messages end with that id" ;;
+  esac
+}
+
+# A message file's state is its directory, which is the whole design.
+message_state() { case "$1" in */cur/*) echo read ;; *) echo unread ;; esac; }
+
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # Hours since a scratchpad's last heartbeat or structural change. The heartbeat
@@ -658,17 +689,18 @@ cmd_receipt() {
   # and reported "illegal option -- -" while the command still exited 0.
   id="$(basename "$id" .md)"
 
-  local inbox recipient state="" found=0
+  local inbox recipient path found=0
   for inbox in "$MAIL_ROOT"/*/inbox "$HUMAN_MAIL_ROOT"/*/inbox; do
     [ -d "$inbox" ] || continue
-    if [ -e "$inbox/cur/$id.md" ]; then state=read
-    elif [ -e "$inbox/new/$id.md" ]; then state=unread
-    else continue
-    fi
+    path="$(message_in_inbox "$inbox" "$id")" || continue
     found=1
     recipient="$(basename "$(dirname "$inbox")")"
-    local age; age="$(message_age_hours "$inbox/$([ "$state" = read ] && echo cur || echo new)/$id.md" || echo 0)"
-    printf '%s\t%s\tto:%s\tdelivered:%s\t%sh ago\n' "$state" "$id" "$recipient" "${id%%-*}" "$age"
+    local age; age="$(message_age_hours "$path" || echo 0)"
+    # The canonical id is reported, not what was asked for, so a shortened query still
+    # tells the caller the id to use next time.
+    printf '%s\t%s\tto:%s\tdelivered:%s\t%sh ago\n' \
+      "$(message_state "$path")" "$(basename "$path" .md)" \
+      "$recipient" "$(basename "$path" .md | cut -d- -f1)" "$age"
   done
   [ "$found" -eq 0 ] || return 0
 
@@ -693,8 +725,7 @@ cmd_read() {
 
   local f=""
   if [ -n "$id" ]; then
-    [ -e "$inbox/new/$id.md" ] && f="$inbox/new/$id.md"
-    [ -z "$f" ] && [ -e "$inbox/cur/$id.md" ] && f="$inbox/cur/$id.md"
+    f="$(message_in_inbox "$inbox" "$id")" || die "no message '$id' in $inbox"
   else
     # Oldest unread first; new/ names sort chronologically by construction.
     for cand in "$inbox/new"/*.md; do
@@ -724,8 +755,11 @@ cmd_discard() {
   done
   [ -n "$to" ] && [ -n "$id" ] || die "discard: --to and --id required"
   local inbox; inbox="$(resolve_inbox "$to")"
-  rm -f "$inbox/new/$id.md" "$inbox/cur/$id.md"
-  clear_escalation_marker "$inbox" "$id"
+  # Fail rather than report success: rm -f used to remove nothing and exit 0 for an
+  # id that did not match, which reads as a discarded message.
+  local path; path="$(message_in_inbox "$inbox" "$id")" || die "no message '$id' in $inbox"
+  rm -f "$path"
+  clear_escalation_marker "$inbox" "$(basename "$path" .md)"
 }
 
 message_path() {
