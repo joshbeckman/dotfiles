@@ -54,6 +54,14 @@ systemctl --user enable --now agent-mail-web
 loginctl enable-linger "$USER"
 ```
 
+One caveat on the user unit, observed on the first Linux machine to run this: it has twice
+lost its `default.target.wants` symlink across a reboot there. The directory survives, the
+symlink does not, `is-enabled` reports disabled afterwards, and the root cause was never
+found. That failure is silent in the worst way: the service works until a reboot and then
+does not come back, with no error anywhere. So check `systemctl --user is-enabled
+agent-mail-web` after a reboot. The fallback that machine has needed is a system unit under
+`/etc/systemd/system` instead of a user unit.
+
 Two consequences worth knowing. The token is per machine, so each bridge's launch URL
 authorizes that machine only, and each is a separate origin: one installed app per machine.
 And reaching the bridge over the tailnet makes the token the only check on any device that
