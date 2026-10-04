@@ -517,6 +517,43 @@ class LifecycleTest(unittest.TestCase):
         self.assertFalse((self.state / f'{SID}.lease').exists())
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
 
+    def test_a_session_that_never_parked_gets_a_record(self):
+        # wake-mail reads records, so a session with none was invisible to it: four of the
+        # five running sessions here had no record at all. A record that cannot describe
+        # the session well enough to resume later would be worse than none, so this also
+        # checks the fields resume needs.
+        self.assertFalse((self.state / f'{SID}.json').exists())
+        self.assertEqual(self.run_cli('started', SID, '--pid', str(self.live))['state'], 'awake')
+        record = self.record()
+        self.assertEqual(record['state'], 'awake')
+        self.assertTrue(record['wake'])
+        self.assertEqual(record['sessionFile'], str(self.transcript))
+        self.assertEqual(record['cwd'], str(self.cwd))
+        self.assertTrue(Path(record['notes']).is_file())
+        before = (self.state / f'{SID}.json').read_bytes()
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual((self.state / f'{SID}.json').read_bytes(), before)
+
+    def test_an_unclean_exit_leaves_a_session_wakable(self):
+        # exited repairs a clean exit, but a killed process or a shutdown never runs the
+        # exit handler, so the record stays awake. The lease is then the only signal that
+        # the process is gone, and resume uses it. Without this, a reboot strands a
+        # session permanently: no automatic route back, and a manual relaunch the only way.
+        self.parked()
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'awake')
+        self.run_cli('exited', SID, '--pid', str(self.live))
+        self.assertEqual(self.record()['state'], 'parked')
+        # Unclean exit: the lease vanishes and nothing reports it.
+        self.run_cli('started', SID, '--pid', str(self.live))
+        (self.state / f'{SID}.lease').unlink()
+        self.assertEqual(self.record()['state'], 'awake')
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
+        self.assertEqual(plan['status'], 'would-wake')
+        # A session that really is running still refuses, because it holds the lease.
+        self.run_cli('started', SID, '--pid', str(self.live))
+        self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2)
+
     def test_only_the_lease_holder_can_park_and_notes_are_written(self):
         self.run_cli('started', SID, '--pid', str(self.live))
         self.assertIn('holds the lease', self.park(pid=1, expected=2))
@@ -536,7 +573,9 @@ class LifecycleTest(unittest.TestCase):
                         {'jobs': [], 'notes': ' '}):
             with self.subTest(request=request):
                 self.run_cli('park', SID, '--pid', str(self.live), stdin=json.dumps(request), expected=2)
-        self.assertFalse((self.state / f'{SID}.json').exists())
+        # `started` now writes a record for a session that never parked, so the file exists;
+        # what a rejected park must not do is change it.
+        self.assertEqual(self.record()['state'], 'awake')
 
     def test_resume_dry_run_is_exact_and_changes_nothing(self):
         self.parked()
@@ -546,6 +585,9 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
         self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
         self.assertIn('parked.md', plan['command'][9])
+        # A wake is otherwise one-way: the session stays awake holding its memory,
+        # which makes the next wake likelier to be deferred by the pressure gate.
+        self.assertIn('park_session', plan['command'][9])
         extension = self.root / 'park ext.ts'
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run', '--extension', str(extension))
         self.assertTrue(plan['command'][9].startswith(f"pi -e '{extension}' --session {self.transcript} "))

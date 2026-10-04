@@ -1,0 +1,388 @@
+#!/usr/bin/env node
+// Drives the pi extensions with a fake pi API, so their guardrails are pinned
+// down rather than assumed: the model switch refuses a price rise unless Josh
+// asked for it, and a reload is deferred to the end of the turn with its
+// continuation note crossing the runtime swap.
+//
+// The extensions import "typebox" at runtime, which this repo does not install,
+// so a resolution hook maps it to a stub. Schemas are never validated here, only
+// the behaviour around them.
+
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const EXTENSIONS = join(root, ".agents/pi/extensions");
+
+const STUB =
+  "export const Type = { Object: (p, o) => ({ type: 'object', properties: p, ...o })," +
+  " String: () => ({ type: 'string' }), Optional: (s) => s, Boolean: () => ({ type: 'boolean' })," +
+  " Literal: (v) => ({ const: v }), Union: (s) => ({ anyOf: s }), Number: () => ({ type: 'number' }) };";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "typebox") {
+      return { url: "data:text/javascript," + encodeURIComponent(STUB), shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+let passed = 0;
+const failures = [];
+function check(name, condition, detail = "") {
+  if (condition) {
+    passed += 1;
+    console.log(`ok   ${name}`);
+  } else {
+    failures.push(name);
+    console.log(`FAIL ${name}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+function eq(name, actual, expected) {
+  check(name, actual === expected, `got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+}
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+// --- fixtures ---------------------------------------------------------------
+
+function model(id, input, output, extra = {}) {
+  return {
+    provider: "test",
+    id,
+    cost: input === undefined ? undefined : { input, output },
+    contextWindow: 200_000,
+    reasoning: true,
+    input: ["text", "image"],
+    ...extra,
+  };
+}
+
+const CURRENT = model("cheap", 0.5, 1.5); // 2.0 per million, in and out
+const MODELS = [
+  CURRENT,
+  model("cheapest", 0.1, 0.3), // cheaper than current
+  model("same", 0.5, 1.5), // equal
+  model("dear", 3, 15), // dearer
+  model("mystery", undefined, undefined), // unpriced
+  model("nokey", 0.1, 0.1), // authenticated check fails
+];
+const AUTHED = new Set(["cheap", "cheapest", "same", "dear", "mystery"]);
+
+function fakePi() {
+  const tools = {};
+  const commands = {};
+  const handlers = {};
+  const sent = [];
+  const modelCalls = [];
+  return {
+    tools,
+    commands,
+    sent,
+    modelCalls,
+    api: {
+      registerTool: (tool) => {
+        tools[tool.name] = tool;
+      },
+      registerCommand: (name, definition) => {
+        commands[name] = definition;
+      },
+      on: (event, handler) => {
+        (handlers[event] ||= []).push(handler);
+      },
+      sendUserMessage: (text, options) => sent.push({ text, options }),
+      setModel: async (target) => {
+        modelCalls.push(`${target.provider}/${target.id}`);
+        return true;
+      },
+      setThinkingLevel: (level) => modelCalls.push(`thinking:${level}`),
+      getThinkingLevel: () => "high",
+    },
+    async emit(event, payload = {}) {
+      for (const handler of handlers[event] || []) await handler(payload);
+    },
+  };
+}
+
+function contextFor(current = CURRENT, available = MODELS, authed = AUTHED) {
+  return {
+    model: current,
+    thinkingLevel: "medium",
+    modelRegistry: {
+      getAvailable: () => available,
+      hasConfiguredAuth: (target) => authed.has(target.id),
+      find: (provider, id) => available.find((m) => m.provider === provider && m.id === id),
+    },
+  };
+}
+
+// The benchmark snapshot path is read when the extension module loads, so the
+// fixture has to exist before that import, not before the assertions.
+const SNAPSHOT_DIR = mkdtempSync(join(tmpdir(), "pi-ext-benchmarks-"));
+const SNAPSHOT = join(SNAPSHOT_DIR, "snapshot.json");
+const SNAPSHOT_MODELS = [
+  { id: "claude-opus-5.5::max", benchmarks: { aa_livecodebench: 0.8, aa_coding_index: 80 } },
+  { id: "claude-haiku-4.5::reasoning", benchmarks: { aa_livecodebench: 0.5, aa_coding_index: 40 } },
+  { id: "glm-5.3::max", benchmarks: { aa_livecodebench: 0.6, aa_coding_index: 60 } },
+  { id: "gpt-6-sol::max", benchmarks: { aa_livecodebench: 0.7, aa_coding_index: 70 } },
+  // One of two coding benchmarks: still ranked, but its coverage must show.
+  { id: "half-covered::max", benchmarks: { aa_livecodebench: 0.65 } },
+];
+const writeSnapshot = (generatedAt = new Date().toISOString()) =>
+  writeFileSync(SNAPSHOT, JSON.stringify({ generated_at: generatedAt, models: SNAPSHOT_MODELS }));
+writeSnapshot();
+process.env.PI_MODEL_BENCHMARKS = SNAPSHOT;
+
+const load = async (file) => (await import(pathToFileURL(join(EXTENSIONS, file)).href)).default;
+const modelSwitch = await load("model-switch.ts");
+const sessionReload = await load("session-reload.ts");
+
+// The tool requires requestedByJosh to be passed explicitly, true or false, so a
+// caller cannot leave the question unanswered and have it read as consent. These
+// tests therefore always pass it.
+async function switchModel(params, options = {}) {
+  const pi = fakePi();
+  modelSwitch(pi.api);
+  const result = await pi.tools.switch_model.execute("call-1", params, undefined, undefined, contextFor(
+    options.current ?? CURRENT,
+    options.available ?? MODELS,
+    options.authed ?? AUTHED,
+  ));
+  return { pi, result, text: result.content.map((part) => part.text).join("\n") };
+}
+
+// --- model switching --------------------------------------------------------
+
+{
+  const { text } = await switchModel({ list: true });
+  const lineFor = (id) => text.split("\n").find((line) => line.includes(`test/${id}`)) ?? "";
+  check("list names the current model and thinking level", text.includes("Current: test/cheap at medium thinking."), text.split("\n")[0]);
+  check("list marks a cheaper model as switchable", lineFor("cheapest").includes("| yes |"), lineFor("cheapest"));
+  check("list marks a dearer model as needing Josh", lineFor("dear").includes("ask Josh"), lineFor("dear"));
+  check("list marks an unpriced model as needing Josh", lineFor("mystery").includes("ask Josh"), lineFor("mystery"));
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/cheapest", reason: "cheaper", requestedByJosh: false });
+  check("a cheaper model switches without Josh", result.isError !== true, result.content?.[0]?.text);
+  eq("setModel called with the cheaper model", pi.modelCalls[0], "test/cheapest");
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/same", reason: "same price", requestedByJosh: false });
+  check("an equally priced model switches without Josh", result.isError !== true, result.content?.[0]?.text);
+  eq("setModel called with the equal model", pi.modelCalls[0], "test/same");
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/dear", reason: "smarter", requestedByJosh: false });
+  check("a dearer model is refused without Josh", result.isError === true, "it switched anyway");
+  check("the refusal says why", result.content[0].text.includes("Refused"), result.content[0].text);
+  eq("no model was set on refusal", pi.modelCalls.length, 0);
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/mystery", reason: "unknown cost", requestedByJosh: false });
+  check("an unpriced model is refused without Josh", result.isError === true, "it switched anyway");
+  eq("no model was set for the unpriced refusal", pi.modelCalls.length, 0);
+}
+
+{
+  const { result, pi } = await switchModel({ model: "test/dear", reason: "Josh asked", requestedByJosh: true });
+  check("a dearer model switches when Josh asked", result.isError !== true, result.content?.[0]?.text);
+  eq("setModel called for the dearer model", pi.modelCalls[0], "test/dear");
+}
+
+{
+  const { result } = await switchModel({ model: "test/cheapest" });
+  check("a switch without a reason is refused", result.isError === true);
+  check("the refusal names the missing fields", result.content[0].text.includes("model, reason, and requestedByJosh"), result.content[0].text);
+}
+
+{
+  const { result } = await switchModel({ model: "test/ghost", reason: "typo", requestedByJosh: true });
+  check("an unknown model is refused", result.isError === true && result.content[0].text.includes("Unknown model"), result.content[0].text);
+}
+
+{
+  const { result } = await switchModel({ model: "nonsense", reason: "typo", requestedByJosh: true });
+  check(
+    "a model without a provider is refused",
+    result.isError === true && result.content[0].text.includes("provider/model-id"),
+    result.content[0].text,
+  );
+}
+
+{
+  const { result } = await switchModel({ model: "test/nokey", reason: "no credentials", requestedByJosh: true });
+  check("a model without credentials is refused", result.isError === true && result.content[0].text.includes("no configured credentials"), result.content[0].text);
+}
+
+{
+  const { pi } = await switchModel({ model: "test/cheapest", reason: "and quieter", thinking: "low", requestedByJosh: false });
+  check("the thinking level is applied with the switch", pi.modelCalls.includes("thinking:low"), pi.modelCalls.join(", "));
+}
+
+// --- benchmark recommendation -----------------------------------------------
+
+const BENCH_MODELS = [
+  model("claude-opus-5-5", 4, 20),
+  model("claude-haiku-4-5", 0.25, 1),
+  model("accounts/fireworks/models/glm-5p3", 0.4, 1.2), // pi path-prefixes it and spells the dot as "p"
+  model("gpt-6-sol", 2, 8),
+  model("half-covered", 0.1, 0.1), // mapped, but only one of two benchmarks
+  model("nemotron-3-ultra-nvfp4", 0.1, 0.1), // absent from the catalog entirely
+];
+
+async function recommend(params, options = {}) {
+  const pi = fakePi();
+  modelSwitch(pi.api);
+  const result = await pi.tools.switch_model.execute("call-1", params, undefined, undefined,
+    contextFor(options.current ?? model("claude-opus-5-5", 4, 20), options.available ?? BENCH_MODELS, new Set(BENCH_MODELS.map((m) => m.id))));
+  return { pi, result, text: result.content.map((part) => part.text).join("\n") };
+}
+
+{
+  const { text } = await recommend({ class: "coding", topPercent: 50 });
+  const lines = text.split("\n");
+  const ranked = lines.filter((line) => line.startsWith("| ") && !line.includes("---") && !line.startsWith("| Model"));
+  check("the recommendation names the class and the cutoff", text.includes("coding candidates") && text.includes("top 50%"), lines[0]);
+  const prices = ranked.map((line) => Number(line.split("|")[4].trim().replace("$", "").split("/")[0]));
+  check("rows are cheapest first", prices.every((value, index) => index === 0 || value >= prices[index - 1]), ranked.join(" | "));
+  const cutoff = Number(text.match(/score >= (\d+)/)?.[1]);
+  const scores = ranked.map((line) => Number(line.split("|")[2].trim()));
+  check("every listed row clears the stated cutoff", scores.every((score) => score >= cutoff), `${scores} vs ${cutoff}`);
+  check("the most capable qualifying model is listed", ranked.some((l) => l.includes("claude-opus-5-5")), ranked.join(" | "));
+  check("a model below the tier is left out", !ranked.some((l) => l.includes("haiku")), ranked.join(" | "));
+  check("a model measured on one of the class's inputs is still ranked", ranked.some((l) => l.includes("half-covered")), ranked.join(" | "));
+  check("and its partial coverage is visible", /half-covered\D+\d+ \| 1\/2/.test(text), ranked.find((l) => l.includes("half-covered")));
+  check("a model below the cutoff is not reported as unmapped", !text.includes("no benchmark data: ") || !text.includes("glm-5p3"), text);
+  check("models the catalog lacks are reported", text.includes("nemotron-3-ultra-nvfp4") && text.includes("no benchmark data"), text.split("\n").pop());
+  check("the snapshot date and price basis are stated", text.includes("Snapshot:") && text.includes("pi's list price"), text);
+}
+
+{
+  // Wide enough that every scored model ranks, which is what proves the mapping:
+  // pi spells this one glm-5p3 while the catalog says glm-5.3.
+  const { text } = await recommend({ class: "coding", topPercent: 100 });
+  const ranked = text.split("\n").filter((line) => line.startsWith("| ") && !line.includes("---") && !line.startsWith("| Model"));
+  check("a path-prefixed id with the dot spelled p is matched", ranked.some((l) => l.includes("glm-5p3")), ranked.join(" | "));
+  check("every scored model is ranked at the widest tier", ranked.length === 5, ranked.join(" | "));
+}
+
+{
+  const { text } = await recommend({ class: "coding" }); // default tier is the top 5%
+  const ranked = text.split("\n").filter((line) => line.startsWith("| ") && !line.includes("---") && !line.startsWith("| Model"));
+  check("the default tier keeps only the top scorers", ranked.every((l) => Number(l.split("|")[2].trim()) >= 100), ranked.join(" | "));
+  check("a mid-scoring model is not in the default tier", !ranked.some((l) => l.includes("haiku")), ranked.join(" | "));
+}
+
+{
+  const { text } = await recommend({ class: "coding", topPercent: 100, minContext: 500_000 });
+  check("a context constraint empties the list rather than ignoring it", text.includes("no model clears that tier"), text.split("\n").slice(-2).join(" "));
+}
+
+{
+  const small = [model("gpt-6-sol", 2, 8, { input: ["text"] }), model("claude-opus-5-5", 4, 20)];
+  const { text } = await recommend({ class: "coding", topPercent: 100, needsImages: true },
+    { current: model("gpt-6-sol", 2, 8), available: small });
+  check("an image constraint drops models that cannot take images", !text.includes("gpt-6-sol") && text.includes("claude-opus-5-5"), text.split("\n").slice(0, 5).join(" "));
+}
+
+{
+  writeSnapshot(new Date(Date.now() - 72 * 3600 * 1000).toISOString());
+  const { text } = await recommend({ class: "coding", topPercent: 50 });
+  check("a stale snapshot still answers and says so", text.includes("stale") && text.includes("gpt-6-sol"), text.split("\n")[2]);
+  writeSnapshot();
+}
+
+{
+  // The no-cache path cannot be reached in this process, since the path is fixed
+  // at import, so it runs in a child with a snapshot path that does not exist.
+  const driver = join(SNAPSHOT_DIR, "missing-snapshot.mjs");
+  writeFileSync(driver, `
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, next) {
+  if (specifier === "typebox") return { url: "data:text/javascript," + encodeURIComponent(${JSON.stringify(STUB)}), shortCircuit: true };
+  return next(specifier, context);
+} });
+const ext = (await import(${JSON.stringify(pathToFileURL(join(EXTENSIONS, "model-switch.ts")).href)})).default;
+const tools = {};
+ext({ registerTool: (t) => { tools[t.name] = t; }, registerCommand: () => {}, on: () => {} });
+const ctx = { model: null, thinkingLevel: "medium", modelRegistry: { getAvailable: () => [], hasConfiguredAuth: () => true, find: () => undefined } };
+const result = await tools.switch_model.execute("c", { class: "coding" }, undefined, undefined, ctx);
+process.stdout.write(result.content.map((p) => p.text).join("\\n"));
+`);
+  const output = execFileSync(process.execPath, [driver], {
+    encoding: "utf8",
+    env: { ...process.env, PI_MODEL_BENCHMARKS: join(SNAPSHOT_DIR, "absent.json") },
+  });
+  check("a missing snapshot explains itself instead of throwing", output.includes("No benchmark snapshot yet"), output);
+}
+
+// --- session reload ---------------------------------------------------------
+
+{
+  const pi = fakePi();
+  sessionReload(pi.api);
+  check("the reload command is registered", typeof pi.commands["reload-session"]?.handler === "function");
+  check("the reload tool is registered", typeof pi.tools.reload_session?.execute === "function");
+
+  let reloaded = 0;
+  await pi.commands["reload-session"].handler([], { reload: async () => { reloaded += 1; } });
+  eq("the command reloads", reloaded, 1);
+}
+
+{
+  delete globalThis.__piReloadContinuation;
+  const pi = fakePi();
+  sessionReload(pi.api);
+
+  const result = await pi.tools.reload_session.execute("call-1", { continuation: "then read the plan" });
+  check("the tool reports a queued reload", result.content[0].text.includes("Reload queued"), result.content[0].text);
+  eq("the tool does not send anything itself", pi.sent.length, 0);
+  check(
+    "the continuation note is parked on a process global",
+    String(globalThis.__piReloadContinuation).includes("then read the plan"),
+    String(globalThis.__piReloadContinuation),
+  );
+
+  await pi.emit("agent_settled");
+  eq("settling submits the reload command", pi.sent.length, 1);
+  eq("the reload is submitted as a command", pi.sent[0].text, "/reload-session");
+  eq("prompt templates are expanded", pi.sent[0].options?.expandPromptTemplates, true);
+
+  await pi.emit("agent_settled");
+  eq("a second settle does not reload again", pi.sent.length, 1);
+
+  await pi.emit("session_start", { reason: "reload" });
+  await tick();
+  eq("the continuation note is delivered after the reload", pi.sent.length, 2);
+  check("the note says what to do next", pi.sent[1].text.includes("then read the plan"), pi.sent[1].text);
+  eq("the parked note is consumed", globalThis.__piReloadContinuation, undefined);
+}
+
+{
+  delete globalThis.__piReloadContinuation;
+  const pi = fakePi();
+  sessionReload(pi.api);
+
+  await pi.emit("session_start", { reason: "startup" });
+  await tick();
+  eq("a normal start sends nothing", pi.sent.length, 0);
+
+  await pi.emit("agent_settled");
+  eq("settling without a request sends nothing", pi.sent.length, 0);
+}
+
+// --- result -----------------------------------------------------------------
+
+console.log(`\n${passed} passed, ${failures.length} failed`);
+if (failures.length) {
+  console.log("failed: " + failures.join("; "));
+  process.exit(1);
+}

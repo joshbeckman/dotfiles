@@ -161,6 +161,23 @@ namespace = runpy.run_path(cli)
         self.assertIn('[archived]', self.ok('list'))
         self.assertEqual(json.loads(self.ok('search', 'cleanup', '--json'))[0]['status'], 'archived')
 
+    def test_scope_reaches_the_coordinator_and_existing_members(self):
+        # The coordinator is added at creation and cannot leave to rejoin with a
+        # scope, so create has to take one. And a scope given on a re-join has to
+        # reach an existing member instead of being silently ignored.
+        team = json.loads(self.ok('create', 'sample', '--coordinator', A,
+                                  '--scope', 'Chief of Staff: coordinator', '--json'))
+        self.assertEqual(team['members'][0]['scope'], 'Chief of Staff: coordinator')
+        self.ok('join', 'sample', '--agent', B, '--scope', 'reviewer', '--json')
+        self.ok('join', 'sample', '--agent', B, '--scope', 'reviewer and archivist', '--json')
+        scopes = {member['handle']: member['scope'] for member in self.show()['members']}
+        self.assertEqual(scopes[A], 'Chief of Staff: coordinator')
+        self.assertEqual(scopes[B], 'reviewer and archivist')
+        # A re-join without a scope must not clear what is already recorded.
+        self.ok('join', 'sample', '--agent', B)
+        self.assertEqual({member['handle']: member['scope'] for member in self.show()['members']}[B],
+                         'reviewer and archivist')
+
     def test_strict_slugs_and_literal_text(self):
         self.create('valid.a_b-0')
         for invalid in ('VALID.a_b-0', ' valid.a_b-0', 'valid!a_b-0', 'valid/a_b-0', '../outside',

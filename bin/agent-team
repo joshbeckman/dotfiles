@@ -229,7 +229,7 @@ def mutate(args, name):
         coordinator = identity(args.coordinator)
         team = dict(version=1, handle='@team/' + name, name=args.name or name,
                     purpose=args.purpose or '', status='active', coordinator=coordinator[0],
-                    members=[membership(coordinator, '', now)], createdAt=now,
+                    members=[membership(coordinator, args.scope or '', now)], createdAt=now,
                     updatedAt=now, history=[dict(type='created', coordinator=coordinator[0], at=now)])
     else:
         team = read_team(name)
@@ -240,8 +240,14 @@ def mutate(args, name):
             if command == 'join':
                 if member:
                     require(member['sessionId'] == agent[1], 'registry identity changed')
-                    return team
-                team['members'].append(membership(agent, args.scope or '', now))
+                    # A plain re-join stays a no-op rather than rewriting the file,
+                    # but a scope has to apply to an existing member: the
+                    # coordinator can never leave and rejoin to set theirs.
+                    if args.scope is None:
+                        return team
+                    member['scope'] = args.scope
+                else:
+                    team['members'].append(membership(agent, args.scope or '', now))
             else:
                 require(agent[0] != team['coordinator'], 'coordinator cannot leave; transfer first')
                 require(member and member['sessionId'] == agent[1], 'agent is not an active member')
@@ -313,6 +319,9 @@ def main():
         if command == 'create':
             sub.add_argument('--name')
             sub.add_argument('--purpose')
+            # The coordinator is the only member at creation, and they cannot
+            # leave to rejoin with a scope, so this is their only chance.
+            sub.add_argument('--scope', help="coordinator's role, e.g. 'Chief of Staff: coordinator' of this team")
         if command in ('join', 'leave'):
             sub.add_argument('--agent', help='canonical handle or registered transport alias; defaults to calling agent')
         if command == 'join':

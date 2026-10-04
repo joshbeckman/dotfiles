@@ -391,13 +391,25 @@ def started(sid, pid):
         if record and record['state'] in ('parked', 'waking'):
             record.update(state='awake', awakeAt=now())
             save(root / f'{sid}.json', record)
+        elif not record:
+            # A session that never parked had no record, so the wake job could not see it.
+            record = fresh_record(sid)
+            if record:
+                save(root / f'{sid}.json', record)
         return dict(sessionId=sid, status='leased', state=record['state'] if record else None)
 
 
 def exited(sid, pid):
     with locked(sid) as root:
-        if lease_holder(root, sid) == pid or not lease_holder(root, sid):
+        if lease_holder(root, sid) in (pid, None):
             (root / f'{sid}.lease').unlink(missing_ok=True)
+            # The process is gone, so parked is the truthful state, and it is what lets the
+            # wake job start this session again. Only when we released the lease: a lease
+            # held by another live process means that process is still running the session.
+            record = load(root / f'{sid}.json')
+            if record and record['state'] == 'awake':
+                record.update(state='parked', parkedAt=now())
+                save(root / f'{sid}.json', record)
         return dict(sessionId=sid, status='released')
 
 
@@ -409,6 +421,49 @@ def validate_jobs(jobs):
                 or not all(isinstance(job[key], str) and job[key].strip() for key in JOB_KEYS - {'restart'}):
             raise ValueError('each job needs command, cwd, reason, and boolean restart')
     return jobs
+
+
+def fresh_record(sid):
+    """Describe a session that never parked, so the wake job can see it.
+
+    wake-mail reads records, so a session with none is invisible to it: four of the five
+    running sessions here were in that state. This writes the same shape park writes, with
+    state awake and wake enabled, so the job can start the session once its process is
+    gone. Returns None when the session cannot be described well enough to resume later,
+    since a record that cannot be resumed is worse than no record at all.
+    """
+    registry, sessions, scratch = roots()
+    try:
+        handle = handle_for(sid, registry)
+        evidence = collect_evidence(handle, registry, sessions, scratch)
+    except (OSError, ValueError):
+        return None
+    if evidence['status'] != 'existing':
+        return None
+    notes = Path(evidence['scratchpad']) / 'wake-notes.md'
+    if not notes.exists():
+        save(notes, '\n'.join([
+            f'# Woken without parking {now()}', '',
+            'This session was running and its process exited without parking, so there are no',
+            'recorded jobs and no notes from a previous park. Its scratchpad and its mail are',
+            'the places to look.', '',
+            '`parked.md` replaces this the first time the session parks itself.', '',
+        ]))
+    return dict(handle=evidence['handle'], sessionId=sid, sessionFile=evidence['sessionFile'],
+                cwd=evidence['cwd'], state='awake', wake=True, awakeAt=now(), notes=str(notes))
+
+
+def effective_state(root, sid, record):
+    """A record saying awake with no live process is stale, not awake.
+
+    The process exits without reporting when it is killed, and a shutdown sends SIGTERM,
+    which does not run exit handlers, so the record cannot be repaired from inside the
+    dying process. Treat it as parked so it can be woken; resume still refuses while a
+    lease is held, so a session that really is running is unaffected.
+    """
+    if record.get('state') == 'awake' and lease_holder(root, sid) is None:
+        return 'parked'
+    return record.get('state')
 
 
 def park(sid, pid, request):
@@ -466,7 +521,8 @@ def resume(handle, tmux_session, dry_run, extensions=()):
     sid = evidence['sessionId']
     with locked(sid) as root:
         record = load(root / f'{sid}.json')
-        if not record or record['state'] not in ('parked', 'waking') or not record.get('wake'):
+        state = effective_state(root, sid, record) if record else None
+        if not record or state not in ('parked', 'waking') or not record.get('wake'):
             raise ValueError(f"not parked for waking (state: {record['state'] if record else 'none'})")
         if record['state'] == 'waking':
             age = datetime.now().astimezone() - datetime.fromisoformat(record['wakingAt'])
@@ -487,7 +543,9 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         mailbox = Path(evidence['scratchpad']).name
         prompt = (f"You were parked and have been woken by agent-session. Read {record['notes']} for the jobs "
                   f"you stopped and your notes. Then read your mail with `agent-mail read --to {mailbox}`. "
-                  'Restart a job only if it is still needed.')
+                  'Restart a job only if it is still needed. Once the mail is dealt with and nothing else '
+                  'needs doing, call the park_session tool with no jobs: a session left awake holds its '
+                  'memory, and every wake makes the next one more likely to be deferred by the pressure gate.')
         command = ['tmux', 'new-window', '-d', '-t', tmux_session + ':', '-n', handle, '-c', evidence['cwd'],
                    shlex.join(['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
                                '--session', evidence['sessionFile'], prompt])]
@@ -536,7 +594,8 @@ def wake_mail(tmux_session, dry_run):
     root = state_root()
     for path in sorted(root.glob('*.json')):
         record = load(path) or {}
-        if record.get('state') not in ('parked', 'waking') or not record.get('wake'):
+        if effective_state(root, record.get('sessionId', ''), record) not in ('parked', 'waking') \
+                or not record.get('wake'):
             continue
         sid, handle = record['sessionId'], record['handle'][2:]
         names, from_human = unread(scratch / f'{handle}-{sid[:8]}', human_root)

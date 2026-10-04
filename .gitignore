@@ -69,3 +69,6 @@ bin/.auto-review-skip
 # .senv is encrypted and can be committed if its encryption key is not shared.
 # Ignored by default; remove this entry to track it (or create with `s init --git`).
 .senv
+
+# Python bytecode from running the tools in bin/.
+__pycache__/

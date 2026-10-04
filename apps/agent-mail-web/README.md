@@ -14,6 +14,52 @@ Treat the launch URL as private. Its fragment authorizes that window, which keep
 
 Storage belongs to the app container, not the origin. Chrome's installed app shares the browser profile, so it already sees the token a tab stored. Safari gives a Dock web app its own container, which never sees it. So any window that has no usable token, or gets a 403 from the bridge, shows an **Authorize this app** panel: paste the launch URL or the token once per container. The app verifies it against the bridge before storing it, so a stale token cannot displace a working one.
 
+### Reaching it from another device
+
+The bridge binds to `127.0.0.1`, so it is not on the network by default. To reach it from a
+phone or another machine, put [Tailscale Serve](https://tailscale.com/kb/1247/funnel-serve-use-cases)
+in front of it rather than binding more widely: Serve terminates HTTPS on the machine's
+tailnet name and proxies to the loopback port, so a machine without Tailscale is unaffected.
+HTTPS certificates have to be enabled for the tailnet first, and iOS needs HTTPS to install
+the app to the home screen at all.
+
+```sh
+launchctl kickstart -k "gui/$(id -u)/org.joshbeckman.agent-mail-web"   # restart on the new code
+tailscale serve --bg 8765                                              # https://<machine>.<tailnet>.ts.net
+tailscale serve --https=443 off                                        # undo
+```
+
+The bridge detects its own tailnet name from `tailscale status` rather than being told, so a
+renamed tailnet or a new machine needs no configuration. It answers to that name in addition
+to loopback, and prints both launch URLs at startup; the tailnet one is what a phone uses.
+On Linux, supervise it with a systemd user unit instead of the plist, and enable lingering so
+it runs without a login session:
+
+```ini
+# ~/.config/systemd/user/agent-mail-web.service
+[Unit]
+Description=Agent Mail web bridge (loopback)
+[Service]
+# PATH matters for what the bridge shells out to: agent-mail resolves notify-josh
+# through it, so a mail sent from the app still reaches the notification ladder.
+Environment=PATH=%h/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/dotfiles/bin/agent-mail-web --no-open
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user enable --now agent-mail-web
+loginctl enable-linger "$USER"
+```
+
+Two consequences worth knowing. The token is per machine, so each bridge's launch URL
+authorizes that machine only, and each is a separate origin: one installed app per machine.
+And reaching the bridge over the tailnet makes the token the only check on any device that
+can reach the port, so restrict who can reach it with a Tailscale ACL if the tailnet has
+devices you do not control.
+
 ### Installed app and notifications
 
 `Library/LaunchAgents/org.joshbeckman.agent-mail-web.plist` keeps the bridge running in the background; `dfm install` links it. Load it after stopping any manual bridge on port 8765:

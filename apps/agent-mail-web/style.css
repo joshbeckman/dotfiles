@@ -461,6 +461,14 @@ details.message summary time {
     "IBM Plex Mono",
     monospace;
 }
+/* iOS zooms the page when a focusable field is under 16px, which is why the composer
+   jumped on a phone. Keyed to a coarse pointer rather than a narrow window: a small
+   desktop window does not zoom, and the 15px is deliberate on a real keyboard. */
+@media (pointer: coarse) {
+  #body {
+    font-size: 16px;
+  }
+}
 #draft-status {
   font-size: 0.85rem;
   color: var(--c-muted);
@@ -561,6 +569,30 @@ footer {
   main {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+  }
+  /* Nine nav buttons wrapped to three rows and took a third of the screen, so the list
+     started below the fold. Compact rather than scrollable: a scroller hides tabs, and
+     these all fit in two rows at this size. */
+  header {
+    gap: 0.5rem 0.75rem;
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
+  }
+  h1 {
+    font-size: 1.15rem;
+  }
+  h1 small {
+    font-size: 0.9rem;
+  }
+  nav {
+    gap: 0.3rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+  nav button,
+  #notify-button {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.9rem;
   }
   .row {
     grid-template-columns: 1fr auto;

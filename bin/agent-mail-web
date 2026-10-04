@@ -349,7 +349,10 @@ class Handler(BaseHTTPRequestHandler):
             # blocked reader.js and reader.css and left Safari's message body blank
             # while Chromium, the only engine the browser test drives, passed. An
             # explicit origin matches in every engine and grants nothing 'self' did not.
-            own = 'http://' + self.server.authority
+            # Both schemes for the host this request arrived on: behind Tailscale Serve the
+            # bridge cannot see the scheme the browser used, and naming one would break the
+            # reader frame on whichever it was not. The host is already validated above.
+            own = ' '.join(f'{scheme}://{self.headers.get("Host", "")}' for scheme in ('http', 'https'))
             # font-src is required here: without it fonts fall back to default-src
             # 'none', so message bodies rendered in this frame would use system
             # fonts while the surrounding app used the self-hosted ones.
@@ -364,7 +367,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_request(self):
         try:
-            if self.headers.get('Host') != self.server.authority:
+            # Loopback plus any tailnet name this machine answers to, so Tailscale Serve
+            # can proxy to it without the bridge binding anywhere but 127.0.0.1.
+            if self.headers.get('Host') not in self.server.authorities:
                 raise MailError('Invalid Host', 403)
             url = urlsplit(self.path)
             origin = self.headers.get('Origin')
@@ -378,7 +383,7 @@ class Handler(BaseHTTPRequestHandler):
                 or re.fullmatch(r'/fonts/[a-z0-9-]+\.woff2', url.path) is not None
             )
             if not reader_asset:
-                if origin and origin != 'http://' + self.server.authority:
+                if origin and origin not in self.server.origins:
                     raise MailError('Invalid Origin', 403)
                 if self.headers.get('Sec-Fetch-Site') == 'cross-site':
                     raise MailError('Cross-site requests are not allowed', 403)
@@ -387,7 +392,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not hmac.compare_digest(token, self.server.token):
                     raise MailError('Open the launch URL from agent-mail web to authorize this tab.', 403)
                 if self.command == 'POST':
-                    if origin != 'http://' + self.server.authority or self.headers.get('Content-Type') != 'application/json':
+                    if origin not in self.server.origins or self.headers.get('Content-Type') != 'application/json':
                         raise MailError('A same-origin JSON request is required', 403)
                     length = int(self.headers.get('Content-Length', '0'))
                     if length < 1 or length > 8 * 1024 * 1024:
@@ -505,6 +510,25 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = handle_request
 
 
+def tailnet_authorities():
+    """Host names besides loopback this bridge should answer to.
+
+    Tailscale Serve proxies this machine's HTTPS name to this port, so requests arrive with
+    that name in the Host header. Detected rather than configured because the tailnet DNS
+    name can change -- it did, once, while this was being written -- and a stale name in the
+    LaunchAgent would be a 403 nobody sees. A missing or unreadable tailscale is not an
+    error: the bridge is loopback-only, which stays the default on a machine without it.
+    """
+    try:
+        result = subprocess.run(['tailscale', 'status', '--json'], capture_output=True,
+                                text=True, timeout=5, check=True)
+        status = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    name = ((status.get('Self') or {}).get('DNSName') or '').rstrip('.')
+    return [name] if name else []
+
+
 def load_token(home):
     # Persistent so an installed app, which launches without the URL fragment,
     # stays authorized across bridge restarts. Delete the file to rotate it.
@@ -558,8 +582,15 @@ def main():
     server.box = box
     server.token = token
     server.authority = '127.0.0.1:' + str(server.server_port)
+    server.authorities = [server.authority, *tailnet_authorities()]
+    server.origins = {f'{scheme}://{authority}'
+                      for authority in server.authorities for scheme in ('http', 'https')}
     url = 'http://' + server.authority + '/#' + server.token
     print('Agent Mail web inbox (keep this launch URL private):\n' + url, flush=True)
+    for authority in server.authorities[1:]:
+        # Printed because the phone cannot use the loopback URL, and the token has to be
+        # opened once per origin before the app there is authorized.
+        print(f'Also reachable on your tailnet (same token):\nhttps://{authority}/#{server.token}', flush=True)
     print('Ctrl-C stops the bridge. Neovim and CLI mail remain available.', flush=True)
     if not args.no_open:
         webbrowser.open(url)
