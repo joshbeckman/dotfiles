@@ -49,6 +49,10 @@ class WebTest(unittest.TestCase):
         self.server.box = self.box
         self.server.token = 'fixture-token'
         self.server.authority = '127.0.0.1:' + str(self.server.server_port)
+        # main() builds these from the loopback authority plus any tailnet name; the fixture
+        # mirrors that so a test can add a name and exercise the checks.
+        self.server.authorities = [self.server.authority]
+        self.server.origins = {f'{scheme}://{self.server.authority}' for scheme in ('http', 'https')}
         self.url = 'http://' + self.server.authority
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -72,6 +76,55 @@ class WebTest(unittest.TestCase):
                 return r.status, r.read()
         except urllib.error.HTTPError as r:
             return r.code, r.read()
+
+    def add_tailnet(self, name='machine.example.ts.net'):
+        self.server.authorities = [self.server.authority, name]
+        self.server.origins = {f'{scheme}://{host}'
+                               for host in self.server.authorities for scheme in ('http', 'https')}
+        return name
+
+    def test_a_tailnet_host_is_accepted_and_a_foreign_one_is_not(self):
+        # Tailscale Serve proxies this machine's HTTPS name to the loopback port, so the
+        # Host header arriving here is that name. Allowing it is what lets the phone reach
+        # the bridge without the bridge binding anywhere but 127.0.0.1, and an unknown name
+        # must still be refused: the tailnet is not a licence to answer anyone.
+        tailnet = 'machine.example.ts.net'
+        self.assertEqual(self.request('/', Host=tailnet)[0], 403)
+        self.add_tailnet(tailnet)
+        self.assertEqual(self.request('/', Host=tailnet)[0], 200)
+        self.assertEqual(self.request('/', Host='elsewhere.example.ts.net')[0], 403)
+        # The origin check follows the same list, since a browser on the tailnet sends the
+        # tailnet origin rather than the loopback one.
+        self.assertEqual(self.request('/api/messages?folder=inbox&q=', Origin='https://' + tailnet)[0], 200)
+        self.assertEqual(self.request('/api/messages?folder=inbox&q=', Origin='https://elsewhere.example.ts.net')[0], 403)
+
+    def test_the_reader_policy_names_the_host_the_request_arrived_on(self):
+        # The reader frame's policy has to name its own origin, because WebKit does not match
+        # 'self' from a sandboxed opaque origin. Behind a proxy the bridge cannot see the
+        # scheme the browser used, so both are named for whichever host arrived.
+        tailnet = self.add_tailnet()
+        req = urllib.request.Request(self.url + '/reader.html', headers={'Host': tailnet})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            policy = response.headers['Content-Security-Policy']
+        self.assertIn(f'script-src http://{tailnet} https://{tailnet}', policy)
+        self.assertNotIn('127.0.0.1', policy)
+
+    def test_tailnet_authorities_reads_the_local_name(self):
+        # Detected rather than configured: the tailnet DNS name can change, and a stale name
+        # in the LaunchAgent would be a 403 nobody sees. An unusable tailscale means no
+        # extra authority, which is the loopback-only default.
+        script = self.root / 'bin' / 'tailscale'
+        script.write_text('#!/bin/sh\necho \'{"Self": {"DNSName": "machine.example.ts.net."}}\'\n')
+        script.chmod(0o755)
+        # The trailing dot is how the API spells a fully qualified name; a Host header has
+        # none, so the helper strips it rather than producing a name nothing matches.
+        self.assertEqual(web.tailnet_authorities(), ['machine.example.ts.net'])
+        script.write_text('#!/bin/sh\necho \'{"Self": {}}\'\n')
+        self.assertEqual(web.tailnet_authorities(), [])
+        script.write_text('#!/bin/sh\nexit 1\n')
+        self.assertEqual(web.tailnet_authorities(), [])
+        script.write_text('#!/bin/sh\necho not-json\n')
+        self.assertEqual(web.tailnet_authorities(), [])
 
     def test_contact_search_matches_headers_and_aliases_across_folders(self):
         fixtures = [
@@ -355,6 +408,8 @@ class WebTest(unittest.TestCase):
         other.box = web.Mailbox()
         other.token = 'fixture-token'
         other.authority = '127.0.0.1:' + str(other.server_port)
+        other.authorities = [other.authority]
+        other.origins = {f'{scheme}://{other.authority}' for scheme in ('http', 'https')}
         serving = threading.Thread(target=other.serve_forever, daemon=True)
         serving.start()
         results = []
