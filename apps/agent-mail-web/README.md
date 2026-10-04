@@ -40,6 +40,9 @@ it runs without a login session:
 [Unit]
 Description=Agent Mail web bridge (loopback)
 [Service]
+# PATH matters for what the bridge shells out to: agent-mail resolves notify-josh
+# through it, so a mail sent from the app still reaches the notification ladder.
+Environment=PATH=%h/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/dotfiles/bin/agent-mail-web --no-open
 Restart=on-failure
 [Install]
