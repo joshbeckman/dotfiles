@@ -171,6 +171,44 @@ class SetupTest(unittest.TestCase):
         self.assertIn('universal-ctags', args)
         self.assertNotIn('exuberant-ctags', args)
 
+    def test_missing_machine_local_prerequisites_are_reported(self):
+        # These files cannot be shipped: they are per-machine or secret. Their
+        # absence is silent elsewhere, which is why a machine missing the push
+        # credential accumulated unread mail without anyone being told.
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('machine-local prerequisites missing', result.stdout)
+        self.assertIn('agent-realm', result.stdout)
+        self.assertIn('mcp.json', result.stdout)
+        self.assertIn('Josh Status MCP credential', result.stdout)
+
+    def test_present_machine_local_prerequisites_are_silent(self):
+        (self.home / '.config').mkdir()
+        (self.home / '.config/agent-realm').write_text('test-realm\n')
+        (self.home / '.pi/agent').mkdir(parents=True)
+        (self.home / '.pi/agent/mcp.json').write_text('{}')
+        (self.home / '.claude.json').write_text(
+            json.dumps({'mcpServers': {'josh-beckman-status': {'headers': {'Authorization': 'x'}}}}))
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('machine-local prerequisites missing', result.stdout)
+
+    def test_push_credential_in_the_environment_suppresses_the_warning(self):
+        (self.home / '.config').mkdir()
+        (self.home / '.config/agent-realm').write_text('test-realm\n')
+        (self.home / '.pi/agent').mkdir(parents=True)
+        (self.home / '.pi/agent/mcp.json').write_text('{}')
+        result = self.run_setup(PI_JOSH_STATUS_MCP_AUTHORIZATION='x')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('machine-local prerequisites missing', result.stdout)
+
+    def test_bridge_restart_is_skipped_without_the_launch_agent(self):
+        # Guarded by the plist's existence, so this never reaches launchctl on a
+        # machine that does not supervise the bridge, nor inside this sandbox.
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('restarting the agent mail bridge', result.stdout)
+
     def test_unchecked_architecture_stops_before_apt(self):
         result = self.run_setup(platform='linux', FAKE_ARCH='riscv64')
         self.assertIn('not a checked architecture (riscv64)', result.stdout)

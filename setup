@@ -56,6 +56,26 @@ if [ -d "$HOME/.agents" ]; then
         echo '  ======  installed shared coding-agent config'
 fi
 
+# machine-local prerequisites: files this repo cannot ship because they are
+# per-machine or secret. Their absence is silent everywhere else, which is the
+# whole problem: the escalation call site discards the notification error, so a
+# machine missing the credential accumulates unread mail nobody is told about.
+missing_prereqs=()
+[ -f "$HOME/.config/agent-realm" ] || missing_prereqs+=('~/.config/agent-realm: sessions cannot be named (run bin/agent-identity-backfill --realm NAME)')
+[ -f "$HOME/.pi/agent/mcp.json" ] || missing_prereqs+=('~/.pi/agent/mcp.json: no MCP servers, so no mail tools')
+if [ -z "${PI_JOSH_STATUS_MCP_AUTHORIZATION:-}" ] \
+   && ! { grep -q '"josh-beckman-status"' "$HOME/.claude.json" 2>/dev/null \
+          && grep -q '"Authorization"' "$HOME/.claude.json" 2>/dev/null; }; then
+        missing_prereqs+=('Josh Status MCP credential: escalation notifications cannot reach Josh (see bin/notify-josh)')
+fi
+if (( ${#missing_prereqs} )); then
+        echo '  ======  machine-local prerequisites missing'
+        for prereq in "${missing_prereqs[@]}"; do
+                echo "    - $prereq"
+        done
+        echo '  ======  machine-local prerequisites missing'
+fi
+
 # zsh-specific things
 echo '  ======  installing zsh plugins'
 mkdir -p ~/.config/zsh
@@ -220,5 +240,27 @@ if command -v pi &> /dev/null; then
         # report failure on every scheduled refresh.
         pi update || echo 'pi update failed; continuing (check npmCommand in .agents/pi/settings.json)'
         echo '  ======  updated pi and pi packages'
+fi
+
+# A supervised service keeps running the code it started with, so a change to the
+# bridge stays invisible until something restarts it: the avatar feature was merged
+# and sat unused behind a process two days older than its code. This compares the
+# files against the running process rather than assuming a pull, because setup does
+# not pull; it is how the change arrives that does not matter. Every file in the
+# bridge's directory counts, including its documentation: a needless restart costs a
+# second, and a process serving last week's code costs days.
+bridge_label="org.joshbeckman.agent-mail-web"
+if [ -f "$HOME/Library/LaunchAgents/$bridge_label.plist" ]; then
+        bridge_pid=$(launchctl print "gui/$(id -u)/$bridge_label" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}' || true)
+        bridge_start=$(LC_ALL=C ps -o lstart= -p "${bridge_pid:-0}" 2>/dev/null || true)
+        stamp="${TMPDIR:-/tmp}/dotfiles-bridge-start.$$"
+        if [ -n "$bridge_start" ] && touch -t "$(LC_ALL=C date -j -f '%a %b %d %T %Y' "$bridge_start" +%Y%m%d%H%M.%S 2>/dev/null)" "$stamp" 2>/dev/null; then
+                if [ -n "$(find "$DOTFILES_DIR/bin/agent-mail-web" "$DOTFILES_DIR/apps/agent-mail-web" -type f -newer "$stamp" 2>/dev/null | head -1)" ]; then
+                        echo '  ======  restarting the agent mail bridge: its code changed since it started'
+                        launchctl kickstart -k "gui/$(id -u)/$bridge_label" || echo 'bridge restart failed; continuing'
+                        echo '  ======  restarted the agent mail bridge'
+                fi
+        fi
+        rm -f "$stamp"
 fi
 

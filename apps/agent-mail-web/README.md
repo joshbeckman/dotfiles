@@ -12,6 +12,8 @@ The bridge binds to `http://127.0.0.1:8765`, opens the browser, and runs until C
 
 Treat the launch URL as private. Its fragment authorizes that window, which keeps the token in local storage so it can relaunch at `/`. The token lives in the human mailbox as `.web-token` (mode 0600) and persists across bridge restarts. Delete it and restart the bridge to rotate it; every window then needs the new launch URL.
 
+The bridge prints both launch URLs at startup, so its log (`~/.local/state/agent-mail/web.log`, or the journal under systemd) contains the token as well. That log is a secret-bearing file: reading it to find the URL is fine, copying its output somewhere is not.
+
 Storage belongs to the app container, not the origin. Chrome's installed app shares the browser profile, so it already sees the token a tab stored. Safari gives a Dock web app its own container, which never sees it. So any window that has no usable token, or gets a 403 from the bridge, shows an **Authorize this app** panel: paste the launch URL or the token once per container. The app verifies it against the bridge before storing it, so a stale token cannot displace a working one.
 
 ### Reaching it from another device

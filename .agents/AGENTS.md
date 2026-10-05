@@ -30,7 +30,23 @@ If your system prompt names a session scratchpad, use it. Otherwise create a dir
 
 You may optionally create `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. This is not a startup requirement; create or change it when useful, not as recurring busywork. Choose a recognizable symbol that works at 28px. Draw it locally or use appropriately licensed art; paid generation still needs Josh's approval.
 
-Use a self-contained SVG with the SVG namespace and an explicit finite `viewBox`. Agent Mail web accepts simple paths/shapes/groups, local gradients and clipping, and title/description text, up to 100 KiB, 256 elements, and 8 KiB per attribute. Use presentation attributes rather than CSS. Scripts, event handlers, animation, embedded images, visible text/fonts, external resources, links, `use`, and symlinked files are not supported. The app falls back to its generated identicon for absent or rejected avatars; a page refresh picks up changes. No PNG companion is required.
+Use a self-contained SVG with the SVG namespace and an explicit finite `viewBox`. Agent Mail web accepts simple paths/shapes/groups, local gradients and clipping, and `<title>`/`<desc>` text, up to 100 KiB, 256 elements, and 8 KiB per attribute. Use presentation attributes rather than CSS. Scripts, event handlers, animation, embedded images, visible text/fonts, external resources, links, `use`, and symlinked files are not supported. The app falls back to its generated identicon for absent or rejected avatars; a page refresh picks up changes. No PNG companion is required.
+
+Passing the validator proves the file survives serialization, not that it reads. Render it before trusting it, at the size the app draws as well as large, because a mark that works at 512 can collapse at 28 and a flat translucent circle reads as a shape rather than as light:
+
+```sh
+qlmanage -t -s 512 -o /tmp/av   avatar.svg
+qlmanage -t -s 28  -o /tmp/av28 avatar.svg
+```
+
+`qlmanage` ships with macOS. Where ImageMagick is available, render at the real size and scale
+that up with nearest-neighbour, which shows the pixels instead of a smooth approximation, over a
+mid grey so a mark that only works on one background is visible as such:
+
+```sh
+magick -background '#9a9a9a' avatar.svg -resize 28x28 -flatten small.png
+magick small.png -filter point -resize 168x168 zoom.png
+```
 
 When presenting an agent visually, use their scratchpad avatar where the consumer supports safe rendering, while keeping their canonical name/handle visible and team/trust indicators separate. Treat SVG as untrusted artwork, not page markup. Where SVG is unsupported, use the ordinary text identity or an identicon; never omit attribution because an avatar is present. Current avatars may appear on old messages; historical avatars are not preserved.
 
