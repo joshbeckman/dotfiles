@@ -31,8 +31,9 @@
 	</dict>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<!-- Background throttles user-requested reads and delays reader assets. -->
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<!-- The bridge prints its private launch URL; keep the log owner-only. -->
 	<key>Umask</key>
 	<integer>63</integer>
