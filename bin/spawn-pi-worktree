@@ -124,9 +124,11 @@ if ((${#secrets[@]} > 0)); then
   wrapped=true
 fi
 
-# Passed to the window, not exported globally: S_KEY_COMMAND is a command, not
-# the key itself, and it is what lets `s` decrypt without a TTY. The absolute
-# wrapper path matters because this shell's PATH is not the window's.
+# Passed to the window so a machine whose shell rc sets neither still has a key
+# source, and neither value is the key itself. tmux runs the window command
+# through its default shell, so a shell rc that exports these names wins: on
+# blueberry `.zshenv` already sets both and the -e values are shadowed there.
+# They matter where nothing else sets them.
 env_args=()
 [[ -n "${S_KEY_COMMAND:-}" ]] && env_args+=(-e "S_KEY_COMMAND=$S_KEY_COMMAND")
 [[ -n "${S_FILE:-}" ]] && env_args+=(-e "S_FILE=$S_FILE")

@@ -488,6 +488,17 @@ class LifecycleTest(unittest.TestCase):
         path.write_text(text)
         path.chmod(0o700)
 
+    def use_darwin(self):
+        # The pressure gate is macOS-only. sitecustomize makes the CLI subprocess
+        # report darwin so the gate can be exercised on any host.
+        seam = self.root / 'seam'
+        seam.mkdir(exist_ok=True)
+        (seam / 'sitecustomize.py').write_text('import sys\nsys.platform = "darwin"\n')
+        self.env['PYTHONPATH'] = str(seam)
+
+    def no_darwin(self):
+        self.env.pop('PYTHONPATH', None)
+
     def run_cli(self, *args, stdin=None, expected=0):
         result = subprocess.run([str(CLI), *args, '--json'], env=self.env, input=stdin,
                                 capture_output=True, text=True, timeout=15)
@@ -604,14 +615,20 @@ class LifecycleTest(unittest.TestCase):
 
     def test_resume_refusals_leave_the_parked_record(self):
         self.parked()
-        cases = [({'PRESSURE': '2'}, 'memory pressure is 2'), ({'TMUX_HAS': '1'}, 'tmux session does not exist'),
-                 ({'TMUX_FAIL': '1'}, 'tmux launch failed')]
-        for environment, message in cases:
+        # The pressure gate is macOS-only, so that case simulates darwin; the
+        # tmux cases are platform-independent.
+        cases = [(True, {'PRESSURE': '2'}, 'memory pressure is 2'),
+                 (False, {'TMUX_HAS': '1'}, 'tmux session does not exist'),
+                 (False, {'TMUX_FAIL': '1'}, 'tmux launch failed')]
+        for darwin, environment, message in cases:
             with self.subTest(message=message):
+                if darwin:
+                    self.use_darwin()
                 self.env.update(environment)
                 self.assertIn(message, self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
                 for key in environment:
                     self.env.pop(key)
+                self.no_darwin()
                 self.assertEqual(self.record()['state'], 'parked')
         self.run_cli('started', SID, '--pid', str(self.live))
         self.park()
@@ -684,9 +701,11 @@ class LifecycleTest(unittest.TestCase):
     def test_watcher_skips_retired_running_and_high_pressure(self):
         self.parked()
         self.mail()
+        self.use_darwin()
         self.env['PRESSURE'] = '2'
         self.assertEqual(self.wake()['status'], 'idle')
         self.env.pop('PRESSURE')
+        self.no_darwin()
         self.run_cli('started', SID, '--pid', str(self.live))
         self.assertEqual(self.wake()['status'], 'idle')
         self.run_cli('exited', SID, '--pid', str(self.live))
@@ -695,27 +714,25 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(self.launches(), 0)
 
     def test_memory_pressure_probe_failure_refuses_on_macos(self):
-        # Exercise the Darwin branch on any host: sitecustomize makes the
-        # interpreter report darwin, and the stub sysctl then fails instead of
-        # printing a level. A failed probe must not silently disable the gate.
+        # A failed probe must not silently disable the gate. The stub sysctl
+        # fails instead of printing a level.
         self.parked()
+        self.use_darwin()
         self.stub('sysctl', '#!/bin/sh\nexit 1\n')
-        seam = self.root / 'seam'
-        seam.mkdir()
-        (seam / 'sitecustomize.py').write_text('import sys\nsys.platform = "darwin"\n')
-        self.env['PYTHONPATH'] = str(seam)
         self.assertIn('could not read memory pressure',
                       self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
-        self.env.pop('PYTHONPATH')
+        self.no_darwin()
         self.assertEqual(self.record()['state'], 'parked')
 
-    def test_memory_pressure_probe_failure_is_normal_off_macos(self):
-        # Linux has no such sysctl key, so a failed probe is normal pressure and
-        # the wake proceeds to the tmux checks.
+    def test_memory_pressure_is_not_probed_off_macos(self):
+        # The gate is macOS-only, so the probe is skipped entirely rather than
+        # forking a sysctl that cannot answer.
         self.parked()
-        self.stub('sysctl', '#!/bin/sh\nexit 1\n')
+        marker = self.root / 'sysctl-called'
+        self.stub('sysctl', f'#!/bin/sh\ntouch {marker}\necho 1\n')
         self.assertEqual(self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents',
                                       '--dry-run')['status'], 'would-wake')
+        self.assertFalse(marker.exists())
 
     def test_watcher_creates_missing_tmux_session_and_dry_run_changes_nothing(self):
         self.parked()
