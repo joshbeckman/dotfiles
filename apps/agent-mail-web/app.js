@@ -1014,10 +1014,11 @@ function renderParticipantCards(messages) {
     });
   }
   $("participant-cards").replaceChildren();
+  // Eager session inspection blocks reader assets and subsequent message opens
+  // on the serial bridge; expand a participant only when details are wanted.
   for (const contact of people.values()) {
     const card = contactCard(contact, { allowCompose: false, compact: true });
     $("participant-cards").append(card);
-    card.open = true;
   }
 }
 

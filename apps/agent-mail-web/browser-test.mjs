@@ -352,16 +352,25 @@ try {
       (image) => image.complete && image.naturalWidth > 0,
     ),
   );
+  // Session inspection must be on demand, not ahead of reader assets.
+  let inspectionCalls = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/contact") inspectionCalls++;
+  });
   await page
     .getByRole("button", { name: /alder-turner Markdown conversation/ })
     .click();
+  await page.frameLocator("#thread iframe").getByRole("heading", { name: "Fixture heading" }).waitFor();
+  assert.equal(inspectionCalls, 0);
+  const sidebar = page.getByRole("complementary", {
+    name: "Thread participants",
+  });
+  for (const summary of await sidebar.locator(".contact > summary").all())
+    await summary.click();
   assert.equal(
     await page.locator("#thread summary .avatar").first().getAttribute("src"),
     icons["alder-turner"],
   );
-  const sidebar = page.getByRole("complementary", {
-    name: "Thread participants",
-  });
   await sidebar
     .getByText("Investigate orchard migrations", { exact: true })
     .waitFor();
@@ -716,6 +725,7 @@ try {
   await page.locator(".row").click();
   await page.locator("#reply").click();
   await page.locator("#body").fill("Contact navigation preserves this draft.");
+  await sidebar.locator(".contact").filter({ hasText: "@+alder-turner" }).locator("summary").first().click();
   await sidebar
     .locator(".contact")
     .filter({ hasText: "@+alder-turner" })

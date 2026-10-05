@@ -192,16 +192,27 @@ class Mailbox:
             self.cache[key] = (stamp, dict(parse_mail(path), key=key, folder=key.split(':')[0]))
         return dict(self.cache[key][1])
 
-    def messages(self):
+    def messages(self, thread=None):
         messages, warnings, present = [], [], set()
         for folder in FOLDERS:
             for path in self.directory(folder).glob('*.md'):
                 key = folder + ':' + path.name
                 present.add(key)
                 try:
+                    if thread is not None:
+                        # Keep checking external edits/new files without revalidating
+                        # every cached, unrelated message's parent directory.
+                        info = path.lstat()
+                        cached = self.cache.get(key)
+                        stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+                        if (stat.S_ISREG(info.st_mode) and cached and cached[0] == stamp
+                                and cached[1]['thread'] != thread):
+                            continue
                     if path.stat().st_size > MAX_MESSAGE:
                         raise MailError('Message exceeds the 2 MiB reader limit')
-                    messages.append(self.message(key))
+                    message = self.message(key)
+                    if thread is None or message['thread'] == thread:
+                        messages.append(message)
                 except (MailError, OSError) as e:
                     warnings.append(f'{path.name}: {e}')
         self.cache = {k: v for k, v in self.cache.items() if k in present}
@@ -235,7 +246,7 @@ class Mailbox:
 
     def thread(self, key):
         selected = self.message(key)
-        messages, _ = self.messages()
+        messages, _ = self.messages(thread=selected['thread'])
         unique = {}
         for m in messages:
             if m['folder'] != 'drafts' and m['thread'] == selected['thread']:

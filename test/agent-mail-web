@@ -219,6 +219,34 @@ class WebTest(unittest.TestCase):
         script.write_text('#!/bin/sh\necho not-json\n')
         self.assertEqual(web.tailnet_authorities(), [])
 
+    def test_thread_skips_unchanged_unrelated_cache_but_observes_external_edits(self):
+        other = self.box.directory('archive') / 'unrelated.md'
+        other.write_text('From: fixture\nMessage-ID: unrelated\nThread-ID: elsewhere\n\nOther body.\n')
+        self.box.messages()
+        selected = self.box.message(self.key)
+        with patch.object(self.box, 'message', wraps=self.box.message) as read:
+            self.assertEqual(len(self.box.thread(self.key)), 1)
+            self.assertNotIn(('archive:unrelated.md',), [call.args for call in read.call_args_list])
+        self.assertIn('archive:unrelated.md', self.box.cache)
+        other.write_text('From: fixture\nMessage-ID: unrelated\nThread-ID: ' + selected['thread'] + '\n\nEdited into this thread.\n')
+        self.assertEqual({m['id'] for m in self.box.thread(self.key)}, {selected['id'], 'unrelated'})
+        reply = self.box.directory('inbox') / 'new-reply.md'
+        reply.write_text('From: fixture\nMessage-ID: new-reply\nThread-ID: ' + selected['thread'] + '\n\nNew body.\n')
+        self.assertEqual({m['id'] for m in self.box.thread(self.key)}, {selected['id'], 'unrelated', 'new-reply'})
+        reply.unlink()
+        self.assertEqual({m['id'] for m in self.box.thread(self.key)}, {selected['id'], 'unrelated'})
+        self.assertNotIn('inbox:new-reply.md', self.box.cache)
+
+    def test_thread_does_not_trust_a_symlink_replacing_a_cached_reply(self):
+        selected = self.box.message(self.key)
+        reply = self.box.directory('archive') / 'reply.md'
+        reply.write_text('From: fixture\nMessage-ID: reply\nThread-ID: ' + selected['thread'] + '\n\nReply body.\n')
+        self.box.messages()
+        moved = self.root / 'outside-reply.md'
+        reply.rename(moved)
+        reply.symlink_to(moved)
+        self.assertEqual({m['id'] for m in self.box.thread(self.key)}, {selected['id']})
+
     def test_contact_search_matches_headers_and_aliases_across_folders(self):
         fixtures = [
             ('sent', 'outbound', 'josh', '@+birch-weaver, +alder-turner-12345678'),
