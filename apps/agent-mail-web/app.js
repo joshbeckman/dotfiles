@@ -274,6 +274,29 @@ function avatar(address) {
   decorateAvatar(wrap);
   return wrap;
 }
+const avatarSources = new Map();
+function scratchpadAvatar(handle) {
+  handle = String(handle).trim().toLowerCase().replace(/^@\+|^\+/, "");
+  if (!avatarSources.has(handle))
+    avatarSources.set(handle, (async () => {
+      try {
+        const response = await fetch("/api/avatar?handle=" + encodeURIComponent("@+" + handle), {
+          headers: { "X-Agent-Mail-Token": token },
+        });
+        if (!response.ok) return "";
+        const blob = await response.blob();
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } catch {
+        return "";
+      }
+    })());
+  return avatarSources.get(handle);
+}
 function avatarImage(address) {
   const image = document.createElement("img");
   image.className = "avatar";
@@ -294,8 +317,17 @@ function avatarImage(address) {
         svg += `<rect x="${6 + x * 4}" y="${6 + y * 4}" width="3.5" height="3.5" rx="0.5" fill="hsl(${hue} 65% 35%)"/>`;
     }
   }
-  image.src =
-    "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg + "</svg>");
+  const fallback = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg + "</svg>");
+  image.src = fallback;
+  if (key.startsWith("agent:"))
+    scratchpadAvatar(address).then((src) => {
+      if (!src) return;
+      image.onerror = () => {
+        image.onerror = null;
+        image.src = fallback;
+      };
+      image.src = src;
+    });
   return image;
 }
 function renderList() {

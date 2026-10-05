@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import mimetypes
+import math
 import os
 from pathlib import Path
 import re
@@ -20,12 +21,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlsplit
 import urllib.request
 import webbrowser
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / 'apps/agent-mail-web'
 CLI = ROOT / 'bin/agent-mail'
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_IMAGE = 5 * 1024 * 1024
+MAX_AVATAR = 100 * 1024
 FOLDERS = {'inbox': 'inbox/new', 'archive': 'inbox/cur', 'sent': 'sent', 'drafts': 'drafts'}
 
 
@@ -103,6 +106,47 @@ def address_key(address):
     if not value.startswith('@+') and '@' in value:
         return ('human', value.split('@')[0])
     return ('agent', re.sub(r'-[0-9a-f]{8}$', '', re.sub(r'^@\+|^\+', '', value)))
+
+
+def avatar_svg(raw):
+    # Re-serialize an allowlisted drawing, rather than trusting SVG as a document:
+    # direct navigation must be as inert as rendering it through an <img>.
+    text = raw.decode('utf-8')
+    if re.search(r'<!DOCTYPE|<!ENTITY', text, re.I):
+        raise ValueError('SVG declarations are not supported')
+    svg = ET.fromstring(text)
+    namespace = '{http://www.w3.org/2000/svg}'
+    if svg.tag != namespace + 'svg':
+        raise ValueError('Expected SVG')
+    box = [float(n) for n in re.split(r'[\s,]+', svg.get('viewBox', '').strip())]
+    if len(box) != 4 or not all(math.isfinite(n) and abs(n) <= 1e6 for n in box) or min(box[2:]) <= 0:
+        raise ValueError('Expected a finite viewBox')
+    tags = {'svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
+            'defs', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'title', 'desc'}
+    attrs = {'viewBox', 'width', 'height', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
+             'r', 'rx', 'ry', 'd', 'points', 'fill', 'stroke', 'stroke-width', 'stroke-linecap',
+             'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray', 'stroke-dashoffset',
+             'fill-rule', 'clip-rule', 'clip-path', 'opacity', 'fill-opacity', 'stroke-opacity',
+             'transform', 'id', 'offset', 'stop-color', 'stop-opacity', 'gradientUnits',
+             'gradientTransform', 'spreadMethod', 'fx', 'fy', 'fr', 'preserveAspectRatio',
+             'role', 'aria-label'}
+    paints = {'fill', 'stroke', 'stop-color', 'clip-path'}
+    color = r'(?:#[0-9a-fA-F]{3,8}|[A-Za-z]+|(?:rgb|hsl)a?\([0-9.,%+\-\s]+\)|url\(#[A-Za-z_][A-Za-z0-9_.-]*\))'
+    allowed_tags = {namespace + tag for tag in tags}
+    nodes = list(svg.iter())
+    if len(nodes) > 256:
+        raise ValueError('Too many SVG elements')
+    for node in nodes:
+        if node.tag not in allowed_tags or (node is not svg and node.tag == namespace + 'svg'):
+            raise ValueError('Unsupported SVG element')
+        for key, value in node.attrib.items():
+            if len(value.encode('utf-8')) > 8192 or key not in attrs or (key in paints and not re.fullmatch(color, value)):
+                raise ValueError('Unsupported SVG attribute')
+            if key not in paints and ('url' in value.lower() or '\\' in value):
+                raise ValueError('SVG resources are not supported')
+    svg.set('width', '256')
+    svg.set('height', '256')
+    return ET.tostring(svg, encoding='utf-8')
 
 
 class Mailbox:
@@ -245,6 +289,59 @@ class Mailbox:
             raise MailError(result.stderr.strip() or 'Agent search failed')
         return json.loads(result.stdout)
 
+    def avatar(self, address):
+        unavailable = MailError('Avatar unavailable', 404)
+        raw_address = str(address).strip().lower()
+        transport = re.search(r'-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8})$', raw_address)
+        kind, handle = address_key(raw_address[:transport.start()] if transport else raw_address)
+        if kind != 'agent' or not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,127}', handle):
+            raise unavailable
+        registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
+        root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()
+        exact = registry / handle
+        if exact.exists() or exact.is_symlink():
+            names = [handle]
+        elif '-of-' in handle:
+            names = [handle.rsplit('-of-', 1)[0]]
+        else:
+            names = [p.name for p in registry.glob(handle + '-of-*')]
+        claims = [registry / name for name in names if (registry / name).exists() or (registry / name).is_symlink()]
+        if len(claims) != 1:
+            raise unavailable
+        try:
+            fd = os.open(claims[0], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise unavailable
+                sid = source.read(129).decode('ascii').strip()
+            if not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', sid):
+                raise unavailable
+            if transport and transport[1] not in {sid, sid[:8]}:
+                raise unavailable
+            name = claims[0].name
+            candidates = {root / (base + '-' + suffix)
+                          for base in (name, name.rsplit('-of-', 1)[0])
+                          for suffix in (sid[:8], sid)}
+            pads = [p for p in candidates if p.exists() or p.is_symlink()]
+            if len(pads) != 1:
+                raise unavailable
+            # Directory-relative opens prevent a swapped pad/file from escaping to
+            # another agent's room; FIFOs and other non-files must never block us.
+            directory = os.open(pads[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                fd = os.open('avatar.svg', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            finally:
+                os.close(directory)
+            with os.fdopen(fd, 'rb') as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise unavailable
+                raw = source.read(MAX_AVATAR + 1)
+            if len(raw) > MAX_AVATAR:
+                raise unavailable
+            return avatar_svg(raw)
+        except (OSError, ValueError, ET.ParseError):
+            raise unavailable from None
+
     def teams(self, query=''):
         if not isinstance(query, str) or len(query) > 512:
             raise MailError('Team searches must be at most 512 characters')
@@ -357,6 +454,8 @@ class Handler(BaseHTTPRequestHandler):
             # 'none', so message bodies rendered in this frame would use system
             # fonts while the surrounding app used the self-hosted ones.
             policy = f"default-src 'none'; script-src {own}; style-src {own} 'unsafe-inline'; img-src {images}; font-src {own}; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+        elif mime == 'image/svg+xml':
+            policy = "sandbox; default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         else:
             policy = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         self.send_header('Content-Security-Policy', policy)
@@ -463,6 +562,8 @@ class Handler(BaseHTTPRequestHandler):
             result = box.contacts(args.get('q', [''])[0])
         elif route == '/api/contact':
             result = box.find_sessions(handle=args.get('handle', [''])[0])
+        elif route == '/api/avatar':
+            return self.reply(200, box.avatar(args.get('handle', [''])[0]), 'image/svg+xml')
         elif route == '/api/attachment':
             name = args.get('name', [''])[0]
             if not re.fullmatch(r'[0-9a-f]{32}\.(png|jpg|gif|webp)', name):

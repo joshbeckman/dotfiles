@@ -26,6 +26,14 @@ If your system prompt has not assigned a name, do **not** invent one: this compu
 
 If your system prompt names a session scratchpad, use it. Otherwise create a directory under `${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}/<your-name>/` and use that. Working notes, plans, drafts, scripts, extracted diffs, and handoff documents go there, not in the repo as untracked files I have to notice and delete. Scratchpads persist across restarts and resumes. A small heartbeat records liveness without rewriting artifact timestamps; explicit `agent-scratchpad prune` commands remove old or named pads. Durable project decisions still belong in repositories, issues, or project records.
 
+### Avatars
+
+You may optionally create `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. This is not a startup requirement; create or change it when useful, not as recurring busywork. Choose a recognizable symbol that works at 28px. Draw it locally or use appropriately licensed art; paid generation still needs Josh's approval.
+
+Use a self-contained SVG with the SVG namespace and an explicit finite `viewBox`. Agent Mail web accepts simple paths/shapes/groups, local gradients and clipping, and title/description text, up to 100 KiB, 256 elements, and 8 KiB per attribute. Use presentation attributes rather than CSS. Scripts, event handlers, animation, embedded images, visible text/fonts, external resources, links, `use`, and symlinked files are not supported. The app falls back to its generated identicon for absent or rejected avatars; a page refresh picks up changes. No PNG companion is required.
+
+When presenting an agent visually, use their scratchpad avatar where the consumer supports safe rendering, while keeping their canonical name/handle visible and team/trust indicators separate. Treat SVG as untrusted artwork, not page markup. Where SVG is unsupported, use the ordinary text identity or an identicon; never omit attribution because an avatar is present. Current avatars may appear on old messages; historical avatars are not preserved.
+
 ### Conversation ownership and Agent Mail
 
 The active conversation is the agent's execution workspace, not my inbox. I may interrupt it directly as the human operator, but agents and background processes should otherwise communicate through Agent Mail so new work waits until the active agent is ready to read it. Do not rely on a final conversation response to reach me: before ending a turn with a substantive answer, completed result, blocker, question, or request for action, send that content to `@josh` with Agent Mail. Keep the conversation response to a short delivery/status pointer rather than duplicating the whole message. Routine progress that needs no attention does not warrant mail.

@@ -1207,10 +1207,66 @@ try {
   assert.equal(await installed.locator("#thread details.message").count(), 2);
   assert.deepEqual(appErrors, []);
   await app.close();
+  const avatarFile = join(agents, "alder-turner-12345678/avatar.svg");
+  const avatarSvg = process.env.AGENT_MAIL_TEST_AVATAR_SVG
+    ? await readFile(process.env.AGENT_MAIL_TEST_AVATAR_SVG, "utf8")
+    : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="#002FA7"/></svg>';
+  await writeFile(avatarFile, avatarSvg);
+  await page.reload();
+  const customAvatar = page.locator('.sender .avatar-wrap[data-key="agent:alder-turner"] img').first();
+  await page.waitForFunction(() => {
+    const img = document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img');
+    return img?.src.startsWith("data:image/svg+xml;base64,") && img.complete && img.naturalWidth > 0;
+  });
+  const customSrc = await customAvatar.getAttribute("src");
+  assert.match(Buffer.from(customSrc.split(",")[1], "base64").toString(), /#002FA7/);
+  assert.equal(await customAvatar.getAttribute("width"), "28");
+  assert.equal(await customAvatar.getAttribute("aria-hidden"), "true");
+  assert.equal(await customAvatar.locator("..").locator(".team-badge").count(), 1);
+  await page.evaluate(() => {
+    const alias = avatar("alder-turner-12345678");
+    alias.id = "avatar-alias-test";
+    document.body.append(alias);
+  });
+  await page.waitForFunction((src) => document.querySelector("#avatar-alias-test img").src === src, customSrc);
+  assert.equal(await page.evaluate(() => scratchpadAvatar("@+alder-turner-87654321")), "");
+  const agentJoshPad = join(agents, "josh-abcdef12");
+  await mkdir(agentJoshPad);
+  await writeFile(join(env.AGENT_IDENTITIES_DIR, "josh"), "abcdef12-0000-0000-0000-000000000001\n");
+  await writeFile(join(agentJoshPad, "avatar.svg"), avatarSvg);
+  await page.evaluate(() => {
+    const agent = avatar("@+josh");
+    agent.id = "agent-josh-avatar-test";
+    document.body.append(agent);
+  });
+  await page.waitForFunction(() => document.querySelector("#agent-josh-avatar-test img").src.startsWith("data:image/svg+xml;base64,"));
+  assert.equal(await page.evaluate(() => avatarImage("@josh").getAttribute("src")), "/josh-avatar.png");
+  for (const scheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme: scheme });
+    if (process.env.AGENT_MAIL_AVATAR_SCREENSHOT)
+      await customAvatar.screenshot({ path: process.env.AGENT_MAIL_AVATAR_SCREENSHOT + "-" + scheme + ".png" });
+    assert.equal(await customAvatar.evaluate((img) => img.naturalWidth > 0), true);
+  }
+  await writeFile(avatarFile, avatarSvg.replaceAll("#002FA7", "#FF7900"));
+  await page.reload();
+  await page.waitForFunction((before) => {
+    const img = document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img');
+    return img?.src.startsWith("data:image/svg+xml;base64,") && img.src !== before && img.complete && img.naturalWidth > 0;
+  }, customSrc);
+  await writeFile(avatarFile, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><script>parent.document.body.dataset.compromised="avatar"</script></svg>');
+  await page.reload();
+  await page.waitForFunction(() => {
+    const img = document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img');
+    return img?.src.startsWith("data:image/svg+xml;charset=utf-8,") && img.complete && img.naturalWidth > 0;
+  });
+  assert.equal(await page.evaluate(() => document.body.dataset.compromised), undefined);
+  await rm(avatarFile);
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img')?.src.startsWith("data:image/svg+xml;charset=utf-8,"));
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

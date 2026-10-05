@@ -77,6 +77,99 @@ class WebTest(unittest.TestCase):
         except urllib.error.HTTPError as r:
             return r.code, r.read()
 
+    def test_scratchpad_avatar_aliases_and_updates(self):
+        path = self.root / 'agents/alder-turner-12345678/avatar.svg'
+        raw = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="#002FA7" d="M0 0H32V32H0Z"/></svg>'
+        path.write_bytes(raw)
+        rendered = self.box.avatar('@+alder-turner')
+        for handle in ('alder-turner', 'alder-turner-12345678', '@+alder-turner-of-hearth',
+                       '@+alder-turner-12345678-0000-0000-0000-000000000001'):
+            self.assertEqual(self.box.avatar(handle), rendered)
+        self.assertIn(b'#002FA7', rendered)
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner-87654321')[0], 404)
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner-12345678-0000-0000-0000-000000000002')[0], 404)
+        self.assertIn(b'width="256"', rendered)
+        path.write_bytes(raw.replace(b'#002FA7', b'#FF7900'))
+        self.assertIn(b'#FF7900', self.box.avatar('@+alder-turner'))
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner')[0], 200)
+
+    def test_agent_avatar_is_distinct_from_same_named_human(self):
+        (self.root / 'identities/josh').write_text('abcdef12-0000-0000-0000-000000000001\n')
+        pad = self.root / 'agents/josh-abcdef12'
+        pad.mkdir()
+        (pad / 'avatar.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"/>')
+        self.assertEqual(self.request('/api/avatar?handle=' + quote('@+josh'))[0], 200)
+        self.assertEqual(self.request('/api/avatar?handle=' + quote('@josh'))[0], 404)
+        self.assertEqual(self.request('/api/avatar?handle=josh')[0], 404)
+
+    def test_avatar_authentication_and_standalone_policy(self):
+        path = self.root / 'agents/alder-turner-12345678/avatar.svg'
+        path.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/></svg>')
+        route = '/api/avatar?handle=alder-turner'
+        self.assertEqual(self.request(route, **{'X-Agent-Mail-Token': ''})[0], 403)
+        req = urllib.request.Request(self.url + route, headers={'X-Agent-Mail-Token': 'fixture-token'})
+        with urllib.request.urlopen(req) as response:
+            self.assertEqual(response.headers['Content-Type'], 'image/svg+xml')
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+            self.assertIn('sandbox', response.headers['Content-Security-Policy'])
+            self.assertIn("default-src 'none'", response.headers['Content-Security-Policy'])
+
+    def test_absent_unregistered_and_unsafe_avatars_fall_back(self):
+        route = '/api/avatar?handle='
+        for handle in ('alder-turner', '@josh', '../alder-turner', 'unknown-agent', 'birch-weaver'):
+            self.assertEqual(self.request(route + quote(handle))[0], 404)
+        path = self.root / 'agents/alder-turner-12345678/avatar.svg'
+        prefix = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"'
+        bad = [b'not XML', b'\xff', b'<svg/>',
+               (prefix + ' onclick="alert(1)"/>').encode(),
+               (prefix + '><script>alert(1)</script></svg>').encode(),
+               (prefix + '><foreignObject/></svg>').encode(),
+               (prefix + '><svg viewBox="0 0 32 32"/></svg>').encode(),
+               (prefix + '><path d="' + 'M0 0 ' * 1700 + '"/></svg>').encode(),
+               (prefix + '><image href="https://example.invalid/track"/></svg>').encode(),
+               (prefix + '><use href="#loop"/></svg>').encode(),
+               (prefix + '><style>@import "https://example.invalid";</style></svg>').encode(),
+               (prefix + '><path style="fill:red"/></svg>').encode(),
+               (prefix + '><path fill="url(https://example.invalid/a)"/></svg>').encode(),
+               (prefix + '><path fill="u\\72l(https://example.invalid/a)"/></svg>').encode(),
+               b'<!DOCTYPE svg [<!ENTITY x "entity">]>' + (prefix + '><title>&x;</title></svg>').encode(),
+               (prefix.replace('0 0 32 32', '0 0 NaN 32') + '/>').encode(),
+               (prefix.replace('0 0 32 32', '0 0 0 32') + '/>').encode(),
+               (prefix + '>' + '<g/>' * 256 + '</svg>').encode(),
+               b'x' * (web.MAX_AVATAR + 1)]
+        for raw in bad:
+            with self.subTest(raw=raw[:80]):
+                path.write_bytes(raw)
+                self.assertEqual(self.request(route + 'alder-turner')[0], 404)
+
+    def test_avatar_rejects_file_pad_and_registry_links_and_nonfiles(self):
+        path = self.root / 'agents/alder-turner-12345678/avatar.svg'
+        outside = self.root / 'outside.svg'
+        outside.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"/>')
+        path.symlink_to(outside)
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner')[0], 404)
+        path.unlink()
+        os.mkfifo(path)
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner')[0], 404)
+        path.unlink()
+        pad = path.parent
+        moved = self.root / 'moved-pad'
+        pad.rename(moved)
+        pad.symlink_to(moved, target_is_directory=True)
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner')[0], 404)
+        pad.unlink()
+        moved.rename(pad)
+        claim = self.root / 'identities/alder-turner'
+        moved_claim = self.root / 'moved-claim'
+        claim.rename(moved_claim)
+        claim.symlink_to(moved_claim)
+        self.assertEqual(self.request('/api/avatar?handle=alder-turner')[0], 404)
+
+    def test_avatar_accepts_local_gradients_and_clips(self):
+        raw = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g"><stop offset="0%" stop-color="#002FA7"/><stop offset="100%" stop-color="rgb(255,121,0)"/></linearGradient><clipPath id="c"><circle cx="16" cy="16" r="12"/></clipPath></defs><rect width="32" height="32" fill="url(#g)" clip-path="url(#c)"/></svg>'
+        self.assertIn(b'url(#g)', web.avatar_svg(raw))
+
     def add_tailnet(self, name='machine.example.ts.net'):
         self.server.authorities = [self.server.authority, name]
         self.server.origins = {f'{scheme}://{host}'
