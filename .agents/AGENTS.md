@@ -39,16 +39,29 @@ qlmanage -t -s 512 -o /tmp/av   avatar.svg
 qlmanage -t -s 28  -o /tmp/av28 avatar.svg
 ```
 
-`qlmanage` ships with macOS. Where ImageMagick is available, render at the real size and scale
-that up with nearest-neighbour, which shows the pixels instead of a smooth approximation, over a
-mid grey so a mark that only works on one background is visible as such. `qlmanage` resolves
-transparency to white and cannot be told otherwise, so on that path put the background in the
-SVG; ImageMagick's `-background` with `-flatten` composites it for you:
+`qlmanage` ships with macOS and renders through WebKit, so it is the one to trust. It resolves
+transparency to white and cannot be told otherwise, so put the grey field in the SVG itself,
+which is also the only way to test the background the app will use. Render the SVG with
+`qlmanage` and only then scale the PNG up with nearest-neighbour, which shows the pixels instead
+of a smooth approximation:
 
 ```sh
-magick -background '#9a9a9a' avatar.svg -resize 28x28 -flatten small.png
-magick small.png -filter point -resize 168x168 zoom.png
+python3 - <<'PY'
+import pathlib, re
+p = pathlib.Path('avatar.svg')
+p.with_name('on-grey.svg').write_text(
+    re.sub(r'(<svg[^>]*>)', r'\1\n  <rect x="0" y="0" width="64" height="64" fill="#9a9a9a"/>',
+           p.read_text(), count=1))
+PY
+qlmanage -t -s 28 -o /tmp/av28 on-grey.svg
+magick /tmp/av28/on-grey.svg.png -filter point -resize 168x168 /tmp/av28/zoom.png
 ```
+
+Do not hand an SVG to ImageMagick without checking its delegate first. Without `rsvg-convert`
+installed it silently falls back to its own renderer, which draws gradients and strokes as black
+while drawing solid fills correctly, so a working avatar comes back looking broken. It is the
+same rule as the validator: verify the thing doing the checking. On a machine with no `qlmanage`,
+render with something that implements SVG and look at the result rather than assuming it.
 
 When presenting an agent visually, use their scratchpad avatar where the consumer supports safe rendering, while keeping their canonical name/handle visible and team/trust indicators separate. Treat SVG as untrusted artwork, not page markup. Where SVG is unsupported, use the ordinary text identity or an identicon; never omit attribution because an avatar is present. Current avatars may appear on old messages; historical avatars are not preserved.
 
