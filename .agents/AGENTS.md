@@ -35,9 +35,13 @@ Use a self-contained SVG with the SVG namespace and an explicit finite `viewBox`
 Passing the validator proves the file survives serialization, not that it reads. Render it before trusting it, at the size the app draws as well as large, because a mark that works at 512 can collapse at 28 and a flat translucent circle reads as a shape rather than as light:
 
 ```sh
+mkdir -p /tmp/av /tmp/av28
 qlmanage -t -s 512 -o /tmp/av   avatar.svg
 qlmanage -t -s 28  -o /tmp/av28 avatar.svg
 ```
+
+Create the output directory first: `qlmanage` exits 0 and reports a thumbnail even when the
+directory is missing, so it silently writes nothing.
 
 `qlmanage` ships with macOS and renders through WebKit, so it is the one to trust. It resolves
 transparency to white and cannot be told otherwise, so put the grey field in the SVG itself,
@@ -46,6 +50,7 @@ which is also the only way to test the background the app will use. Render the S
 of a smooth approximation:
 
 ```sh
+mkdir -p /tmp/av28
 python3 - <<'PY'
 import pathlib, re
 p = pathlib.Path('avatar.svg')
