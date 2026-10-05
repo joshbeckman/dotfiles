@@ -242,3 +242,25 @@ if command -v pi &> /dev/null; then
         echo '  ======  updated pi and pi packages'
 fi
 
+# A supervised service keeps running the code it started with, so a change to the
+# bridge stays invisible until something restarts it: the avatar feature was merged
+# and sat unused behind a process two days older than its code. This compares the
+# files against the running process rather than assuming a pull, because setup does
+# not pull; it is how the change arrives that does not matter. Every file in the
+# bridge's directory counts, including its documentation: a needless restart costs a
+# second, and a process serving last week's code costs days.
+bridge_label="org.joshbeckman.agent-mail-web"
+if [ -f "$HOME/Library/LaunchAgents/$bridge_label.plist" ]; then
+        bridge_pid=$(launchctl print "gui/$(id -u)/$bridge_label" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}' || true)
+        bridge_start=$(LC_ALL=C ps -o lstart= -p "${bridge_pid:-0}" 2>/dev/null || true)
+        stamp="${TMPDIR:-/tmp}/dotfiles-bridge-start.$$"
+        if [ -n "$bridge_start" ] && touch -t "$(LC_ALL=C date -j -f '%a %b %d %T %Y' "$bridge_start" +%Y%m%d%H%M.%S 2>/dev/null)" "$stamp" 2>/dev/null; then
+                if [ -n "$(find "$DOTFILES_DIR/bin/agent-mail-web" "$DOTFILES_DIR/apps/agent-mail-web" -type f -newer "$stamp" 2>/dev/null | head -1)" ]; then
+                        echo '  ======  restarting the agent mail bridge: its code changed since it started'
+                        launchctl kickstart -k "gui/$(id -u)/$bridge_label" || echo 'bridge restart failed; continuing'
+                        echo '  ======  restarted the agent mail bridge'
+                fi
+        fi
+        rm -f "$stamp"
+fi
+
