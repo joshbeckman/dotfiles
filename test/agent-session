@@ -694,6 +694,29 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(self.wake()['status'], 'idle')
         self.assertEqual(self.launches(), 0)
 
+    def test_memory_pressure_probe_failure_refuses_on_macos(self):
+        # Exercise the Darwin branch on any host: sitecustomize makes the
+        # interpreter report darwin, and the stub sysctl then fails instead of
+        # printing a level. A failed probe must not silently disable the gate.
+        self.parked()
+        self.stub('sysctl', '#!/bin/sh\nexit 1\n')
+        seam = self.root / 'seam'
+        seam.mkdir()
+        (seam / 'sitecustomize.py').write_text('import sys\nsys.platform = "darwin"\n')
+        self.env['PYTHONPATH'] = str(seam)
+        self.assertIn('could not read memory pressure',
+                      self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2))
+        self.env.pop('PYTHONPATH')
+        self.assertEqual(self.record()['state'], 'parked')
+
+    def test_memory_pressure_probe_failure_is_normal_off_macos(self):
+        # Linux has no such sysctl key, so a failed probe is normal pressure and
+        # the wake proceeds to the tmux checks.
+        self.parked()
+        self.stub('sysctl', '#!/bin/sh\nexit 1\n')
+        self.assertEqual(self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents',
+                                      '--dry-run')['status'], 'would-wake')
+
     def test_watcher_creates_missing_tmux_session_and_dry_run_changes_nothing(self):
         self.parked()
         self.mail()

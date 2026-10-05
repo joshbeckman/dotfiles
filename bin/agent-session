@@ -510,9 +510,12 @@ def memory_pressure():
     try:
         return int(subprocess.run(['sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
                                   capture_output=True, text=True, check=True).stdout)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        # The gate is macOS-only, and probing the key answers "is this macOS?"
-        # and "what is the level?" in one call on every platform.
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if sys.platform == 'darwin':
+            # A failed probe must not silently disable the only platform that has
+            # the gate; refuse the wake instead of assuming normal pressure.
+            raise ValueError(f'could not read memory pressure: {error}') from error
+        # Linux has no such key, so a failed probe is normal pressure.
         return 1
 
 
