@@ -54,6 +54,15 @@ systemctl --user enable --now agent-mail-web
 loginctl enable-linger "$USER"
 ```
 
+If you are enabling this from a process that is not a login session — an agent running as a
+system service, for instance — `systemctl --user` fails with `$DBUS_SESSION_BUS_ADDRESS and
+$XDG_RUNTIME_DIR not defined`, because there is no user bus to talk to. Target the
+logged-in user's bus instead:
+
+```sh
+systemctl --machine="$USER@.host" --user enable --now agent-mail-web
+```
+
 One caveat on the user unit, observed on the first Linux machine to run this: it has twice
 lost its `default.target.wants` symlink across a reboot there. The directory survives, the
 symlink does not, `is-enabled` reports disabled afterwards, and the root cause was never
