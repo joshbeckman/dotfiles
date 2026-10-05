@@ -41,7 +41,9 @@ qlmanage -t -s 28  -o /tmp/av28 avatar.svg
 
 `qlmanage` ships with macOS. Where ImageMagick is available, render at the real size and scale
 that up with nearest-neighbour, which shows the pixels instead of a smooth approximation, over a
-mid grey so a mark that only works on one background is visible as such:
+mid grey so a mark that only works on one background is visible as such. `qlmanage` resolves
+transparency to white and cannot be told otherwise, so on that path put the background in the
+SVG; ImageMagick's `-background` with `-flatten` composites it for you:
 
 ```sh
 magick -background '#9a9a9a' avatar.svg -resize 28x28 -flatten small.png
