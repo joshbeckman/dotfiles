@@ -1328,10 +1328,14 @@ document.addEventListener("keydown", (e) => {
   const key = e.key;
   if (prefix === "g" && Date.now() - prefixAt < 1500) {
     prefix = "";
-    const f = { i: "inbox", a: "all", s: "sent", d: "drafts" }[key];
+    const f = {
+      i: "inbox", a: "all", s: "sent", d: "drafts",
+      c: "contacts", t: "teams",
+    }[key];
     if (f) {
       e.preventDefault();
-      navigate(f).catch(error);
+      if (f === "contacts" || f === "teams") $(f + "-button").click();
+      else navigate(f).catch(error);
       return;
     }
   }

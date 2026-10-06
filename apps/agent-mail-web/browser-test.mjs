@@ -676,7 +676,8 @@ try {
     "Reply shortcut should not open a dialog",
   );
   assert.equal(await page.locator("#archive").isDisabled(), true);
-  await page.getByRole("button", { name: "Contacts", exact: true }).click();
+  await page.keyboard.press("g");
+  await page.keyboard.press("c");
   const directory = page.locator("#contact-list");
   await directory
     .locator(".contact summary")
@@ -693,6 +694,8 @@ try {
   await directory
     .getByText("Investigate orchard migrations", { exact: true })
     .waitFor();
+  assert.equal(await directory.locator(".avatar").first().evaluate((image) => image.getBoundingClientRect().width), 48);
+  assert(await page.locator("#current-user .avatar").evaluate((image) => image.getBoundingClientRect().width < 28));
   await directory.getByText("/fixture/orchard", { exact: true }).waitFor();
   await assertTeams(directory);
   await directory.getByText("Latest recorded model", { exact: true }).waitFor();
@@ -813,6 +816,7 @@ try {
   assert.equal(await recipients.locator(".contact").count(), 1);
   // Typing Gmail shortcut letters in the composer must not navigate or archive.
   await page.locator("#body").press("e");
+  for (const key of ["g", "c", "g", "t"]) await page.locator("#body").press(key);
   assert.equal(await page.locator("#editor").isVisible(), true);
   const beforeSend = await page.evaluate(() => composer.value());
   const dialogsBeforeShortcutSend = dialogs.length;
@@ -997,7 +1001,9 @@ try {
   team("leave", "review", "--agent", "@+birch-weaver");
   team("archive", "review");
   await body.fill("Teams navigation preserves this draft.");
-  await page.getByRole("button", { name: "Teams", exact: true }).click();
+  await page.locator("#teams-button").focus();
+  await page.keyboard.press("g");
+  await page.keyboard.press("t");
   const teamsPage = page.getByRole("region", { name: "Teams", exact: true });
   await teamsPage
     .getByText("2 teams · 1 active · 1 archived", { exact: true })
@@ -1065,6 +1071,9 @@ try {
       path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-teams-desktop.png",
       fullPage: true,
     });
+  assert.equal(await orchardCard.locator(":scope > summary > .team-badge").evaluate((badge) => badge.getBoundingClientRect().width), 48);
+  assert.equal(await orchardCard.locator(".contact .avatar").first().evaluate((image) => image.getBoundingClientRect().width), 48);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await orchardCard
     .getByRole("button", { name: "Message team", exact: true })
     .click();

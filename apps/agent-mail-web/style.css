@@ -104,6 +104,16 @@ h1 small {
   height: 1rem;
   font-size: 0.6rem;
 }
+#contact-list .avatar,
+#team-list .avatar {
+  width: 3rem;
+  height: 3rem;
+}
+#team-list > .team-card > summary > .team-badge {
+  width: 3rem;
+  height: 3rem;
+  font-size: 1.125rem;
+}
 #current-user .avatar {
   width: 1.4rem;
   height: 1.4rem;
