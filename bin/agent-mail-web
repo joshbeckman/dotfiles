@@ -369,7 +369,7 @@ class Mailbox:
         contacts = {}
         for p in registry.glob('*'):
             if p.is_file() and not p.name.startswith('.'):
-                contacts[p.name] = {'handle': '@+' + p.name, 'lastSeen': None, 'status': 'historical', 'addressable': False}
+                contacts[p.name] = {'handle': '@+' + p.name, 'lastSeen': None, 'status': 'historical', 'addressable': False, 'transcriptAvailable': True}
         for pad in root.glob('*'):
             if not pad.is_dir() or pad.is_symlink():
                 continue
@@ -404,6 +404,162 @@ class Mailbox:
                                     status=session['liveness'], lastSeen=contact.get('lastSeen'), session=session))
             return results
         return sorted(contacts.values(), key=lambda c: (not c['status'].startswith('active'), not c['addressable'], c['handle']))
+
+    def transcript(self, handle, version=None, before=None, after=None):
+        match = re.fullmatch(r'(?:@\+|\+)?([a-z0-9][a-z0-9._-]{0,127})', handle or '')
+        if not match:
+            raise MailError('Use a registered agent handle, not a human address or file path')
+        name = match[1]
+        if version is not None and len(version) > 200:
+            raise MailError('Invalid transcript version')
+        registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
+        sessions = Path(os.environ.get('PI_SESSIONS_DIR', '~/.pi/agent/sessions')).expanduser()
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        source_fd = None
+        try:
+            registry_fd = os.open(registry, directory_flags)
+            try:
+                claim_fd = os.open(name, file_flags, dir_fd=registry_fd)
+                with os.fdopen(claim_fd, 'rb') as claim:
+                    if not stat.S_ISREG(os.fstat(claim.fileno()).st_mode):
+                        raise MailError('Identity claim is not a regular file', 404)
+                    sid = claim.read(129).decode('ascii').strip()
+            finally:
+                os.close(registry_fd)
+            if not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', sid):
+                raise MailError('Invalid registered session ID', 404)
+            root_fd = os.open(sessions, directory_flags)
+            try:
+                def inspect(directory):
+                    nonlocal source_fd
+                    for filename in os.listdir(directory):
+                        if not filename.endswith('_' + sid + '.jsonl'):
+                            continue
+                        fd = os.open(filename, file_flags, dir_fd=directory)
+                        if not stat.S_ISREG(os.fstat(fd).st_mode):
+                            os.close(fd)
+                            raise MailError('Transcript is not a regular file', 404)
+                        if source_fd is not None:
+                            os.close(fd)
+                            raise MailError('Multiple transcripts match this session', 409)
+                        source_fd = fd
+
+                inspect(root_fd)
+                for child in os.listdir(root_fd):
+                    try:
+                        child_info = os.stat(child, dir_fd=root_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISDIR(child_info.st_mode):
+                        continue
+                    directory = os.open(child, directory_flags, dir_fd=root_fd)
+                    try:
+                        inspect(directory)
+                    finally:
+                        os.close(directory)
+            finally:
+                os.close(root_fd)
+            if source_fd is None:
+                raise MailError('No retained Pi transcript for this registered agent', 404)
+            with os.fdopen(source_fd, 'rb') as source:
+                source_fd = None
+                info = os.fstat(source.fileno())
+                header_line = source.readline(65536)
+                if not header_line.endswith(b'\n'):
+                    raise MailError('Invalid or incomplete Pi session header', 422)
+                header = json.loads(header_line)
+                if not isinstance(header, dict) or header.get('type') != 'session' or header.get('id') != sid:
+                    raise MailError('Transcript header does not match the registered session', 422)
+                header = {key: header[key] for key in ('version', 'id', 'timestamp', 'cwd') if key in header}
+                stamp = ':'.join(map(str, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)))
+                if before is None and version == stamp:
+                    return {'unchanged': True, 'version': stamp, 'sessionId': sid}
+
+                page_limit = 512 * 1024
+                tail_limit = 8 * 1024 * 1024
+                position, scanned, last_newline = info.st_size, 0, -1
+                while position > 0 and scanned < tail_limit:
+                    size = min(64 * 1024, position, tail_limit - scanned)
+                    source.seek(position - size)
+                    tail = source.read(size)
+                    found = tail.rfind(b'\n')
+                    if found >= 0:
+                        last_newline = position - size + found
+                        break
+                    position -= size
+                    scanned += size
+                if last_newline < 0:
+                    raise MailError('Incomplete transcript tail exceeds the read limit', 413)
+                complete_end = last_newline + 1
+                if complete_end < len(header_line):
+                    raise MailError('Invalid or incomplete Pi session header', 422)
+                end = complete_end if before is None else int(before)
+                if end < 0 or end > info.st_size:
+                    raise MailError('Invalid transcript page offset')
+                after_offset = None if after is None else int(after)
+                if after_offset is not None and after_offset < 0:
+                    raise MailError('Invalid transcript live offset')
+
+                window_start = max(len(header_line), end - page_limit)
+                source.seek(window_start)
+                raw = source.read(end - window_start)
+                records = []
+                if raw:
+                    source.seek(end - 1)
+                    end_is_boundary = source.read(1) == b'\n'
+                    if not end_is_boundary:
+                        last = raw.rfind(b'\n')
+                        line_start = window_start + last + 1 if last >= 0 else window_start
+                        records.append((line_start, None, end - line_start, True))
+                    else:
+                        source.seek(window_start - 1)
+                        starts_at_boundary = window_start == len(header_line) or source.read(1) == b'\n'
+                        pieces, offset = [], window_start
+                        for line in raw.splitlines(keepends=True):
+                            pieces.append((offset, line))
+                            offset += len(line)
+                        used = 0
+                        for offset, line in reversed(pieces):
+                            charge = max(len(line), 256)
+                            if records and (used + charge > page_limit or len(records) >= 2000):
+                                break
+                            partial = offset == window_start and not starts_at_boundary
+                            records.append((offset, None if partial or len(line) > 128 * 1024 else line,
+                                            len(line), partial))
+                            used += charge
+                records.reverse()
+                page_start = records[0][0] if records else 0
+                old_file = version and version.split(':', 2)[:2] != stamp.split(':', 2)[:2]
+                reset = bool(after_offset is not None and
+                             (old_file or after_offset < len(header_line) or
+                              after_offset > complete_end or page_start > after_offset))
+                entries, skipped = [], 0
+                for offset, line, size, continued in records:
+                    if after_offset is not None and not reset and offset < after_offset:
+                        continue
+                    if line is None:
+                        entry = {'type': 'transcript_oversize', 'bytes': size, 'continued': continued}
+                    else:
+                        try:
+                            entry = json.loads(line)
+                            if not isinstance(entry, dict) or not isinstance(entry.get('type'), str):
+                                raise ValueError('Invalid entry')
+                        except (ValueError, UnicodeDecodeError, RecursionError):
+                            skipped += 1
+                            continue
+                    entries.append({'key': str(offset), 'entry': entry})
+                return {'handle': '@+' + name, 'sessionId': sid, 'version': stamp,
+                        'header': header, 'entries': entries, 'before': page_start,
+                        'end': complete_end, 'reset': reset, 'skipped': skipped,
+                        'partial': complete_end < info.st_size}
+        except (OSError, UnicodeDecodeError):
+            raise MailError('Registered transcript is unavailable or unsafe to read', 404) from None
+        except (ValueError, TypeError, RecursionError):
+            raise MailError('Invalid transcript header or page offset', 422) from None
+        finally:
+            if source_fd is not None:
+                os.close(source_fd)
 
     def attachment(self, data):
         try:
@@ -518,7 +674,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.get(url.path, parse_qs(url.query))
             if self.command != 'GET':
                 raise MailError('Unknown endpoint', 404)
-            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'fonts.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'fonts.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'transcript.html', 'transcript.css', 'transcript.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
             if url.path.startswith('/fonts/'):
                 # Self-hosted so the app does not depend on fonts installed on the
                 # machine; the name is whitelisted rather than joined, because a
@@ -573,6 +729,12 @@ class Handler(BaseHTTPRequestHandler):
             result = box.contacts(args.get('q', [''])[0])
         elif route == '/api/contact':
             result = box.find_sessions(handle=args.get('handle', [''])[0])
+        elif route == '/api/transcript':
+            handle = args.get('handle', [''])[0]
+            version = args.get('version', [None])[0]
+            before = args.get('before', [None])[0]
+            after = args.get('after', [None])[0]
+            result = box.transcript(handle, version, before, after)
         elif route == '/api/avatar':
             return self.reply(200, box.avatar(args.get('handle', [''])[0]), 'image/svg+xml')
         elif route == '/api/attachment':

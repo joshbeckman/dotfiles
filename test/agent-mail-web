@@ -39,9 +39,10 @@ class WebTest(unittest.TestCase):
         (self.root / 'agents/birch-weaver-87654321').mkdir()
         (self.root / 'sessions').mkdir()
         (self.root / 'identities').mkdir()
-        sid = '12345678-0000-0000-0000-000000000001'
-        (self.root / 'identities/alder-turner').write_text(sid + '\n')
-        (self.root / 'sessions' / ('2026-01-01T00-00-00Z_' + sid + '.jsonl')).write_text('\n'.join(json.dumps(entry) for entry in [{'type':'session','cwd':'/fixture/project'}, {'type':'session_info','name':'Alder session title'}, {'type':'message','message':{'content':'orchard migration topic'}}]) + '\n')
+        self.sid = '12345678-0000-0000-0000-000000000001'
+        (self.root / 'identities/alder-turner').write_text(self.sid + '\n')
+        self.session_file = self.root / 'sessions' / ('2026-01-01T00-00-00Z_' + self.sid + '.jsonl')
+        self.session_file.write_text('\n'.join(json.dumps(entry) for entry in [{'type':'session','version':3,'id':self.sid,'timestamp':'2026-01-01T00:00:00Z','cwd':'/fixture/project'}, {'type':'session_info','name':'Alder session title'}, {'type':'message','message':{'content':'orchard migration topic'}}]) + '\n')
         self.box = web.Mailbox()
         self.id = web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--to', '@+birch-weaver', '--subject', 'A test thread', '--body', '**Hello**\n\nA searchable needle.\n')
         self.key = 'inbox:' + self.id + '.md'
@@ -76,6 +77,132 @@ class WebTest(unittest.TestCase):
                 return r.status, r.read()
         except urllib.error.HTTPError as r:
             return r.code, r.read()
+
+    def transcript(self, suffix=''):
+        status, body = self.request('/api/transcript?handle=' + quote('@+alder-turner') + suffix)
+        return status, json.loads(body)
+
+    def test_transcript_is_authenticated_registered_bounded_and_live(self):
+        route = '/api/transcript?handle=' + quote('@+alder-turner')
+        self.assertEqual(self.request(route, **{'X-Agent-Mail-Token': ''})[0], 403)
+        status, first = self.transcript()
+        self.assertEqual(status, 200)
+        self.assertEqual(first['sessionId'], self.sid)
+        self.assertEqual(first['header']['cwd'], '/fixture/project')
+        self.assertNotIn('path', first)
+        self.assertIn('orchard migration topic', json.dumps(first['entries']))
+        status, unchanged = self.transcript('&version=' + quote(first['version']))
+        self.assertEqual((status, unchanged['unchanged']), (200, True))
+        with self.session_file.open('a') as session:
+            session.write(json.dumps({'type': 'message', 'id': 'live-entry', 'parentId': None,
+                                      'timestamp': '2026-01-01T00:01:00Z',
+                                      'message': {'role': 'assistant', 'content': 'live append'}}) + '\n')
+        status, updated = self.transcript('&version=' + quote(first['version']))
+        self.assertEqual(status, 200)
+        self.assertIn('live append', json.dumps(updated['entries']))
+        with self.session_file.open('a') as session:
+            session.write('{"type":"message","message":{"content":"partial')
+        status, partial = self.transcript('&version=' + quote(updated['version']))
+        self.assertEqual((status, partial['partial']), (200, True))
+        self.assertNotIn('partial', json.dumps(partial['entries']))
+        with self.session_file.open('a') as session:
+            session.write(' complete"}}\n')
+        self.assertIn('partial complete', json.dumps(self.transcript('&version=' + quote(partial['version']))[1]['entries']))
+        self.assertEqual(self.request('/api/transcript?handle=../alder-turner')[0], 400)
+        self.assertEqual(self.request('/api/transcript?handle=' + quote('@josh'))[0], 400)
+
+    def test_transcript_rejects_unbound_ambiguous_and_linked_files(self):
+        original = self.session_file.read_text()
+        wrong = dict(json.loads(original.splitlines()[0]), id='ffffffff-0000-0000-0000-000000000000')
+        self.session_file.write_text(json.dumps(wrong) + '\n' + '\n'.join(original.splitlines()[1:]) + '\n')
+        self.assertEqual(self.transcript()[0], 422)
+        self.session_file.write_text(original)
+        duplicate_dir = self.root / 'sessions/duplicate'
+        duplicate_dir.mkdir()
+        duplicate = duplicate_dir / self.session_file.name
+        duplicate.write_text(original)
+        self.assertEqual(self.transcript()[0], 409)
+        duplicate.unlink()
+        outside = self.root / 'outside.jsonl'
+        outside.write_text(original)
+        self.session_file.unlink()
+        self.session_file.symlink_to(outside)
+        self.assertEqual(self.transcript()[0], 404)
+
+    def test_transcript_pages_large_sessions_without_returning_the_whole_file(self):
+        with self.session_file.open('a') as session:
+            for index in range(7000):
+                session.write(json.dumps({'type': 'message', 'id': str(index), 'parentId': None,
+                                          'message': {'role': 'user', 'content': 'x' * 100}}) + '\n')
+        status, page = self.transcript()
+        self.assertEqual(status, 200)
+        self.assertGreater(page['before'], 0)
+        seen = []
+        while True:
+            seen = [entry['entry'].get('id') for entry in page['entries']
+                    if str(entry['entry'].get('id', '')).isdigit()] + seen
+            self.assertEqual(page['skipped'], 0)
+            self.assertLess(len(json.dumps(page)), 1024 * 1024)
+            if page['before'] == 0:
+                break
+            status, page = self.transcript('&before=' + str(page['before']))
+            self.assertEqual(status, 200)
+        self.assertEqual(seen, [str(index) for index in range(7000)])
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_transcript_omits_one_oversized_entry_and_marks_a_live_gap(self):
+        first = self.transcript()[1]
+        with self.session_file.open('a') as session:
+            session.write(json.dumps({'type': 'message', 'id': 'huge',
+                                      'message': {'role': 'toolResult', 'content': 'x' * (600 * 1024)}}) + '\n')
+        status, page = self.transcript('&version=' + quote(first['version']) + '&after=' + str(first['end']))
+        self.assertEqual(status, 200)
+        omitted = [entry['entry'] for entry in page['entries']
+                   if entry['entry']['type'] == 'transcript_oversize']
+        self.assertEqual(len(omitted), 1)
+        self.assertGreaterEqual(omitted[0]['bytes'], 128 * 1024)
+        self.assertNotIn('"huge"', json.dumps(page))
+        previous_end = page['end']
+        previous_version = page['version']
+        with self.session_file.open('a') as session:
+            for index in range(6000):
+                session.write(json.dumps({'type': 'message', 'id': 'gap-' + str(index),
+                                          'message': {'role': 'user', 'content': 'y' * 100}}) + '\n')
+        status, advanced = self.transcript('&version=' + quote(previous_version) + '&after=' + str(previous_end))
+        self.assertEqual(status, 200)
+        self.assertTrue(advanced['reset'])
+        self.assertGreater(advanced['before'], previous_end)
+
+    def test_transcript_resets_after_a_smaller_same_session_replacement(self):
+        with self.session_file.open('a') as session:
+            session.write(json.dumps({'type': 'message', 'id': 'large-old',
+                                      'message': {'role': 'user', 'content': 'z' * 4096}}) + '\n')
+        first = self.transcript()[1]
+        replacement = [
+            {'type': 'session', 'version': 3, 'id': self.sid,
+             'timestamp': '2026-01-01T00:00:00Z', 'cwd': '/fixture/replaced'},
+            {'type': 'message', 'id': 'replacement', 'parentId': None,
+             'message': {'role': 'user', 'content': 'replacement content'}},
+        ]
+        self.session_file.write_text('\n'.join(json.dumps(entry) for entry in replacement) + '\n')
+        status, result = self.transcript('&version=' + quote(first['version']) + '&after=' + str(first['end']))
+        self.assertEqual(status, 200)
+        self.assertTrue(result['reset'])
+        self.assertIn('replacement content', json.dumps(result['entries']))
+
+    def test_transcript_rejects_unsafe_claims_and_offsets(self):
+        claim = self.root / 'identities/alder-turner'
+        saved = claim.read_text()
+        outside = self.root / 'outside-claim'
+        outside.write_text(saved)
+        claim.unlink()
+        claim.symlink_to(outside)
+        self.assertEqual(self.transcript()[0], 404)
+        claim.unlink()
+        claim.write_text(saved)
+        for suffix in ('&before=abc', '&before=-1', '&before=999999999', '&after=-1', '&version=' + 'x' * 201):
+            with self.subTest(suffix=suffix):
+                self.assertIn(self.transcript(suffix)[0], (400, 422))
 
     def test_scratchpad_avatar_aliases_and_updates(self):
         path = self.root / 'agents/alder-turner-12345678/avatar.svg'

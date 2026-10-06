@@ -849,6 +849,17 @@ function contactCard(contact, { allowCompose = true, compact = false } = {}) {
     compose.disabled = !contact.addressable;
     row.append(compose);
   }
+  if (contact.transcriptAvailable) {
+    row.append(
+      button("View transcript", () => {
+        window.open(
+          `/transcript.html?handle=${encodeURIComponent(contact.handle)}`,
+          "_blank",
+          "noopener",
+        );
+      }),
+    );
+  }
   row.append(content);
   let loaded = false;
   row.addEventListener("toggle", async () => {

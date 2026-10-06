@@ -4,6 +4,8 @@ import {
   mkdtemp,
   mkdir,
   writeFile,
+  appendFile,
+  rename,
   readdir,
   readFile,
   rm,
@@ -57,10 +59,11 @@ await mkdir(env.AGENT_IDENTITIES_DIR);
 await mkdir(env.PI_SESSIONS_DIR);
 const sid = "12345678-0000-0000-0000-000000000001";
 await writeFile(join(env.AGENT_IDENTITIES_DIR, "alder-turner"), sid + "\n");
+const sessionFile = join(env.PI_SESSIONS_DIR, "2026-01-01T00-00-00Z_" + sid + ".jsonl");
 await writeFile(
-  join(env.PI_SESSIONS_DIR, "2026-01-01T00-00-00Z_" + sid + ".jsonl"),
+  sessionFile,
   [
-    { type: "session", cwd: "/fixture/orchard" },
+    { type: "session", version: 3, id: sid, timestamp: "2026-01-01T00:00:00Z", cwd: "/fixture/orchard" },
     { type: "session_info", name: "Investigate orchard migrations" },
     {
       type: "message",
@@ -80,7 +83,8 @@ await writeFile(
         model: "cedar-v2",
       },
     },
-    { type: "message", message: { content: "orchard incident analysis" } },
+    { type: "message", id: "fixture-user", parentId: null, timestamp: "2026-01-02T00:01:00Z", message: { role: "user", content: "orchard incident analysis <script>unsafe()</script>", timestamp: 1767312060000 } },
+    { type: "message", id: "fixture-assistant", parentId: "fixture-user", timestamp: "2026-01-02T00:02:00Z", message: { role: "assistant", provider: "fixture-provider", model: "cedar-v2", timestamp: 1767312120000, content: [{ type: "text", text: "I will inspect it." }, { type: "toolCall", id: "tool-1", name: "read", arguments: { path: "/fixture/orchard" } }] } },
   ]
     .map((entry) => JSON.stringify(entry))
     .join("\n") + "\n",
@@ -714,6 +718,42 @@ try {
   await directory
     .getByRole("button", { name: "Copy resume command", exact: true })
     .waitFor();
+  const transcriptErrors = [];
+  const transcriptPromise = page.waitForEvent("popup");
+  await directory
+    .getByRole("button", { name: "View transcript", exact: true })
+    .click();
+  const transcript = await transcriptPromise;
+  transcript.on("pageerror", (error) => transcriptErrors.push(error.message));
+  await transcript.getByText("orchard incident analysis <script>unsafe()</script>", { exact: true }).waitFor();
+  assert.equal(await transcript.locator("script").count(), 1, "Transcript text must not become markup");
+  const assistantEntry = transcript.locator("details.entry.role-assistant").filter({ hasText: "I will inspect it." });
+  await assistantEntry.getByText("Tool call · read", { exact: true }).click();
+  assert.equal(await assistantEntry.locator("details").first().evaluate((node) => node.open), true);
+  await assistantEntry.locator(":scope > summary").click();
+  assert.equal(await assistantEntry.evaluate((node) => node.open), false);
+  await appendFile(
+    sessionFile,
+    JSON.stringify({
+      type: "message",
+      id: "fixture-live",
+      parentId: "fixture-assistant",
+      timestamp: "2026-01-02T00:03:00Z",
+      message: { role: "assistant", content: "Live transcript update.", timestamp: 1767312180000 },
+    }) + "\n",
+  );
+  await transcript.getByText("Live transcript update.", { exact: true }).waitFor({ timeout: 5000 });
+  assert.equal(await assistantEntry.evaluate((node) => node.open), false);
+  assert.equal(await assistantEntry.locator("details").first().evaluate((node) => node.open), true);
+  assert.match(await transcript.getByRole("complementary").textContent(), /recorded branches/);
+  const missingSession = sessionFile + ".missing";
+  await rename(sessionFile, missingSession);
+  await transcript.getByText("No retained Pi transcript is registered for this contact.", { exact: true }).waitFor({ timeout: 5000 });
+  assert.equal(await transcript.locator("#entries").getByText("Live transcript update.", { exact: true }).count(), 0);
+  await rename(missingSession, sessionFile);
+  await transcript.getByText("Live transcript update.", { exact: true }).waitFor({ timeout: 5000 });
+  assert.deepEqual(transcriptErrors, []);
+  await transcript.close();
   await directory
     .getByRole("button", { name: "Show mail", exact: true })
     .click();
@@ -1314,7 +1354,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

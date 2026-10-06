@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Session transcript</title>
+    <link rel="stylesheet" href="/fonts.css" />
+    <link rel="stylesheet" href="/transcript.css" />
+    <script defer src="/transcript.js"></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Session transcript</h1>
+        <p id="session-info">Loading registered session…</p>
+      </div>
+      <button id="older" type="button" hidden>Load older entries</button>
+    </header>
+    <aside>
+      This is the append journal for the registered Pi session, including recorded branches—not a claim that every entry is on the current branch. It updates while this page is visible. Tool calls and thinking are collapsed; image payloads are omitted.
+    </aside>
+    <main>
+      <p id="empty" aria-live="polite"></p>
+      <section id="entries" aria-label="Session journal"></section>
+    </main>
+    <footer id="status" role="status" aria-live="polite">Loading…</footer>
+  </body>
+</html>
