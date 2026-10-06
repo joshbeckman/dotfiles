@@ -145,6 +145,7 @@ function show(name) {
   for (const id of ["mail-list", "reader", "editor", "contacts", "teams"])
     $(id).hidden = id !== name && !(replying && id === "reader");
   setFolderButtons();
+  if (name === "editor") renderRecipientCards();
 }
 function button(text, action) {
   const b = document.createElement("button");
@@ -500,6 +501,7 @@ async function loadDraft(value) {
   draft = value;
   dirty = false;
   $("to").value = value.to;
+  $("recipient-cards").replaceChildren();
   $("subject").value = value.subject;
   composer.load(value.body);
   loadKeywords();
@@ -840,6 +842,7 @@ function contactCard(contact, { allowCompose = true, compact = false } = {}) {
     const compose = button("Message " + contact.handle, async () => {
       await newDraft();
       $("to").value = contact.handle;
+      renderRecipientCards();
       changed();
       $("body").focus();
     });
@@ -899,7 +902,7 @@ async function getTeams(query = "") {
   try {
     const teams = await api("teams?q=" + encodeURIComponent(query));
     if (generation !== teamGeneration) return;
-    $("team-list").replaceChildren(...teams.map(teamCard));
+    $("team-list").replaceChildren(...teams.map((team) => teamCard(team)));
     const active = teams.filter((team) => team.status === "active").length;
     $("team-status").textContent = teams.length
       ? `${teams.length} ${teams.length === 1 ? "team" : "teams"} · ${active} active · ${teams.length - active} archived`
@@ -913,7 +916,7 @@ async function getTeams(query = "") {
     throw e;
   }
 }
-function teamCard(team) {
+function teamCard(team, { allowCompose = true } = {}) {
   const row = document.createElement("details");
   row.className = "team-card";
   const members = team.members.filter((member) => member.leftAt === null);
@@ -943,14 +946,17 @@ function teamCard(team) {
     fields.append(term, detail);
   }
   row.append(fields);
-  const message = button("Message team", async () => {
-    await newDraft();
-    $("to").value = team.handle;
-    changed();
-    $("body").focus();
-  });
-  message.disabled = team.status !== "active";
-  row.append(message);
+  if (allowCompose) {
+    const message = button("Message team", async () => {
+      await newDraft();
+      $("to").value = team.handle;
+      renderRecipientCards();
+      changed();
+      $("body").focus();
+    });
+    message.disabled = team.status !== "active";
+    row.append(message);
+  }
   const heading = document.createElement("h3");
   heading.textContent =
     team.status === "active" ? "Current members" : "Retained roster";
@@ -997,6 +1003,62 @@ function teamCard(team) {
   history.append(historyTitle, events);
   row.append(history);
   return row;
+}
+function renderRecipientCards(inspectUnknown = true) {
+  const target = $("recipient-cards");
+  const previous = new Map(
+    [...target.children].map((card) => [card.dataset.recipient, card]),
+  );
+  const addresses = [...new Set(
+    $("to").value.split(",").map((address) => address.trim()).filter(Boolean),
+  )];
+  const cards = addresses.map((address) => {
+    const existing = previous.get(address);
+    if (existing && !(inspectUnknown && address.startsWith("@team/") && !existing.dataset.inspected)) {
+      if (inspectUnknown && existing.matches("details.contact"))
+        existing.open = true;
+      return existing;
+    }
+    let card;
+    if (address.startsWith("@team/")) {
+      card = document.createElement("div");
+      card.textContent = address + " · Leave the To field to inspect this team.";
+      if (inspectUnknown) {
+        card.dataset.inspected = "true";
+        card.textContent = address + " · Loading team details…";
+        api("teams?q=" + encodeURIComponent(address)).then((teams) => {
+          if (!card.isConnected) return;
+          const team = teams.find((team) => team.handle === address);
+          if (!team) {
+            card.textContent = address + " · No matching team.";
+            return;
+          }
+          const details = teamCard(team, { allowCompose: false });
+          details.open = true;
+          card.replaceChildren(details);
+        }).catch((failure) => {
+          card.textContent = address + " · Team details unavailable: " + failure.message;
+        });
+      }
+    } else {
+      const known = contacts.find(
+        (contact) => contact.handle.toLowerCase() === address.toLowerCase(),
+      );
+      const human = avatarKey(address).startsWith("human:");
+      // Keep the exact recipient, including a session suffix, for inspection;
+      // avatar normalization must not retarget an explicit session address.
+      card = contactCard(
+        { handle: address, human, status: human ? "Human" : known?.status || "Agent" },
+        { allowCompose: false, compact: true },
+      );
+      card.open = inspectUnknown || Boolean(known) || human;
+    }
+    card.dataset.recipient = address;
+    return card;
+  });
+  target.replaceChildren(...cards);
+  if (!cards.length)
+    target.textContent = "Select recipients to see their contact details.";
 }
 function renderParticipantCards(messages) {
   const people = new Map();
@@ -1199,6 +1261,8 @@ $("close-draft").onclick = () => navigate("drafts").catch(error);
 $("send").onclick = () => sendDraft().catch(error);
 $("delete-draft").onclick = () => deleteDraft().catch(error);
 for (const id of ["to", "subject"]) $(id).addEventListener("input", changed);
+$("to").addEventListener("input", () => renderRecipientCards(false));
+$("to").addEventListener("change", () => renderRecipientCards());
 $("image").onchange = () => attach().catch(error);
 $("preview-button").onclick = () => {
   $("preview").hidden = false;

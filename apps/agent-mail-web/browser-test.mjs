@@ -524,6 +524,8 @@ try {
   await page.locator("#reply-all").click();
   await page.locator("#editor").waitFor({ state: "visible" });
   assert.equal(await page.locator("#reader").isVisible(), true);
+  await page.getByRole("complementary", { name: "Message recipients" }).getByText("Investigate orchard migrations", { exact: true }).waitFor();
+  assert.equal(await page.locator("#recipient-cards > .contact").count(), 2);
   const panels = await page.evaluate(() => ({
     reader: document.getElementById("reader").getBoundingClientRect().toJSON(),
     editor: document.getElementById("editor").getBoundingClientRect().toJSON(),
@@ -764,9 +766,32 @@ try {
     .filter({ hasText: "@+alder-turner" })
     .waitFor();
   await page.locator("#compose").click();
-  await page.locator("#to").fill("@+alder-turner");
+  const recipients = page.getByRole("complementary", { name: "Message recipients" });
+  await recipients.getByText("Select recipients to see their contact details.", { exact: true }).waitFor();
+  await page.locator("#to").fill("@+alder-turner, @josh");
   await page.locator("#subject").fill("Saved draft");
   await page.locator("#body").fill("First version");
+  await recipients.getByText("Investigate orchard migrations", { exact: true }).waitFor();
+  await recipients.getByText("fixture-provider/cedar-v2", { exact: true }).first().waitFor();
+  await recipients.getByText("Your human inbox; not an agent session.", { exact: true }).waitFor();
+  assert.equal(await recipients.locator(".contact").count(), 2);
+  assert(await page.evaluate(() => $("compose-contacts").getBoundingClientRect().left >= $("compose-fields").getBoundingClientRect().right));
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-compose-recipients-desktop.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert(await page.evaluate(() => $("compose-contacts").getBoundingClientRect().top >= $("compose-fields").getBoundingClientRect().bottom && document.documentElement.scrollWidth <= innerWidth));
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-compose-recipients-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1200, height: 850 });
+  await page.locator("#to").fill("@+alder-turner, @+alder-turner");
+  assert.equal(await recipients.locator(".contact").count(), 1);
+  const inspections = [];
+  page.on("request", (request) => { const url = new URL(request.url()); if (url.pathname === "/api/contact") inspections.push(url.searchParams.get("handle")); });
+  await page.locator("#to").fill("@+alder-turner-12345678");
+  await page.locator("#subject").focus();
+  await recipients.getByText("Historical contact; no registered session transcript is available.", { exact: true }).waitFor();
+  assert(inspections.includes("@+alder-turner-12345678"));
+  assert(!inspections.includes("@+alder-turner"));
+  assert.equal(await page.evaluate(() => composer.value()), "First version");
+  await page.locator("#to").fill("@+alder-turner");
   await page.route("**/api/save", async (route) => {
     const response = await route.fetch();
     await new Promise((r) => setTimeout(r, 300));
@@ -784,6 +809,8 @@ try {
     await page.locator("#body").textContent(),
     "Latest version while save was in flight",
   );
+  await recipients.getByText("Investigate orchard migrations", { exact: true }).waitFor();
+  assert.equal(await recipients.locator(".contact").count(), 1);
   // Typing Gmail shortcut letters in the composer must not navigate or archive.
   await page.locator("#body").press("e");
   assert.equal(await page.locator("#editor").isVisible(), true);
@@ -1043,6 +1070,8 @@ try {
     .click();
   await page.locator("#editor").waitFor({ state: "visible" });
   assert.equal(await page.locator("#to").inputValue(), "@team/orchard");
+  await recipients.locator(".team-card > summary").filter({ hasText: "Orchard crew" }).waitFor();
+  assert.equal(await recipients.getByRole("button", { name: "Message team", exact: true }).count(), 0);
   await page.locator("#delete-draft").click();
   await page.getByText("Draft deleted.", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Teams", exact: true }).click();

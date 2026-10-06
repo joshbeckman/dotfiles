@@ -99,6 +99,8 @@
           ><button id="delete-draft">Delete draft</button>
         </div>
         <h2>Markdown message</h2>
+        <div id="compose-layout">
+          <div id="compose-fields">
         <label for="to">To (comma-separated handles)</label
         ><input
           id="to"
@@ -123,6 +125,12 @@
         />
         <p id="draft-status" role="status"></p>
         <div id="preview" hidden></div>
+          </div>
+          <aside id="compose-contacts" aria-label="Message recipients">
+            <h3>Selected recipients</h3>
+            <div id="recipient-cards"></div>
+          </aside>
+        </div>
       </section>
       <section id="contacts" aria-label="Contacts" hidden>
         <h2>Contacts</h2>
