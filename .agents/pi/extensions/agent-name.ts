@@ -116,7 +116,7 @@ export default function (pi: ExtensionAPI) {
 					wakeForMail();
 				}
 				if (sessionId) heartbeatAt = writeHeartbeat(scratchpad as string, sessionId, heartbeatAt);
-			}, 60_000);
+			}, 15_000);
 		}
 	});
 
@@ -180,11 +180,12 @@ export default function (pi: ExtensionAPI) {
 	// awake all night.
 	function wakeForMail() {
 		if (!scratchpad || !name) return;
-		// Two minutes keeps mail-driven automation responsive. activeAt separately
-		// prevents a wake during or immediately after an agent turn, while the hourly
-		// budget limits unattended loops.
-		if (Date.now() - userAt < 2 * 60_000) return; // Josh is here; mail can wait for his turn
-		if (Date.now() - activeAt < 60_000) return; // a turn is in flight or just ended
+		// Thirty seconds keeps mail-driven automation responsive, and the interval above has to
+		// be shorter than this or the threshold is unreachable. activeAt separately prevents a
+		// wake during or immediately after an agent turn, while the hourly budget limits
+		// unattended loops.
+		if (Date.now() - userAt < 30_000) return; // Josh is here; mail can wait for his turn
+		if (Date.now() - activeAt < 30_000) return; // a turn is in flight or just ended
 		// Warning pressure still permits direct work on the message while admission
 		// controls block optional fanout. At critical pressure, mail stays unread
 		// rather than adding another unsupervised turn; existing turns remain untouched.
@@ -194,10 +195,11 @@ export default function (pi: ExtensionAPI) {
 		const humanWaiting = unreadSummary(scratchpad).some((m) => !announced.has(m.file) && m.from === "josh");
 		const hourAgo = Date.now() - 60 * 60_000;
 		while (autonomousWakes.length > 0 && autonomousWakes[0] < hourAgo) autonomousWakes.shift();
-		// The budget prevents unattended agent-to-agent loops. Josh-originated mail
-		// is deliberate operator input, so spending that budget on it can suppress a
-		// later task while making the inbox the primary control plane.
-		if (!humanWaiting && autonomousWakes.length >= 4) return;
+		// The budget prevents unattended agent-to-agent loops, and ten an hour is what keeps
+		// that guard while letting mail-driven work stay responsive. Josh-originated mail is
+		// deliberate operator input, so spending that budget on it can suppress a later task
+		// while making the inbox the primary control plane.
+		if (!humanWaiting && autonomousWakes.length >= 10) return;
 
 		const message = mailNotice(scratchpad, announced, name, true);
 		if (!message) return;

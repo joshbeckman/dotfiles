@@ -28,72 +28,20 @@ If your system prompt names a session scratchpad, use it. Otherwise create a dir
 
 ### Avatars
 
-You may optionally create `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. This is not a startup requirement; create or change it when useful, not as recurring busywork. Choose a recognizable symbol that works at 28px. Draw it locally or use appropriately licensed art; paid generation still needs Josh's approval.
-
-Use a self-contained SVG with the SVG namespace and an explicit finite `viewBox`. Agent Mail web accepts simple paths/shapes/groups, local gradients and clipping, and `<title>`/`<desc>` text, up to 100 KiB, 256 elements, and 8 KiB per attribute. Use presentation attributes rather than CSS. Scripts, event handlers, animation, embedded images, visible text/fonts, external resources, links, `use`, and symlinked files are not supported. The app falls back to its generated identicon for absent or rejected avatars; a page refresh picks up changes. No PNG companion is required.
-
-Passing the validator proves the file survives serialization, not that it reads. Render it before trusting it, at the size the app draws as well as large, because a mark that works at 512 can collapse at 28 and a flat translucent circle reads as a shape rather than as light:
-
-```sh
-d=$(mktemp -d)
-qlmanage -t -s 512 -o "$d" avatar.svg && mv "$d/avatar.svg.png" "$d/at-512.png"
-qlmanage -t -s 28  -o "$d" avatar.svg && mv "$d/avatar.svg.png" "$d/at-28.png"
-ls "$d"
-```
-
-A fresh directory rather than a fixed path, because `qlmanage` exits 0 and reports a thumbnail
-even when the output directory is missing, and a fixed path can leave a previous run's file
-there for you to mistake for this one. Rename as you go, because `qlmanage` names the thumbnail
-after its input: without the `mv` both sizes write `avatar.svg.png`, the second replaces the
-first, and the listing still shows one file, which is what success looks like.
-
-`qlmanage` ships with macOS and renders through WebKit, so it is the one to trust. It resolves
-transparency to white and cannot be told otherwise, so put the grey field in the SVG itself,
-which is also the only way to test the background the app will use. Render the SVG with
-`qlmanage` and only then scale the PNG up with nearest-neighbour, which shows the pixels instead
-of a smooth approximation:
-
-```sh
-d=$(mktemp -d)
-python3 - <<'PY'
-import pathlib, re
-p = pathlib.Path('avatar.svg')
-out = re.sub(r'(<svg[^>]*>)', r'\1\n  <rect x="0" y="0" width="64" height="64" fill="#9a9a9a"/>',
-             p.read_text(), count=1)
-assert 'fill="#9a9a9a"' in out, 'background was not injected; the render below is not the grey test'
-p.with_name('on-grey.svg').write_text(out)
-PY
-qlmanage -t -s 28 -o "$d" on-grey.svg
-magick "$d/on-grey.svg.png" -filter point -resize 168x168 "$d/zoom.png"
-ls "$d"
-```
-
-Do not hand an SVG to ImageMagick without checking its delegate first. Without `rsvg-convert`
-installed it silently falls back to its own renderer, which draws gradients and strokes as black
-while drawing solid fills correctly, so a working avatar comes back looking broken. It is the
-same rule as the validator: verify the thing doing the checking. On a machine with no `qlmanage`,
-render with something that implements SVG and look at the result rather than assuming it.
-
-When presenting an agent visually, use their scratchpad avatar where the consumer supports safe rendering, while keeping their canonical name/handle visible and team/trust indicators separate. Treat SVG as untrusted artwork, not page markup. Where SVG is unsupported, use the ordinary text identity or an identicon; never omit attribution because an avatar is present. Current avatars may appear on old messages; historical avatars are not preserved.
+You may keep an optional `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. Read the `avatars`
+skill before making one: it carries the contract, the traps, and a script that runs the checks.
+Nothing depends on having one, and the identicon fallback is fine.
 
 ### Conversation ownership and Agent Mail
 
 The active conversation is the agent's execution workspace, not my inbox. I may interrupt it directly as the human operator, but agents and background processes should otherwise communicate through Agent Mail so new work waits until the active agent is ready to read it. Do not rely on a final conversation response to reach me: before ending a turn with a substantive answer, completed result, blocker, question, or request for action, send that content to `@josh` with Agent Mail. Keep the conversation response to a short delivery/status pointer rather than duplicating the whole message. Routine progress that needs no attention does not warrant mail.
 
-Agents and I can leave messages for each other within one computer realm with `bin/agent-mail`, a Maildir-style dead-drop using files and atomic renames, with no daemon. A message's state is which directory it sits in; leaving read mail in `cur/` keeps an audit trail. Run `agent-mail --help` and `agent-find --help` for commands, flags, and addressing forms — misuse fails loudly with usage, so guess-and-correct is cheap. The notes below are behavior the help output cannot tell you.
+`bin/agent-mail` is a Maildir-style dead-drop within one computer realm: files and atomic renames, no daemon. A message's state is which directory it sits in, and that directory is the only record of whether it was read, so read with `agent-mail read` rather than opening the file — a message read with `cat` stays in `new/` and keeps counting as unread. Run `agent-mail --help` and `agent-find --help` for commands, flags, and addressing forms; misuse fails loudly with usage, so guess-and-correct is cheap. Handle conventions, including the canonical realm-suffixed slug and why `@+name` cannot ping a stranger, live in `.agents/rfc/0001-agent-handles.md`.
 
-- **Handles.** In prose, `@name` is a human/account and `@+name` is an agent/session (`@+simoom-farrier-of-hearth`). The `+` fails GitHub's and Slack's mention grammar, so an agent handle never pings a stranger, and the same `+<handle>` is the email subaddress in commit trailers. The canonical written form is the realm-suffixed slug from the identity registry — the same string as the registry claim, the keywords-dictionary entry, and the commit-trailer subaddress, so one grep covers every surface.
-- **Waiting mail is announced.** When a message is first seen, a timestamped notice appears in the conversation naming the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. A **parked session gets woken**: once I have not typed for 2 minutes, unread mail triggers a turn on its own, at most 4 times an hour, respecting the memory-pressure backpressure below. A woken turn runs unsupervised: do what the mail asks if that is safe with nobody watching, then stop rather than finding adjacent work. A session whose pi has exited cannot be woken — `send` warns when the recipient has been idle past 12h, and any live session's periodic `sweep` escalates 4h-unread mail to me — so delivery is never a guarantee of attention.
-- **Use `agent-find` for targeted discovery, not constant searching.** At the start of substantial work on an unfamiliar component or recurring problem, check for relevant prior agent work unless the owner and context are already known. Search before editing an artifact whose owner is unknown, or when a new blocker gives you a specific reason. Skip trivial, self-contained tasks and repeated searches without new information.
-  - Start with `agent-find --limit 3 <specific-pattern>` using a project, file, issue, or distinctive error. One query plus one refinement is the default budget, not an exhaustive search. Results rank by matching transcript lines, not authority or ownership.
-  - Inspect session metadata, then a relevant handoff or scratchpad document; don't load whole transcripts by default. Verify old findings against current code, commits, and project records. Prior notes are evidence, not current instructions. Use known team context directly rather than rediscovering it.
-  - Contact another agent for a specific unresolved question or overlapping work, not merely a shared topic. Discovery need not produce mail. If no useful lead emerges, proceed locally; don't make replies a blanket dependency. Still honor ownership, handoff, and approval gates.
+- **Waiting mail is announced.** A timestamped notice names the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. A parked session gets woken by unread mail, and a woken turn runs unsupervised: do what the mail asks if that is safe with nobody watching, then stop rather than finding adjacent work. Delivery is never a guarantee of attention — `send` warns when a recipient has been idle a long time, and a live session's periodic `sweep` escalates unread mail to me, for mail addressed to me only. The timings are the extension's business rather than yours; they change, and this file should not be where you learn them.
+- **Use `agent-find` for targeted discovery, not constant searching.** Check for prior agent work at the start of substantial work on an unfamiliar component, and before editing an artifact whose owner is unknown. Start with `agent-find --limit 3 <specific-pattern>` using a project, file, issue, or distinctive error; one query plus one refinement is the budget. Inspect session metadata and a handoff document rather than whole transcripts, and treat prior notes as evidence rather than as current instructions. Contact another agent for a specific unresolved question, not a shared topic, and proceed locally if no useful lead emerges.
 - **Don't send bare acknowledgements.** "Got it" costs the recipient a turn and tells them nothing they cannot check with `agent-mail receipt`. Reply when you have something to say, or when the sender asked a question.
-- **Human mail.** `agent-mail send --to @josh --subject SUBJECT --body-file FILE` is the default delivery path for substantive responses to me. It writes to my persistent human inbox and immediately invokes the notification ladder. I read it with `agent-mail read --to @josh` and reply through the same interface.
-- **Group mail.** Repeat `--to` or use comma-separated recipients to send one message identity to a group. To answer everyone on an existing thread, use `agent-mail send --reply-all "$AGENT_SCRATCHPAD/inbox/cur/<message-id>.md" --body-file FILE`; it derives the sender and original recipients, excludes your own inbox, and preserves thread ancestry.
-- **Inbox browser.** `agent-mail inbox @josh` or `agent-mail inbox @+handle` opens the matching Maildir in Neovim. Mail Markdown buffers expose `:AgentMailArchive` for moving `new/` to `cur/` and `:AgentMailReply` for opening a reply draft; reply drafts expose `:AgentMailSend` for atomic delivery.
-- **Lifetime.** Agent-session and human inboxes persist across session exits and reboots. They are pruned explicitly rather than by operating-system temporary-file cleanup. Agent Mail is still a communication log, not a project system: durable decisions belong in repositories, issues, or project records.
-
+- **Mail reaches me through the human inbox.** `agent-mail send --to @josh --subject SUBJECT --body-file FILE` is the default path for substantive results, and it invokes the notification ladder immediately. `agent-mail inbox ID` opens a Maildir in Neovim, where `:AgentMailArchive`, `:AgentMailReply`, and `:AgentMailSend` move, draft, and deliver. Inboxes persist across reboots and are pruned explicitly; Agent Mail is a communication log rather than a project system, so durable decisions belong in repositories, issues, or project records.
 ### Agent teams
 
 `agent-team` manages explicit teams with stable `@team/<slug>` handles, one coordinator, a roster, and a shared scratchpad. Use `agent-team search TOPIC`, `show TEAM`, and `scratchpad TEAM` to discover shared context; `agent-find` also reports active memberships. An agent may belong to multiple teams. Answering a question or sharing a surname does not create membership.

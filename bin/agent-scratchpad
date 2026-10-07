@@ -29,9 +29,14 @@ Options:
 EOF
 }
 
-mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
-}
+# GNU stat answers -f %m by writing a filesystem dump to stdout and exiting 1,
+# so `stat -f %m || stat -c %Y` captured the dump and the fallback value in one
+# command substitution. Probe the flavor once instead.
+if stat -c %Y . >/dev/null 2>&1; then
+  mtime() { stat -c %Y "$1" 2>/dev/null; }
+else
+  mtime() { stat -f %m "$1" 2>/dev/null; }
+fi
 
 newest_activity() {
   local dir="$1" newest=0 stamp file session_file

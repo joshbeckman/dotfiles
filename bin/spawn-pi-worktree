@@ -4,11 +4,15 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  spawn-pi-worktree [--dry-run] [--approve] --tmux-session SESSION \
+  spawn-pi-worktree [--dry-run] [--approve] [--secret KEY]... --tmux-session SESSION \
     --title TITLE --cwd PATH --prompt TEXT
 
 Starts Pi in an existing git worktree and a new detached tmux window.
 Repository-specific worktree creation and setup must already be complete.
+
+Pi's provider key is injected with `s` when that tool is available. The key
+name comes from --secret (repeatable), then $SPAWN_PI_SECRETS, then Pi's own
+configured defaultProvider as <PROVIDER>_API_KEY.
 EOF
 }
 
@@ -25,17 +29,32 @@ shell_join() {
   printf '%s\n' "${joined% }"
 }
 
+pi_default_provider() {
+  # Pi writes a flat settings object; stripping newlines also reads a
+  # pretty-printed file. The launcher is Pi-specific, so reading Pi's own
+  # provider is a less surprising default than hardcoding one key name.
+  local settings="${PI_SETTINGS:-$HOME/.pi/agent/settings.json}"
+  [[ -f "$settings" ]] || return 0
+  tr -d '\n' <"$settings" | sed -n 's/.*"defaultProvider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+s_has_secret() {
+  s list 2>/dev/null | awk '{print $1}' | grep -qx "$1"
+}
+
 dry_run=false
 approve=false
 tmux_session=""
 title=""
 cwd=""
 prompt=""
+secrets=()
 
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
     --approve) approve=true; shift ;;
+    --secret) (($# >= 2)) || die '--secret requires a value'; secrets+=("$2"); shift 2 ;;
     --tmux-session) (($# >= 2)) || die '--tmux-session requires a value'; tmux_session="$2"; shift 2 ;;
     --title) (($# >= 2)) || die '--title requires a value'; title="$2"; shift 2 ;;
     --cwd) (($# >= 2)) || die '--cwd requires a value'; cwd="$2"; shift 2 ;;
@@ -75,17 +94,57 @@ if ! pi_path="$($shell -lic 'command -v pi' 2>/dev/null | tail -1)" || [[ -z "$p
   die "pi is not available in the login shell: $shell"
 fi
 
+# The tmux server is started by systemd with only PATH, so a new window inherits
+# neither the provider key nor the secret store's key source. Both have to be
+# supplied here or the child starts with "No models available".
+if ((${#secrets[@]} == 0)) && [[ -n "${SPAWN_PI_SECRETS:-}" ]]; then
+  read -r -a secrets <<<"$SPAWN_PI_SECRETS"
+fi
+# Infer the configured provider's key only when it is actually in the store.
+# Having `s` and a defaultProvider does not mean the key exists, and wrapping
+# with a missing key would stop a Pi that could authenticate natively.
+if ((${#secrets[@]} == 0)) && provider="$(pi_default_provider)" && [[ -n "$provider" ]] && command -v s >/dev/null 2>&1; then
+  candidate="$(printf '%s_API_KEY' "$provider" | tr '[:lower:]' '[:upper:]')"
+  if s_has_secret "$candidate"; then
+    secrets+=("$candidate")
+  fi
+fi
+
 pi_args=(--name "$title")
 $approve && pi_args+=(--approve)
 pi_args+=(-- "$prompt")
-inner='pi_path=$1; shift; printf "Starting Pi: %s\n" "$pi_path"; "$pi_path" "$@"; status=$?; printf "Pi exited with %s; leaving an interactive shell open.\n" "$status"; exec "${SHELL:-/bin/sh}" -l'
-window_command="$(shell_join /bin/sh -c "$inner" spawn-pi-worktree "$pi_path" "${pi_args[@]}")"
+
+pi_command=("$pi_path" "${pi_args[@]}")
+wrapped=false
+if ((${#secrets[@]} > 0)); then
+  # An explicit request that cannot be honored is an error, not a silent
+  # downgrade to unauthenticated Pi.
+  s_path="$(command -v s)" || die "secrets requested but s is not on PATH: ${secrets[*]}"
+  pi_command=("$s_path" "${secrets[@]}" -- "$pi_path" "${pi_args[@]}")
+  wrapped=true
+fi
+
+# Passed to the window so a machine whose shell rc sets neither still has a key
+# source, and neither value is the key itself. tmux runs the window command
+# through its default shell, so a shell rc that exports these names wins: on
+# blueberry `.zshenv` already sets both and the -e values are shadowed there.
+# They matter where nothing else sets them.
+env_args=()
+[[ -n "${S_KEY_COMMAND:-}" ]] && env_args+=(-e "S_KEY_COMMAND=$S_KEY_COMMAND")
+[[ -n "${S_FILE:-}" ]] && env_args+=(-e "S_FILE=$S_FILE")
+
+inner='pi_path=$1; shift; printf "Starting Pi: %s\n" "$pi_path"; "$@"; status=$?; printf "Pi exited with %s; leaving an interactive shell open.\n" "$status"; exec "${SHELL:-/bin/sh}" -l'
+window_command="$(shell_join /bin/sh -c "$inner" spawn-pi-worktree "$pi_path" "${pi_command[@]}")"
 branch="$(git -C "$cwd" branch --show-current)"
 
 if $dry_run; then
   printf 'worktree: %s\nbranch: %s\npi: %s\n' "$worktree_root" "${branch:-detached HEAD}" "$pi_path"
-  printf 'tmux new-window -t %q -d -n %q -c %q %q\n' "$tmux_session:" "$title" "$cwd" "$window_command"
+  if $wrapped; then printf 'secrets: %s\n' "${secrets[*]}"; fi
+  env_display=""
+  # Guarded expansion: Bash 3.2 (stock macOS) aborts an empty array under set -u.
+  for value in ${env_args[@]+"${env_args[@]}"}; do env_display+=" $(printf '%q' "$value")"; done
+  printf 'tmux new-window -t %q -d -n %q -c %q%s %q\n' "$tmux_session:" "$title" "$cwd" "$env_display" "$window_command"
   exit 0
 fi
 
-exec tmux new-window -t "$tmux_session:" -d -n "$title" -c "$cwd" "$window_command"
+exec tmux new-window -t "$tmux_session:" -d -n "$title" -c "$cwd" ${env_args[@]+"${env_args[@]}"} "$window_command"

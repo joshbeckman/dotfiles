@@ -12,7 +12,7 @@ The bridge binds to `http://127.0.0.1:8765`, opens the browser, and runs until C
 
 Treat the launch URL as private. Its fragment authorizes that window, which keeps the token in local storage so it can relaunch at `/`. The token lives in the human mailbox as `.web-token` (mode 0600) and persists across bridge restarts. Delete it and restart the bridge to rotate it; every window then needs the new launch URL.
 
-The bridge prints both launch URLs at startup, so its log (`~/.local/state/agent-mail/web.log`, or the journal under systemd) contains the token as well. That log is a secret-bearing file: reading it to find the URL is fine, copying its output somewhere is not.
+The bridge prints both launch URLs at startup, so its log contains the token as well. That log is a secret-bearing file: reading it to find the URL is fine, copying its output somewhere is not. Under launchd it is `~/.local/state/agent-mail/web.log`; under systemd the bridge prints to stdout, so the journal is the only copy and the command is `journalctl --user -u agent-mail-web`.
 
 Storage belongs to the app container, not the origin. Chrome's installed app shares the browser profile, so it already sees the token a tab stored. Safari gives a Dock web app its own container, which never sees it. So any window that has no usable token, or gets a 403 from the bridge, shows an **Authorize this app** panel: paste the launch URL or the token once per container. The app verifies it against the bridge before storing it, so a stale token cannot displace a working one.
 
@@ -72,6 +72,34 @@ found. That failure is silent in the worst way: the service works until a reboot
 does not come back, with no error anywhere. So check `systemctl --user is-enabled
 agent-mail-web` after a reboot. The fallback that machine has needed is a system unit under
 `/etc/systemd/system` instead of a user unit.
+
+Verify a new bridge from the command line before trusting it, and mind the header name: the
+bridge reads `X-Agent-Mail-Token`, so a request carrying `Authorization: Bearer` gets the same 403
+as no token at all, which reads like a failed setup rather than a wrong guess.
+
+```sh
+TOKEN="$(cat "$(agent-mail addr @josh | sed 's|/inbox$||')/.web-token")"
+curl -s -o /dev/null -w '%{http_code}\n' -H "X-Agent-Mail-Token: $TOKEN" \
+  http://127.0.0.1:8765/api/messages   # 200; without the header, 403
+```
+
+Read the status codes in order, because each one names a different fault. Without a token every
+route answers 403 regardless of what was asked for, so a 403 means the token is missing or wrong
+and says nothing about the request. A 404 means the token was accepted and the handle or route was
+not. A 404 reading `Unknown endpoint` for a route that exists in `bin/agent-mail-web` is the third
+case: the process predates the pull that added it, so restart the bridge rather than looking for a
+typo.
+
+On a systemd host, check the bridge two ways, because the two fail independently: something
+listening on the port means it is up, and the `default.target.wants` symlink means it comes back
+after a reboot. A running-but-disabled bridge looks healthy from the inbox right up until the next
+reboot. Read the socket and the symlink directly rather than asking `systemctl --user`, which
+cannot reach the user bus from a service context:
+
+```sh
+ss -ltn | grep 8765
+ls ~/.config/systemd/user/default.target.wants/agent-mail-web.service
+```
 
 Two consequences worth knowing. The token is per machine, so each bridge's launch URL
 authorizes that machine only, and each is a separate origin: one installed app per machine.

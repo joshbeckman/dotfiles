@@ -58,7 +58,9 @@ summary_for() {
 
     local mtime="" cache="" cache_mtime=""
     if [ -n "$SUMMARY_CACHE_DIR" ]; then
-        mtime=$(/usr/bin/stat -f %m "$jsonl" 2>/dev/null || printf 0)
+        # GNU stat writes a filesystem dump to stdout and exits 1 for -f %m, so
+        # try the GNU form first and leave the fallback's stdout clean.
+        mtime=$(/usr/bin/stat -c %Y "$jsonl" 2>/dev/null || /usr/bin/stat -f %m "$jsonl" 2>/dev/null || printf 0)
         cache="$SUMMARY_CACHE_DIR/$sid"
         cache_mtime="$SUMMARY_CACHE_DIR/$sid.mtime"
         if [ -f "$cache_mtime" ] && [ "$(cat "$cache_mtime")" = "$mtime" ]; then

@@ -26,7 +26,18 @@ cat >"$tmp/login-shell" <<'EOF'
 [ "$1" = -lic ] || exit 2
 printf '/fake/bin/pi\n'
 EOF
-chmod +x "$tmp/bin/tmux" "$tmp/bin/uname" "$tmp/login-shell"
+cat >"$tmp/bin/s" <<'EOF'
+#!/bin/sh
+# Enough of the `s` interface for the launcher: `s list` reports the key names
+# the store holds, and any other call is a dry run's business, not a child's.
+if [ "$1" = list ]; then
+  printf '  FIREWORKS_API_KEY              [REDACTED]\n'
+fi
+exit 0
+EOF
+chmod +x "$tmp/bin/tmux" "$tmp/bin/uname" "$tmp/login-shell" "$tmp/bin/s"
+
+printf '{"defaultProvider": "fireworks"}\n' >"$tmp/settings.json"
 
 mkdir "$tmp/repo"
 git -C "$tmp/repo" init -q
@@ -38,7 +49,8 @@ git -C "$tmp/repo" commit -qm fixture
 git -C "$tmp/repo" worktree add -q -b child "$tmp/worktree"
 
 run() {
-  (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/login-shell" "$launcher" "$@")
+  (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/login-shell" \
+    PI_SETTINGS="$tmp/settings.json" "$launcher" "$@")
 }
 
 output="$(run --dry-run --approve --tmux-session test --title child \
@@ -50,6 +62,59 @@ grep -Fq 'pi: /fake/bin/pi' <<<"$output"
 grep -Fq -- '--approve' <<<"$output"
 grep -Fq -- '--approve\ --\ ' <<<"$output"
 grep -Fq -- 'inspect' <<<"$output"
+# The provider key comes from settings.json, and `s` is present in the fixture
+# PATH, so the window command must be wrapped with it.
+grep -Fq 'secrets: FIREWORKS_API_KEY' <<<"$output"
+# The absolute wrapper path is embedded; the detached shell's PATH may differ.
+grep -Fq "$tmp/bin/s" <<<"$output"
+grep -Fq 'FIREWORKS_API_KEY' <<<"$output"
+
+# An empty env_args must not abort under set -u on Bash 3.2 (stock macOS).
+output="$(cd "$tmp/repo" && env -u S_KEY_COMMAND -u S_FILE PATH="$tmp/bin:$PATH" \
+  SHELL="$tmp/login-shell" PI_SETTINGS="$tmp/settings.json" "$launcher" --dry-run \
+  --tmux-session test --title no-env --cwd "$tmp/worktree" --prompt test)"
+grep -Fq 'pi: /fake/bin/pi' <<<"$output"
+
+# An explicit --secret overrides the provider-derived name.
+output="$(run --dry-run --secret OPENAI_API_KEY --tmux-session test --title override \
+  --cwd "$tmp/worktree" --prompt test)"
+grep -Fq 'secrets: OPENAI_API_KEY' <<<"$output"
+grep -Fq "$tmp/bin/s" <<<"$output"
+
+# An inferred key that is not in the store must not wrap: Pi may authenticate
+# natively, and `s` would refuse to start a child for a missing key.
+printf '{"defaultProvider": "openai"}\n' >"$tmp/settings-absent.json"
+output="$(cd "$tmp/repo" && PATH="$tmp/bin:$PATH" SHELL="$tmp/login-shell" \
+  PI_SETTINGS="$tmp/settings-absent.json" "$launcher" --dry-run --tmux-session test \
+  --title inferred-absent --cwd "$tmp/worktree" --prompt test)"
+if grep -Fq 'secrets:' <<<"$output"; then
+  printf 'expected no wrapping when the inferred key is absent from the store\n' >&2
+  exit 1
+fi
+
+# Without the secret store on PATH an inferred key is simply not applied.
+# The fake s shares a directory with the fake tmux, so move it aside rather
+# than dropping that directory from PATH.
+mv "$tmp/bin/s" "$tmp/bin/s.off"
+output="$(cd "$tmp/repo" && PATH="$tmp/bin:/usr/bin:/bin" SHELL="$tmp/login-shell" \
+  PI_SETTINGS="$tmp/settings.json" "$launcher" --dry-run --tmux-session test \
+  --title bare --cwd "$tmp/worktree" --prompt test)"
+if grep -Fq 'secrets:' <<<"$output"; then
+  printf 'expected no inferred wrapping without s on PATH\n' >&2
+  exit 1
+fi
+
+# An explicit secret that cannot be honored is an error, not a silent
+# downgrade to unauthenticated Pi.
+if (cd "$tmp/repo" && PATH="$tmp/bin:/usr/bin:/bin" SHELL="$tmp/login-shell" \
+  PI_SETTINGS="$tmp/settings.json" "$launcher" --dry-run --secret FIREWORKS_API_KEY \
+  --tmux-session test --title explicit-no-s --cwd "$tmp/worktree" --prompt test \
+  >"$tmp/out" 2>"$tmp/err"); then
+  printf 'expected an explicit secret without s to fail\n' >&2
+  exit 1
+fi
+grep -Fq 's is not on PATH' "$tmp/err"
+mv "$tmp/bin/s.off" "$tmp/bin/s"
 
 if run --dry-run --tmux-session test --title missing-prompt --cwd "$tmp/worktree" \
   >"$tmp/out" 2>"$tmp/err"; then
