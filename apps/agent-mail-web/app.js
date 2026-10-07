@@ -1084,6 +1084,7 @@ function renderParticipantCards(messages) {
       handle: (human ? "@" : "@+") + key.slice(6),
       human,
       status: human ? "Human" : "Agent",
+      transcriptAvailable: !human,
     });
   }
   $("participant-cards").replaceChildren();

@@ -389,6 +389,19 @@ try {
     .waitFor();
   assert.equal(await sidebar.locator(".contact").count(), 3);
   await sidebar
+    .locator(".contact")
+    .filter({ hasText: "@+alder-turner" })
+    .getByRole("button", { name: "View transcript", exact: true })
+    .waitFor();
+  assert.equal(
+    await sidebar
+      .locator(".contact")
+      .filter({ hasText: "@josh" })
+      .getByRole("button", { name: "View transcript", exact: true })
+      .count(),
+    0,
+  );
+  await sidebar
     .getByText("fixture-provider/cedar-v2", { exact: true })
     .first()
     .waitFor();
