@@ -26,10 +26,26 @@ function status(text, error = false) {
 function text(value) {
   return value == null ? "" : String(value);
 }
+const relativeTime = new Intl.RelativeTimeFormat(undefined, {
+  numeric: "always",
+});
 function time(value) {
   if (!value) return "";
   const date = new Date(value);
-  return Number.isNaN(+date) ? text(value) : date.toLocaleString();
+  if (Number.isNaN(+date)) return text(value);
+  const delta = +date - Date.now();
+  const distance = Math.abs(delta);
+  if (distance >= 3 * 24 * 60 * 60 * 1000) return date.toLocaleString();
+  const [unit, size] =
+    distance < 60 * 1000
+      ? ["second", 1000]
+      : distance < 60 * 60 * 1000
+        ? ["minute", 60 * 1000]
+        : distance < 24 * 60 * 60 * 1000
+          ? ["hour", 60 * 60 * 1000]
+          : ["day", 24 * 60 * 60 * 1000];
+  const amount = Math.max(1, Math.round(distance / size));
+  return relativeTime.format(delta < 0 ? -amount : amount, unit);
 }
 function addText(parent, value, className = "prose") {
   const block = document.createElement("div");
@@ -86,7 +102,13 @@ function entryNode(key, entry) {
   const heading = document.createElement("strong");
   heading.textContent = role;
   const timestamp = document.createElement("time");
-  timestamp.textContent = time(entry.timestamp || entry.message?.timestamp);
+  const timestampValue = entry.timestamp || entry.message?.timestamp;
+  timestamp.textContent = time(timestampValue);
+  const exactTime = new Date(timestampValue);
+  if (!Number.isNaN(+exactTime)) {
+    timestamp.dateTime = exactTime.toISOString();
+    timestamp.title = exactTime.toLocaleString();
+  }
   summary.append(heading, timestamp);
   details.append(summary);
   const body = document.createElement("div");

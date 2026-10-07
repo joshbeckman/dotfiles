@@ -90,7 +90,8 @@ const escape = (value) =>
         c
       ],
   );
-const date = (value) => {
+const absoluteDate = (value) => {
+  if (value == null || value === "") return "";
   const d = new Date(value);
   return Number.isNaN(+d)
     ? ""
@@ -100,6 +101,34 @@ const date = (value) => {
         hour: "numeric",
         minute: "2-digit",
       });
+};
+const relativeDate = new Intl.RelativeTimeFormat(undefined, {
+  numeric: "always",
+});
+const date = (value) => {
+  if (value == null || value === "") return "";
+  const d = new Date(value);
+  if (Number.isNaN(+d)) return "";
+  const delta = +d - Date.now();
+  const distance = Math.abs(delta);
+  if (distance >= 3 * 24 * 60 * 60 * 1000) return absoluteDate(d);
+  const [unit, size] =
+    distance < 60 * 1000
+      ? ["second", 1000]
+      : distance < 60 * 60 * 1000
+        ? ["minute", 60 * 1000]
+        : distance < 24 * 60 * 60 * 1000
+          ? ["hour", 60 * 60 * 1000]
+          : ["day", 24 * 60 * 60 * 1000];
+  const amount = Math.max(1, Math.round(distance / size));
+  return relativeDate.format(delta < 0 ? -amount : amount, unit);
+};
+const describeTime = (element, value) => {
+  if (value == null || value === "") return;
+  const d = new Date(value);
+  if (Number.isNaN(+d)) return;
+  element.dateTime = d.toISOString();
+  element.title = d.toLocaleString();
 };
 const composer = MailComposer.create($("body-editor"), changed, error);
 let keywordGeneration = 0;
@@ -354,6 +383,7 @@ function renderList() {
       escape(date(m.date)) +
       "</time>";
     row.querySelector(".sender").prepend(avatar(m.from || "josh"));
+    describeTime(row.querySelector("time"), m.date);
     rows.append(row);
   });
 }
@@ -445,7 +475,9 @@ function appendThreadMessage(message, open) {
     escape(message.from) +
     " · " +
     escape(message.folder);
-  summary.querySelector("time").after(avatar(message.from));
+  const timestamp = summary.querySelector("time");
+  describeTime(timestamp, message.date);
+  timestamp.after(avatar(message.from));
   detail.append(summary);
   const metadata = document.createElement("p");
   metadata.className = "metadata";
@@ -677,12 +709,7 @@ async function getContacts(query = "") {
   }
 }
 function sessionDetails(session, compact = false) {
-  const observedTime = (value) => {
-    const timestamp = value ? new Date(value) : null;
-    return timestamp && !Number.isNaN(+timestamp)
-      ? timestamp.toLocaleString()
-      : "Time not recorded";
-  };
+  const observedTime = (value) => date(value) || "Time not recorded";
   const section = document.createElement("div");
   const dl = document.createElement("dl");
   const extra = document.createElement("dl");
@@ -706,7 +733,7 @@ function sessionDetails(session, compact = false) {
     ],
     ["Working directory", session.cwd],
     ["Session", session.sessionId],
-    ["Started", session.started],
+    ["Started", session.started ? observedTime(session.started) : null],
     ["Matching lines", session.matches],
     ["Scratchpad", session.scratchpad || "No retained scratchpad"],
     ["Transcript", session.sessionFile],
@@ -937,12 +964,7 @@ function teamCard(team, { allowCompose = true } = {}) {
   row.append(summary);
   const fields = document.createElement("dl");
   fields.className = "session-details";
-  const when = (value) => {
-    const timestamp = value ? new Date(value) : null;
-    return timestamp && !Number.isNaN(+timestamp)
-      ? timestamp.toLocaleString()
-      : "Time not recorded";
-  };
+  const when = (value) => date(value) || "Time not recorded";
   for (const [label, value] of [
     ["Purpose", team.purpose || "Not specified"],
     ["Coordinator", team.coordinator],

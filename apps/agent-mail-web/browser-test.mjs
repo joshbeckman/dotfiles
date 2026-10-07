@@ -203,6 +203,20 @@ try {
   await page.waitForSelector(".row");
   await page.locator("#realm").waitFor({ state: "visible" });
   assert.equal(await page.locator("#realm").textContent(), "Testrealm");
+  const dates = await page.evaluate((now) => ({
+    recent: date(now - 2 * 60 * 60 * 1000),
+    old: date(now - 4 * 24 * 60 * 60 * 1000),
+    future: date(now + 2 * 60 * 1000),
+    missing: date(null),
+  }), Date.now());
+  assert.match(dates.recent, /^2 hours ago$/);
+  assert.doesNotMatch(dates.old, /\b(?:ago|in)\b/);
+  assert.match(dates.future, /^in 2 minutes$/);
+  assert.equal(dates.missing, "");
+  const listedTime = page.locator(".row time").first();
+  assert.match(await listedTime.textContent(), /ago$/);
+  assert.match(await listedTime.getAttribute("datetime"), /^\d{4}-\d{2}-\d{2}T/);
+  assert(await listedTime.getAttribute("title"));
   await page.route("**/reader.css", async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -754,11 +768,14 @@ try {
       type: "message",
       id: "fixture-live",
       parentId: "fixture-assistant",
-      timestamp: "2026-01-02T00:03:00Z",
-      message: { role: "assistant", content: "Live transcript update.", timestamp: 1767312180000 },
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Live transcript update.", timestamp: Date.now() },
     }) + "\n",
   );
   await transcript.getByText("Live transcript update.", { exact: true }).waitFor({ timeout: 5000 });
+  const liveEntry = transcript.locator("details.entry").filter({ hasText: "Live transcript update." });
+  assert.match(await liveEntry.locator(":scope > summary time").textContent(), /ago$/);
+  assert(await liveEntry.locator(":scope > summary time").getAttribute("title"));
   assert.equal(await assistantEntry.evaluate((node) => node.open), false);
   assert.equal(await assistantEntry.locator("details").first().evaluate((node) => node.open), true);
   assert.match(await transcript.getByRole("complementary").textContent(), /recorded branches/);
@@ -1370,7 +1387,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();
