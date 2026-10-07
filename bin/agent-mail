@@ -388,8 +388,9 @@ message_state() { case "$1" in */cur/*) echo read ;; *) echo unread ;; esac; }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# GNU stat treats -f as "filesystem status" and still exits 0, so the BSD form
-# cannot be tried first; probe the flavor once.
+# GNU stat answers -f %m by writing a filesystem dump to stdout and exiting 1,
+# so `stat -f %m || stat -c %Y` captured the dump and the fallback value in one
+# command substitution. Probe the flavor once instead.
 if stat -c %Y . >/dev/null 2>&1; then
   file_mtime() { stat -c %Y "$1" 2>/dev/null; }
 else
