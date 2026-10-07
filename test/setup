@@ -31,6 +31,18 @@ elif name == 'lsb_release':
     print('Distributor ID: ubuntu')
 elif name == 'dpkg':
     print(os.environ.get('FAKE_ARCH', 'amd64'))
+elif name == 'gem':
+    if args[:1] == ['list']:
+        if os.environ.get('FAKE_GEM_HAS_TRY'):
+            print('try-cli (1.10.1)')
+    elif args[:1] == ['install'] and os.environ.get('FAKE_GEM_BINDIR') and name != os.environ.get('FAIL_COMMAND'):
+        bindir = pathlib.Path(os.environ['FAKE_GEM_BINDIR'])
+        bindir.mkdir(parents=True, exist_ok=True)
+        target = bindir / 'try'
+        target.write_text('#!/bin/sh\\nexit 0\\n')
+        target.chmod(0o700)
+elif name == 'ruby':
+    print(os.environ.get('FAKE_GEM_BINDIR', ''))
 if name == os.environ.get('FAIL_COMMAND') and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
     sys.exit(7)
 '''
@@ -59,15 +71,16 @@ class SetupTest(unittest.TestCase):
             target.write_text('{}')
         for path in ('.agents/prompts', '.agents/skills'):
             (self.repo / path).mkdir()
-        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache'):
+        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache', 'gem', 'ruby'):
             self.executable(self.bin / name)
         for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
                      'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
             self.executable(self.repo / 'bin' / name)
         self.log = self.root / 'commands.jsonl'
+        self.gem_bindir = self.root / 'gem-bin'
         self.env = {'HOME': str(self.home), 'ZDOTDIR': str(self.home),
                     'PATH': os.pathsep.join([str(self.bin), '/usr/bin', '/bin']),
-                    'COMMAND_LOG': str(self.log)}
+                    'COMMAND_LOG': str(self.log), 'FAKE_GEM_BINDIR': str(self.gem_bindir)}
 
     def executable(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,6 +226,32 @@ class SetupTest(unittest.TestCase):
         result = self.run_setup(platform='linux', FAKE_ARCH='riscv64')
         self.assertIn('not a checked architecture (riscv64)', result.stdout)
         self.assertIsNone(self.apt_get_args())
+
+    def test_try_is_installed_and_linked_into_local_bin(self):
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installs = [c for c in self.records() if c['command'] == 'gem' and c['args'][:1] == ['install']]
+        self.assertEqual(len(installs), 1)
+        self.assertIn('--user-install', installs[0]['args'])
+        link = self.home / '.local/bin/try'
+        self.assertTrue(link.is_symlink(), result.stdout + result.stderr)
+        self.assertEqual(os.readlink(link), str(self.gem_bindir / 'try'))
+
+    def test_try_install_is_skipped_when_already_installed(self):
+        self.gem_bindir.mkdir(parents=True)
+        (self.gem_bindir / 'try').write_text('#!/bin/sh\nexit 0\n')
+        (self.gem_bindir / 'try').chmod(0o700)
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64', FAKE_GEM_HAS_TRY='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installs = [c for c in self.records() if c['command'] == 'gem' and c['args'][:1] == ['install']]
+        self.assertEqual(installs, [])
+        self.assertTrue((self.home / '.local/bin/try').is_symlink())
+
+    def test_failed_try_install_does_not_abort_setup(self):
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64',
+                                FAIL_COMMAND='gem', FAIL_ARG='install')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('try install failed; continuing', result.stdout)
 
 
 if __name__ == '__main__':

@@ -406,13 +406,7 @@ if command -v _wtp >/dev/null 2>&1; then
   eval "$(_wtp init --zsh)"
 fi
 
-# try — experiment directory manager (https://github.com/tobi/try). The Brewfile
-# covers macOS; on Linux it is a user-installed gem, and that bin path carries the
-# Ruby ABI version, so glob rather than pinning one.
-for _try_bin in "$HOME"/.local/share/gem/ruby/*/bin(N); do
-  path=("$_try_bin" $path)
-done
-unset _try_bin
+# try — experiment directory manager (https://github.com/tobi/try)
 if command -v try >/dev/null 2>&1; then
   try () {
     unfunction try

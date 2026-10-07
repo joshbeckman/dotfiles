@@ -152,10 +152,19 @@ __setup_ubuntu(){
         esac
         # try — ephemeral workspace manager (github.com/tobi/try). The Brewfile
         # covers macOS; Linux has no Homebrew, so install the gem into the user's
-        # gem home, which needs no sudo. The .zshrc puts that bin on PATH.
-        if command -v gem >/dev/null 2>&1 && ! gem list try-cli 2>/dev/null | grep -q '^try-cli '; then
-                echo '  ======  installing try (try-cli)'
-                gem install --user-install --no-document try-cli || echo 'try install failed; continuing'
+        # gem home, which needs no sudo, and link only `try` into ~/.local/bin,
+        # which is already on PATH. Putting the whole user-gem bin directory on
+        # PATH would shadow system commands from every retained Ruby ABI.
+        if command -v gem >/dev/null 2>&1; then
+                gem list try-cli 2>/dev/null | grep -q '^try-cli ' || {
+                        echo '  ======  installing try (try-cli)'
+                        gem install --user-install --no-document try-cli || echo 'try install failed; continuing'
+                }
+                try_bin="$(ruby -e 'require "rubygems"; print Gem.bindir(Gem.user_dir)' 2>/dev/null)/try"
+                if [ -x "$try_bin" ]; then
+                        mkdir -p "$HOME/.local/bin"
+                        ln -sf "$try_bin" "$HOME/.local/bin/try"
+                fi
         fi
         if command -v nix-env &> /dev/null
         then

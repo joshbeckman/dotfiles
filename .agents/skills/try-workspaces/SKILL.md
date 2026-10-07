@@ -20,16 +20,26 @@ try . <name>        # dated worktree of the current repo
 try clone <url>     # clone into a dated workspace
 ```
 
+`try .` and `try clone` produce a repository. A plain `try <name>` creates an ordinary directory, so initialise it before working:
+
+```sh
+try <name>
+git init
+```
+
 An agent, with no terminal:
 
 ```sh
 # A dated worktree of the current repo. try detaches HEAD, so branch before
 # committing or the work lands on no branch.
-eval "$(try exec . <name>)"
+command="$(try exec . <name>)" || exit
+eval "$command"
+git rev-parse --is-inside-work-tree >/dev/null || { echo "workspace was not created" >&2; exit 1; }
 git switch -c <branch>
 
-# A clone works the same way.
-eval "$(try exec clone https://github.com/<owner>/<repo>.git)"
+# A clone works the same way, and is already a repository.
+command="$(try exec clone https://github.com/<owner>/<repo>.git)" || exit
+eval "$command"
 
 # A plain workspace: try needs a TTY to create a brand-new directory, so make the
 # dated path directly and initialise it.
@@ -37,7 +47,7 @@ path="${TRY_PATH:-$HOME/src/tries}/$(date +%F)-<name>"
 mkdir -p "$path" && cd "$path" && git init
 ```
 
-Only `try exec . <name>` and `try exec clone <url>` work without a TTY. Selecting an existing workspace or creating a new plain directory goes through the interactive picker and fails with "try requires an interactive terminal".
+`try exec` prints a shell script, so capture it before `eval`: a failure that prints nothing would otherwise become `eval ""`, which succeeds and leaves the next command running in the original directory. Only `try exec . <name>` and `try exec clone <url>` work without a TTY. Selecting an existing workspace or creating a new plain directory goes through the interactive picker and fails with "try requires an interactive terminal".
 
 ## Prefer a branch for task work
 
