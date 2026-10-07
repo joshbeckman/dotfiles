@@ -37,9 +37,9 @@ printf '%s\n' "$*" >"$LOCAL_LOG"
 EOF
 cat >"$tmp/bin/node" <<'EOF'
 #!/bin/sh
-# Record the length, not just that it was called: the status MCP rejects a body
-# over 150 characters, so the interesting assertion is how much arrived.
-printf 'push called len=%s\n' "${#NOTIFY_JOSH_MESSAGE}" >"$PUSH_LOG"
+# Record the lengths, not just that it was called: the status MCP caps the title
+# at 50 and the body at 150, so the interesting assertion is how much arrived.
+printf 'push called title=%s len=%s\n' "${#NOTIFY_JOSH_TITLE}" "${#NOTIFY_JOSH_MESSAGE}" >"$PUSH_LOG"
 exit 1
 EOF
 cat >"$tmp/bin/tmux" <<'EOF'
@@ -76,5 +76,11 @@ rm -f "$PUSH_LOG"
 long_message="$(printf 'x%.0s' $(seq 1 400))"
 NOTIFY_JOSH_FORCE_PUSH=1 "$root/bin/notify-josh" 'Title' "$long_message" || true
 grep -Fq 'len=150' "$PUSH_LOG"
+
+# The title is capped at 50 too; a long one used to be rejected and drop the push.
+rm -f "$PUSH_LOG"
+long_title="$(printf 'y%.0s' $(seq 1 80))"
+NOTIFY_JOSH_FORCE_PUSH=1 "$root/bin/notify-josh" "$long_title" 'Body' || true
+grep -Fq 'title=50' "$PUSH_LOG"
 
 printf 'notify-josh tests passed\n'
