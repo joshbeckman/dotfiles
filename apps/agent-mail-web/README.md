@@ -83,6 +83,24 @@ curl -s -o /dev/null -w '%{http_code}\n' -H "X-Agent-Mail-Token: $TOKEN" \
   http://127.0.0.1:8765/api/messages   # 200; without the header, 403
 ```
 
+Read the status codes in order, because each one names a different fault. Without a token every
+route answers 403 regardless of what was asked for, so a 403 means the token is missing or wrong
+and says nothing about the request. A 404 means the token was accepted and the handle or route was
+not. A 404 reading `Unknown endpoint` for a route that exists in `bin/agent-mail-web` is the third
+case: the process predates the pull that added it, so restart the bridge rather than looking for a
+typo.
+
+On a systemd host, check the bridge two ways, because the two fail independently: something
+listening on the port means it is up, and the `default.target.wants` symlink means it comes back
+after a reboot. A running-but-disabled bridge looks healthy from the inbox right up until the next
+reboot. Read the socket and the symlink directly rather than asking `systemctl --user`, which
+cannot reach the user bus from a service context:
+
+```sh
+ss -ltn | grep 8765
+ls ~/.config/systemd/user/default.target.wants/agent-mail-web.service
+```
+
 Two consequences worth knowing. The token is per machine, so each bridge's launch URL
 authorizes that machine only, and each is a separate origin: one installed app per machine.
 And reaching the bridge over the tailnet makes the token the only check on any device that
