@@ -28,53 +28,9 @@ If your system prompt names a session scratchpad, use it. Otherwise create a dir
 
 ### Avatars
 
-You may optionally create `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. This is not a startup requirement; create or change it when useful, not as recurring busywork. Choose a recognizable symbol that works at 28px. Draw it locally or use appropriately licensed art; paid generation still needs Josh's approval.
-
-Use a self-contained SVG with the SVG namespace and an explicit finite `viewBox`. Agent Mail web accepts simple paths/shapes/groups, local gradients and clipping, and `<title>`/`<desc>` text, up to 100 KiB, 256 elements, and 8 KiB per attribute. Use presentation attributes rather than CSS. Scripts, event handlers, animation, embedded images, visible text/fonts, external resources, links, `use`, and symlinked files are not supported. The app falls back to its generated identicon for absent or rejected avatars; a page refresh picks up changes. No PNG companion is required.
-
-Passing the validator proves the file survives serialization, not that it reads. Render it before trusting it, at the size the app draws as well as large, because a mark that works at 512 can collapse at 28 and a flat translucent circle reads as a shape rather than as light:
-
-```sh
-d=$(mktemp -d)
-qlmanage -t -s 512 -o "$d" avatar.svg && mv "$d/avatar.svg.png" "$d/at-512.png"
-qlmanage -t -s 28  -o "$d" avatar.svg && mv "$d/avatar.svg.png" "$d/at-28.png"
-ls "$d"
-```
-
-A fresh directory rather than a fixed path, because `qlmanage` exits 0 and reports a thumbnail
-even when the output directory is missing, and a fixed path can leave a previous run's file
-there for you to mistake for this one. Rename as you go, because `qlmanage` names the thumbnail
-after its input: without the `mv` both sizes write `avatar.svg.png`, the second replaces the
-first, and the listing still shows one file, which is what success looks like.
-
-`qlmanage` ships with macOS and renders through WebKit, so it is the one to trust. It resolves
-transparency to white and cannot be told otherwise, so put the grey field in the SVG itself,
-which is also the only way to test the background the app will use. Render the SVG with
-`qlmanage` and only then scale the PNG up with nearest-neighbour, which shows the pixels instead
-of a smooth approximation:
-
-```sh
-d=$(mktemp -d)
-python3 - <<'PY'
-import pathlib, re
-p = pathlib.Path('avatar.svg')
-out = re.sub(r'(<svg[^>]*>)', r'\1\n  <rect x="0" y="0" width="64" height="64" fill="#9a9a9a"/>',
-             p.read_text(), count=1)
-assert 'fill="#9a9a9a"' in out, 'background was not injected; the render below is not the grey test'
-p.with_name('on-grey.svg').write_text(out)
-PY
-qlmanage -t -s 28 -o "$d" on-grey.svg
-magick "$d/on-grey.svg.png" -filter point -resize 168x168 "$d/zoom.png"
-ls "$d"
-```
-
-Do not hand an SVG to ImageMagick without checking its delegate first. Without `rsvg-convert`
-installed it silently falls back to its own renderer, which draws gradients and strokes as black
-while drawing solid fills correctly, so a working avatar comes back looking broken. It is the
-same rule as the validator: verify the thing doing the checking. On a machine with no `qlmanage`,
-render with something that implements SVG and look at the result rather than assuming it.
-
-When presenting an agent visually, use their scratchpad avatar where the consumer supports safe rendering, while keeping their canonical name/handle visible and team/trust indicators separate. Treat SVG as untrusted artwork, not page markup. Where SVG is unsupported, use the ordinary text identity or an identicon; never omit attribution because an avatar is present. Current avatars may appear on old messages; historical avatars are not preserved.
+You may keep an optional `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. Read the `avatars`
+skill before making one: it carries the contract, the traps, and a script that runs the checks.
+Nothing depends on having one, and the identicon fallback is fine.
 
 ### Conversation ownership and Agent Mail
 

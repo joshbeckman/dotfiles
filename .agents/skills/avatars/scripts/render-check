@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Check an avatar: validate it through the bridge, then render it at both sizes.
+
+Every check here asserts the furthest reachable step and says how far that is from the
+outcome, because the outcome -- does the mark read at 28px -- cannot be asserted from
+outside. Passing this means the file is valid, is the size the app draws, and produced an
+image; it does not mean the mark looks good. Look at the images.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+SIZES = (512, 28)
+GREY = '#9a9a9a'
+
+
+def repo_root():
+    """Walk up for bin/agent-mail-web rather than counting directories, so moving the skill
+    between .agents/ and a package does not break the path."""
+    for parent in pathlib.Path(__file__).resolve().parents:
+        if (parent / 'bin/agent-mail-web').is_file():
+            return parent
+    raise SystemExit('render-check: could not find bin/agent-mail-web above this script')
+
+
+def validator():
+    """The bridge's own function, so a pass here is a pass in the app."""
+    loader = importlib.machinery.SourceFileLoader('agent_mail_web', str(repo_root() / 'bin/agent-mail-web'))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader('agent_mail_web', loader))
+    loader.exec_module(module)
+    return module.avatar_svg
+
+
+def validate(source, validate_svg):
+    try:
+        validate_svg(source.read_bytes())
+    except Exception as error:
+        return f'{type(error).__name__}: {error}'
+    return None
+
+
+def inject_grey(source, target):
+    """qlmanage resolves transparency to white and cannot be told otherwise, so the field has
+    to be in the SVG or the render tests the wrong background."""
+    text = source.read_text()
+    out = re.sub(r'(<svg[^>]*>)',
+                 r'\1\n  <rect x="0" y="0" width="64" height="64" fill="%s"/>' % GREY,
+                 text, count=1)
+    # A substitution that misses returns the input unchanged and the render would silently be
+    # a white-background test, which is the whole failure this script exists to prevent.
+    if GREY not in out:
+        return None
+    target.write_text(out)
+    return target
+
+
+def render(svg, directory, size):
+    """Render one size, then rename, because qlmanage names the thumbnail after its input and
+    two sizes into one directory would leave only the second."""
+    result = subprocess.run(['qlmanage', '-t', '-s', str(size), '-o', str(directory), str(svg)],
+                            capture_output=True, text=True)
+    produced = directory / (svg.name + '.png')
+    if result.returncode != 0 or not produced.is_file():
+        # qlmanage exits 0 and reports a thumbnail even when it wrote nothing, so the file is
+        # the check rather than the status.
+        return None, result.stdout + result.stderr
+    target = directory / f'at-{size}.png'
+    produced.rename(target)
+    return target, ''
+
+
+def dimensions(path):
+    """Existence is not the property: the collision defect left one file behind that existed
+    and was the wrong size."""
+    result = subprocess.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', str(path)],
+                            capture_output=True, text=True)
+    found = {k: int(v) for k, v in re.findall(r'pixel(Width|Height):\s*(\d+)', result.stdout)}
+    return found.get('Width'), found.get('Height')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('avatar', nargs='?', default=None,
+                        help='path to avatar.svg (default: $AGENT_SCRATCHPAD/avatar.svg)')
+    parser.add_argument('--keep', action='store_true', help='keep the rendered images and say where')
+    args = parser.parse_args()
+
+    if args.avatar:
+        source = pathlib.Path(args.avatar).expanduser().resolve()
+    else:
+        import os
+        pad = os.environ.get('AGENT_SCRATCHPAD')
+        if not pad:
+            print('render-check: no avatar given and AGENT_SCRATCHPAD is unset', file=sys.stderr)
+            return 2
+        source = pathlib.Path(pad).expanduser() / 'avatar.svg'
+
+    if not source.is_file():
+        print(f'render-check: no such file: {source}', file=sys.stderr)
+        return 2
+
+    failure = validate(source, validator())
+    if failure:
+        print(f'FAIL invalid: {source}')
+        print(f'  the bridge would reject this: {failure}')
+        print('  this says nothing about how it looks; nothing has been rendered.')
+        return 1
+    print(f'ok   valid: {source}')
+
+    if not shutil.which('qlmanage'):
+        print('ok   valid, and that is all this host can check: no qlmanage, so nothing was rendered.')
+        print('     The mark reading at 28px is untested here. On macOS this would also render both sizes.')
+        return 0
+
+    with tempfile.TemporaryDirectory(prefix='avatar-check-') as tmp:
+        directory = pathlib.Path(tmp)
+        grey = inject_grey(source, directory / 'on-grey.svg')
+        if grey is None:
+            print('FAIL background: could not inject the grey field, so the render below would')
+            print('     have tested a white background instead. Check that the file starts with <svg.')
+            return 1
+        rendered = {}
+        for size in SIZES:
+            path, output = render(grey, directory, size)
+            if path is None:
+                print(f'FAIL render {size}: qlmanage produced no file')
+                if output.strip():
+                    print('     ' + output.strip().splitlines()[0])
+                return 1
+            width, height = dimensions(path)
+            if (width, height) != (size, size):
+                print(f'FAIL dimensions: expected {size}x{size}, got {width}x{height} in {path.name}')
+                return 1
+            rendered[size] = path
+            print(f'ok   rendered {size}x{size}: {path}')
+
+        if args.keep:
+            kept = source.parent / 'rendered'
+            kept.mkdir(exist_ok=True)
+            for size, path in rendered.items():
+                shutil.copyfile(path, kept / f'at-{size}.png')
+            print(f'     kept in {kept}')
+        else:
+            print('     (temporary; pass --keep to write them beside the avatar)')
+
+    print('')
+    print('Look at the images. This checked that the file is valid, that it is 28px as well as')
+    print('512px, and that the background was injected. It cannot tell you whether the mark')
+    print('reads at 28px, which is the only thing that matters at the size the app draws it.')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

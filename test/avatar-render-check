@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Each case asserts a failure the check exists to catch. A check whose failure cannot be
+# named is a check that cannot fail, which is what every avatar defect turned out to be.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+check="$root/.agents/skills/avatars/scripts/render-check"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/stubs"
+
+cat >"$tmp/avatar.svg" <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="0" y="0" width="64" height="64" fill="#123456"/></svg>
+EOF
+printf 'not an svg at all\n' >"$tmp/bad.svg"
+
+# qlmanage writes the thumbnail it claims; sips reports the size asked for, read back off the
+# filename the check gives it. Both have a flavour that lies, because the defects were tools
+# reporting success without doing the thing.
+cat >"$tmp/qlmanage-good" <<'EOF'
+#!/bin/sh
+out=""; svg=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift 2 ;; *.svg) svg="$1"; shift ;; *) shift ;; esac
+done
+# ${svg##*/} rather than basename: the test puts only the stub directory on PATH, so an
+# external tool would not be found and the stub would fail for its own reasons.
+[ -n "$out" ] && [ -n "$svg" ] && : >"$out/${svg##*/}.png"
+exit 0
+EOF
+cat >"$tmp/qlmanage-silent" <<'EOF'
+#!/bin/sh
+printf '* %s produced one thumbnail\nDone producing thumbnails\n' "$*"
+exit 0
+EOF
+cat >"$tmp/sips-good" <<'EOF'
+#!/bin/sh
+w=0
+for a in "$@"; do case "$a" in *at-512.png) w=512 ;; *at-28.png) w=28 ;; esac; done
+printf '  pixelWidth: %s\n  pixelHeight: %s\n' "$w" "$w"
+EOF
+cat >"$tmp/sips-wrong" <<'EOF'
+#!/bin/sh
+printf '  pixelWidth: 28\n  pixelHeight: 28\n'
+EOF
+chmod +x "$tmp"/qlmanage-* "$tmp"/sips-*
+
+stub_dir() { # name it after the flavour pair, e.g. stub_dir good wrong
+  local dir="$tmp/stubs/$1-$2"
+  mkdir -p "$dir"
+  cp "$tmp/qlmanage-$1" "$dir/qlmanage"
+  cp "$tmp/sips-$2" "$dir/sips"
+  ln -sf "$(command -v python3)" "$dir/python3"
+  printf '%s' "$dir"
+}
+
+last=""
+expect() { # want_exit label command...
+  local want="$1" label="$2"; shift 2
+  local got=0
+  "$@" >"$tmp/out" 2>&1 || got=$?
+  last="$(cat "$tmp/out")"
+  if [ "$got" != "$want" ]; then
+    printf 'FAIL %s: expected exit %s, got %s\n' "$label" "$want" "$got" >&2
+    printf '%s\n' "$last" >&2
+    exit 1
+  fi
+  printf 'ok   %s (exit %s)\n' "$label" "$got"
+}
+
+run_with() { # stub_dir
+  # Only the stub directory is on PATH: appending /usr/bin would put the real qlmanage and
+  # sips back, which is how the "no renderer" case first passed while rendering.
+  PATH="$1" "$check" "$tmp/avatar.svg"
+}
+
+# 1. A file the bridge would reject, which must not be rendered at all.
+expect 1 "invalid svg is rejected before rendering" "$check" "$tmp/bad.svg"
+case "$last" in *"the bridge would reject this"*) ;; *) printf 'FAIL: no rejection reason\n' >&2; exit 1 ;; esac
+
+# 2. Nothing to check.
+expect 2 "missing file" "$check" "$tmp/nothing-here.svg"
+
+# 3. No renderer on this host: still valid, and the report names what that leaves untested.
+# qlmanage lives in /usr/bin, so the only way to hide it is a PATH that has python3 and
+# nothing else — which is also what a bare host looks like.
+mkdir -p "$tmp/stubs/no-qlmanage"
+ln -sf "$(command -v python3)" "$tmp/stubs/no-qlmanage/python3"
+expect 0 "no qlmanage still validates and names the gap" run_with "$tmp/stubs/no-qlmanage"
+case "$last" in *"no qlmanage"*) ;; *) printf 'FAIL: silent about the missing renderer\n' >&2; exit 1 ;; esac
+
+# 4. qlmanage reporting success while writing nothing — the defect that cost the most.
+expect 1 "qlmanage that writes nothing" run_with "$(stub_dir silent good)"
+
+# 5. A file that exists but is not the size that was asked for: the collision defect.
+expect 1 "wrong dimensions are caught" run_with "$(stub_dir good wrong)"
+case "$last" in *"expected 512x512"*) ;; *) printf 'FAIL: did not name the expected size\n' >&2; exit 1 ;; esac
+
+# 6. The passing case, which must stay passing, and must still name what it cannot see.
+expect 0 "valid avatar renders at both sizes" run_with "$(stub_dir good good)"
+case "$last" in *"cannot tell you whether the mark"*) ;; *) printf 'FAIL: passing run did not name its distance\n' >&2; exit 1 ;; esac
+
+printf 'avatar render-check tests passed\n'
