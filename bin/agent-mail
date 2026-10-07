@@ -58,13 +58,13 @@ subject before a collision-resistant suffix. Thread-ID names the root message;
 In-Reply-To names the immediate parent.
 
 send   Deliver a message. Repeat --to or separate recipients with commas.
-       --reply-all derives recipients and thread headers from an existing message.
-       Body from --body/-m, --body-file, or stdin.
+       --to starts a new thread; --reply-all derives recipients and thread headers
+       from an existing message. Body from --body/-m, --body-file, or stdin.
 scan   List unread (new/) messages for an inbox, or --all inboxes.
 receipt Say whether a message you sent has been read. Takes the MSGID that
        `send` printed. Exits 1 if it is in no inbox.
-read   Print the oldest unread message (or --id), moving it new/ -> cur/.
-       --peek prints without marking read.
+read   Print the oldest unread message (or --id), moving it new/ -> cur/, then
+       print the command for replying in-thread. --peek reads without moving.
 discard Delete a message from cur/ or new/.
 addr   Print the resolved inbox path for an ID (empty+exit 1 if none).
 inbox Open an ID's inbox directory in Neovim.
@@ -745,12 +745,15 @@ cmd_read() {
 
   cat "$f"
 
+  local reply_source="$f"
   if [ "$peek" -eq 0 ] && [ "$(dirname "$f")" = "$inbox/new" ]; then
     mkdir -p "$inbox/cur"
     local basename; basename="$(basename "$f")"
-    mv "$f" "$inbox/cur/$basename"
+    reply_source="$inbox/cur/$basename"
+    mv "$f" "$reply_source"
     clear_escalation_marker "$inbox" "${basename%.md}"
   fi
+  printf 'Reply with: agent-mail send --reply-all %q --body-file FILE\n' "$reply_source" >&2
 }
 
 cmd_discard() {

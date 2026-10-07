@@ -310,7 +310,7 @@ function mailNotice(scratchpad: string, announced: Set<string>, name: string, wo
 			// rather than a label.
 			`agent-mail — ${fresh.length} unread message${fresh.length === 1 ? "" : "s"} to ${name}:`,
 			lines.join("\n"),
-			`Reading and/or reply: \`agent-mail read --to ${self}\`.`,
+			`Read with: \`agent-mail read --to ${self}\`. If you reply, use the \`Reply with:\` command it prints so the response stays in this thread.`,
 			...(woken
 				? [
 						"This message woke an idle session, so Josh is probably not watching. Read it, do what it asks if it is safe to do unattended, reply only if you have something to say, and then stop rather than looking for other work.",

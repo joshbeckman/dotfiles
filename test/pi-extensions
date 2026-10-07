@@ -390,6 +390,10 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
   const interval = number(/\},\s*(\d[\d_]*)\);/);
   const quiet = number(/Date\.now\(\) - userAt < (\d[\d_]*)/);
   check(
+    "mail notices tell replies to keep the source thread",
+    source.includes("response stays in this thread"),
+  );
+  check(
     "the wake poll interval is shorter than the quiet threshold",
     interval > 0 && quiet > 0 && interval < quiet,
     `interval ${interval}ms, threshold ${quiet}ms`,

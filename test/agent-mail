@@ -76,7 +76,17 @@ grep -Fq 'agent-mail\ inbox\ @josh' "$NOTIFY_LOG"
 "$command" sweep --hours 0 >/dev/null
 [[ "$(wc -l <"$NOTIFY_LOG" | tr -d ' ')" == 1 ]]
 
-"$command" read --to @josh | grep -Fq 'Please review this.'
+read_body="$tmp/read-body"
+read_hint="$tmp/read-hint"
+"$command" read --to @josh >"$read_body" 2>"$read_hint"
+grep -Fq 'Please review this.' "$read_body"
+grep -Fq "Reply with: agent-mail send --reply-all $inbox/cur/$msgid.md --body-file FILE" "$read_hint"
+
+peek_id="$("$command" send --to @josh --from test-agent --subject 'Peek without moving' --body 'Leave this unread.')"
+"$command" read --to @josh --id "$peek_id" --peek >/dev/null 2>"$read_hint"
+grep -Fq "Reply with: agent-mail send --reply-all $inbox/new/$peek_id.md --body-file FILE" "$read_hint"
+[[ -f "$inbox/new/$peek_id.md" ]]
+"$command" discard --to @josh --id "$peek_id"
 
 # A web app that polled recently shows its own notification; only away pushes remain.
 touch "$human_root/josh/.web-notifier"
@@ -85,8 +95,8 @@ tail -n 1 "$NOTIFY_LOG" | grep -Eq -- '^--away-only .*Agent mail: App is open'
 touch -t 202601010000 "$human_root/josh/.web-notifier"
 "$command" send --to @josh --from test-agent --subject 'App is closed' --body 'Terminal banner.' >/dev/null
 tail -n 1 "$NOTIFY_LOG" | grep -Eq -- '^--from agent-mail .*Agent mail: App is closed'
-"$command" read --to @josh >/dev/null
-"$command" read --to @josh >/dev/null
+"$command" read --to @josh >/dev/null 2>/dev/null
+"$command" read --to @josh >/dev/null 2>/dev/null
 message="$inbox/cur/$msgid.md"
 [[ -f "$message" ]]
 [[ ! -e "$inbox/.escalated-$msgid" ]]
@@ -100,7 +110,7 @@ message="$inbox/cur/$msgid.md"
 short_id="$(printf '%s' "$msgid" | cut -d- -f1)-$(printf '%s' "$msgid" | awk -F- '{print $(NF-1)"-"$NF}')"
 [[ "$short_id" != "$msgid" ]]
 "$command" receipt "$short_id" | grep -Fq $'read\t'
-"$command" read --to @josh --id "$short_id" >/dev/null
+"$command" read --to @josh --id "$short_id" >/dev/null 2>/dev/null
 if "$command" discard --to @josh --id "19700101T000000Z-1-1" >/dev/null 2>&1; then
   echo 'discard reported success for an id that matches nothing' >&2; exit 1
 fi
@@ -151,7 +161,9 @@ cmp -s "$human_root/josh/sent/$sent_id.md" "$mail_root/test-agent-session/inbox/
 [[ ! -d "$human_root/test-agent/sent" ]]
 
 agent_group_id="$("$command" send --to @+test-agent --to @josh --from other-agent --subject 'Agent group thread' --body 'Can every agent reply?')"
-agent_group_source="$mail_root/test-agent-session/inbox/new/$agent_group_id.md"
+AGENT_SCRATCHPAD="$mail_root/test-agent-session" "$command" read --to @+test-agent --id "$agent_group_id" >/dev/null 2>"$read_hint"
+agent_group_source="$mail_root/test-agent-session/inbox/cur/$agent_group_id.md"
+grep -Fq "Reply with: agent-mail send --reply-all $agent_group_source --body-file FILE" "$read_hint"
 agent_reply_id="$(AGENT_SCRATCHPAD="$mail_root/test-agent-session" "$command" send --reply-all "$agent_group_source" --body 'Yes, replying to all.')"
 agent_reply_message="$mail_root/other-agent-session/inbox/new/$agent_reply_id.md"
 agent_reply_human="$inbox/new/$agent_reply_id.md"
