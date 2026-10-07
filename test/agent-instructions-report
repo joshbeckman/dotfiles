@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+# A fixture with two sections, deliberately outside any git repository so the authorship
+# lookup has to degrade to blank rather than fail. That path is what makes the tool usable
+# on a file that is not checked in.
+cat >"$tmp/AGENTS.md" <<'EOF'
+## First
+one line
+
+### Second
+two lines here
+EOF
+
+out="$tmp/page.html"
+"$root/bin/agent-instructions-report" --file "$tmp/AGENTS.md" --output "$out" >/dev/null
+[[ -f "$out" ]]
+grep -Fq 'First' "$out"
+grep -Fq 'Second' "$out"
+grep -Fq '2 sections' "$out"
+
+# Failing directions. The point of the tool is to make an unmeasured file measurable, so a
+# run that cannot measure anything must fail rather than write a page that looks fine.
+if "$root/bin/agent-instructions-report" --file "$tmp/nope.md" --output "$tmp/missing.html" 2>/dev/null; then
+  printf 'missing file did not fail\n' >&2
+  exit 1
+fi
+printf 'no headings here\n' >"$tmp/flat.md"
+if "$root/bin/agent-instructions-report" --file "$tmp/flat.md" --output "$tmp/flat.html" 2>/dev/null; then
+  printf 'headingless file did not fail\n' >&2
+  exit 1
+fi
+[[ ! -e "$tmp/missing.html" && ! -e "$tmp/flat.html" ]]
+
+printf 'agent-instructions-report tests passed\n'
