@@ -150,6 +150,13 @@ __setup_ubuntu(){
                         __setup_unsupported
                         ;;
         esac
+        # try — ephemeral workspace manager (github.com/tobi/try). The Brewfile
+        # covers macOS; Linux has no Homebrew, so install the gem into the user's
+        # gem home, which needs no sudo. The .zshrc puts that bin on PATH.
+        if command -v gem >/dev/null 2>&1 && ! gem list try-cli 2>/dev/null | grep -q '^try-cli '; then
+                echo '  ======  installing try (try-cli)'
+                gem install --user-install --no-document try-cli || echo 'try install failed; continuing'
+        fi
         if command -v nix-env &> /dev/null
         then
                 echo "Nix detected"
