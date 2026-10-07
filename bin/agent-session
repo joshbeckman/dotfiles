@@ -520,8 +520,34 @@ def memory_pressure():
         raise ValueError(f'could not read memory pressure: {error}') from error
 
 
+def login_s_path():
+    """Resolve `s` the way the resumed window will, not the caller's PATH.
+
+    A scheduled wake runs with a minimal PATH, but the window runs through the
+    login shell, which is where `s` lives. Resolving it here keeps the availability
+    check and the command it gates on the same PATH, so the gate cannot skip an
+    injection the window would have been able to run.
+    """
+    import subprocess
+    shell = os.environ.get('SHELL') or '/bin/sh'
+    if os.path.exists(shell):
+        try:
+            result = subprocess.run([shell, '-lic', 'command -v s'], capture_output=True,
+                                    text=True, timeout=10, stdin=subprocess.DEVNULL)
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            if result.returncode == 0 and lines:
+                return lines[-1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return shutil.which('s') or ''
+
+
 def pi_default_provider():
-    """The provider Pi will default to, from its own settings."""
+    """The provider Pi will default to, from its own settings.
+
+    PI_SETTINGS is a seam these tools invented for testing, not a variable Pi
+    reads; setting it changes only where this looks.
+    """
     settings = Path(os.environ.get('PI_SETTINGS', '~/.pi/agent/settings.json')).expanduser()
     try:
         return json.loads(settings.read_text(encoding='utf-8')).get('defaultProvider') or ''
@@ -529,14 +555,14 @@ def pi_default_provider():
         return ''
 
 
-def pi_secrets():
+def pi_secrets(s_path):
     """Secret names to inject with `s` when starting Pi.
 
-    A resumed window runs through the login shell, which supplies the secret
-    store's key source where the machine sets it, so only the key name is needed
-    here. Explicit names win; otherwise infer the configured provider's key when
-    it is actually in the store, mirroring spawn-pi-worktree. Wrapping with a
-    missing key would stop a Pi that could authenticate natively.
+    Explicit names win; otherwise infer the configured provider's key when it is
+    actually in the store, mirroring spawn-pi-worktree. Wrapping with a missing
+    key would stop a Pi that could authenticate natively. That tool reads only
+    SPAWN_PI_SECRETS while this prefers AGENT_PI_SECRETS first; the pair is
+    deliberate but duplicated, and a shared helper is the follow-up.
     """
     import subprocess
     # A set-but-empty override is explicit: it disables inference rather than
@@ -546,14 +572,14 @@ def pi_secrets():
         explicit = os.environ.get('SPAWN_PI_SECRETS')
     if explicit is not None:
         return explicit.split()
-    if not shutil.which('s'):
+    if not s_path:
         return []
     provider = pi_default_provider()
     if not provider:
         return []
     name = provider.upper() + '_API_KEY'
     try:
-        listing = subprocess.run(['s', 'list'], capture_output=True, text=True, timeout=10)
+        listing = subprocess.run([s_path, 'list'], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return []
     return [name] if any(line.split()[:1] == [name] for line in listing.stdout.splitlines()) else []
@@ -597,9 +623,10 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         # holds the resident session does.
         pi_command = ['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
                       '--session', evidence['sessionFile'], prompt]
-        secrets = pi_secrets()
-        if secrets:
-            pi_command = ['s', *secrets, '--', *pi_command]
+        s_path = login_s_path()
+        secrets = pi_secrets(s_path)
+        if secrets and s_path:
+            pi_command = [s_path, *secrets, '--', *pi_command]
         command = ['tmux', 'new-window', '-d', '-t', tmux_session + ':', '-n', handle, '-c', evidence['cwd'],
                    shlex.join(pi_command)]
         if dry_run:

@@ -607,7 +607,8 @@ class LifecycleTest(unittest.TestCase):
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
         self.assertEqual(plan['status'], 'would-wake')
         self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
-        self.assertTrue(plan['command'][9].startswith(f"s FIREWORKS_API_KEY -- pi --session {self.transcript} "))
+        self.assertTrue(plan['command'][9].startswith(
+            f"{self.bin / 's'} FIREWORKS_API_KEY -- pi --session {self.transcript} "))
         self.assertIn('parked.md', plan['command'][9])
         # A wake is otherwise one-way: the session stays awake holding its memory,
         # which makes the next wake likelier to be deferred by the pressure gate.
@@ -615,7 +616,7 @@ class LifecycleTest(unittest.TestCase):
         extension = self.root / 'park ext.ts'
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run', '--extension', str(extension))
         self.assertTrue(plan['command'][9].startswith(
-            f"s FIREWORKS_API_KEY -- pi -e '{extension}' --session {self.transcript} "))
+            f"{self.bin / 's'} FIREWORKS_API_KEY -- pi -e '{extension}' --session {self.transcript} "))
         self.assertEqual(before, snapshot(self.root))
 
     def test_resume_can_start_pi_without_a_secret(self):
@@ -628,10 +629,12 @@ class LifecycleTest(unittest.TestCase):
 
     def test_resume_infers_the_provider_key_from_the_store(self):
         self.parked()
-        self.env.pop('AGENT_PI_SECRETS')
+        # Pop both so an ambient SPAWN_PI_SECRETS cannot change the result.
+        self.env.pop('AGENT_PI_SECRETS', None)
+        self.env.pop('SPAWN_PI_SECRETS', None)
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
         self.assertTrue(plan['command'][9].startswith(
-            f"s FIREWORKS_API_KEY -- pi --session {self.transcript} "))
+            f"{self.bin / 's'} FIREWORKS_API_KEY -- pi --session {self.transcript} "))
         # A provider whose key is not in the store must not wrap: Pi may
         # authenticate natively, and `s` would refuse to start a child.
         (self.root / 'pi-settings.json').write_text('{"defaultProvider": "openai"}\n')
