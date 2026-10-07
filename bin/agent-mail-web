@@ -149,6 +149,21 @@ def avatar_svg(raw):
     return ET.tostring(svg, encoding='utf-8')
 
 
+def read_realm():
+    # The same file the Pi extension reads, so the header names this machine's
+    # realm rather than a guess. AGENT_REALM wins when the process was given one.
+    raw = os.environ.get('AGENT_REALM')
+    if raw is None:
+        try:
+            raw = Path('~/.config/agent-realm').expanduser().read_text(encoding='utf-8')
+        except OSError:
+            return None
+    raw = raw.strip()
+    if not re.fullmatch(r'[A-Za-z][A-Za-z-]*', raw):
+        return None
+    return raw[:1].upper() + raw[1:].lower()
+
+
 class Mailbox:
     def __init__(self):
         human_root = Path(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans')).expanduser()
@@ -719,6 +734,10 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/draft':
             box.path(key, 'drafts')
             result = box.message(key)
+        elif route == '/api/config':
+            if args:
+                raise MailError('Configuration is not addressable')
+            result = {'realm': read_realm()}
         elif route == '/api/keywords':
             if args:
                 raise MailError('Keyword dictionary paths are configured locally, not through the API')

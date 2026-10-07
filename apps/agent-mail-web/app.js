@@ -1398,6 +1398,15 @@ document.addEventListener("keydown", (e) => {
   }
 });
 $("current-user").prepend(avatar("@josh"));
+// The realm distinguishes one machine's inbox from another; the bridge reads it locally.
+api("config")
+  .then((config) => {
+    if (!config.realm) return;
+    const realm = $("realm");
+    realm.textContent = config.realm;
+    realm.hidden = false;
+  })
+  .catch(() => {});
 if (!token) showAuthorize();
 $("authorize-form").onsubmit = (event) => {
   event.preventDefault();

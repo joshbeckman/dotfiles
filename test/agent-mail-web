@@ -34,7 +34,7 @@ class WebTest(unittest.TestCase):
         fake.mkdir()
         (fake / 'notify-josh').write_text('#!/bin/sh\nexit 0\n')
         (fake / 'notify-josh').chmod(0o755)
-        os.environ.update(AGENT_TEAM_ROOT=str(self.root / 'teams'), AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PI_SESSIONS_DIR=str(self.root / 'sessions'), PATH=str(fake) + ':' + os.environ['PATH'])
+        os.environ.update(AGENT_TEAM_ROOT=str(self.root / 'teams'), AGENT_MAIL_ROOT=str(self.root / 'agents'), AGENT_HUMAN_MAIL_ROOT=str(self.root / 'humans'), AGENT_IDENTITIES_DIR=str(self.root / 'identities'), PI_SESSIONS_DIR=str(self.root / 'sessions'), AGENT_REALM='testrealm', PATH=str(fake) + ':' + os.environ['PATH'])
         (self.root / 'agents/alder-turner-12345678').mkdir(parents=True)
         (self.root / 'agents/birch-weaver-87654321').mkdir()
         (self.root / 'sessions').mkdir()
@@ -219,6 +219,12 @@ class WebTest(unittest.TestCase):
         path.write_bytes(raw.replace(b'#002FA7', b'#FF7900'))
         self.assertIn(b'#FF7900', self.box.avatar('@+alder-turner'))
         self.assertEqual(self.request('/api/avatar?handle=alder-turner')[0], 200)
+
+    def test_config_reports_the_realm_and_is_not_addressable(self):
+        status, body = self.request('/api/config')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {'realm': 'Testrealm'})
+        self.assertEqual(self.request('/api/config?x=1')[0], 400)
 
     def test_agent_avatar_is_distinct_from_same_named_human(self):
         (self.root / 'identities/josh').write_text('abcdef12-0000-0000-0000-000000000001\n')

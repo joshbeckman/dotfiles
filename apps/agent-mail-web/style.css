@@ -114,9 +114,30 @@ h1 small {
   height: 3rem;
   font-size: 1.125rem;
 }
+/* Flex rather than baseline-aligned inline boxes: the avatar and the name were a
+   hair off each other inside the heading's line box. */
+#current-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  vertical-align: middle;
+}
+#current-user .avatar-wrap {
+  margin-inline-end: 0;
+}
 #current-user .avatar {
   width: 1.4rem;
   height: 1.4rem;
+}
+#realm {
+  margin-inline-start: 0.5rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--c-muted);
+  vertical-align: middle;
 }
 h2 {
   font-size: 1.35rem;
