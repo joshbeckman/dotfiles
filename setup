@@ -56,6 +56,13 @@ if [ -d "$HOME/.agents" ]; then
         echo '  ======  installed shared coding-agent config'
 fi
 
+# Val Town plugin — the platform skills for building on Val Town, loaded by Pi from
+# the skills path in .agents/pi/settings.json. Cloned rather than vendored so the
+# skills track upstream.
+echo '  ======  installing the Val Town plugin skills'
+git_clone_or_update https://github.com/val-town/plugins "$HOME/.local/share/val-town-plugins"
+echo '  ======  installed the Val Town plugin skills'
+
 # machine-local prerequisites: files this repo cannot ship because they are
 # per-machine or secret. Their absence is silent everywhere else, which is the
 # whole problem: the escalation call site discards the notification error, so a
@@ -244,6 +251,17 @@ if [ ! -x "$DOTFILES_DIR/bin/s" ]; then
         else
                 echo 'could not determine s release; install manually from github.com/tobi/s'
         fi
+fi
+
+# deno + vt — the Val Town CLI. vt runs on Deno; both install into ~/.deno/bin,
+# which .zshrc puts on PATH. User-local, so no sudo and no Brewfile entry.
+if [ ! -x "$HOME/.deno/bin/deno" ]; then
+        echo '  ======  installing Deno'
+        curl -fsSL https://deno.land/install.sh | sh || echo 'Deno install failed; continuing'
+fi
+if [ -x "$HOME/.deno/bin/deno" ] && [ ! -x "$HOME/.deno/bin/vt" ]; then
+        echo '  ======  installing vt (Val Town CLI)'
+        "$HOME/.deno/bin/deno" install -grAf jsr:@valtown/vt || echo 'vt install failed; continuing'
 fi
 
 # pi — update after config is linked and package managers have had a chance to install it

@@ -9,6 +9,9 @@
   "extensions": [
     "~/.agents/pi/extensions"
   ],
+  "skills": [
+    "~/.local/share/val-town-plugins/plugin/skills"
+  ],
   "themes": [
     "~/.agents/pi/themes"
   ],
