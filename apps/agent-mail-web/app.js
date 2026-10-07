@@ -646,20 +646,64 @@ async function deleteDraft() {
     composer.readOnly(false);
   }
 }
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const UPLOADABLE_IMAGE_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+];
+function base64Of(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+function loadImage(file) {
+  // A data URL, not a blob URL: the app's CSP allows img-src 'self' data: and would
+  // block blob:.
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () =>
+        reject(new Error("Could not read that image; try a PNG or JPEG."));
+      image.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+// The bridge accepts only PNG/JPEG/GIF/WebP and at most 5 MiB, and a phone photo can
+// be a HEIC or larger than that. Re-encode only when the file would otherwise be
+// rejected, so a small GIF keeps its animation and a normal screenshot uploads as-is.
+async function uploadData(file) {
+  if (file.size <= MAX_IMAGE_BYTES && UPLOADABLE_IMAGE_TYPES.includes(file.type))
+    return base64Of(file);
+  const image = await loadImage(file);
+  const initial = Math.min(1, 2560 / Math.max(image.width, image.height));
+  for (let factor = initial; factor > 0.1; factor *= 0.75) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * factor));
+    canvas.height = Math.max(1, Math.round(image.height * factor));
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.85),
+    );
+    if (blob && blob.size <= MAX_IMAGE_BYTES) return base64Of(blob);
+  }
+  throw new Error("Could not shrink that image enough to send it.");
+}
 async function attach() {
   const file = $("image").files[0];
   if (!file || uploading) return;
-  if (file.size > 5 * 1024 * 1024)
-    throw new Error("Images must be at most 5 MiB");
   const key = draft?.key;
   uploading = true;
   try {
-    const data = await new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result.split(",")[1]);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
+    const data = await uploadData(file);
     const result = await api("attachment", { data });
     if (draft?.key !== key || view !== "editor")
       throw new Error(
