@@ -37,7 +37,9 @@ printf '%s\n' "$*" >"$LOCAL_LOG"
 EOF
 cat >"$tmp/bin/node" <<'EOF'
 #!/bin/sh
-printf 'push called\n' >"$PUSH_LOG"
+# Record the length, not just that it was called: the status MCP rejects a body
+# over 150 characters, so the interesting assertion is how much arrived.
+printf 'push called len=%s\n' "${#NOTIFY_JOSH_MESSAGE}" >"$PUSH_LOG"
 exit 1
 EOF
 cat >"$tmp/bin/tmux" <<'EOF'
@@ -63,7 +65,16 @@ grep -Fq -- '-execute echo clicked' "$LOCAL_LOG"
 rm -f "$LOCAL_LOG" "$PUSH_LOG"
 "$root/bin/notify-josh" --away-only 'Mail delivered' 'A web app shows this.'
 [[ ! -e "$LOCAL_LOG" && ! -e "$PUSH_LOG" ]]
-NOTIFY_JOSH_FORCE_PUSH=1 "$root/bin/notify-josh" --away-only 'Mail delivered' 'Away from the desk.' || true
+short_message='Away from the desk.'
+NOTIFY_JOSH_FORCE_PUSH=1 "$root/bin/notify-josh" --away-only 'Mail delivered' "$short_message" || true
 [[ ! -e "$LOCAL_LOG" && -s "$PUSH_LOG" ]]
+grep -Fq "len=${#short_message}" "$PUSH_LOG"
+
+# Over the MCP's limit the message is shortened rather than rejected: the call sites
+# mostly discard the exit status, so a rejection would arrive as silence.
+rm -f "$PUSH_LOG"
+long_message="$(printf 'x%.0s' $(seq 1 400))"
+NOTIFY_JOSH_FORCE_PUSH=1 "$root/bin/notify-josh" 'Title' "$long_message" || true
+grep -Fq 'len=150' "$PUSH_LOG"
 
 printf 'notify-josh tests passed\n'
