@@ -7,50 +7,42 @@ description: Drive and inspect a live Chrome browser via the chrome-devtools CLI
 
 pi has no built-in MCP, so use the **CLI** shipped with `chrome-devtools-mcp`, not an MCP server config.
 
-## Quick start
+## Read the contract from the install, not from here
+
+The package ships the CLI documentation for its own version:
 
 ```sh
-chrome-devtools status || npm i -g chrome-devtools-mcp@latest   # ensure installed
-chrome-devtools navigate_page --url "https://example.com" --type url
-chrome-devtools take_snapshot                                   # get element UIDs
-chrome-devtools take_screenshot --filePath "$TMPDIR/shot.png"  # writes must be under $TMPDIR
-chrome-devtools stop                                            # when finished
+find "$(pnpm root -g 2>/dev/null || npm root -g)" \
+  -path '*chrome-devtools-mcp/skills/chrome-devtools-cli/SKILL.md' | head -1
 ```
 
-- A background daemon starts on first tool call and persists browser state (pages, cookies) across commands.
-- Headless and isolated are the default. Pass daemon args once via `chrome-devtools start ...` (e.g. `chrome-devtools start --headless=false`); run `chrome-devtools start --help` for supported args.
-- `--output-format=json` gives machine-readable output. `DEBUG=* chrome-devtools <tool>` for verbose logs.
+Read that file before trusting any example. The argument style changed between versions — required arguments are positional on 1.10.x and flags on 1.6.x — so the installed copy is the only description that matches the installed CLI. `chrome-devtools <tool> --help` is the fallback.
+
+## Local setup
+
+- **Install with pnpm, not npm.** `npm i -g` fails where the npm prefix is `/usr`; `pnpm add -g chrome-devtools-mcp@latest` needs no sudo.
+- **Chromium, not Google Chrome.** On a machine without Google Chrome the CLI fails with `Could not find Google Chrome executable`; start the daemon once with the path:
+  ```sh
+  chrome-devtools start --executablePath /usr/bin/chromium
+  ```
 
 ## Workflow
 
-1. **Navigate**: `navigate_page --url "<url>" --type url` (the URL is a flag, not positional) or `new_page "<url>"`.
-2. **Locate**: `take_snapshot` returns element UIDs — interaction tools act on those UIDs, not CSS selectors.
-3. **Interact**: `click "<uid>"`, `fill "<uid>" "text"`, `type_text`, `hover`, `press_key`, `drag`, `upload_file`.
-4. **Verify**: `take_screenshot [--fullPage] [--filePath ...]`, re-`take_snapshot`, `list_console_messages`, `list_network_requests` / `get_network_request`.
-5. **Cleanup**: `chrome-devtools stop` when the task is done.
+The background server starts implicitly; do not run `start`/`status`/`stop` before each call. Start it once with `--executablePath` if this machine needs it.
 
-## Common tools
-
-| Goal | Command |
-|---|---|
-| Go to URL | `navigate_page --url "<url>" --type url` / `new_page "<url>"` |
-| See page structure + UIDs | `take_snapshot` |
-| Screenshot | `take_screenshot [--fullPage] [--filePath ...]` |
-| Click / fill | `click "<uid>"` / `fill "<uid>" "<value>"` |
-| Run JS | `evaluate_script "<expr>"` |
-| Console / network | `list_console_messages` / `list_network_requests` |
-| Performance trace | `performance_start_trace` … `performance_stop_trace` |
-| Audit | `lighthouse_audit [--mode snapshot]` |
-| List / switch tabs | `list_pages` / `select_page` |
+1. **Find the page**: `chrome-devtools list_pages`; `select_page <pageId>` if there is more than one.
+2. **Locate**: `take_snapshot <pageId>` returns element `<uid>`s. Interaction tools act on those UIDs, not CSS selectors.
+3. **Act**: `click`, `fill`, `type_text`, `hover`, `press_key`, `drag`, `upload_file`. Exact arguments: the upstream file.
+4. **Verify**: `take_screenshot`, re-`take_snapshot`, `list_console_messages`, `list_network_requests`, `lighthouse_audit`.
+5. **Stop** the daemon when the task is done.
 
 ## Gotchas
 
-- **File writes are sandboxed to `$TMPDIR`.** `take_screenshot`/other file-writing tools reject paths outside the OS temp dir ("not within any of the configured workspace roots"). Write to `$TMPDIR/...` then `mv` to the destination (e.g. `~/Downloads`).
-- **`navigate_page` takes flags, not a positional URL**: use `--url "<url>" --type url`. A bare positional is parsed as `--type` and errors.
-- Ignore the `ExperimentalWarning: localStorage is not available` noise on stderr — harmless.
+- **File access depends on the version.** 1.10.x has full filesystem access by default (`--allowUnrestrictedPaths=true`), so `--filePath` can write anywhere. 1.6.0 refuses writes outside the OS temp dir ("not within any of the configured workspace roots"), so write to `$TMPDIR` and `mv`. That boundary was observed on two machines (1.6.0 on macOS, 1.10.1 on blueberry), not bisected to a release; when unsure, write to `$TMPDIR`.
+- `wait_for` and `fill_form` are MCP-only in the versions seen; poll with `take_snapshot` or make individual `fill` calls.
+- Ignore the `ExperimentalWarning: localStorage is not available` noise on stderr.
 
 ## Notes
 
-- To use a signed-in real profile or connect to an already-running Chrome, start Chrome with `--remote-debugging-port=9222 --user-data-dir=...` and run the daemon with `chrome-devtools start --browserUrl=http://127.0.0.1:9222`.
-- `wait_for` and `fill_form` are MCP-only (excluded from the CLI); use `take_snapshot` polling or individual `fill` calls instead.
-- Full tool reference: https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/tool-reference.md
+- Signed-in profile or already-running Chrome: start Chrome with `--remote-debugging-port=9222 --user-data-dir=...`, then `chrome-devtools start --browserUrl=http://127.0.0.1:9222`.
+- Tool reference: https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/tool-reference.md
