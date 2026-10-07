@@ -71,7 +71,8 @@ class SetupTest(unittest.TestCase):
             target.write_text('{}')
         for path in ('.agents/prompts', '.agents/skills'):
             (self.repo / path).mkdir()
-        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache', 'gem', 'ruby'):
+        for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache',
+                     'gem', 'ruby', 'curl'):
             self.executable(self.bin / name)
         for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
                      'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
@@ -226,6 +227,21 @@ class SetupTest(unittest.TestCase):
         result = self.run_setup(platform='linux', FAKE_ARCH='riscv64')
         self.assertIn('not a checked architecture (riscv64)', result.stdout)
         self.assertIsNone(self.apt_get_args())
+
+    def test_val_town_plugin_is_cloned(self):
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        clones = [c for c in self.records() if c['command'] == 'git' and c['args'][:1] == ['clone']]
+        self.assertTrue(any('val-town/plugins' in ' '.join(c['args']) for c in clones), result.stdout)
+
+    def test_deno_install_is_attempted_without_network(self):
+        # The curl stub prints nothing, so Deno is not created and the vt step
+        # stays skipped; this only proves the attempt happens without a real fetch.
+        result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        curls = [c for c in self.records() if c['command'] == 'curl']
+        self.assertTrue(any('deno.land' in ' '.join(c['args']) for c in curls), result.stdout)
+        self.assertEqual([c for c in self.records() if c['command'] == 'deno'], [])
 
     def test_try_is_installed_and_linked_into_local_bin(self):
         result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
