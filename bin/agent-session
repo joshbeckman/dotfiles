@@ -520,25 +520,35 @@ def memory_pressure():
         raise ValueError(f'could not read memory pressure: {error}') from error
 
 
-def login_s_path():
-    """Resolve `s` the way the resumed window will, not the caller's PATH.
-
-    A scheduled wake runs with a minimal PATH, but the window runs through the
-    login shell, which is where `s` lives. Resolving it here keeps the availability
-    check and the command it gates on the same PATH, so the gate cannot skip an
-    injection the window would have been able to run.
-    """
-    import subprocess
+def login_shell():
     shell = os.environ.get('SHELL') or '/bin/sh'
-    if os.path.exists(shell):
-        try:
-            result = subprocess.run([shell, '-lic', 'command -v s'], capture_output=True,
-                                    text=True, timeout=10, stdin=subprocess.DEVNULL)
-            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            if result.returncode == 0 and lines:
-                return lines[-1]
-        except (OSError, subprocess.SubprocessError):
-            pass
+    return shell if os.path.exists(shell) else '/bin/sh'
+
+
+def login_run(argv):
+    """Wrap argv so it runs in the login shell.
+
+    The secret store's key source lives in the login environment. A scheduled wake
+    runs in the service environment, and tmux runs a window command through its own
+    non-login command shell, so neither is guaranteed to have it. Running both the
+    availability check and the command it gates through the login shell keeps them
+    in the environment `s` needs to unlock the store.
+    """
+    import shlex
+    return [login_shell(), '-lic', shlex.join(argv)]
+
+
+def login_s_path():
+    """Resolve `s` in the login shell, the same environment it will run in."""
+    import subprocess
+    try:
+        result = subprocess.run(login_run(['command', '-v', 's']), capture_output=True,
+                                text=True, timeout=10, stdin=subprocess.DEVNULL)
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if result.returncode == 0 and lines:
+            return lines[-1]
+    except (OSError, subprocess.SubprocessError):
+        pass
     return shutil.which('s') or ''
 
 
@@ -579,7 +589,8 @@ def pi_secrets(s_path):
         return []
     name = provider.upper() + '_API_KEY'
     try:
-        listing = subprocess.run([s_path, 'list'], capture_output=True, text=True, timeout=10)
+        listing = subprocess.run(login_run([s_path, 'list']), capture_output=True,
+                                 text=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return []
     return [name] if any(line.split()[:1] == [name] for line in listing.stdout.splitlines()) else []
@@ -625,8 +636,13 @@ def resume(handle, tmux_session, dry_run, extensions=()):
                       '--session', evidence['sessionFile'], prompt]
         s_path = login_s_path()
         secrets = pi_secrets(s_path)
-        if secrets and s_path:
-            pi_command = [s_path, *secrets, '--', *pi_command]
+        if secrets and not s_path:
+            # An explicit override is an authentication requirement; starting bare
+            # Pi would drop it silently. Inference, by contrast, may legitimately
+            # fall back to native auth when no key is configured.
+            raise ValueError(f'secrets requested but s is not available: {", ".join(secrets)}')
+        if secrets:
+            pi_command = login_run([s_path, *secrets, '--', *pi_command])
         command = ['tmux', 'new-window', '-d', '-t', tmux_session + ':', '-n', handle, '-c', evidence['cwd'],
                    shlex.join(pi_command)]
         if dry_run:
