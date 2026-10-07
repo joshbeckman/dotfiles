@@ -9,7 +9,7 @@
 // the behaviour around them.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -377,6 +377,23 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
 
   await pi.emit("agent_settled");
   eq("settling without a request sends nothing", pi.sent.length, 0);
+}
+
+// --- wake thresholds ---------------------------------------------------------
+
+// The poll interval has to be shorter than the quiet threshold, or the threshold is never
+// reached: a check on a 60s tick cannot see a 30s window. That relationship is the reason
+// the interval moved with the threshold, so it is pinned rather than left in a comment.
+{
+  const source = readFileSync(join(EXTENSIONS, "agent-name.ts"), "utf8");
+  const number = (re) => Number((re.exec(source)?.[1] ?? "0").replace(/_/g, ""));
+  const interval = number(/\},\s*(\d[\d_]*)\);/);
+  const quiet = number(/Date\.now\(\) - userAt < (\d[\d_]*)/);
+  check(
+    "the wake poll interval is shorter than the quiet threshold",
+    interval > 0 && quiet > 0 && interval < quiet,
+    `interval ${interval}ms, threshold ${quiet}ms`,
+  );
 }
 
 // --- result -----------------------------------------------------------------
