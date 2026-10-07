@@ -618,6 +618,22 @@ try {
   await page.waitForFunction(() =>
     document.getElementById("body").textContent.includes("file:"),
   );
+  // An image the bridge would reject is rasterized client-side: SVG is not one of
+  // PNG/JPEG/GIF/WebP, so the upload must come back as a JPEG.
+  await page.locator("#image").setInputFiles({
+    name: "vector.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#002FA7"/></svg>',
+    ),
+  });
+  await page.waitForFunction(() =>
+    document.getElementById("body").textContent.includes("vector.svg"),
+  );
+  assert.match(
+    await page.locator("#body").textContent(),
+    /!\[vector\.svg\]\(file:[^)]+\.jpg\)/,
+  );
   await page.locator("#preview-button").click();
   await page
     .frameLocator("#preview iframe")
