@@ -9,14 +9,19 @@ pi has no built-in MCP, so use the **CLI** shipped with `chrome-devtools-mcp`, n
 
 ## Read the contract from the install, not from here
 
-The package ships the CLI documentation for its own version:
+The package ships the CLI documentation for its own version. Resolve the package the running executable belongs to, rather than whichever copy a package-manager root happens to hold:
 
 ```sh
-find "$(pnpm root -g 2>/dev/null || npm root -g)" \
-  -path '*chrome-devtools-mcp/skills/chrome-devtools-cli/SKILL.md' | head -1
+exe=$(command -v chrome-devtools) || { echo "chrome-devtools is not on PATH" >&2; exit 1; }
+target=$(sed -n 's/^# cmd-shim-target=//p' "$exe" 2>/dev/null | tail -1)
+[ -n "$target" ] || target=$(readlink -f "$exe")
+pkg=$(printf '%s' "$target" | sed -n 's|^\(.*/chrome-devtools-mcp\)/.*|\1|p')
+docs="$pkg/skills/chrome-devtools-cli/SKILL.md"
+[ -f "$docs" ] || { echo "no bundled CLI docs; use chrome-devtools <tool> --help" >&2; exit 1; }
+printf '%s\n' "$docs"
 ```
 
-Read that file before trusting any example. The argument style changed between versions — required arguments are positional on 1.10.x and flags on 1.6.x — so the installed copy is the only description that matches the installed CLI. `chrome-devtools <tool> --help` is the fallback.
+Read that file before trusting any example. The argument style changed between versions — required arguments are positional on 1.10.x and flags on 1.6.x — so the installed copy is the only description that matches the installed CLI. If it is missing, `chrome-devtools <tool> --help` is the fallback.
 
 ## Local setup
 
@@ -30,10 +35,10 @@ Read that file before trusting any example. The argument style changed between v
 
 The background server starts implicitly; do not run `start`/`status`/`stop` before each call. Start it once with `--executablePath` if this machine needs it.
 
-1. **Find the page**: `chrome-devtools list_pages`; `select_page <pageId>` if there is more than one.
-2. **Locate**: `take_snapshot <pageId>` returns element `<uid>`s. Interaction tools act on those UIDs, not CSS selectors.
-3. **Act**: `click`, `fill`, `type_text`, `hover`, `press_key`, `drag`, `upload_file`. Exact arguments: the upstream file.
-4. **Verify**: `take_screenshot`, re-`take_snapshot`, `list_console_messages`, `list_network_requests`, `lighthouse_audit`.
+1. **Find the page**: list the open pages, and select the one to work with when there is more than one. Exact arguments: the upstream file.
+2. **Locate**: take a snapshot of that page; it returns element `<uid>`s. Interaction tools act on those UIDs, not CSS selectors.
+3. **Act**: click, fill, type text, hover, press keys, drag, or upload, using the UIDs from the snapshot. Exact arguments: the upstream file.
+4. **Verify**: screenshot, re-snapshot, or read the console, the network, or a Lighthouse audit. Exact arguments: the upstream file.
 5. **Stop** the daemon when the task is done.
 
 ## Gotchas
