@@ -113,23 +113,23 @@ When a comment mixes Josh's words with an agent response, compose the boundary e
 
 ### Pull request ownership
 
-If you create or inherit a pull request, you own it until the change is deployed and its production result is checked, unless Josh explicitly releases or transfers ownership. Opening a PR is not task completion. Use the `own-pr` skill for the full lifecycle: open as draft; trigger and monitor CI and automated review; address comments and conflicts; propose three high-context reviewers when it is green; request them after Josh marks it ready; monitor the merge queue after Josh enqueues; verify deployment; report production proof; then make the worktree eligible for cleanup. New PRs are registered by `gw`/`gsw` with `agent-pr-monitor`, which polls without model turns and delivers changes through `agent-mail`; use direct polling only as its fallback rather than relying on Josh to relay notifications. Ownership does not grant permission to mark ready, enqueue, merge, or re-enqueue without Josh's instruction.
+If you create or inherit a pull request, you own it until the change is deployed and its production result is checked, unless Josh explicitly releases or transfers ownership. Opening a PR is not task completion. Ownership does not grant permission to mark ready, enqueue, merge, or re-enqueue without Josh's instruction. The `own-pr` skill carries the lifecycle, the monitor, and the rest; read it before touching a PR.
+
+### Attribution
 
 **Shared instructions are an exception.** Never append a concrete author identity or attribution trailer to `AGENTS.md`, `CLAUDE.md`, shared system prompts, agent definitions, prompt templates, or skills and their instruction references. Keep contributor attribution in Git commits instead; a reusable instruction file must not look like another session's identity assignment. Attribution examples should use placeholders. Runtime-injected session identity is separate and should remain intact.
 
-**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer. For a standalone conversational response, put the generated identity first and blockquote the response. For mixed prose, keep Josh's words unquoted and place the trailer adjacent to the blockquoted agent passage. Maintained artifacts can carry the trailer after the prose without blockquoting the whole artifact. Generate the identity with `bin/agent-trailer` (in dotfiles `bin/`, on PATH). Never write it from memory; models guess their own name wrong.
-
-Published trailers identify the agent, not its harness or model. Keep runtime details in session metadata; `agent-trailer --raw` remains available for diagnostics and tool detection.
+**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory, because models guess their own name wrong. `gw` and `gsw` add it automatically on the paths that matter — PR and issue comments, reviews, and close or reopen comments — and append it to maintained artifacts such as PR bodies and issue bodies. Where they do not, put the generated identity first and blockquote the response, or place the trailer after the prose for an artifact.
 
 ```sh
 agent-trailer   # => Co-authored-by: AI <session name> @+<handle>
 ```
 
-One key on every surface, so `grep "Co-authored-by: AI"` turns up agent work in commits, comments, and documents alike.
-
-Keep approvals brief. For change requests, identify each blocker and explain why it matters. Use Conventional Comments below.
+One key on every surface, so `grep "Co-authored-by: AI"` turns up agent work in commits, comments, and documents alike. Published trailers identify the agent, not its harness or model; keep runtime details in session metadata, where `agent-trailer --raw` remains available for diagnostics.
 
 ## Comments on Pull Requests or Changes
+
+Keep approvals brief. For change requests, identify each blocker and explain why it matters. Use Conventional Comments:
 
 Use **Conventional Comments** format for all PR/change comments to improve clarity and actionability:
 
