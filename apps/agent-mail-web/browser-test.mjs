@@ -49,6 +49,7 @@ const env = {
   AGENT_IDENTITIES_DIR: join(tmp, "identities"),
   PI_SESSIONS_DIR: join(tmp, "sessions"),
   XDG_CONFIG_HOME: join(tmp, "config"),
+  AGENT_REALM: "testrealm",
 };
 await mkdir(join(env.XDG_CONFIG_HOME, "nvim"), { recursive: true });
 const keywordFile = join(env.XDG_CONFIG_HOME, "nvim/keywords.txt");
@@ -196,6 +197,8 @@ try {
   });
   await page.goto(url);
   await page.waitForSelector(".row");
+  await page.locator("#realm").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#realm").textContent(), "Testrealm");
   await page.route("**/reader.css", async (route) => {
     const response = await route.fetch();
     await route.fulfill({
