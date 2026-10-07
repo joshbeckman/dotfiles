@@ -520,6 +520,45 @@ def memory_pressure():
         raise ValueError(f'could not read memory pressure: {error}') from error
 
 
+def pi_default_provider():
+    """The provider Pi will default to, from its own settings."""
+    settings = Path(os.environ.get('PI_SETTINGS', '~/.pi/agent/settings.json')).expanduser()
+    try:
+        return json.loads(settings.read_text(encoding='utf-8')).get('defaultProvider') or ''
+    except (OSError, ValueError):
+        return ''
+
+
+def pi_secrets():
+    """Secret names to inject with `s` when starting Pi.
+
+    A resumed window runs through the login shell, which supplies the secret
+    store's key source where the machine sets it, so only the key name is needed
+    here. Explicit names win; otherwise infer the configured provider's key when
+    it is actually in the store, mirroring spawn-pi-worktree. Wrapping with a
+    missing key would stop a Pi that could authenticate natively.
+    """
+    import subprocess
+    # A set-but-empty override is explicit: it disables inference rather than
+    # falling through, so a machine can say "start Pi with nothing from `s`".
+    explicit = os.environ.get('AGENT_PI_SECRETS')
+    if explicit is None:
+        explicit = os.environ.get('SPAWN_PI_SECRETS')
+    if explicit is not None:
+        return explicit.split()
+    if not shutil.which('s'):
+        return []
+    provider = pi_default_provider()
+    if not provider:
+        return []
+    name = provider.upper() + '_API_KEY'
+    try:
+        listing = subprocess.run(['s', 'list'], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [name] if any(line.split()[:1] == [name] for line in listing.stdout.splitlines()) else []
+
+
 def resume(handle, tmux_session, dry_run, extensions=()):
     import shlex
     import subprocess
@@ -553,9 +592,16 @@ def resume(handle, tmux_session, dry_run, extensions=()):
                   'Restart a job only if it is still needed. Once the mail is dealt with and nothing else '
                   'needs doing, call the park_session tool with no jobs: a session left awake holds its '
                   'memory, and every wake makes the next one more likely to be deferred by the pressure gate.')
+        # Pi needs its provider key, and a new tmux window inherits the server's
+        # environment, which has none. Inject it with `s`, as the service that
+        # holds the resident session does.
+        pi_command = ['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
+                      '--session', evidence['sessionFile'], prompt]
+        secrets = pi_secrets()
+        if secrets:
+            pi_command = ['s', *secrets, '--', *pi_command]
         command = ['tmux', 'new-window', '-d', '-t', tmux_session + ':', '-n', handle, '-c', evidence['cwd'],
-                   shlex.join(['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
-                               '--session', evidence['sessionFile'], prompt])]
+                   shlex.join(pi_command)]
         if dry_run:
             return dict(record, status='would-wake', command=command)
         if subprocess.run(['tmux', 'has-session', '-t', tmux_session], capture_output=True).returncode:

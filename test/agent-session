@@ -475,7 +475,12 @@ class LifecycleTest(unittest.TestCase):
         self.tmux_log = self.root / 'tmux.log'
         self.stub('tmux', '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TMUX_LOG"\n[ "$1" = has-session ] && exit "${TMUX_HAS:-0}"\nexit "${TMUX_FAIL:-0}"\n')
         self.stub('sysctl', '#!/bin/sh\necho "${PRESSURE:-1}"\n')
-        self.env.update(AGENT_SESSION_STATE=str(self.state), TMUX_LOG=str(self.tmux_log),
+        self.stub('s', '#!/bin/sh\n[ "$1" = list ] && printf "  FIREWORKS_API_KEY  [REDACTED]\\n"\nexit 0\n')
+        settings = self.root / 'pi-settings.json'
+        settings.write_text('{"defaultProvider": "fireworks"}\n')
+        # Pin the secret source so resume tests do not read the host's store.
+        self.env.update(PI_SETTINGS=str(settings), AGENT_PI_SECRETS='FIREWORKS_API_KEY',
+                        AGENT_SESSION_STATE=str(self.state), TMUX_LOG=str(self.tmux_log),
                         PATH=str(self.bin) + os.pathsep + self.env['PATH'])
         self.live = os.getpid()
         dead = subprocess.Popen(['true'])
@@ -602,15 +607,36 @@ class LifecycleTest(unittest.TestCase):
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
         self.assertEqual(plan['status'], 'would-wake')
         self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
-        self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
+        self.assertTrue(plan['command'][9].startswith(f"s FIREWORKS_API_KEY -- pi --session {self.transcript} "))
         self.assertIn('parked.md', plan['command'][9])
         # A wake is otherwise one-way: the session stays awake holding its memory,
         # which makes the next wake likelier to be deferred by the pressure gate.
         self.assertIn('park_session', plan['command'][9])
         extension = self.root / 'park ext.ts'
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run', '--extension', str(extension))
-        self.assertTrue(plan['command'][9].startswith(f"pi -e '{extension}' --session {self.transcript} "))
+        self.assertTrue(plan['command'][9].startswith(
+            f"s FIREWORKS_API_KEY -- pi -e '{extension}' --session {self.transcript} "))
         self.assertEqual(before, snapshot(self.root))
+
+    def test_resume_can_start_pi_without_a_secret(self):
+        # An explicit empty override disables inference, so a machine that
+        # authenticates Pi another way still gets a bare command.
+        self.parked()
+        self.env['AGENT_PI_SECRETS'] = ''
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
+        self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
+
+    def test_resume_infers_the_provider_key_from_the_store(self):
+        self.parked()
+        self.env.pop('AGENT_PI_SECRETS')
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
+        self.assertTrue(plan['command'][9].startswith(
+            f"s FIREWORKS_API_KEY -- pi --session {self.transcript} "))
+        # A provider whose key is not in the store must not wrap: Pi may
+        # authenticate natively, and `s` would refuse to start a child.
+        (self.root / 'pi-settings.json').write_text('{"defaultProvider": "openai"}\n')
+        plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
+        self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
 
     def test_resume_launches_once_then_new_process_marks_awake(self):
         self.parked()
