@@ -60,12 +60,24 @@ def inject_grey(source, target):
     return target
 
 
-def render(svg, directory, size):
-    """Render one size, then rename, because qlmanage names the thumbnail after its input and
-    two sizes into one directory would leave only the second."""
-    result = subprocess.run(['qlmanage', '-t', '-s', str(size), '-o', str(directory), str(svg)],
-                            capture_output=True, text=True)
+def renderer():
+    """Prefer qlmanage (macOS), fall back to rsvg-convert (installed on Linux), so the render
+    half is not silently untested off macOS. None when neither is present."""
+    for name in ('qlmanage', 'rsvg-convert'):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def render(tool, svg, directory, size):
+    """Render one size, then rename, because both renderers name the output after its input
+    and two sizes into one directory would leave only the second."""
     produced = directory / (svg.name + '.png')
+    if tool == 'qlmanage':
+        argv = ['qlmanage', '-t', '-s', str(size), '-o', str(directory), str(svg)]
+    else:
+        argv = ['rsvg-convert', '-w', str(size), '-h', str(size), '-o', str(produced), str(svg)]
+    result = subprocess.run(argv, capture_output=True, text=True)
     if result.returncode != 0 or not produced.is_file():
         # qlmanage exits 0 and reports a thumbnail even when it wrote nothing, so the file is
         # the check rather than the status.
@@ -76,12 +88,13 @@ def render(svg, directory, size):
 
 
 def dimensions(path):
-    """Existence is not the property: the collision defect left one file behind that existed
-    and was the wrong size."""
-    result = subprocess.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', str(path)],
-                            capture_output=True, text=True)
-    found = {k: int(v) for k, v in re.findall(r'pixel(Width|Height):\s*(\d+)', result.stdout)}
-    return found.get('Width'), found.get('Height')
+    """Read the PNG header rather than shelling to sips, which is macOS-only. Existence is
+    not the property: the collision defect left one file behind that existed and was the
+    wrong size."""
+    data = path.read_bytes()[:24]
+    if data[:8] != b'\x89PNG\r\n\x1a\n' or data[12:16] != b'IHDR':
+        return None, None
+    return int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')
 
 
 def main():
@@ -113,9 +126,10 @@ def main():
         return 1
     print(f'ok   valid: {source}')
 
-    if not shutil.which('qlmanage'):
-        print('ok   valid, and that is all this host can check: no qlmanage, so nothing was rendered.')
-        print('     The mark reading at 28px is untested here. On macOS this would also render both sizes.')
+    tool = renderer()
+    if tool is None:
+        print('ok   valid, and that is all this host can check: no qlmanage or rsvg-convert, so nothing was rendered.')
+        print('     The mark reading at 28px is untested here.')
         return 0
 
     with tempfile.TemporaryDirectory(prefix='avatar-check-') as tmp:
@@ -127,9 +141,9 @@ def main():
             return 1
         rendered = {}
         for size in SIZES:
-            path, output = render(grey, directory, size)
+            path, output = render(tool, grey, directory, size)
             if path is None:
-                print(f'FAIL render {size}: qlmanage produced no file')
+                print(f'FAIL render {size}: {tool} produced no file')
                 if output.strip():
                     print('     ' + output.strip().splitlines()[0])
                 return 1
