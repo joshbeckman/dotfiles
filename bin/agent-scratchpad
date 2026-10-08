@@ -14,10 +14,12 @@ Usage:
   agent-scratchpad list
   agent-scratchpad prune --days N [--include-unread] [--apply] [--yes]
   agent-scratchpad prune --agent NAME [--apply] [--yes] [--force]
+  agent-scratchpad durable AGENT [--remove]
 
-List or explicitly prune durable agent scratchpads. Prune is a dry run unless
---apply is supplied. Age is the newest activity among the heartbeat, Pi session
-log, scratchpad files, and inbox messages. Live pads are never age-pruned.
+List or explicitly prune agent scratchpads. Prune is a dry run unless --apply is
+supplied. Age is the newest activity among the heartbeat, Pi session log,
+scratchpad files, and inbox messages. Live pads are never age-pruned, and neither
+are pads marked durable.
 
 Options:
   --days N      Select pads inactive for at least N days.
@@ -25,7 +27,8 @@ Options:
   --include-unread  Permit age pruning of pads that still have unread mail.
   --apply       Delete selected pads.
   --yes         Skip the confirmation prompt with --apply.
-  --force       Permit --agent to remove a pad with a live heartbeat.
+  --force       Permit --agent to remove a live or durable pad.
+  --remove      With durable, clear the mark instead of setting it.
 EOF
 }
 
@@ -40,10 +43,12 @@ fi
 
 newest_activity() {
   local dir="$1" newest=0 stamp file session_file
+  # The .durable marker states intent, it is not activity, so it must not move a
+  # pad's last-active stamp forward.
   while IFS= read -r -d '' file; do
     stamp="$(mtime "$file" || echo 0)"
     [ "$stamp" -le "$newest" ] || newest="$stamp"
-  done < <(find "$dir" -type f -print0 2>/dev/null)
+  done < <(find "$dir" -type f -not -name '.durable' -print0 2>/dev/null)
 
   session_file="$(sed -n 's/^- session file: //p' "$dir/session.md" 2>/dev/null | head -1)"
   if [ -f "$session_file" ]; then
@@ -71,6 +76,18 @@ is_live() {
   # PID reuse can conservatively retain a dead pad, which is safer than deleting
   # one still owned by a local process. --agent --force is the escape hatch.
   kill -0 "$pid" 2>/dev/null
+}
+
+is_durable() {
+  [ -e "$1/.durable" ]
+}
+
+# A pad is protected from age pruning when a session is running or it is marked
+# durable. Liveness cannot describe a pad whose owner is a poller that exits
+# between runs, so durability is stated by intent rather than inferred from a
+# heartbeat that cannot express it.
+is_protected() {
+  is_live "$1" || is_durable "$1"
 }
 
 unread_count() {
@@ -107,6 +124,7 @@ list_pads() {
     stamp="$(newest_activity "$dir")"
     state=parked
     is_live "$dir" && state=live
+    is_durable "$dir" && state=durable
     printf '%-7s  %-8s  %-19s  %s (%s)\n' "$state" "$(human_size "$dir")" "$(format_time "$stamp")" "$(pad_name "$dir")" "$(basename "$dir")"
   done < <(pads)
 }
@@ -165,15 +183,15 @@ prune_pads() {
   local -a selected=()
   if [ -n "$agent" ]; then
     dir="$(resolve_agent "$agent")" || return
-    if is_live "$dir" && [ "$force" -eq 0 ]; then
-      echo "agent-scratchpad: refusing to prune live pad $(basename "$dir") (use --force to override)" >&2
+    if is_protected "$dir" && [ "$force" -eq 0 ]; then
+      echo "agent-scratchpad: refusing to prune protected pad $(basename "$dir") (use --force to override)" >&2
       return 1
     fi
     selected+=("$dir")
   else
     while IFS= read -r dir; do
       [ -n "$dir" ] || continue
-      is_live "$dir" && continue
+      is_protected "$dir" && continue
       [ "$include_unread" -eq 1 ] || [ "$(unread_count "$dir")" -eq 0 ] || continue
       stamp="$(newest_activity "$dir")"
       [ "$stamp" -le "$cutoff" ] && selected+=("$dir")
@@ -191,6 +209,7 @@ prune_pads() {
     age=$(((now - stamp) / 86400))
     state=parked
     is_live "$dir" && state=live
+    is_durable "$dir" && state=durable
     printf '  %s  %s  %sd old  unread=%s  %s  %s\n' "$(human_size "$dir")" "$state" "$age" "$(unread_count "$dir")" "$(pad_name "$dir")" "$dir"
     total_kb=$((total_kb + $(du -sk "$dir" 2>/dev/null | awk '{print $1+0}')))
   done
@@ -206,8 +225,8 @@ prune_pads() {
   for dir in "${selected[@]}"; do
     [ "$(dirname "$dir")" = "$ROOT" ] && [ -f "$dir/session.md" ] || { echo "agent-scratchpad: unsafe path: $dir" >&2; return 1; }
     [ ! -L "$dir" ] || { echo "agent-scratchpad: refusing symlinked pad: $dir" >&2; continue; }
-    if is_live "$dir" && [ "$force" -eq 0 ]; then
-      echo "skipped newly live pad $dir" >&2
+    if is_protected "$dir" && [ "$force" -eq 0 ]; then
+      echo "skipped newly live or durable pad $dir" >&2
       continue
     fi
     if [ -n "$days" ] && [ "$(newest_activity "$dir")" -gt "$cutoff" ]; then
@@ -223,11 +242,34 @@ prune_pads() {
   done
 }
 
+set_durable() {
+  local agent='' remove=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --remove) remove=1; shift ;;
+      -h|--help) usage; return ;;
+      -*) echo "agent-scratchpad: unknown option: $1" >&2; usage >&2; return 2 ;;
+      *) [ -z "$agent" ] || { echo "agent-scratchpad: unexpected argument: $1" >&2; usage >&2; return 2; }; agent="$1"; shift ;;
+    esac
+  done
+  [ -n "$agent" ] || { echo 'agent-scratchpad: durable requires an agent' >&2; usage >&2; return 2; }
+  local dir
+  dir="$(resolve_agent "$agent")" || return
+  if [ "$remove" -eq 1 ]; then
+    rm -f -- "$dir/.durable"
+    echo "cleared the durable mark on $(basename "$dir")"
+  else
+    : >"$dir/.durable"
+    echo "marked $(basename "$dir") durable; age pruning will skip it"
+  fi
+}
+
 command="${1:-}"
 [ $# -gt 0 ] && shift
 case "$command" in
   list) [ $# -eq 0 ] || { usage >&2; exit 2; }; list_pads ;;
   prune) prune_pads "$@" ;;
+  durable) set_durable "$@" ;;
   -h|--help|'') usage ;;
   *) echo "agent-scratchpad: unknown command: $command" >&2; usage >&2; exit 2 ;;
 esac
