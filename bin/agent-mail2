@@ -1,0 +1,593 @@
+#!/usr/bin/env python3
+"""SQLite-backed Agent Mail prototype with compare-and-swap thread appends."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+import sys
+import uuid
+from datetime import datetime, timezone
+
+STALE_THREAD = 3
+SCHEMA_VERSION = 1
+ADDRESS = re.compile(r"^[A-Za-z0-9._+@-]+$")
+AGENT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
+HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS mailboxes (
+  mailbox_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('agent', 'human')),
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS threads (
+  thread_id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+  message_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(thread_id),
+  sequence INTEGER NOT NULL CHECK (sequence > 0),
+  sender_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
+  reply_to_message_id TEXT REFERENCES messages(message_id),
+  sent_at INTEGER NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  UNIQUE (thread_id, sequence)
+);
+CREATE TABLE IF NOT EXISTS deliveries (
+  message_id TEXT NOT NULL REFERENCES messages(message_id),
+  recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
+  read_at INTEGER,
+  discarded_at INTEGER,
+  PRIMARY KEY (message_id, recipient_mailbox_id)
+);
+CREATE INDEX IF NOT EXISTS messages_thread_sequence
+  ON messages(thread_id, sequence DESC);
+CREATE INDEX IF NOT EXISTS deliveries_recipient_state
+  ON deliveries(recipient_mailbox_id, discarded_at, read_at, message_id);
+CREATE TRIGGER IF NOT EXISTS messages_no_update
+  BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS messages_no_delete
+  BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
+"""
+
+
+class MailError(Exception):
+    pass
+
+
+class StaleThread(MailError):
+    def __init__(self, thread_id: str, expected: str, current: str):
+        self.thread_id = thread_id
+        self.expected = expected
+        self.current = current
+        super().__init__(
+            f"stale-thread: expected head {expected}, current head {current} "
+            f"for thread {thread_id}"
+        )
+
+
+def now_us() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+
+
+def format_time(value: int) -> str:
+    return datetime.fromtimestamp(value / 1_000_000, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def message_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{stamp}--{uuid.uuid4().hex[:12]}"
+
+
+def database_path() -> Path:
+    raw = os.environ.get("AGENT_MAIL2_DB")
+    path = Path(raw).expanduser() if raw else Path.home() / ".local" / "state" / "agent-mail" / "mail2.sqlite3"
+    return path.absolute()
+
+
+def connect() -> sqlite3.Connection:
+    path = database_path()
+    parent_existed = path.parent.exists()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not parent_existed or "AGENT_MAIL2_DB" not in os.environ:
+        os.chmod(path.parent, 0o700)
+    if path.is_symlink():
+        raise MailError(f"database path must not be a symlink: {path}")
+    db = sqlite3.connect(path, timeout=5, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")
+    db.execute("PRAGMA busy_timeout = 5000")
+    db.execute("PRAGMA journal_mode = WAL")
+    db.execute("PRAGMA synchronous = FULL")
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version not in (0, SCHEMA_VERSION):
+        db.close()
+        raise MailError(f"unsupported schema version {version}; expected {SCHEMA_VERSION}")
+    db.executescript(SCHEMA)
+    if version == 0:
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    os.chmod(path, 0o600)
+    return db
+
+
+def normalize_address(value: str) -> str:
+    value = value.strip()
+    if value.startswith("@+"):
+        value = value[2:]
+    elif value.startswith("@"):
+        value = value[1:]
+    if not value or not ADDRESS.fullmatch(value):
+        raise MailError(f"invalid mailbox address: {value!r}")
+    return value
+
+
+def is_team(value: str) -> bool:
+    return value.startswith("@team/") or value.startswith("team/")
+
+
+def expand_recipients(raw_values: list[str]) -> list[str]:
+    values: list[str] = []
+    for raw in raw_values:
+        for value in raw.split(","):
+            value = value.strip()
+            if not value:
+                raise MailError("empty recipient")
+            if is_team(value):
+                helper = Path(__file__).resolve().with_name("agent-team")
+                try:
+                    result = subprocess.run(
+                        [str(helper), "members", value if value.startswith("@") else f"@{value}"],
+                        check=False,
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                    )
+                except subprocess.TimeoutExpired as error:
+                    raise MailError(f"team expansion timed out: {value}") from error
+                if result.returncode:
+                    raise MailError(result.stderr.strip() or f"could not expand {value}")
+                values.extend(line for line in result.stdout.splitlines() if line.strip())
+                if len(values) > 1000:
+                    raise MailError("recipient expansion exceeds 1000 mailboxes")
+            else:
+                values.append(value)
+    recipients: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        address = normalize_address(value)
+        if address not in seen:
+            seen.add(address)
+            recipients.append(address)
+    if not recipients:
+        raise MailError("at least one recipient is required")
+    return recipients
+
+
+def sender_id() -> str:
+    scratchpad = os.environ.get("AGENT_SCRATCHPAD")
+    candidate = Path(scratchpad).name if scratchpad else os.environ.get("AGENT_HANDLE")
+    if candidate and candidate not in (".", "/"):
+        address = normalize_address(candidate)
+        if address == "josh" or "@" in address or not AGENT_ID.fullmatch(address):
+            raise MailError(f"invalid derived agent identity: {address}")
+        return address
+    if os.environ.get("AGENT_MAIL2_HUMAN") == "josh":
+        return "josh"
+    raise MailError("cannot determine sender; set AGENT_SCRATCHPAD or AGENT_HANDLE")
+
+
+def mailbox_kind(address: str) -> str:
+    return "human" if address == "josh" or "@" in address else "agent"
+
+
+def ensure_mailbox(db: sqlite3.Connection, address: str, timestamp: int) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO mailboxes(mailbox_id, kind, created_at) VALUES (?, ?, ?)",
+        (address, mailbox_kind(address), timestamp),
+    )
+
+
+def get_message(db: sqlite3.Connection, identifier: str) -> sqlite3.Row:
+    row = db.execute("SELECT * FROM messages WHERE message_id = ?", (identifier,)).fetchone()
+    if row is None:
+        raise MailError(f"unknown message: {identifier}")
+    return row
+
+
+def head(db: sqlite3.Connection, thread_id: str) -> sqlite3.Row | None:
+    return db.execute(
+        "SELECT message_id, sequence FROM messages WHERE thread_id = ? ORDER BY sequence DESC LIMIT 1",
+        (thread_id,),
+    ).fetchone()
+
+
+def recipients_for(db: sqlite3.Connection, message: str) -> list[str]:
+    return [
+        row[0]
+        for row in db.execute(
+            "SELECT recipient_mailbox_id FROM deliveries WHERE message_id = ? ORDER BY recipient_mailbox_id",
+            (message,),
+        )
+    ]
+
+
+def read_body(args: argparse.Namespace) -> str:
+    if args.body is not None and args.body_file is not None:
+        raise MailError("--body and --body-file are mutually exclusive")
+    if args.body is not None:
+        body = args.body
+    elif args.body_file is not None:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    else:
+        body = sys.stdin.read()
+    if "\x00" in body:
+        raise MailError("body must not contain NUL")
+    return body
+
+
+def subject_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if HEADER_CONTROL.search(value):
+        raise MailError("subject must be one line without control characters")
+    return value
+
+
+def append_message(args: argparse.Namespace) -> str:
+    db = connect()
+    sender = sender_id()
+    body = read_body(args)
+    subject = subject_value(args.subject)
+    reply_to: str | None = None
+    thread_id: str | None = args.thread
+    expected = args.if_head
+    direct = list(args.to or [])
+
+    try:
+        if args.reply_all:
+            source = get_message(db, args.reply_all)
+            reply_to = source["message_id"]
+            if thread_id is not None and thread_id != source["thread_id"]:
+                raise MailError("--reply-all message belongs to another --thread")
+            thread_id = source["thread_id"]
+            if direct:
+                raise MailError("--reply-all and --to are mutually exclusive")
+            direct = [source["sender_mailbox_id"], *recipients_for(db, source["message_id"])]
+            direct = [value for value in direct if normalize_address(value) != sender]
+            if subject is None:
+                source_subject = source["subject"] or "(no subject)"
+                subject = source_subject if source_subject.startswith("Re: ") else f"Re: {source_subject}"
+        elif args.in_reply_to:
+            source = get_message(db, args.in_reply_to)
+            reply_to = source["message_id"]
+            if thread_id is None:
+                thread_id = source["thread_id"]
+            elif thread_id != source["thread_id"]:
+                raise MailError("--in-reply-to message belongs to another thread")
+
+        recipients = expand_recipients(direct)
+        new_thread = thread_id is None
+        if new_thread:
+            if expected not in (None, "none"):
+                raise MailError("a new thread has no head; omit --if-head or use --if-head none")
+        else:
+            if expected in (None, "none"):
+                raise MailError("existing-thread send requires --if-head CURRENT_HEAD_MESSAGE_ID")
+
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            mid = message_id()
+            timestamp = now_us()
+            if new_thread:
+                thread_id = mid
+            current = head(db, thread_id)
+            if new_thread:
+                if current is not None:
+                    raise MailError(f"thread already exists: {thread_id}")
+                db.execute("INSERT INTO threads(thread_id, created_at) VALUES (?, ?)", (thread_id, timestamp))
+                sequence = 1
+            else:
+                if current is None:
+                    raise MailError(f"unknown thread: {thread_id}")
+                if current["message_id"] != expected:
+                    raise StaleThread(thread_id, expected, current["message_id"])
+                sequence = current["sequence"] + 1
+            if reply_to is not None:
+                source = get_message(db, reply_to)
+                if source["thread_id"] != thread_id:
+                    raise MailError("reply target belongs to another thread")
+            ensure_mailbox(db, sender, timestamp)
+            for recipient in recipients:
+                ensure_mailbox(db, recipient, timestamp)
+            db.execute(
+                """INSERT INTO messages(
+                     message_id, thread_id, sequence, sender_mailbox_id,
+                     reply_to_message_id, sent_at, subject, body
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mid, thread_id, sequence, sender, reply_to, timestamp, subject, body),
+            )
+            db.executemany(
+                "INSERT INTO deliveries(message_id, recipient_mailbox_id) VALUES (?, ?)",
+                [(mid, recipient) for recipient in recipients],
+            )
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+        return mid
+    finally:
+        db.close()
+
+
+def render_message(db: sqlite3.Connection, row: sqlite3.Row) -> str:
+    recipients = ", ".join(recipients_for(db, row["message_id"]))
+    lines = [
+        f"From: {row['sender_mailbox_id']}",
+        f"To: {recipients}",
+        f"Date: {format_time(row['sent_at'])}",
+        f"Message-ID: {row['message_id']}",
+        f"Thread-ID: {row['thread_id']}",
+        f"Thread-Sequence: {row['sequence']}",
+    ]
+    if row["reply_to_message_id"]:
+        lines.append(f"In-Reply-To: {row['reply_to_message_id']}")
+    lines.append(f"Subject: {row['subject'] or '(no subject)'}")
+    return "\n".join(lines) + "\n\n" + row["body"]
+
+
+def cmd_init(_args: argparse.Namespace) -> None:
+    db = connect()
+    db.close()
+    print(database_path())
+
+
+def cmd_send(args: argparse.Namespace) -> None:
+    print(append_message(args))
+
+
+def cmd_head(args: argparse.Namespace) -> None:
+    db = connect()
+    try:
+        thread_id = args.thread
+        row = db.execute("SELECT thread_id FROM messages WHERE message_id = ?", (thread_id,)).fetchone()
+        if row is not None:
+            thread_id = row["thread_id"]
+        current = head(db, thread_id)
+        if current is None:
+            raise MailError(f"unknown thread: {thread_id}")
+        print(current["message_id"])
+    finally:
+        db.close()
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    db = connect()
+    try:
+        if args.limit < 1:
+            raise MailError("--limit must be positive")
+        mailbox = None if args.all else normalize_address(args.to or sender_id())
+        thread_id = args.thread
+        if thread_id:
+            message = db.execute("SELECT thread_id FROM messages WHERE message_id = ?", (thread_id,)).fetchone()
+            if message is not None:
+                thread_id = message["thread_id"]
+        sql = """SELECT d.recipient_mailbox_id, d.read_at, m.*
+                 FROM deliveries d JOIN messages m USING(message_id)
+                 WHERE d.discarded_at IS NULL"""
+        params: list[object] = []
+        if args.state == "unread":
+            sql += " AND d.read_at IS NULL"
+        elif args.state == "read":
+            sql += " AND d.read_at IS NOT NULL"
+        if mailbox is not None:
+            sql += " AND d.recipient_mailbox_id = ?"
+            params.append(mailbox)
+        if thread_id:
+            sql += " AND m.thread_id = ?"
+            params.append(thread_id)
+        if args.sender:
+            sql += " AND m.sender_mailbox_id = ?"
+            params.append(normalize_address(args.sender))
+        if args.contains:
+            sql += " AND (instr(COALESCE(m.subject, ''), ?) > 0 OR instr(m.body, ?) > 0)"
+            params.extend([args.contains, args.contains])
+        sql += " ORDER BY m.sent_at, m.thread_id, m.sequence LIMIT ?"
+        params.append(args.limit)
+        rows = db.execute(sql, params).fetchall()
+        if not rows:
+            print("(no matching messages)")
+            return
+        for row in rows:
+            state = "read" if row["read_at"] is not None else "unread"
+            print(
+                f"{row['recipient_mailbox_id']}\t{row['message_id']}\tstate:{state}\t"
+                f"thread:{row['thread_id']}\tseq:{row['sequence']}\t"
+                f"from:{row['sender_mailbox_id']}\t{row['subject'] or '(no subject)'}"
+            )
+    finally:
+        db.close()
+
+
+def delivery_message(db: sqlite3.Connection, mailbox: str, identifier: str | None) -> sqlite3.Row | None:
+    if identifier:
+        return db.execute(
+            """SELECT m.* FROM deliveries d JOIN messages m USING(message_id)
+               WHERE d.recipient_mailbox_id = ? AND d.message_id = ? AND d.discarded_at IS NULL""",
+            (mailbox, identifier),
+        ).fetchone()
+    return db.execute(
+        """SELECT m.* FROM deliveries d JOIN messages m USING(message_id)
+           WHERE d.recipient_mailbox_id = ? AND d.read_at IS NULL AND d.discarded_at IS NULL
+           ORDER BY m.sent_at, m.message_id LIMIT 1""",
+        (mailbox,),
+    ).fetchone()
+
+
+def cmd_read(args: argparse.Namespace) -> None:
+    db = connect()
+    mailbox = normalize_address(args.to or sender_id())
+    try:
+        if args.peek:
+            row = delivery_message(db, mailbox, args.id)
+        else:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = delivery_message(db, mailbox, args.id)
+                if row is None:
+                    raise MailError("no matching message")
+                db.execute(
+                    """UPDATE deliveries SET read_at = COALESCE(read_at, ?)
+                       WHERE message_id = ? AND recipient_mailbox_id = ? AND discarded_at IS NULL""",
+                    (now_us(), row["message_id"], mailbox),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        if row is None:
+            raise MailError("no matching message")
+        print(render_message(db, row), end="")
+        current = head(db, row["thread_id"])
+        print(
+            f"Reply with: agent-mail2 send --reply-all {row['message_id']} "
+            f"--if-head {current['message_id']} --body-file FILE",
+            file=sys.stderr,
+        )
+    finally:
+        db.close()
+
+
+def cmd_receipt(args: argparse.Namespace) -> None:
+    db = connect()
+    try:
+        rows = db.execute(
+            """SELECT d.*, m.sent_at FROM deliveries d JOIN messages m USING(message_id)
+               WHERE d.message_id = ? ORDER BY d.recipient_mailbox_id""",
+            (args.message,),
+        ).fetchall()
+        if not rows:
+            raise MailError(f"unknown message: {args.message}")
+        for row in rows:
+            state = "discarded" if row["discarded_at"] is not None else "read" if row["read_at"] is not None else "unread"
+            print(f"{state}\t{args.message}\tto:{row['recipient_mailbox_id']}\tsent:{format_time(row['sent_at'])}")
+    finally:
+        db.close()
+
+
+def cmd_discard(args: argparse.Namespace) -> None:
+    db = connect()
+    mailbox = normalize_address(args.to or sender_id())
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(
+            """UPDATE deliveries SET discarded_at = COALESCE(discarded_at, ?)
+               WHERE message_id = ? AND recipient_mailbox_id = ?""",
+            (now_us(), args.id, mailbox),
+        )
+        if cursor.rowcount != 1:
+            db.execute("ROLLBACK")
+            raise MailError(f"message {args.id} is not in {mailbox}'s inbox")
+        db.execute("COMMIT")
+    except Exception:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+    finally:
+        db.close()
+
+
+def cmd_thread(args: argparse.Namespace) -> None:
+    db = connect()
+    try:
+        thread_id = args.thread
+        row = db.execute("SELECT thread_id FROM messages WHERE message_id = ?", (thread_id,)).fetchone()
+        if row is not None:
+            thread_id = row["thread_id"]
+        rows = db.execute(
+            "SELECT * FROM messages WHERE thread_id = ? ORDER BY sequence", (thread_id,)
+        ).fetchall()
+        if not rows:
+            raise MailError(f"unknown thread: {thread_id}")
+        for index, message in enumerate(rows):
+            if index:
+                print("\n---")
+            print(render_message(db, message), end="")
+    finally:
+        db.close()
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(description=__doc__)
+    sub = result.add_subparsers(dest="command", required=True)
+    sub.add_parser("init", help="initialize the database").set_defaults(func=cmd_init)
+
+    send = sub.add_parser("send", help="append a message")
+    send.add_argument("--to", action="append", default=[])
+    send.add_argument("--reply-all", metavar="MESSAGE_ID")
+    send.add_argument("--thread", metavar="THREAD_ID")
+    send.add_argument("--if-head", metavar="MESSAGE_ID")
+    send.add_argument("--in-reply-to", metavar="MESSAGE_ID")
+    send.add_argument("--subject")
+    send.add_argument("--body")
+    send.add_argument("--body-file")
+    send.set_defaults(func=cmd_send)
+
+    scan = sub.add_parser("scan", help="list and filter inbox messages")
+    scan.add_argument("--to")
+    scan.add_argument("--all", action="store_true", help="scan every mailbox")
+    scan.add_argument("--state", choices=("unread", "read", "all"), default="unread")
+    scan.add_argument("--thread")
+    scan.add_argument("--from", dest="sender")
+    scan.add_argument("--contains", help="match literal text in subject or body")
+    scan.add_argument("--limit", type=int, default=100)
+    scan.set_defaults(func=cmd_scan)
+
+    read = sub.add_parser("read", help="read one inbox message")
+    read.add_argument("--to")
+    read.add_argument("--id")
+    read.add_argument("--peek", action="store_true")
+    read.set_defaults(func=cmd_read)
+
+    receipt = sub.add_parser("receipt", help="show recipient delivery state")
+    receipt.add_argument("message")
+    receipt.set_defaults(func=cmd_receipt)
+
+    discard = sub.add_parser("discard", help="hide one inbox delivery")
+    discard.add_argument("--to")
+    discard.add_argument("--id", required=True)
+    discard.set_defaults(func=cmd_discard)
+
+    head_parser = sub.add_parser("head", help="print a thread's current head message")
+    head_parser.add_argument("thread")
+    head_parser.set_defaults(func=cmd_head)
+
+    thread = sub.add_parser("thread", help="print a thread in ledger order")
+    thread.add_argument("thread")
+    thread.set_defaults(func=cmd_thread)
+
+    return result
+
+
+def main() -> int:
+    os.umask(0o077)
+    args = parser().parse_args()
+    try:
+        args.func(args)
+        return 0
+    except StaleThread as error:
+        print(f"agent-mail2: {error}", file=sys.stderr)
+        return STALE_THREAD
+    except (MailError, OSError, sqlite3.Error) as error:
+        print(f"agent-mail2: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+command="$root/bin/agent-mail2"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL2_HUMAN
+export AGENT_MAIL2_DB="$tmp/mail.sqlite3"
+
+[[ -x "$command" ]]
+"$command" init >/dev/null
+[[ -f "$AGENT_MAIL2_DB" ]]
+[[ "$(stat -f %Lp "$AGENT_MAIL2_DB" 2>/dev/null || stat -c %a "$AGENT_MAIL2_DB")" == 600 ]]
+
+receipt_state() {
+  "$command" receipt "$1" | awk -F '\t' -v recipient="$2" '$3 == "to:" recipient { print $1 }'
+}
+
+root_id="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --to bob-agent-22222222 --subject 'Coordinate work' --body 'I will own file A.')"
+[[ "$($command head "$root_id")" == "$root_id" ]]
+
+scan="$($command scan --to bob-agent-22222222)"
+grep -Fq "$root_id" <<<"$scan"
+grep -Fq 'seq:1' <<<"$scan"
+
+peek="$tmp/peek"
+hint="$tmp/hint"
+"$command" read --to bob-agent-22222222 --peek >"$peek" 2>"$hint"
+grep -Fxq 'Thread-Sequence: 1' "$peek"
+grep -Fq -- "--if-head $root_id" "$hint"
+[[ "$(receipt_state "$root_id" bob-agent-22222222)" == unread ]]
+
+"$command" read --to bob-agent-22222222 >/dev/null 2>/dev/null
+[[ "$(receipt_state "$root_id" bob-agent-22222222)" == read ]]
+read_at_before="$(python3 - "$AGENT_MAIL2_DB" "$root_id" <<'PY'
+import sqlite3, sys
+print(sqlite3.connect(sys.argv[1]).execute("select read_at from deliveries where message_id = ?", (sys.argv[2],)).fetchone()[0])
+PY
+)"
+"$command" read --to bob-agent-22222222 --id "$root_id" >/dev/null 2>/dev/null
+read_at_after="$(python3 - "$AGENT_MAIL2_DB" "$root_id" <<'PY'
+import sqlite3, sys
+print(sqlite3.connect(sys.argv[1]).execute("select read_at from deliveries where message_id = ?", (sys.argv[2],)).fetchone()[0])
+PY
+)"
+[[ "$read_at_before" == "$read_at_after" ]]
+[[ "$($command head "$root_id")" == "$root_id" ]]
+read_scan="$($command scan --to bob-agent-22222222 --state read --from alice-agent-11111111 --contains 'own file A')"
+grep -Fq "$root_id" <<<"$read_scan"
+grep -Fq 'state:read' <<<"$read_scan"
+if "$command" scan --to bob-agent-22222222 --state unread | grep -Fq "$root_id"; then
+  echo 'read message remained in unread scan' >&2
+  exit 1
+fi
+
+reply1="$(AGENT_SCRATCHPAD="$tmp/bob-agent-22222222" "$command" send \
+  --reply-all "$root_id" --if-head "$root_id" --body 'I saw the claim and will take file B.')"
+[[ "$($command head "$root_id")" == "$reply1" ]]
+[[ "$($command receipt "$reply1" | wc -l | tr -d ' ')" == 1 ]]
+[[ "$(receipt_state "$reply1" alice-agent-11111111)" == unread ]]
+
+printf 'stale but preserved\n' >"$tmp/stale-body"
+set +e
+AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --reply-all "$root_id" --if-head "$root_id" --body-file "$tmp/stale-body" \
+  >"$tmp/stale-out" 2>"$tmp/stale-error"
+status=$?
+set -e
+[[ "$status" == 3 ]]
+grep -Fq 'stale-thread' "$tmp/stale-error"
+grep -Fq "current head $reply1" "$tmp/stale-error"
+grep -Fxq 'stale but preserved' "$tmp/stale-body"
+[[ "$($command head "$root_id")" == "$reply1" ]]
+[[ "$($command thread "$root_id" | grep -c '^Message-ID:')" == 2 ]]
+
+reply2="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --reply-all "$reply1" --if-head "$reply1" --body-file "$tmp/stale-body")"
+[[ "$($command head "$root_id")" == "$reply2" ]]
+
+thread="$tmp/thread"
+"$command" thread "$root_id" >"$thread"
+[[ "$(grep -c '^Message-ID:' "$thread")" == 3 ]]
+grep -Fxq 'Thread-Sequence: 1' "$thread"
+grep -Fxq 'Thread-Sequence: 2' "$thread"
+grep -Fxq 'Thread-Sequence: 3' "$thread"
+grep -Fxq "In-Reply-To: $reply1" "$thread"
+grep -Fxq 'stale but preserved' "$thread"
+[[ "$($command scan --to bob-agent-22222222 --state all --thread "$root_id" | grep -c "thread:$root_id")" == 2 ]]
+
+# Contending writers observing one head produce exactly one append and stale rejections.
+race_root="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --to josh --body 'race root')"
+pids=()
+for i in $(seq 1 8); do
+  (
+    while [[ ! -e "$tmp/race-gate" ]]; do sleep 0.01; done
+    set +e
+    writer="$(printf 'writer-agent-%08x' "$i")"
+    AGENT_SCRATCHPAD="$tmp/$writer" "$command" send --thread "$race_root" \
+      --to josh --if-head "$race_root" --body "writer $i" >"$tmp/race-$i-out" 2>"$tmp/race-$i-err"
+    echo $? >"$tmp/race-$i-status"
+  ) &
+  pids+=("$!")
+done
+touch "$tmp/race-gate"
+for pid in "${pids[@]}"; do wait "$pid"; done
+[[ "$(grep -l '^0$' "$tmp"/race-*-status | wc -l | tr -d ' ')" == 1 ]]
+[[ "$(grep -l '^3$' "$tmp"/race-*-status | wc -l | tr -d ' ')" == 7 ]]
+race_thread="$($command thread "$race_root")"
+[[ "$(grep -c '^Message-ID:' <<<"$race_thread")" == 2 ]]
+grep -Fxq 'Thread-Sequence: 1' <<<"$race_thread"
+grep -Fxq 'Thread-Sequence: 2' <<<"$race_thread"
+
+# Any failure during fanout rolls back the thread, message, mailboxes, and deliveries.
+python3 - "$AGENT_MAIL2_DB" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("""create trigger reject_boom before insert on deliveries
+when new.recipient_mailbox_id = 'boom-agent-44444444'
+begin select raise(abort, 'forced delivery failure'); end""")
+con.commit()
+PY
+before_counts="$(python3 - "$AGENT_MAIL2_DB" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+print(*(con.execute(f"select count(*) from {table}").fetchone()[0] for table in ('threads','messages','mailboxes','deliveries')))
+PY
+)"
+set +e
+AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --to ok-agent-55555555,boom-agent-44444444 --body fail >"$tmp/rollback-out" 2>"$tmp/rollback-err"
+rollback_status=$?
+set -e
+[[ "$rollback_status" == 1 ]]
+grep -Fq 'forced delivery failure' "$tmp/rollback-err"
+after_counts="$(python3 - "$AGENT_MAIL2_DB" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("drop trigger reject_boom")
+con.commit()
+print(*(con.execute(f"select count(*) from {table}").fetchone()[0] for table in ('threads','messages','mailboxes','deliveries')))
+PY
+)"
+[[ "$before_counts" == "$after_counts" ]]
+
+multi="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --to bob-agent-22222222,josh --subject 'Two recipients' --body 'Same ledger event.')"
+[[ "$(receipt_state "$multi" bob-agent-22222222)" == unread ]]
+[[ "$(receipt_state "$multi" josh)" == unread ]]
+multi_reply="$(AGENT_SCRATCHPAD="$tmp/bob-agent-22222222" "$command" send \
+  --reply-all "$multi" --if-head "$multi" --body 'reply to both')"
+[[ "$(receipt_state "$multi_reply" alice-agent-11111111)" == unread ]]
+[[ "$(receipt_state "$multi_reply" josh)" == unread ]]
+[[ "$($command receipt "$multi_reply" | wc -l | tr -d ' ')" == 2 ]]
+"$command" read --to josh --id "$multi" >/dev/null 2>/dev/null
+[[ "$(receipt_state "$multi" josh)" == read ]]
+[[ "$(receipt_state "$multi" bob-agent-22222222)" == unread ]]
+"$command" discard --to bob-agent-22222222 --id "$multi"
+[[ "$(receipt_state "$multi" bob-agent-22222222)" == discarded ]]
+[[ "$(receipt_state "$multi" josh)" == read ]]
+if "$command" scan --to bob-agent-22222222 | grep -Fq "$multi"; then
+  echo 'discarded delivery remained in unread scan' >&2
+  exit 1
+fi
+if "$command" read --to bob-agent-22222222 --id "$multi" >/dev/null 2>&1; then
+  echo 'discarded delivery remained readable' >&2
+  exit 1
+fi
+
+python3 - "$AGENT_MAIL2_DB" "$reply2" <<'PY'
+import sqlite3, sys, time
+con = sqlite3.connect(sys.argv[1])
+assert con.execute("select body from messages where message_id = ?", (sys.argv[2],)).fetchone()[0] == "stale but preserved\n"
+assert con.execute("select typeof(sent_at) from messages limit 1").fetchone()[0] == "integer"
+sent = con.execute("select sent_at from messages order by sent_at limit 1").fetchone()[0]
+assert 1_000_000_000_000_000 < sent <= int(time.time() * 1_000_000) + 5_000_000
+assert con.execute("select count(*) from sqlite_master where type='table' and name in ('mailboxes','threads','messages','deliveries')").fetchone()[0] == 4
+assert con.execute("select count(*) from sqlite_master where type='index' and name='messages_thread_sequence'").fetchone()[0] == 1
+assert con.execute("select count(*) from sqlite_master where type='trigger' and name in ('messages_no_update','messages_no_delete')").fetchone()[0] == 2
+try:
+    con.execute("update messages set body = 'tampered'")
+except sqlite3.IntegrityError as error:
+    assert "append-only" in str(error)
+else:
+    raise AssertionError("message ledger accepted an update")
+assert con.execute("pragma journal_mode").fetchone()[0] == "wal"
+assert con.execute("pragma user_version").fetchone()[0] == 1
+PY
+
+grep -Eq '^Date: [0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$' "$thread"
+
+expect_failure() {
+  local expected="$1"; shift
+  set +e
+  "$@" >"$tmp/failure-out" 2>"$tmp/failure-err"
+  local actual=$?
+  set -e
+  [[ "$actual" == "$expected" ]]
+}
+
+expect_failure 1 "$command" send --to bob-agent-22222222 --body nope
+grep -Fq 'cannot determine sender' "$tmp/failure-err"
+human_message="$(AGENT_MAIL2_HUMAN=josh "$command" send --to bob-agent-22222222 --body 'human message')"
+"$command" thread "$human_message" | grep -Fxq 'From: josh'
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/josh" "$command" send --to bob-agent-22222222 --body nope
+grep -Fq 'invalid derived agent identity: josh' "$tmp/failure-err"
+expect_failure 2 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --from forged --to bob-agent-22222222 --body nope
+grep -Fq 'unrecognized arguments: --from forged' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --thread "$root_id" --to josh --body nope
+grep -Fq 'requires --if-head' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --to josh --if-head bogus --body nope
+grep -Fq 'new thread has no head' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --to josh --subject $'bad\nsubject' --body nope
+grep -Fq 'control characters' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --to 'bad/address' --body nope
+grep -Fq 'invalid mailbox address' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --reply-all "$root_id" --to josh --if-head "$reply2" --body nope
+grep -Fq 'mutually exclusive' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --to josh --body x --body-file "$tmp/stale-body"
+grep -Fq 'mutually exclusive' "$tmp/failure-err"
+
+# An override inside an existing directory must not chmod that directory.
+mkdir "$tmp/override-parent"
+chmod 755 "$tmp/override-parent"
+AGENT_MAIL2_DB="$tmp/override-parent/mail.sqlite3" "$command" init >/dev/null
+[[ "$(stat -f %Lp "$tmp/override-parent" 2>/dev/null || stat -c %a "$tmp/override-parent")" == 755 ]]
+
+# Refuse a final database path that is a symlink.
+touch "$tmp/target.sqlite3"
+ln -s "$tmp/target.sqlite3" "$tmp/link.sqlite3"
+expect_failure 1 env AGENT_MAIL2_DB="$tmp/link.sqlite3" "$command" init
+grep -Fq 'must not be a symlink' "$tmp/failure-err"
+
+echo 'agent-mail2 tests passed'
