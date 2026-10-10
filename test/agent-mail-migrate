@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# The migrator reads the Maildir, so its tests build one by hand and check that the
+# database it produces matches what the directories say.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+export PATH="$root/bin:$PATH"
+export AGENT_SCRATCH_ROOT="$tmp/scratchpads"
+export AGENT_MAIL2_DB="$tmp/mail2.sqlite3"
+
+agent1="alder-agent-11111111"
+agent2="birch-agent-22222222"
+mkdir -p "$AGENT_SCRATCH_ROOT/$agent1/inbox/new" "$AGENT_SCRATCH_ROOT/$agent1/inbox/cur"
+mkdir -p "$AGENT_SCRATCH_ROOT/$agent2/inbox/new" "$AGENT_SCRATCH_ROOT/$agent2/inbox/cur"
+mkdir -p "$tmp/humans/josh/inbox/new" "$tmp/humans/josh/sent"
+
+write_message() {
+  local path="$1" from="$2" to="$3" date="$4" id="$5" thread="$6" reply_to="$7" subject="$8" body="$9"
+  {
+    printf 'From: %s\n' "$from"
+    printf 'To: %s\n' "$to"
+    printf 'Date: %s\n' "$date"
+    printf 'Message-ID: %s\n' "$id"
+    printf 'Thread-ID: %s\n' "$thread"
+    [ -z "$reply_to" ] || printf 'In-Reply-To: %s\n' "$reply_to"
+    printf 'Subject: %s\n\n' "$subject"
+    printf '%s\n' "$body"
+  } > "$path"
+}
+
+a="20261001T100000Z--from-$agent1--to-$agent2--first--1-1"
+b="20261001T110000Z--from-$agent2--to-$agent1--second--2-2"
+c="20261001T120000Z--from-$agent1--to-$agent1,--to-$agent2--both--3-3"
+d="20261002T090000Z--from-josh--to-$agent1--human--4-4"
+
+# A opens a thread; B replies to it; C goes to both. C lands in two inboxes, which must
+# become one message with two recipients rather than two messages.
+write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$a.md" "$agent1" "$agent2" "2026-10-01T10:00:00Z" "$a" "$a" "" "First" "one"
+write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/cur/$b.md" "$agent2" "$agent1" "2026-10-01T11:00:00Z" "$b" "$a" "$a" "Second" "two"
+write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/new/$c.md" "$agent1" "$agent2" "2026-10-01T12:00:00Z" "$c" "$a" "" "Both" "three"
+write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$c.md" "$agent1" "$agent2" "2026-10-01T12:00:00Z" "$c" "$a" "" "Both" "three"
+# A human's sent copy is redundant where an inbox copy exists, since the From header
+# names the sender; it is read as a fallback, which is what this message exercises.
+write_message "$tmp/humans/josh/sent/$d.md" "josh" "$agent1" "2026-10-02T09:00:00Z" "$d" "$d" "" "Human" "four"
+write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/new/$d.md" "josh" "$agent1" "2026-10-02T09:00:00Z" "$d" "$d" "" "Human" "four"
+
+AGENT_MAIL2_DB="$AGENT_MAIL2_DB" agent-mail-migrate --agent-root "$AGENT_SCRATCH_ROOT" \
+  --human-root "$tmp/humans" >/dev/null
+
+python3 - "$AGENT_MAIL2_DB" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.row_factory = sqlite3.Row
+one = lambda sql, *p: db.execute(sql, p).fetchone()[0]
+
+assert one("select count(*) from messages") == 4, "expected four distinct messages"
+assert one("select count(*) from threads") == 2, "expected two threads"
+# A to agent2, B to agent1, C to both, D to agent1.
+assert one("select count(*) from message_recipients") == 5
+assert one("select count(*) from deliveries") == 5
+# C reached two inboxes but is one message addressed to two mailboxes.
+assert one("select count(*) from message_recipients where message_id = ?", "20261001T120000Z--from-alder-agent-11111111--to-alder-agent-11111111,--to-birch-agent-22222222--both--3-3") == 2
+# The thread is ordered by the Date header, and the reply points at the opening message.
+thread = db.execute("select thread_id from messages where sequence = 1 and sender_mailbox_id = 'alder-agent-11111111' limit 1").fetchone()[0]
+rows = db.execute("select sequence, sender_mailbox_id from messages where thread_id = ? order by sequence", (thread,)).fetchall()
+assert [r["sequence"] for r in rows] == [1, 2, 3], [r["sequence"] for r in rows]
+assert [r["sender_mailbox_id"] for r in rows] == ["alder-agent-11111111", "birch-agent-22222222", "alder-agent-11111111"]
+# Read state comes from the folder: cur/ is read, new/ is unread.
+assert one("select read_at from deliveries where message_id = ? and recipient_mailbox_id = ?", "20261001T110000Z--from-birch-agent-22222222--to-alder-agent-11111111--second--2-2", "alder-agent-11111111") is not None
+assert one("select read_at from deliveries where message_id = ? and recipient_mailbox_id = ?", "20261001T100000Z--from-alder-agent-11111111--to-birch-agent-22222222--first--1-1", "birch-agent-22222222") is None
+# The human is a human mailbox, not an agent.
+assert db.execute("select kind from mailboxes where mailbox_id = 'josh'").fetchone()[0] == "human"
+PY
+
+# Re-running changes nothing: the migrator is idempotent.
+AGENT_MAIL2_DB="$AGENT_MAIL2_DB" agent-mail-migrate --agent-root "$AGENT_SCRATCH_ROOT" \
+  --human-root "$tmp/humans" >/dev/null
+python3 - "$AGENT_MAIL2_DB" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("select count(*) from messages").fetchone()[0] == 4
+assert db.execute("select count(*) from deliveries").fetchone()[0] == 5
+PY
+
+# --verify reconciles the Maildir against the database.
+AGENT_MAIL2_DB="$AGENT_MAIL2_DB" agent-mail-migrate --verify --agent-root "$AGENT_SCRATCH_ROOT" \
+  --human-root "$tmp/humans" | grep -qx verified
+
+echo "agent-mail-migrate tests passed"
