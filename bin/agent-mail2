@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 STALE_THREAD = 3
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ADDRESS = re.compile(r"^[A-Za-z0-9._+@-]+$")
 AGENT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
 HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS messages (
   body TEXT NOT NULL,
   UNIQUE (thread_id, sequence)
 );
+CREATE TABLE IF NOT EXISTS message_recipients (
+  message_id TEXT NOT NULL REFERENCES messages(message_id),
+  recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
+  PRIMARY KEY (message_id, recipient_mailbox_id)
+);
 CREATE TABLE IF NOT EXISTS deliveries (
   message_id TEXT NOT NULL REFERENCES messages(message_id),
   recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
@@ -50,12 +55,18 @@ CREATE TABLE IF NOT EXISTS deliveries (
 );
 CREATE INDEX IF NOT EXISTS messages_thread_sequence
   ON messages(thread_id, sequence DESC);
+CREATE INDEX IF NOT EXISTS message_recipients_by_recipient
+  ON message_recipients(recipient_mailbox_id, message_id);
 CREATE INDEX IF NOT EXISTS deliveries_recipient_state
   ON deliveries(recipient_mailbox_id, discarded_at, read_at, message_id);
 CREATE TRIGGER IF NOT EXISTS messages_no_update
   BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS messages_no_delete
   BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS message_recipients_no_update
+  BEFORE UPDATE ON message_recipients BEGIN SELECT RAISE(ABORT, 'the recipient list is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS message_recipients_no_delete
+  BEFORE DELETE ON message_recipients BEGIN SELECT RAISE(ABORT, 'the recipient list is append-only'); END;
 """
 
 
@@ -108,12 +119,29 @@ def connect() -> sqlite3.Connection:
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = FULL")
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, 1, SCHEMA_VERSION):
+    if version not in (0, 1, 2, SCHEMA_VERSION):
         db.close()
         raise MailError(f"unsupported schema version {version}; expected {SCHEMA_VERSION}")
     # v1 had no thread visibility; every thread was visible to every mailbox.
     if version == 1:
         db.execute("ALTER TABLE threads ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
+    # v3 lifts the recipient list out of deliveries, where it shared a row with the
+    # mutable read/discard state, into an append-only table. Copy the audience across.
+    if version in (1, 2):
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS message_recipients (
+                 message_id TEXT NOT NULL,
+                 recipient_mailbox_id TEXT NOT NULL,
+                 PRIMARY KEY (message_id, recipient_mailbox_id)
+               )"""
+        )
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'"
+        ).fetchone():
+            db.execute(
+                """INSERT OR IGNORE INTO message_recipients(message_id, recipient_mailbox_id)
+                   SELECT message_id, recipient_mailbox_id FROM deliveries"""
+            )
     db.executescript(SCHEMA)
     if version != SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -219,7 +247,7 @@ def thread_members(db: sqlite3.Connection, thread_id: str) -> set[str]:
         for row in db.execute(
             """SELECT sender_mailbox_id AS mailbox FROM messages WHERE thread_id = ?
                UNION
-               SELECT d.recipient_mailbox_id FROM deliveries d
+               SELECT r.recipient_mailbox_id FROM message_recipients r
                  JOIN messages m USING(message_id) WHERE m.thread_id = ?""",
             (thread_id, thread_id),
         )
@@ -245,7 +273,7 @@ def recipients_for(db: sqlite3.Connection, message: str) -> list[str]:
     return [
         row[0]
         for row in db.execute(
-            "SELECT recipient_mailbox_id FROM deliveries WHERE message_id = ? ORDER BY recipient_mailbox_id",
+            "SELECT recipient_mailbox_id FROM message_recipients WHERE message_id = ? ORDER BY recipient_mailbox_id",
             (message,),
         )
     ]
@@ -351,6 +379,10 @@ def append_message(args: argparse.Namespace) -> str:
                      reply_to_message_id, sent_at, subject, body
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (mid, thread_id, sequence, sender, reply_to, timestamp, subject, body),
+            )
+            db.executemany(
+                "INSERT INTO message_recipients(message_id, recipient_mailbox_id) VALUES (?, ?)",
+                [(mid, recipient) for recipient in recipients],
             )
             db.executemany(
                 "INSERT INTO deliveries(message_id, recipient_mailbox_id) VALUES (?, ?)",
