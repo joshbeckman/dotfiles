@@ -74,4 +74,22 @@ $root/bin/agent-scratchpad prune --agent 'Malformed Agent' --apply --yes --force
 $root/bin/agent-scratchpad prune --agent 'Recent Agent' --apply --yes >/dev/null
 [[ ! -e "$AGENT_SCRATCH_ROOT/recent-agent-22222222" ]]
 
+# A durable pad is protected by intent, not by a heartbeat that cannot describe a
+# poller which exits between runs.
+make_pad durable-agent-77777777 'Durable Agent' durable-session
+touch -t 202001010000 "$AGENT_SCRATCH_ROOT/durable-agent-77777777/"*.md
+"$root/bin/agent-scratchpad" durable 'Durable Agent' >/dev/null
+[[ -e "$AGENT_SCRATCH_ROOT/durable-agent-77777777/.durable" ]]
+grep -Fq 'durable' <<<"$("$root/bin/agent-scratchpad" list)"
+! grep -Fq 'Durable Agent' <<<"$("$root/bin/agent-scratchpad" prune --days 30)"
+if "$root/bin/agent-scratchpad" prune --agent 'Durable Agent' --apply --yes >/dev/null 2>&1; then
+  echo 'durable scratchpad was pruned without --force' >&2
+  exit 1
+fi
+[[ -d "$AGENT_SCRATCH_ROOT/durable-agent-77777777" ]]
+"$root/bin/agent-scratchpad" durable 'Durable Agent' --remove >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/durable-agent-77777777/.durable" ]]
+"$root/bin/agent-scratchpad" prune --agent 'Durable Agent' --apply --yes >/dev/null
+[[ ! -e "$AGENT_SCRATCH_ROOT/durable-agent-77777777" ]]
+
 printf 'agent-scratchpad tests passed\n'
