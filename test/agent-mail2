@@ -193,7 +193,7 @@ except sqlite3.IntegrityError as error:
 else:
     raise AssertionError("message ledger accepted an update")
 assert con.execute("pragma journal_mode").fetchone()[0] == "wal"
-assert con.execute("pragma user_version").fetchone()[0] == 1
+assert con.execute("pragma user_version").fetchone()[0] == 2
 PY
 
 grep -Eq '^Date: [0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$' "$thread"
@@ -239,5 +239,41 @@ touch "$tmp/target.sqlite3"
 ln -s "$tmp/target.sqlite3" "$tmp/link.sqlite3"
 expect_failure 1 env AGENT_MAIL2_DB="$tmp/link.sqlite3" "$command" init
 grep -Fq 'must not be a symlink' "$tmp/failure-err"
+
+# Visibility: public by default, so a non-member can find and read it.
+pub_thread="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --to bob-agent-22222222 --subject 'public topic' --body 'open')"
+priv_thread="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --private --to bob-agent-22222222 --subject 'private topic' --body 'closed')"
+carol="$tmp/carol-agent-33333333"
+search="$(AGENT_SCRATCHPAD="$carol" "$command" search topic)"
+grep -Fq "$pub_thread" <<<"$search"
+! grep -Fq "$priv_thread" <<<"$search"
+AGENT_SCRATCHPAD="$carol" "$command" thread "$pub_thread" >/dev/null
+expect_failure 1 env AGENT_SCRATCHPAD="$carol" "$command" thread "$priv_thread"
+grep -Fq 'is private' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$carol" "$command" publish "$priv_thread"
+grep -Fq 'not a member' "$tmp/failure-err"
+[[ "$(AGENT_SCRATCHPAD="$tmp/bob-agent-22222222" "$command" publish "$priv_thread")" == "$priv_thread"$'\tpublic' ]]
+AGENT_SCRATCHPAD="$carol" "$command" thread "$priv_thread" >/dev/null
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --private \
+  --thread "$pub_thread" --to bob-agent-22222222 --if-head "$pub_thread" --body nope
+grep -Fq 'visibility is fixed at creation' "$tmp/failure-err"
+
+# A v1 database gains the visibility column on first connect, defaulting to public.
+mig="$tmp/migrate.sqlite3"
+python3 - "$mig" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("CREATE TABLE threads (thread_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL)")
+db.execute("INSERT INTO threads(thread_id, created_at) VALUES ('legacy', 1)")
+db.execute("PRAGMA user_version = 1")
+db.commit(); db.close()
+PY
+AGENT_MAIL2_DB="$mig" "$command" init >/dev/null
+python3 - "$mig" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("pragma user_version").fetchone()[0] == 2
+assert db.execute("select visibility from threads where thread_id='legacy'").fetchone()[0] == "public"
+PY
 
 echo 'agent-mail2 tests passed'
