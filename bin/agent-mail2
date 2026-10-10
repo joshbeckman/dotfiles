@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS deliveries (
   recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
   read_at INTEGER,
   discarded_at INTEGER,
-  PRIMARY KEY (message_id, recipient_mailbox_id)
+  PRIMARY KEY (message_id, recipient_mailbox_id),
+  FOREIGN KEY (message_id, recipient_mailbox_id)
+    REFERENCES message_recipients(message_id, recipient_mailbox_id)
 );
 CREATE INDEX IF NOT EXISTS messages_thread_sequence
   ON messages(thread_id, sequence DESC);
@@ -125,24 +127,35 @@ def connect() -> sqlite3.Connection:
     # v1 had no thread visibility; every thread was visible to every mailbox.
     if version == 1:
         db.execute("ALTER TABLE threads ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
-    # v3 lifts the recipient list out of deliveries, where it shared a row with the
-    # mutable read/discard state, into an append-only table. Copy the audience across.
-    if version in (1, 2):
+    had_deliveries = bool(
         db.execute(
-            """CREATE TABLE IF NOT EXISTS message_recipients (
-                 message_id TEXT NOT NULL,
-                 recipient_mailbox_id TEXT NOT NULL,
-                 PRIMARY KEY (message_id, recipient_mailbox_id)
-               )"""
-        )
-        if db.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'"
-        ).fetchone():
-            db.execute(
-                """INSERT OR IGNORE INTO message_recipients(message_id, recipient_mailbox_id)
-                   SELECT message_id, recipient_mailbox_id FROM deliveries"""
-            )
+        ).fetchone()
+    )
     db.executescript(SCHEMA)
+    # v3 lifts the recipient list out of deliveries, where it shared a row with the mutable
+    # read/discard state, into an append-only table, and points deliveries at it with a
+    # foreign key. SQLite cannot add a constraint in place, so rebuild the table.
+    if version in (1, 2) and had_deliveries:
+        db.execute(
+            """INSERT OR IGNORE INTO message_recipients(message_id, recipient_mailbox_id)
+               SELECT message_id, recipient_mailbox_id FROM deliveries"""
+        )
+        db.executescript(
+            """CREATE TABLE deliveries_v3 (
+                 message_id TEXT NOT NULL REFERENCES messages(message_id),
+                 recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
+                 read_at INTEGER,
+                 discarded_at INTEGER,
+                 PRIMARY KEY (message_id, recipient_mailbox_id),
+                 FOREIGN KEY (message_id, recipient_mailbox_id)
+                   REFERENCES message_recipients(message_id, recipient_mailbox_id)
+               );
+               INSERT INTO deliveries_v3(message_id, recipient_mailbox_id, read_at, discarded_at)
+                 SELECT message_id, recipient_mailbox_id, read_at, discarded_at FROM deliveries;
+               DROP TABLE deliveries;
+               ALTER TABLE deliveries_v3 RENAME TO deliveries;"""
+        )
     if version != SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     os.chmod(path, 0o600)

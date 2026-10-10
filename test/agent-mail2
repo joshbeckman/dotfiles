@@ -185,6 +185,8 @@ sent = con.execute("select sent_at from messages order by sent_at limit 1").fetc
 assert 1_000_000_000_000_000 < sent <= int(time.time() * 1_000_000) + 5_000_000
 assert con.execute("select count(*) from sqlite_master where type='table' and name in ('mailboxes','threads','messages','message_recipients','deliveries')").fetchone()[0] == 5
 assert con.execute("select count(*) from sqlite_master where type='index' and name='messages_thread_sequence'").fetchone()[0] == 1
+# The mutable state points at the immutable audience, so a delivery cannot exist without one.
+assert "FOREIGN KEY" in con.execute("select sql from sqlite_master where name='deliveries'").fetchone()[0].upper()
 assert con.execute("select count(*) from sqlite_master where type='trigger' and name in ('messages_no_update','messages_no_delete')").fetchone()[0] == 2
 try:
     con.execute("update messages set body = 'tampered'")
@@ -289,12 +291,14 @@ python3 - "$v2" <<'PY'
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
 db.executescript("""
+CREATE TABLE mailboxes (mailbox_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
 CREATE TABLE threads (thread_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, visibility TEXT NOT NULL DEFAULT 'public');
 CREATE TABLE messages (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, sequence INTEGER NOT NULL, sender_mailbox_id TEXT NOT NULL, reply_to_message_id TEXT, sent_at INTEGER NOT NULL, subject TEXT, body TEXT NOT NULL, UNIQUE(thread_id, sequence));
+INSERT INTO mailboxes(mailbox_id, created_at) VALUES ('alice-agent-11111111', 1), ('bob-agent-22222222', 1);
 CREATE TABLE deliveries (message_id TEXT NOT NULL, recipient_mailbox_id TEXT NOT NULL, read_at INTEGER, discarded_at INTEGER, PRIMARY KEY (message_id, recipient_mailbox_id));
 INSERT INTO threads(thread_id, created_at) VALUES ('t', 1);
 INSERT INTO messages(message_id, thread_id, sequence, sender_mailbox_id, sent_at, body) VALUES ('m', 't', 1, 'alice-agent-11111111', 1, 'hi');
-INSERT INTO deliveries(message_id, recipient_mailbox_id) VALUES ('m', 'bob-agent-22222222');
+INSERT INTO deliveries(message_id, recipient_mailbox_id, read_at) VALUES ('m', 'bob-agent-22222222', 123);
 PRAGMA user_version = 2;
 """)
 db.commit(); db.close()
@@ -305,6 +309,8 @@ import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
 assert db.execute("pragma user_version").fetchone()[0] == 3
 assert db.execute("select recipient_mailbox_id from message_recipients where message_id='m'").fetchone()[0] == "bob-agent-22222222"
+assert db.execute("select read_at from deliveries where message_id='m'").fetchone()[0] == 123
+assert "FOREIGN KEY" in db.execute("select sql from sqlite_master where name='deliveries'").fetchone()[0].upper()
 PY
 
 echo 'agent-mail2 tests passed'
