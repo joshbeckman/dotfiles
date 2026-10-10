@@ -41,6 +41,11 @@ Each of these was a real defect in this skill's own recipe, and each one reporte
 
 - **Passing the validator is not the test.** A flat `<circle opacity="0.13">` validates and draws
   as a hard-edged disc rather than light. Two agents shipped that and only saw it by rendering.
+- **An edge that is too even reads as machined.** Seven overlapping circles read as a hop cone;
+  a regular scalloped outline read as a corn cob, twice. Fuzz has to be a property of the
+  outline, and any part whose own edge stays visible against the field reads as a separate
+  object. Break the regularity: modulate phase and amplitude over the repeating form rather
+  than holding one period.
 - **Preview size lies.** A mark that reads at 512 can collapse at 28. Judge at 28, over a mid
   grey, scaled up with nearest-neighbour so you see pixels rather than an approximation.
 - **`qlmanage` renders transparency as white** and cannot be told otherwise, so the grey field has

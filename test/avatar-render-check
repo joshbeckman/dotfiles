@@ -14,42 +14,41 @@ cat >"$tmp/avatar.svg" <<'EOF'
 EOF
 printf 'not an svg at all\n' >"$tmp/bad.svg"
 
-# qlmanage writes the thumbnail it claims; sips reports the size asked for, read back off the
-# filename the check gives it. Both have a flavour that lies, because the defects were tools
-# reporting success without doing the thing.
-cat >"$tmp/qlmanage-good" <<'EOF'
-#!/bin/sh
-out=""; svg=""
-while [ $# -gt 0 ]; do
-  case "$1" in -o) out="$2"; shift 2 ;; *.svg) svg="$1"; shift ;; *) shift ;; esac
-done
-# ${svg##*/} rather than basename: the test puts only the stub directory on PATH, so an
-# external tool would not be found and the stub would fail for its own reasons.
-[ -n "$out" ] && [ -n "$svg" ] && : >"$out/${svg##*/}.png"
-exit 0
+# A renderer stub writes a real PNG header, because the check now reads the dimensions from
+# the file rather than shelling to sips, which is macOS-only. Each flavour lies in the way a
+# tool reporting success without doing the thing did.
+cat >"$tmp/render-good" <<'EOF'
+#!/usr/bin/env python3
+import pathlib, struct, sys
+args = sys.argv[1:]
+size = int(args[args.index('-s') + 1]) if '-s' in args else int(args[args.index('-w') + 1])
+out = pathlib.Path(args[args.index('-o') + 1])
+if pathlib.Path(sys.argv[0]).name == 'qlmanage':
+    out = out / (pathlib.Path(args[-1]).name + '.png')
+out.write_bytes(b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR'
+                + struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0))
 EOF
-cat >"$tmp/qlmanage-silent" <<'EOF'
+cat >"$tmp/render-wrong" <<'EOF'
+#!/usr/bin/env python3
+import pathlib, struct, sys
+args = sys.argv[1:]
+out = pathlib.Path(args[args.index('-o') + 1])
+if pathlib.Path(sys.argv[0]).name == 'qlmanage':
+    out = out / (pathlib.Path(args[-1]).name + '.png')
+out.write_bytes(b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR'
+                + struct.pack('>IIBBBBB', 28, 28, 8, 6, 0, 0, 0))
+EOF
+cat >"$tmp/render-silent" <<'EOF'
 #!/bin/sh
 printf '* %s produced one thumbnail\nDone producing thumbnails\n' "$*"
 exit 0
 EOF
-cat >"$tmp/sips-good" <<'EOF'
-#!/bin/sh
-w=0
-for a in "$@"; do case "$a" in *at-512.png) w=512 ;; *at-28.png) w=28 ;; esac; done
-printf '  pixelWidth: %s\n  pixelHeight: %s\n' "$w" "$w"
-EOF
-cat >"$tmp/sips-wrong" <<'EOF'
-#!/bin/sh
-printf '  pixelWidth: 28\n  pixelHeight: 28\n'
-EOF
-chmod +x "$tmp"/qlmanage-* "$tmp"/sips-*
+chmod +x "$tmp"/render-*
 
-stub_dir() { # name it after the flavour pair, e.g. stub_dir good wrong
+stub_dir() { # stub_dir qlmanage good -> a PATH with that renderer and no other
   local dir="$tmp/stubs/$1-$2"
   mkdir -p "$dir"
-  cp "$tmp/qlmanage-$1" "$dir/qlmanage"
-  cp "$tmp/sips-$2" "$dir/sips"
+  cp "$tmp/render-$2" "$dir/$1"
   ln -sf "$(command -v python3)" "$dir/python3"
   printf '%s' "$dir"
 }
@@ -90,14 +89,17 @@ expect 0 "no qlmanage still validates and names the gap" run_with "$tmp/stubs/no
 case "$last" in *"no qlmanage"*) ;; *) printf 'FAIL: silent about the missing renderer\n' >&2; exit 1 ;; esac
 
 # 4. qlmanage reporting success while writing nothing — the defect that cost the most.
-expect 1 "qlmanage that writes nothing" run_with "$(stub_dir silent good)"
+expect 1 "qlmanage that writes nothing" run_with "$(stub_dir qlmanage silent)"
 
 # 5. A file that exists but is not the size that was asked for: the collision defect.
-expect 1 "wrong dimensions are caught" run_with "$(stub_dir good wrong)"
+expect 1 "wrong dimensions are caught" run_with "$(stub_dir qlmanage wrong)"
 case "$last" in *"expected 512x512"*) ;; *) printf 'FAIL: did not name the expected size\n' >&2; exit 1 ;; esac
 
 # 6. The passing case, which must stay passing, and must still name what it cannot see.
-expect 0 "valid avatar renders at both sizes" run_with "$(stub_dir good good)"
+expect 0 "valid avatar renders at both sizes" run_with "$(stub_dir qlmanage good)"
 case "$last" in *"cannot tell you whether the mark"*) ;; *) printf 'FAIL: passing run did not name its distance\n' >&2; exit 1 ;; esac
+
+# 7. The render half works off macOS: rsvg-convert is the fallback when qlmanage is absent.
+expect 0 "rsvg-convert covers the render half without qlmanage" run_with "$(stub_dir rsvg-convert good)"
 
 printf 'avatar render-check tests passed\n'
