@@ -42,7 +42,8 @@ write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$a.md" "$agent1" "$agent2" 
 write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/cur/$b.md" "$agent2" "$agent1" "2026-10-01T11:00:00Z" "$b" "$a" "$a" "Second" "two"
 write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/new/$c.md" "$agent1" "$agent2" "2026-10-01T12:00:00Z" "$c" "$a" "" "Both" "three"
 write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$c.md" "$agent1" "$agent2" "2026-10-01T12:00:00Z" "$c" "$a" "" "Both" "three"
-# A human's sent copy is the only record of the human having sent anything.
+# A human's sent copy is redundant where an inbox copy exists, since the From header
+# names the sender; it is read as a fallback, which is what this message exercises.
 write_message "$tmp/humans/josh/sent/$d.md" "josh" "$agent1" "2026-10-02T09:00:00Z" "$d" "$d" "" "Human" "four"
 write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/new/$d.md" "josh" "$agent1" "2026-10-02T09:00:00Z" "$d" "$d" "" "Human" "four"
 
