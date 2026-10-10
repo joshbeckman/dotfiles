@@ -112,8 +112,9 @@ class Message:
 
 def mailboxes(agent_root: Path, human_root: Path) -> dict[str, dict[str, Path]]:
     """Mailbox id to its Maildir folders. Agents keep an inbox in their scratchpad;
-    humans keep a full mailbox with a sent folder that is the only record of a human
-    having sent a message."""
+    humans keep a full mailbox, sent folder included. A sent copy is redundant wherever
+    the message reached an inbox, since the From header names the sender, so it is only
+    read as a fallback for a message with no inbox copy at all."""
     found: dict[str, dict[str, Path]] = {}
     for inbox in sorted(agent_root.glob("*/inbox")):
         found[inbox.parent.name] = {"inbox": inbox}
