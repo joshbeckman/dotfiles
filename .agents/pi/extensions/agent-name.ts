@@ -55,6 +55,7 @@ export default function (pi: ExtensionAPI) {
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let activeAt = Date.now();
 	let userAt = Date.now();
+	let turnInFlight = false;
 	const autonomousWakes: number[] = [];
 	// Keyed by filename, which agent-mail never reuses, so a message announced
 	// before a /resume is not re-announced after it.
@@ -120,8 +121,8 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Any sign of work, not just turn starts: a turn that spends 20 minutes in
-	// tool calls would otherwise look idle and get "woken" mid-stride.
+	// Any sign of work, not just turn starts. A long turn is also tracked whole via
+	// turnInFlight, because a single tool call stamps activeAt only when it starts.
 	pi.on("tool_call", () => {
 		activeAt = Date.now();
 		// The launcher can prune this session's package link while it is still
@@ -141,6 +142,20 @@ export default function (pi: ExtensionAPI) {
 	// another grace period, and the hourly budget would never be the binding limit.
 	pi.on("input", () => {
 		userAt = Date.now();
+		return undefined;
+	});
+
+	// A turn is active for its whole length, not just when a tool call starts. The mail
+	// wake reads this, and idle-parking will read it rather than the last event time.
+	pi.on("agent_start", () => {
+		turnInFlight = true;
+		activeAt = Date.now();
+		return undefined;
+	});
+
+	pi.on("agent_end", () => {
+		turnInFlight = false;
+		activeAt = Date.now();
 		return undefined;
 	});
 
@@ -185,7 +200,10 @@ export default function (pi: ExtensionAPI) {
 		// wake during or immediately after an agent turn, while the hourly budget limits
 		// unattended loops.
 		if (Date.now() - userAt < 30_000) return; // Josh is here; mail can wait for his turn
-		if (Date.now() - activeAt < 30_000) return; // a turn is in flight or just ended
+		// A turn in flight is not idle however long it runs: a single long tool call stamps
+		// activeAt only when it starts, so the elapsed check below cannot see it.
+		if (turnInFlight) return;
+		if (Date.now() - activeAt < 30_000) return; // a turn just ended
 		// Warning pressure still permits direct work on the message while admission
 		// controls block optional fanout. At critical pressure, mail stays unread
 		// rather than adding another unsupervised turn; existing turns remain untouched.

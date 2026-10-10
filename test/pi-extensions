@@ -398,6 +398,12 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
     interval > 0 && quiet > 0 && interval < quiet,
     `interval ${interval}ms, threshold ${quiet}ms`,
   );
+  check(
+    "a turn in flight is tracked as active",
+    /pi\.on\("agent_start"[\s\S]*?turnInFlight = true/.test(source)
+      && /pi\.on\("agent_end"[\s\S]*?turnInFlight = false/.test(source)
+      && /if \(turnInFlight\) return/.test(source),
+  );
 }
 
 // --- result -----------------------------------------------------------------
