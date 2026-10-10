@@ -8,10 +8,18 @@ trap 'rm -rf "$tmp"' EXIT
 unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL2_HUMAN
 export AGENT_MAIL2_DB="$tmp/mail.sqlite3"
 
+# GNU stat answers -f %Lp with a filesystem dump and exits 0, so the BSD form cannot be
+# tried first; probe the flavor once.
+if stat -c %a . >/dev/null 2>&1; then
+  mode() { stat -c %a "$1"; }
+else
+  mode() { stat -f %Lp "$1"; }
+fi
+
 [[ -x "$command" ]]
 "$command" init >/dev/null
 [[ -f "$AGENT_MAIL2_DB" ]]
-[[ "$(stat -f %Lp "$AGENT_MAIL2_DB" 2>/dev/null || stat -c %a "$AGENT_MAIL2_DB")" == 600 ]]
+[[ "$(mode "$AGENT_MAIL2_DB")" == 600 ]]
 
 receipt_state() {
   "$command" receipt "$1" | awk -F '\t' -v recipient="$2" '$3 == "to:" recipient { print $1 }'
@@ -224,7 +232,7 @@ grep -Fq 'mutually exclusive' "$tmp/failure-err"
 mkdir "$tmp/override-parent"
 chmod 755 "$tmp/override-parent"
 AGENT_MAIL2_DB="$tmp/override-parent/mail.sqlite3" "$command" init >/dev/null
-[[ "$(stat -f %Lp "$tmp/override-parent" 2>/dev/null || stat -c %a "$tmp/override-parent")" == 755 ]]
+[[ "$(mode "$tmp/override-parent")" == 755 ]]
 
 # Refuse a final database path that is a symlink.
 touch "$tmp/target.sqlite3"
