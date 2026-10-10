@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 STALE_THREAD = 3
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ADDRESS = re.compile(r"^[A-Za-z0-9._+@-]+$")
 AGENT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
 HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS mailboxes (
 );
 CREATE TABLE IF NOT EXISTS threads (
   thread_id TEXT PRIMARY KEY,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'private'))
 );
 CREATE TABLE IF NOT EXISTS messages (
   message_id TEXT PRIMARY KEY,
@@ -107,11 +108,14 @@ def connect() -> sqlite3.Connection:
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = FULL")
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, SCHEMA_VERSION):
+    if version not in (0, 1, SCHEMA_VERSION):
         db.close()
         raise MailError(f"unsupported schema version {version}; expected {SCHEMA_VERSION}")
+    # v1 had no thread visibility; every thread was visible to every mailbox.
+    if version == 1:
+        db.execute("ALTER TABLE threads ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
     db.executescript(SCHEMA)
-    if version == 0:
+    if version != SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     os.chmod(path, 0o600)
     return db
@@ -208,6 +212,35 @@ def head(db: sqlite3.Connection, thread_id: str) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def thread_members(db: sqlite3.Connection, thread_id: str) -> set[str]:
+    """Everyone who has sent or received a message in the thread."""
+    return {
+        row[0]
+        for row in db.execute(
+            """SELECT sender_mailbox_id AS mailbox FROM messages WHERE thread_id = ?
+               UNION
+               SELECT d.recipient_mailbox_id FROM deliveries d
+                 JOIN messages m USING(message_id) WHERE m.thread_id = ?""",
+            (thread_id, thread_id),
+        )
+    }
+
+
+def thread_visibility(db: sqlite3.Connection, thread_id: str) -> str:
+    row = db.execute("SELECT visibility FROM threads WHERE thread_id = ?", (thread_id,)).fetchone()
+    if row is None:
+        raise MailError(f"unknown thread: {thread_id}")
+    return row["visibility"]
+
+
+def require_visible(db: sqlite3.Connection, thread_id: str, mailbox: str) -> str:
+    """A private thread is visible only to its members; a public one to anyone."""
+    visibility = thread_visibility(db, thread_id)
+    if visibility == "private" and mailbox not in thread_members(db, thread_id):
+        raise MailError(f"thread {thread_id} is private")
+    return visibility
+
+
 def recipients_for(db: sqlite3.Connection, message: str) -> list[str]:
     return [
         row[0]
@@ -249,6 +282,7 @@ def append_message(args: argparse.Namespace) -> str:
     thread_id: str | None = args.thread
     expected = args.if_head
     direct = list(args.to or [])
+    private = bool(args.private)
 
     try:
         if args.reply_all:
@@ -280,6 +314,8 @@ def append_message(args: argparse.Namespace) -> str:
         else:
             if expected in (None, "none"):
                 raise MailError("existing-thread send requires --if-head CURRENT_HEAD_MESSAGE_ID")
+            if private:
+                raise MailError("--private applies only when creating a thread; visibility is fixed at creation")
 
         db.execute("BEGIN IMMEDIATE")
         try:
@@ -291,7 +327,10 @@ def append_message(args: argparse.Namespace) -> str:
             if new_thread:
                 if current is not None:
                     raise MailError(f"thread already exists: {thread_id}")
-                db.execute("INSERT INTO threads(thread_id, created_at) VALUES (?, ?)", (thread_id, timestamp))
+                db.execute(
+                    "INSERT INTO threads(thread_id, created_at, visibility) VALUES (?, ?, ?)",
+                    (thread_id, timestamp, "private" if private else "public"),
+                )
                 sequence = 1
             else:
                 if current is None:
@@ -415,6 +454,65 @@ def cmd_scan(args: argparse.Namespace) -> None:
         db.close()
 
 
+def resolve_thread(db: sqlite3.Connection, identifier: str) -> str:
+    """Accept either a thread id or a message id in that thread."""
+    row = db.execute("SELECT thread_id FROM messages WHERE message_id = ?", (identifier,)).fetchone()
+    return row["thread_id"] if row is not None else identifier
+
+
+def viewer_id(args: argparse.Namespace) -> str:
+    """The mailbox asking, or "" when the caller has no identity: only public threads
+    are visible then, so a private one is refused rather than shown."""
+    value = getattr(args, "viewer", None)
+    if value:
+        return normalize_address(value)
+    try:
+        return sender_id()
+    except MailError:
+        return ""
+
+
+def cmd_search(args: argparse.Namespace) -> None:
+    """Find messages the caller can see: its own deliveries, plus every public thread."""
+    db = connect()
+    try:
+        if args.limit < 1:
+            raise MailError("--limit must be positive")
+        mailbox = viewer_id(args)
+        sql = """SELECT m.*, t.visibility,
+                        CASE WHEN d.recipient_mailbox_id IS NULL THEN 0 ELSE 1 END AS delivered
+                 FROM messages m
+                 JOIN threads t ON t.thread_id = m.thread_id
+                 LEFT JOIN deliveries d
+                   ON d.message_id = m.message_id AND d.recipient_mailbox_id = ?
+                 WHERE (t.visibility = 'public' OR d.recipient_mailbox_id IS NOT NULL)"""
+        params: list[object] = [mailbox]
+        if args.thread:
+            sql += " AND m.thread_id = ?"
+            params.append(resolve_thread(db, args.thread))
+        if args.sender:
+            sql += " AND m.sender_mailbox_id = ?"
+            params.append(normalize_address(args.sender))
+        if args.query:
+            sql += " AND (instr(COALESCE(m.subject, ''), ?) > 0 OR instr(m.body, ?) > 0)"
+            params.extend([args.query, args.query])
+        sql += " ORDER BY m.sent_at, m.thread_id, m.sequence LIMIT ?"
+        params.append(args.limit)
+        rows = db.execute(sql, params).fetchall()
+        if not rows:
+            print("(no matching messages)")
+            return
+        for row in rows:
+            scope = "mine" if row["delivered"] else "public"
+            print(
+                f"{row['visibility']}\t{scope}\t{row['message_id']}\t"
+                f"thread:{row['thread_id']}\tseq:{row['sequence']}\t"
+                f"from:{row['sender_mailbox_id']}\t{row['subject'] or '(no subject)'}"
+            )
+    finally:
+        db.close()
+
+
 def delivery_message(db: sqlite3.Connection, mailbox: str, identifier: str | None) -> sqlite3.Row | None:
     if identifier:
         return db.execute(
@@ -506,10 +604,8 @@ def cmd_discard(args: argparse.Namespace) -> None:
 def cmd_thread(args: argparse.Namespace) -> None:
     db = connect()
     try:
-        thread_id = args.thread
-        row = db.execute("SELECT thread_id FROM messages WHERE message_id = ?", (thread_id,)).fetchone()
-        if row is not None:
-            thread_id = row["thread_id"]
+        thread_id = resolve_thread(db, args.thread)
+        require_visible(db, thread_id, viewer_id(args))
         rows = db.execute(
             "SELECT * FROM messages WHERE thread_id = ? ORDER BY sequence", (thread_id,)
         ).fetchall()
@@ -519,6 +615,29 @@ def cmd_thread(args: argparse.Namespace) -> None:
             if index:
                 print("\n---")
             print(render_message(db, message), end="")
+    finally:
+        db.close()
+
+
+def cmd_publish(args: argparse.Namespace) -> None:
+    """A thread member makes a private thread public; anyone may read it afterwards."""
+    db = connect()
+    mailbox = viewer_id(args)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            thread_id = resolve_thread(db, args.thread)
+            visibility = thread_visibility(db, thread_id)
+            if mailbox not in thread_members(db, thread_id):
+                raise MailError(f"{mailbox or 'no identity'} is not a member of thread {thread_id}")
+            if visibility != "public":
+                db.execute("UPDATE threads SET visibility = 'public' WHERE thread_id = ?", (thread_id,))
+            db.execute("COMMIT")
+        except Exception:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        print(f"{thread_id}\tpublic")
     finally:
         db.close()
 
@@ -537,6 +656,8 @@ def parser() -> argparse.ArgumentParser:
     send.add_argument("--subject")
     send.add_argument("--body")
     send.add_argument("--body-file")
+    send.add_argument("--private", action="store_true",
+                       help="create the thread private (visible only to its members; public is the default)")
     send.set_defaults(func=cmd_send)
 
     scan = sub.add_parser("scan", help="list and filter inbox messages")
@@ -570,7 +691,21 @@ def parser() -> argparse.ArgumentParser:
 
     thread = sub.add_parser("thread", help="print a thread in ledger order")
     thread.add_argument("thread")
+    thread.add_argument("--as", dest="viewer", help="view as this mailbox (default: the caller)")
     thread.set_defaults(func=cmd_thread)
+
+    search = sub.add_parser("search", help="find messages you can see, including public threads")
+    search.add_argument("query", nargs="?", help="match literal text in subject or body")
+    search.add_argument("--thread")
+    search.add_argument("--from", dest="sender")
+    search.add_argument("--limit", type=int, default=100)
+    search.add_argument("--as", dest="viewer", help="search as this mailbox (default: the caller)")
+    search.set_defaults(func=cmd_search)
+
+    publish = sub.add_parser("publish", help="a thread member makes a private thread public")
+    publish.add_argument("thread")
+    publish.add_argument("--as", dest="viewer", help="act as this mailbox (default: the caller)")
+    publish.set_defaults(func=cmd_publish)
 
     return result
 
