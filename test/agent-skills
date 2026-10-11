@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Skills are loaded by name and description, so a skill with malformed
+# frontmatter is silently invisible rather than broken. This pins the contract
+# down: every skill declares a name that matches its directory and a description
+# long enough to be routed on.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+python3 - "$root" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+skills_dir = root / ".agents" / "skills"
+NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+MAX_DESCRIPTION = 1024
+
+skills = sorted(p for p in skills_dir.glob("*/SKILL.md"))
+if not skills:
+    raise SystemExit(f"no skills found under {skills_dir}")
+
+problems = []
+seen = {}
+for path in skills:
+    where = path.relative_to(root)
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        problems.append(f"{where}: no frontmatter block")
+        continue
+    end = text.find("\n---", 3)
+    if end == -1:
+        problems.append(f"{where}: frontmatter block is not closed")
+        continue
+
+    fields = {}
+    for line in text[4:end].splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, sep, value = line.partition(":")
+        if not sep:
+            problems.append(f"{where}: frontmatter line is not `key: value`: {line!r}")
+            continue
+        fields[key.strip()] = value.strip().strip('"').strip("'")
+
+    name = fields.get("name")
+    description = fields.get("description")
+
+    if not name:
+        problems.append(f"{where}: missing `name`")
+    else:
+        if name != path.parent.name:
+            problems.append(f"{where}: name {name!r} does not match directory {path.parent.name!r}")
+        if not NAME.match(name):
+            problems.append(f"{where}: name {name!r} is not lowercase words separated by hyphens")
+        if name in seen:
+            problems.append(f"{where}: name {name!r} is already used by {seen[name]}")
+        seen[name] = where
+
+    if not description:
+        problems.append(f"{where}: missing `description`")
+    elif len(description) > MAX_DESCRIPTION:
+        problems.append(f"{where}: description is {len(description)} chars, over {MAX_DESCRIPTION}")
+    elif len(description) < 40:
+        problems.append(f"{where}: description is too short to route on: {description!r}")
+
+for problem in problems:
+    print(f"agent-skills: {problem}", file=sys.stderr)
+if problems:
+    raise SystemExit(1)
+print(f"agent-skills: {len(skills)} skills valid")
+PY
