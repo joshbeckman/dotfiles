@@ -432,20 +432,6 @@ details.message summary time {
   display: block;
   margin: 0.8rem 0 0.3rem;
 }
-#to,
-#subject,
-#vimrc-input {
-  width: 100%;
-}
-.composer-preferences {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-#editor .composer-preferences label {
-  margin: 0;
-}
 #body-editor {
   margin-top: 0.5rem;
 }
@@ -486,15 +472,6 @@ details.message summary time {
   background: var(--c-selected);
   color: var(--c-text);
   outline: 1px solid var(--c-focus);
-}
-#vimrc-dialog {
-  width: min(42rem, 90vw);
-}
-#vimrc-dialog form {
-  display: inline-block;
-}
-#vimrc-input {
-  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
 }
 #body {
   font:

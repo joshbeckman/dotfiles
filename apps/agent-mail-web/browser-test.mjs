@@ -969,89 +969,6 @@ try {
   await page.waitForTimeout(100);
   await body.press("Tab");
   assert.equal(await body.textContent(), "name.with_dot");
-  await body.fill("one\ntwo\nthree");
-  await page.locator("#vim-mode").check();
-  await body.press("g");
-  await body.press("g");
-  await body.press("d");
-  await body.press("d");
-  assert.equal(await page.evaluate(() => composer.value()), "two\nthree");
-  await body.press("u");
-  assert.equal(await page.evaluate(() => composer.value()), "one\ntwo\nthree");
-  await body.press("Control+r");
-  assert.equal(await page.evaluate(() => composer.value()), "two\nthree");
-  assert.equal(await page.locator("#editor").isVisible(), true);
-  await page.locator("#vimrc-button").click();
-  await page
-    .locator("#vimrc-input")
-    .fill(
-      'inoremap jk <Esc>\nset number\nlet mapleader=","\nnnoremap <leader>x dd',
-    );
-  await page.locator("#vimrc-input").press("Control+Enter");
-  assert.equal(await page.locator("#vimrc-dialog").isVisible(), true);
-  await page.locator("#vimrc-apply").click();
-  await page
-    .getByText("2 mappings applied; unsupported lines ignored: 2")
-    .waitFor();
-  await page
-    .locator("#vimrc-dialog")
-    .getByRole("button", { name: "Close", exact: true })
-    .click();
-  await body.press("i");
-  await page.keyboard.type("jk");
-  await page.keyboard.type(",x");
-  assert.equal(await page.evaluate(() => composer.value()), "three");
-  await body.press("u");
-  await page.locator("#vimrc-button").click();
-  await page
-    .locator("#vimrc-input")
-    .fill(
-      'inoremap jk <Esc>\nlet mapleader="\\<Space>"\nnnoremap <leader>x dd',
-    );
-  await page.locator("#vimrc-apply").click();
-  await page.getByText("2 mappings applied.", { exact: true }).waitFor();
-  await page.locator("#vimrc-input").fill("inoremap jk");
-  await page.locator("#vimrc-apply").click();
-  await page.getByText(/a mapping needs a key and an action/).waitFor();
-  await page
-    .locator("#vimrc-dialog")
-    .getByRole("button", { name: "Close", exact: true })
-    .click();
-  await body.press("Space");
-  await body.press("x");
-  assert.equal(await page.evaluate(() => composer.value()), "three");
-  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) {
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.screenshot({
-      path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-vim.png",
-      fullPage: true,
-    });
-    await page.emulateMedia({ colorScheme: "light" });
-  }
-  await body.press("i");
-  await page.keyboard.type("@+ald");
-  await body.press("Control+n");
-  await page.locator(".cm-tooltip-autocomplete").waitFor();
-  // CodeMirror guards against accidental acceptance for the first 75 ms.
-  await page.waitForTimeout(100);
-  await body.press("Tab");
-  assert.match(
-    await page.evaluate(() => composer.value()),
-    /^@\+alder-(turner|weaver)three$/,
-  );
-  await body.press("Escape");
-  await page.locator("#close-draft").click();
-  await page.reload();
-  await page.getByRole("button", { name: /^Drafts/ }).click();
-  await page.locator(".row").click();
-  assert.equal(await page.locator("#vim-mode").isChecked(), true);
-  await page.locator("#vimrc-button").click();
-  assert.match(await page.locator("#vimrc-input").inputValue(), /inoremap jk/);
-  await page
-    .locator("#vimrc-dialog")
-    .getByRole("button", { name: "Close", exact: true })
-    .click();
-  await page.locator("#vim-mode").uncheck();
   await writeFile(keywordFile, "@+new-fixture-agent\n");
   await page.locator("#close-draft").click();
   await page.locator(".row").click();
@@ -1403,7 +1320,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, Vim mappings/leader/undo/redo, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

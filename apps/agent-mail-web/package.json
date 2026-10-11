@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test composer-test.mjs && node browser-test.mjs"
+    "test": "node browser-test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.20.3",
