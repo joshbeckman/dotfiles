@@ -20,8 +20,14 @@ await build({
   legalComments: "eof",
 });
 const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
+// Everything below the header is regenerated from the lockfile, so anything hand-written here
+// is lost on the next build. The font notice was added by hand once and dropped by a later
+// build; keeping it in the generator is what makes the file stable.
 let licenses =
-  "Bundled third-party editor and renderers. Rebuild with npm ci --ignore-scripts && npm run build.\n";
+  "Bundled third-party editor and renderers. Rebuild with npm ci --ignore-scripts && npm run build.\n" +
+  "\n" +
+  "IBM Plex fonts are self-hosted in fonts/ under the SIL Open Font License 1.1,\n" +
+  "with the licence text alongside them in fonts/LICENSE.txt.\n";
 for (const [path, info] of Object.entries(lock.packages).sort()) {
   if (!path || info.dev || info.optional) continue;
   const pkg = JSON.parse(await readFile(join(path, "package.json"), "utf8"));
