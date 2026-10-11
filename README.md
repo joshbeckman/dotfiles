@@ -71,7 +71,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Scripts (`bin/`)
 
-Many small utilities. [Agent teams](docs/agent-teams.md) documents `agent-team`, shared scratchpads, roster broadcasts through `agent-mail`, and membership in `agent-find`.
+Many small utilities. [Agent teams](.agents/skills/agent-teams/SKILL.md) documents `agent-team`, shared scratchpads, roster broadcasts through `agent-mail`, and membership in `agent-find`.
 
 Run any script with `--help` or read the source — they're short.
 

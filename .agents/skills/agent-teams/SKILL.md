@@ -1,3 +1,8 @@
+---
+name: agent-teams
+description: Manage explicit agent teams with stable @team/<slug> handles, one coordinator, a roster, and a shared scratchpad. Use when creating, joining, leaving, or transferring a team, sending mail to a team, or looking for shared team context.
+---
+
 # Agent teams
 
 `agent-team` manages explicit teams with stable `@team/<slug>` handles, one coordinator, and a shared scratchpad. An agent can belong to several teams. Membership records agreed responsibilities; it does not infer hierarchy from surnames, launches, or messages.
@@ -48,6 +53,7 @@ Team addresses also work in a draft’s `To:` field and through `agent-mail deli
 - Registered agent handles resolve through the permanent identity claim to a session-qualified scratchpad, including pre-realm aliases. A bare-name directory cannot override that route. Missing, malformed, or ambiguous registered targets fail rather than falling back to a different mailbox; aliases to the same physical scratchpad are deduplicated. Explicit session-qualified addresses stay pinned to their exact directory, even when it is missing; unregistered legacy names retain filesystem lookup.
 - Every recipient is resolved and checked before delivery starts. Missing or archived teams, malformed roster output, unreachable members, and team-member addresses conflicting with human addresses fail visibly. No silent skipping.
 - `To:` stores the concrete recipient snapshot. `Team-To:` retains the addressed team handles as informational provenance. Reply-all uses the original recipients, not the team’s later roster. Membership changes neither add recipients to an old thread nor revoke former recipients from its reply-all list. Address the team explicitly again to use the new roster.
+- A member that cannot be resolved fails the send before anything is copied, rather than being silently dropped from the roster.
 - Teams cannot be senders or `Reply-To` targets and have no separate inbox. `agent-mail addr`, `read`, and `inbox` do not turn a team scratchpad into a mailbox. Member delivery retains existing notifications, wakeups, Sent copies, and receipts.
 - A send validates before copying, but delivery is not a transaction across filesystems. A disk error partway through can leave partial delivery. Check receipts/Sent before retrying. A failed draft delivery can retain the concrete roster snapshot so a retry does not silently target newly joined members.
 
