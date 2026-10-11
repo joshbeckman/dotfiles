@@ -86,3 +86,20 @@ Ceramic returns indexed pages with text excerpts. Reach for something else, or s
 - The full content of a page beyond the excerpt
 - Paywalled or non-public content
 - The most recent release, version, or announcement, where the index has not caught up
+
+### Recency: let a model write its own queries
+
+For "what is the latest X", do not fight the query grammar. The index lags on recent pages and version-numbered queries often return nothing, so ask a model that searches for itself:
+
+```sh
+s OPENAI_API_KEY -- sh -c 'curl -sS https://api.openai.com/v1/responses \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\": \"gpt-5\", \"tools\": [{\"type\": \"web_search\"}], \"input\": \"What is the current stable release of Deno?\"}"'
+```
+
+The model writes its own queries, runs several, and returns an answer with the sources it used as annotations. On the Deno question above it returned v2.9.7 with a link to the release page, where Ceramic returned nothing at all for the same question.
+
+`gpt-5-search-api` is the same idea through `/v1/chat/completions`, and that endpoint is the only one that accepts it. Prefer the Responses API call above, because it can run more than one query and returns structured citations rather than a citation in the prose.
+
+This costs an order of magnitude more than Ceramic, around 20,000 tokens for one question against a quarter of a cent per thousand searches. Use it deliberately rather than by default: read the answer, keep the citations, and do not repeat its claims as your own without the sources.
