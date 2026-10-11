@@ -667,7 +667,15 @@ class LifecycleTest(unittest.TestCase):
         # when `s` cannot be found would drop it silently.
         self.parked()
         self.env['AGENT_PI_SECRETS'] = 'FIREWORKS_API_KEY'
-        self.env['PATH'] = '/usr/bin:/bin'
+        # `s` lives in ~/bin, so dropping that from PATH is how this hides it. sysctl is not
+        # under /usr/sbin either, because the probe has to answer rather than fail: an earlier
+        # version left /usr/sbin on PATH and read the machine's real pressure, so the test
+        # passed or failed depending on how busy the host was. The stub pins it at normal.
+        sysctl_only = self.root / 'sysctl-only'
+        sysctl_only.mkdir(exist_ok=True)
+        (sysctl_only / 'sysctl').write_text('#!/bin/sh\necho 1\n')
+        (sysctl_only / 'sysctl').chmod(0o700)
+        self.env['PATH'] = f'{sysctl_only}:/usr/bin:/bin'
         error = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', expected=2)
         self.assertIn('secrets requested but s is not available', error)
         self.assertEqual(self.record()['state'], 'parked')
