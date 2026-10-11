@@ -68,11 +68,13 @@ Two of those failures have names, and the names are what make them stick.
 
 **A ranked list is a ranking, not a set of candidates.** The tail is filler even when rank 1 is right, so read the top one or two, and require a description to prove itself before trusting the rest. When the top result is the wrong kind of page, the fix is different nouns, not page two.
 
+**A description is somebody else's resolution.** A snippet is a summary that has already dropped its qualifiers, which makes it the highest-risk input you can get: someone else has done the compressing for you, in advance, and the ambiguity leaves no trace. So fetch the page and name the source before a detail travels anywhere as a fact, and never let a snippet reach another person as one.
+
 And "the evidence is weak" is itself a claim. A hedge that sounds diligent gets past every instinct, so either get the check that would settle it or delete it.
 
 In practice:
 
-- Read the top one or two and fetch the page before relying on a detail. The description is an excerpt and it may be stale. `web_fetch` and `curl` both work.
+- Read the top one or two and fetch the page before relying on a detail. The description is an excerpt, it may be stale, and it has already dropped its qualifiers. `web_fetch` and `curl` both work.
 - When a query returns nothing, rewrite it with different nouns rather than paging through what came back.
 - Say when the evidence is stale or not authoritative, and say what you checked.
 
