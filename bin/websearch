@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Search the web from the shell, cheapest engine first.
+
+Three engines, and the default is the cheap one:
+
+  ceramic     Keyword search over Ceramic's independent index. The default, and
+              good at "where is the documentation for X". Needs CERAMIC_API_KEY.
+  duckduckgo  Keyless and accountless, scraped from DuckDuckGo's HTML endpoint.
+              The floor when nothing else is available, and a useful second
+              opinion when Ceramic returns nothing. This is the shape lifted
+              from pi-web-access.
+  openai      --recent only. A model that writes its own queries and answers
+              with citations, for "what is the latest X", where an index lags.
+              Costs an order of magnitude more, so it is opt-in.
+
+Secrets are injected per process with `s`, never exported, so a key reaches
+only this script's own HTTP call. Run `websearch --help` for the flags.
+
+Usage:
+  websearch QUERY...              cheap keyword search
+  websearch --recent QUERY...     a model that searches for itself
+  websearch --ddg QUERY...        force the keyless engine
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from html.parser import HTMLParser
+from pathlib import Path
+
+CERAMIC_URL = os.environ.get("WEBSEARCH_CERAMIC_URL", "https://api.ceramic.ai/search")
+OPENAI_URL = os.environ.get("WEBSEARCH_OPENAI_URL", "https://api.openai.com/v1/responses")
+DDG_URL = os.environ.get("WEBSEARCH_DDG_URL", "https://html.duckduckgo.com/html/")
+TIMEOUT = 45
+# DuckDuckGo serves a challenge page instead of results to anything that looks
+# like a bot, including a polite `+https://...` user agent. A browser string is
+# the price of the keyless engine, and it is the reason this engine is the floor
+# rather than the default.
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+CERAMIC_KEY = "CERAMIC_API_KEY"
+OPENAI_KEY = "OPENAI_API_KEY"
+# Guards the re-exec through `s`, so a missing key cannot loop.
+INJECTED = "WEBSEARCH_INJECTED"
+
+
+class SearchError(Exception):
+    pass
+
+
+# --------------------------------------------------------------- secret plumbing
+
+
+def reexec_with(key: str) -> int | None:
+    """Hand this process to `s` so the key is injected for it alone.
+
+    Returns the exit status when it ran, or None when the key is already
+    present, already attempted, or `s` is unavailable.
+    """
+    if os.environ.get(key) or os.environ.get(INJECTED) == key:
+        return None
+    if not shutil_which("s"):
+        return None
+    environment = dict(os.environ, **{INJECTED: key})
+    try:
+        return subprocess.run(
+            ["s", key, "--", sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+            env=environment,
+        ).returncode
+    except OSError:
+        return None
+
+
+def shutil_which(name: str) -> str | None:
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def get(url: str, *, headers: dict[str, str], data: bytes | None = None) -> bytes:
+    request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", "replace")[:300]
+        raise SearchError(f"{error.code} from {urllib.parse.urlsplit(url).netloc}: {body}") from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise SearchError(f"could not reach {urllib.parse.urlsplit(url).netloc}: {error}") from error
+
+
+# ----------------------------------------------------------------------- ceramic
+
+
+def search_ceramic(query: str, limit: int) -> list[dict]:
+    key = os.environ.get(CERAMIC_KEY)
+    if not key:
+        raise SearchError(f"{CERAMIC_KEY} is not set")
+    payload = json.dumps(
+        {"query": query, "maxResults": limit, "maxDescriptionLength": 3000}
+    ).encode()
+    raw = get(
+        CERAMIC_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        data=payload,
+    )
+    body = json.loads(raw)
+    results = (body.get("result") or {}).get("results") or []
+    return [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "description": " ".join((item.get("description") or "").split()),
+        }
+        for item in results
+    ]
+
+
+# -------------------------------------------------------------------- duckduckgo
+
+
+class _DuckDuckGo(HTMLParser):
+    """Collect `.result` containers, skipping ads, the way pi-web-access does.
+
+    The markup is scraped, so a change in DuckDuckGo's HTML shows up as zero
+    parseable results rather than as an empty search, and the caller says so.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict] = []
+        self.seen = 0
+        self._current: dict | None = None
+        self._field: str | None = None
+        # Div depth inside the current container, so a nested div does not end it.
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        if tag == "div":
+            if self._current is None:
+                if "result" in classes and "result--ad" not in classes:
+                    self._current = {"title": "", "url": "", "description": ""}
+                    self._depth = 0
+                return
+            self._depth += 1
+            return
+        if self._current is None:
+            return
+        if tag == "a" and "result__a" in classes:
+            self._field = "title"
+            self._current["url"] = _decode_ddg_url(attributes.get("href") or "")
+        elif "result__snippet" in classes:
+            self._field = "description"
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._field and tag in ("a", "div", "span"):
+            self._field = None
+        if tag == "div" and self._current is not None:
+            if self._depth == 0:
+                self.seen += 1
+                if self._current["title"] and self._current["url"]:
+                    self.results.append(self._current)
+                self._current = None
+            else:
+                self._depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._current is not None and self._field:
+            self._current[self._field] += data
+
+
+def _decode_ddg_url(href: str) -> str:
+    """DuckDuckGo wraps outbound links in a redirect carrying the real URL."""
+    if not href:
+        return ""
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urllib.parse.urlsplit(href)
+    target = urllib.parse.parse_qs(parsed.query).get("uddg", [href])[0]
+    return target if target.startswith(("http://", "https://")) else ""
+
+
+def search_duckduckgo(query: str, limit: int) -> list[dict]:
+    url = DDG_URL + "?" + urllib.parse.urlencode({"q": query})
+    raw = get(url, headers={"Accept": "text/html"}).decode("utf-8", "replace")
+    parser = _DuckDuckGo()
+    parser.feed(raw)
+    if parser.seen == 0:
+        lowered = raw.lower()
+        if "anomaly" in lowered or "challenge" in lowered:
+            raise SearchError(
+                "DuckDuckGo served a challenge page rather than results; try again, or use ceramic"
+            )
+        raise SearchError("DuckDuckGo returned no parseable results, so its markup changed")
+    return [
+        {**item, "description": " ".join(item["description"].split())}
+        for item in parser.results[:limit]
+    ]
+
+
+# ------------------------------------------------------------------------ openai
+
+
+def search_openai(query: str) -> tuple[str, list[str]]:
+    key = os.environ.get(OPENAI_KEY)
+    if not key:
+        raise SearchError(f"{OPENAI_KEY} is not set")
+    payload = json.dumps(
+        {
+            "model": os.environ.get("WEBSEARCH_OPENAI_MODEL", "gpt-5"),
+            "tools": [{"type": "web_search"}],
+            "input": query,
+        }
+    ).encode()
+    raw = get(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        data=payload,
+    )
+    body = json.loads(raw)
+    if body.get("error"):
+        raise SearchError(str(body["error"].get("message") or body["error"])[:300])
+    answer, sources = "", []
+    for item in body.get("output") or []:
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content") or []:
+            answer += content.get("text") or ""
+            for annotation in content.get("annotations") or []:
+                if annotation.get("url") and annotation["url"] not in sources:
+                    sources.append(annotation["url"])
+    if not answer:
+        raise SearchError("OpenAI returned no answer")
+    return answer.strip(), sources
+
+
+# ------------------------------------------------------------------------- output
+
+
+def render(engine: str, results: list[dict], seconds: float) -> None:
+    print(f"{engine}  {len(results)} result{'s' if len(results) != 1 else ''} in {seconds:.2f}s")
+    if not results:
+        print("  (nothing matched; try different nouns, or --ddg for a second opinion)")
+        return
+    for index, item in enumerate(results, start=1):
+        print(f"\n{index}. {item['title']}")
+        print(f"   {item['url']}")
+        if item.get("description"):
+            print("   " + item["description"][:400])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="websearch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("query", nargs="+", help="keywords, not a sentence")
+    parser.add_argument("--recent", action="store_true",
+                        help="ask a model that writes its own queries, for recent facts")
+    parser.add_argument("--ddg", action="store_true", help="force the keyless DuckDuckGo engine")
+    parser.add_argument("--limit", type=int, default=5, help="results to ask for (default 5)")
+    parser.add_argument("--json", action="store_true", help="emit JSON")
+    args = parser.parse_args()
+    query = " ".join(args.query).strip()
+    if args.limit < 1 or args.limit > 20:
+        print("websearch: --limit must be between 1 and 20", file=sys.stderr)
+        return 2
+
+    if args.recent:
+        status = reexec_with(OPENAI_KEY)
+        if status is not None:
+            return status
+        started = time.monotonic()
+        try:
+            answer, sources = search_openai(query)
+        except (SearchError, ValueError) as error:
+            print(f"websearch: {error}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({"engine": "openai", "query": query, "answer": answer,
+                              "sources": sources}, indent=2))
+            return 0
+        print(answer)
+        if sources:
+            print("\nSources")
+            for index, url in enumerate(sources, start=1):
+                print(f"{index}. {url}")
+        print(f"\nopenai  answered in {time.monotonic() - started:.1f}s", file=sys.stderr)
+        return 0
+
+    if args.ddg:
+        engines = [("duckduckgo", search_duckduckgo, None)]
+    else:
+        status = reexec_with(CERAMIC_KEY)
+        if status is not None:
+            return status
+        engines = [("ceramic", search_ceramic, CERAMIC_KEY), ("duckduckgo", search_duckduckgo, None)]
+
+    failures = []
+    for name, engine, key in engines:
+        if key and not os.environ.get(key):
+            failures.append(f"{name}: {key} is not set")
+            continue
+        started = time.monotonic()
+        try:
+            results = engine(query, args.limit)
+        except (SearchError, ValueError) as error:
+            failures.append(f"{name}: {error}")
+            continue
+        seconds = time.monotonic() - started
+        if name == "duckduckgo" and failures:
+            # Say why the cheap engine was skipped, but do not fail on it.
+            print("websearch: " + "; ".join(failures) + "; using duckduckgo", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"engine": name, "query": query, "results": results}, indent=2))
+        else:
+            render(name, results, seconds)
+        return 0
+
+    for failure in failures:
+        print(f"websearch: {failure}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# websearch talks to three engines over HTTP, so the test serves all three from
+# localhost and checks the parsing, the fallback order, and the failure messages.
+# Nothing here touches the network or a real key.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+python3 - "$root/bin/websearch" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+SCRIPT = sys.argv[1]
+
+CERAMIC_OK = {
+    "result": {
+        "results": [
+            {"title": "Official page", "url": "https://example.test/official",
+             "description": "The release date is 1 Oct 2025."},
+            {"title": "Second page", "url": "https://example.test/second",
+             "description": "More detail."},
+        ],
+        "totalResults": 2,
+    }
+}
+
+# The container, an ad that must be skipped, and a redirect that must be decoded.
+DDG_HTML = """<html><body>
+<div class="result result--ad"><a class="result__a" href="https://ads.test/x">Ad</a>
+  <a class="result__snippet">Buy something</a></div>
+<div class="result results_links">
+  <div class="links_main"><a rel="nofollow" class="result__a"
+     href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Fddg-one">Duck one</a>
+  <a class="result__snippet">First snippet.</a></div>
+</div>
+<div class="result results_links">
+  <a class="result__a" href="https://example.test/ddg-two">Duck two</a>
+  <a class="result__snippet">Second snippet.</a>
+</div>
+</body></html>"""
+
+DDG_CHALLENGE = "<html><body>anomaly: automated challenge</body></html>"
+
+OPENAI_OK = {
+    "status": "completed",
+    "output": [
+        {"type": "web_search_call", "action": {"query": "deno release"}},
+        {"type": "message", "content": [
+            {"type": "output_text", "text": "Deno v2.9.7 is current.",
+             "annotations": [{"type": "url_citation",
+                              "url": "https://github.com/denoland/deno/releases"}]},
+        ]},
+    ],
+}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):  # keep the test output clean
+        pass
+
+    def _send(self, status, body, content_type):
+        raw = body.encode() if isinstance(body, str) else body
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        if self.path.startswith("/ddg"):
+            if "challenge" in self.path:
+                return self._send(200, DDG_CHALLENGE, "text/html")
+            return self._send(200, DDG_HTML, "text/html")
+        return self._send(404, "no", "text/plain")
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/ceramic-401":
+            return self._send(401, '{"detail":"Invalid authentication token."}', "application/json")
+        if self.path == "/ceramic":
+            assert self.headers.get("Authorization") == "Bearer test-key", "key not passed"
+            assert payload["maxDescriptionLength"] >= 1000, "description length below the API floor"
+            return self._send(200, json.dumps(CERAMIC_OK), "application/json")
+        if self.path == "/openai":
+            assert self.headers.get("Authorization") == "Bearer test-openai", "key not passed"
+            assert payload["tools"] == [{"type": "web_search"}], "web_search tool not requested"
+            return self._send(200, json.dumps(OPENAI_OK), "application/json")
+        return self._send(404, "no", "text/plain")
+
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+base = f"http://127.0.0.1:{server.server_port}"
+
+env = dict(
+    os.environ,
+    CERAMIC_API_KEY="test-key",
+    OPENAI_API_KEY="test-openai",
+    WEBSEARCH_INJECTED="CERAMIC_API_KEY",  # the guard, so no re-exec through `s`
+    WEBSEARCH_CERAMIC_URL=f"{base}/ceramic",
+    WEBSEARCH_OPENAI_URL=f"{base}/openai",
+    WEBSEARCH_DDG_URL=f"{base}/ddg",
+)
+
+
+def run(*args, **overrides):
+    return subprocess.run([SCRIPT, *args], env=dict(env, **overrides),
+                          capture_output=True, text=True, timeout=60)
+
+
+# The default engine is Ceramic, and it parses the shape the API returns.
+out = run("--limit", "3", "some query")
+assert out.returncode == 0, out.stderr
+assert "ceramic" in out.stdout, out.stdout
+assert "Official page" in out.stdout and "https://example.test/official" in out.stdout
+assert "1 Oct 2025" in out.stdout, out.stdout
+print("ok  default engine is ceramic")
+
+# JSON output is machine-readable and keeps the fields.
+data = json.loads(run("--json", "some query").stdout)
+assert data["engine"] == "ceramic" and len(data["results"]) == 2, data
+assert data["results"][0]["url"] == "https://example.test/official"
+print("ok  --json")
+
+# DuckDuckGo parses containers, skips the ad, and decodes the uddg redirect.
+out = run("--ddg", "some query")
+assert out.returncode == 0, out.stderr
+assert "Duck one" in out.stdout and "Duck two" in out.stdout, out.stdout
+assert "Ad" not in out.stdout, "the ad container leaked into the results"
+assert "https://example.test/ddg-one" in out.stdout, "the uddg redirect was not decoded"
+print("ok  duckduckgo parsing")
+
+# A challenge page is named as such rather than blamed on the markup.
+out = run("--ddg", "some query", WEBSEARCH_DDG_URL=f"{base}/ddg?challenge=1")
+assert out.returncode == 1, out.stdout
+assert "challenge page" in out.stderr, out.stderr
+print("ok  challenge page is reported honestly")
+
+# When Ceramic is unavailable the search still happens, and says why.
+out = run("some query", WEBSEARCH_CERAMIC_URL=f"{base}/ceramic-401")
+assert out.returncode == 0, out.stderr
+assert "Invalid authentication token" in out.stderr, out.stderr
+assert "using duckduckgo" in out.stderr, out.stderr
+assert "Duck one" in out.stdout, out.stdout
+print("ok  falls back to duckduckgo with a reason")
+
+# With no key at all and no re-exec available, the reason is stated.
+out = run("some query", CERAMIC_API_KEY="")
+assert out.returncode == 0, out.stderr
+assert "CERAMIC_API_KEY is not set" in out.stderr, out.stderr
+print("ok  missing key falls through to duckduckgo")
+
+# --recent asks for the tool and returns the answer with its sources.
+out = run("--recent", "what is current")
+assert out.returncode == 0, out.stderr
+assert "Deno v2.9.7 is current." in out.stdout, out.stdout
+assert "https://github.com/denoland/deno/releases" in out.stdout, out.stdout
+print("ok  --recent returns an answer with sources")
+
+# Bad input fails before any request.
+out = run("--limit", "0", "some query")
+assert out.returncode == 2, out.stdout
+assert "--limit" in out.stderr, out.stderr
+print("ok  --limit is validated")
+
+server.shutdown()
+print("websearch tests passed")
+PY
