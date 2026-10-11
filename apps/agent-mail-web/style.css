@@ -328,6 +328,17 @@ main > section {
   flex-wrap: wrap;
   margin: 1rem 0;
 }
+/* Composing scrolls the page, so the action row stays put: without this, send and
+   close end up above the viewport while the body is being typed, which on a phone
+   means scrolling up to send. Not limited to coarse pointers, so the browser test
+   can assert it. */
+#editor .actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--c-bg);
+  padding: 0.5rem 0;
+}
 #editor {
   max-width: 78rem;
 }

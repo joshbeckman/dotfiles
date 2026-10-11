@@ -688,6 +688,15 @@ try {
     () => document.querySelectorAll("#thread details.message").length === 2,
   );
   assert.equal(await page.locator("#thread details.message").count(), 2);
+  // Opening a thread should land on the newest message, not the oldest.
+  assert(
+    await page.evaluate(() => {
+      const messages = document.querySelectorAll("#thread details.message");
+      const last = messages[messages.length - 1].getBoundingClientRect();
+      return last.top < innerHeight && last.bottom > 0;
+    }),
+    "opening a thread should leave the newest message in view",
+  );
   await page.locator("#archive").click();
   await page.getByText("Conversation archived.", { exact: true }).waitFor();
   assert.equal((await readdir(join(humans, "josh/inbox/new"))).length, 0);
@@ -872,6 +881,24 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert(await page.evaluate(() => $("compose-contacts").getBoundingClientRect().top >= $("compose-fields").getBoundingClientRect().bottom && document.documentElement.scrollWidth <= innerWidth));
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT) await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-compose-recipients-mobile.png", fullPage: true });
+  // On a phone the action row has to be in view when the editor opens, and has to
+  // stay there once the page scrolls while a message is being typed.
+  assert(
+    await page.evaluate(() => {
+      const box = $("editor").querySelector(".actions").getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= innerHeight;
+    }),
+    "compose actions should be in view",
+  );
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  assert(
+    await page.evaluate(() => {
+      const box = $("editor").querySelector(".actions").getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= innerHeight;
+    }),
+    "compose actions should be in view",
+  );
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.setViewportSize({ width: 1200, height: 850 });
   await page.locator("#to").fill("@+alder-turner, @+alder-turner");
   assert.equal(await recipients.locator(".contact").count(), 1);

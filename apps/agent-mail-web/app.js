@@ -167,6 +167,13 @@ async function api(path, data, extra = {}) {
   }
   return result;
 }
+// Opening a thread should land on the newest message rather than the oldest. The
+// last message renders its Markdown asynchronously, so the scroll runs again once
+// that finishes; a closed message has no such growth and settles immediately.
+function scrollToLatestMessage() {
+  const last = $("thread").lastElementChild;
+  if (last) last.scrollIntoView({ block: "end" });
+}
 function show(name) {
   view = name;
   const replying = name === "editor" && Boolean(draft?.parent);
@@ -428,6 +435,7 @@ async function openThread(m) {
   if (!messages.length)
     $("thread").textContent =
       "Earlier messages are not available for this draft.";
+  scrollToLatestMessage();
   return true;
 }
 function threadSummary(messages) {
@@ -493,7 +501,11 @@ function appendThreadMessage(message, open) {
   const render = () => {
     if (!rendered && detail.open) {
       rendered = true;
-      renderMarkdown(message.body, content).catch(error);
+      renderMarkdown(message.body, content)
+        .then(() => {
+          if (detail === $("thread").lastElementChild) scrollToLatestMessage();
+        })
+        .catch(error);
     }
   };
   detail.addEventListener("toggle", render);
@@ -544,6 +556,9 @@ async function loadDraft(value) {
   show("editor");
   if (value.to) composer.focus();
   else $("to").focus();
+  // Focusing scrolls the field into view, which on a phone can leave the action
+  // row above the viewport. Anchor on the section instead.
+  $("editor").scrollIntoView({ block: "start" });
 }
 function saveDraft() {
   clearTimeout(timer);
