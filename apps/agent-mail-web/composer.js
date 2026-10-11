@@ -85,7 +85,11 @@ export function create(parent, onChange, reportError) {
           role: "textbox",
           "aria-labelledby": "body-label",
           "aria-multiline": "true",
+          // spellcheck was already on; autocapitalize and autocorrect are what a phone
+          // keyboard needs for "i" to become "I", and CodeMirror turns both off by default.
           spellcheck: "true",
+          autocapitalize: "sentences",
+          autocorrect: "on",
         }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChange();

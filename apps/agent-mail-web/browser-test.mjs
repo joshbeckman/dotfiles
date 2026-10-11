@@ -709,6 +709,9 @@ try {
   await page.locator("#body").fill("Reply resumed from a saved draft.");
   await page.locator("#close-draft").click();
   await page.reload();
+  // The folder buttons re-render after a reload, and clicking one mid-render waits
+  // for "stable" until it times out. Wait for the list first.
+  await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
   await page.getByRole("button", { name: /^Drafts/ }).click();
   await page.locator(".row").click();
   await page.locator("#editor").waitFor({ state: "visible" });
@@ -899,6 +902,16 @@ try {
     "compose actions should be in view",
   );
   await page.evaluate(() => window.scrollTo(0, 0));
+  // A phone keyboard only offers spellcheck and autocapitalization if the editor asks
+  // for them; CodeMirror sets autocapitalize off unless told otherwise.
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const body = document.querySelector("#body");
+      return [body.spellcheck, body.getAttribute("autocapitalize"), body.getAttribute("autocorrect")];
+    }),
+    [true, "sentences", "on"],
+    "the message body should keep spellcheck and autocapitalisation on",
+  );
   await page.setViewportSize({ width: 1200, height: 850 });
   await page.locator("#to").fill("@+alder-turner, @+alder-turner");
   assert.equal(await recipients.locator(".contact").count(), 1);
