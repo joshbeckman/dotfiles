@@ -62,10 +62,19 @@ The first one or two results are usually the answer and the tail is filler. Obse
 
 So: good at concept lookups where you know the right nouns, weak on version numbers, dates, and anything whose answer is a recent page. Total results are often fewer than five, sometimes zero.
 
-- Read the top one or two, and treat the rest as keyword noise until the description proves otherwise.
-- **Fetch the page before relying on a detail.** The description is an excerpt, and it may be stale. `web_fetch` and `curl` both work.
-- When a query returns nothing, or only the wrong kind of page, rewrite it with different nouns rather than paging through what came back.
-- Say when the evidence is weak, stale, or not authoritative, instead of presenting it as fact.
+Two of those failures have names, and the names are what make them stick.
+
+**Zero results is a claim about the index, not about the world.** A lexical index has bounded coverage, so an empty result set says only that these words are not indexed together, which is a fact about the engine and not about the page you wanted. Before believing an absence, ask the question that settles it: *would the page I expect actually say these words?* If it would phrase it differently, the empty result says nothing at all.
+
+**A ranked list is a ranking, not a set of candidates.** The tail is filler even when rank 1 is right, so read the top one or two, and require a description to prove itself before trusting the rest. When the top result is the wrong kind of page, the fix is different nouns, not page two.
+
+And "the evidence is weak" is itself a claim. A hedge that sounds diligent gets past every instinct, so either get the check that would settle it or delete it.
+
+In practice:
+
+- Read the top one or two and fetch the page before relying on a detail. The description is an excerpt and it may be stale. `web_fetch` and `curl` both work.
+- When a query returns nothing, rewrite it with different nouns rather than paging through what came back.
+- Say when the evidence is stale or not authoritative, and say what you checked.
 
 ## Cite what you used
 
