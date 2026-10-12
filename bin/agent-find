@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Find agent sessions by transcript topic, or inspect one exact contact."""
+"""Find agent sessions by transcript topic, or inspect one exact contact.
+
+A search result carries the matching line count and a few excerpts. The count is the
+number of transcript records that matched, since one record is one line: it says nothing
+about what matched, and it rewards a session that mentions a term in many separate
+records rather than one that concluded something about it. The excerpts are what let a
+caller judge one result against another.
+"""
 import argparse
 from datetime import datetime, timezone
 import json
@@ -59,7 +66,123 @@ def recorded_model(record):
     return {'provider': provider, 'model': model, 'observedAt': timestamp, 'source': source}
 
 
-def hydrate(file, hits, claims, mail_root, pane_titles):
+def text_candidates(record):
+    """(kind, text) for every place a match is worth showing, in reading order.
+
+    A transcript is JSONL, one record per line, and a single record can hold an entire
+    tool result or a thinking block of hundreds of thousands of characters. So the
+    matching line is never printable as it stands: the match has to be found again
+    inside the parsed record and windowed, or one hit prints a quarter of a megabyte.
+    """
+    kind = record.get('type')
+    if kind == 'custom_message':
+        content = record.get('content')
+        return [('notice', content)] if isinstance(content, str) else []
+    if kind == 'compaction':
+        summary = record.get('summary')
+        return [('summary', summary)] if isinstance(summary, str) else []
+    if kind == 'session_info':
+        name = record.get('name')
+        return [('title', name)] if isinstance(name, str) else []
+    message = record.get('message')
+    if kind != 'message' or not isinstance(message, dict):
+        return []
+    role = message.get('role')
+    role = role if isinstance(role, str) and role else 'message'
+    content = message.get('content')
+    if isinstance(content, str):
+        return [(role, content)]
+    if not isinstance(content, list):
+        return []
+    candidates = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get('type') == 'thinking' and isinstance(part.get('thinking'), str):
+            candidates.append((role + ' thinking', part['thinking']))
+        elif isinstance(part.get('text'), str):
+            candidates.append((role, part['text']))
+        elif part.get('type') == 'toolCall' and isinstance(part.get('arguments'), dict):
+            # Not prose, but a tool call's arguments carry the command or the path
+            # that was searched for, which is often exactly what matched.
+            flat = ' '.join(value for value in part['arguments'].values() if isinstance(value, str))
+            if flat:
+                name = part.get('name')
+                candidates.append((f'{role} tool {name}' if isinstance(name, str) else role + ' tool', flat))
+    return candidates
+
+
+def excerpt(text, start, end, width=60):
+    start = max(0, start - width)
+    end = min(len(text), end + width)
+    body = ' '.join(text[start:end].split())
+    return ('\u2026' if start else '') + body + ('\u2026' if end < len(text) else '')
+
+
+def sample_from(record, raw, matched):
+    """One excerpt for a record ripgrep matched, or None.
+
+    `matched` is the text ripgrep matched, so the window is found with a literal
+    search. Python's re is deliberately not involved: it backtracks and ripgrep does
+    not, so a pattern one handles instantly can hang the other on a record holding a
+    651,615-character thinking block, and the caller here is an agent.
+    """
+    if not matched:
+        return None
+    if isinstance(record, dict):
+        for kind, text in text_candidates(record):
+            at = text.find(matched)
+            if at >= 0:
+                return {'at': record.get('timestamp'), 'kind': kind,
+                        'text': excerpt(text, at, at + len(matched))}
+    # The match is in metadata rather than in any text field. Show where it is rather
+    # than dropping an excerpt that the count says exists.
+    at = raw.find(matched)
+    if at < 0:
+        return None
+    return {'at': record.get('timestamp') if isinstance(record, dict) else None,
+            'kind': 'metadata', 'text': excerpt(raw, at, at + len(matched))}
+
+
+def sample_matches(file, pattern, limit):
+    """The first `limit` matching records in one transcript, windowed.
+
+    ripgrep does the matching and hands back the text it matched, so the excerpts come
+    from the same matcher as the count and the tool has one regex dialect rather than
+    two. It also means the matches are not re-derived: the first version ran Python's
+    regex over every field of every record in the file, including the huge ones.
+    """
+    if limit < 1:
+        return []
+    result = subprocess.run(['rg', '--json', '-i', '-m', str(limit), '--', pattern, str(file)],
+                            capture_output=True)
+    if result.returncode not in (0, 1):
+        return []
+    samples = []
+    for event in result.stdout.splitlines():
+        try:
+            event = json.loads(event)
+        except ValueError:
+            continue
+        if event.get('type') != 'match':
+            continue
+        data = event.get('data') or {}
+        raw = (data.get('lines') or {}).get('text')
+        submatches = data.get('submatches') or []
+        if not isinstance(raw, str) or not submatches:
+            continue
+        matched = (submatches[0].get('match') or {}).get('text')
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            record = None
+        sample = sample_from(record, raw, matched)
+        if sample is not None:
+            samples.append(sample)
+    return samples
+
+
+def hydrate(file, hits, claims, mail_root, pane_titles, samples=()):
     sid = file.stem.rpartition('_')[2]
     handle = claims.get(sid, '')
     cwd, title, harness = '', '', None
@@ -107,7 +230,7 @@ def hydrate(file, hits, claims, mail_root, pane_titles):
     resume = f'cd {shlex.quote(cwd or "?")} && pi --session {shlex.quote(str(file))}'
     return {'handle': '@+' + handle if handle else None, 'title': title or '(untitled)',
             'sessionId': sid, 'sessionShort': sid[:8], 'started': file.name[:10],
-            'matches': hits, 'cwd': cwd or '?', 'liveness': live, 'scratchpad': pad,
+            'matches': hits, 'samples': list(samples), 'cwd': cwd or '?', 'liveness': live, 'scratchpad': pad,
             'sessionFile': str(file), 'resume': resume, 'harness': harness,
             'provider': current['provider'] if current else None,
             'model': current['model'] if current else None,
@@ -147,11 +270,19 @@ def positive_int(value):
     return number
 
 
+def non_negative_int(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError('samples must not be negative')
+    return number
+
+
 def main():
     parser = argparse.ArgumentParser(description='Find agent sessions by case-insensitive transcript regex, or inspect an exact @+handle.')
     parser.add_argument('pattern', nargs='*', help='transcript search pattern, or a single @+handle for exact lookup')
     parser.add_argument('--limit', type=positive_int, default=5, help='maximum results (default: 5)')
-    parser.add_argument('--json', action='store_true', help='emit session metadata, latest recorded model, and observed-model history as JSON')
+    parser.add_argument('--samples', type=non_negative_int, default=3, help='excerpts to show per session, earliest matches first (default: 3; 0 disables)')
+    parser.add_argument('--json', action='store_true', help='emit session metadata, latest recorded model, observed-model history, and matching excerpts as JSON')
     parser.add_argument('--agent', help='inspect an exact registry handle instead of searching transcripts')
     args = parser.parse_intermixed_args()
     pattern = ' '.join(args.pattern)
@@ -185,7 +316,10 @@ def main():
             pane_titles = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_title}'], capture_output=True, text=True, timeout=5).stdout
         except (OSError, subprocess.TimeoutExpired):
             pane_titles = ''
-        results = [hydrate(file, hits, claims, mail_root, pane_titles) for hits, file in ranked[:args.limit]]
+        # No pattern means an exact-handle lookup, which has nothing to excerpt.
+        wanted = args.samples if pattern else 0
+        results = [hydrate(file, hits, claims, mail_root, pane_titles, sample_matches(file, pattern, wanted))
+                   for hits, file in ranked[:args.limit]]
         memberships, team_warning = team_memberships() if results else ({}, None)
         for result in results:
             result['teams'] = memberships.get(result['sessionId'], []) if memberships is not None else None
@@ -215,6 +349,8 @@ def main():
                           f'(first: {model["firstObservedAt"] or "unknown time"}; last: {model["lastObservedAt"] or "unknown time"})')
                 matches = 'metadata only' if result['matches'] is None else f'{result["matches"]} matches'
                 print(f'{"session:":9} {result["sessionShort"]}  ({matches}, started {result["started"]})')
+                for sample in result['samples']:
+                    print(f'{"match:":9} {sample["at"] or "unknown time"}  {sample["kind"]}  {sample["text"]}')
                 print(f'{"cwd:":9} {result["cwd"]}')
                 print(f'{"pad:":9} {result["scratchpad"] or "-"}')
                 print(f'{"resume:":9} {result["resume"]}')
