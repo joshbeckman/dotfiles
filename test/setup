@@ -65,6 +65,10 @@ class SetupTest(unittest.TestCase):
         shutil.copyfile(SOURCE, self.script)
         (self.repo / 'Brewfile').touch()
         (self.repo / '.config/nvim').mkdir(parents=True)
+        for unit in ('dotfiles-refresh.service', 'dotfiles-refresh.timer'):
+            target = self.repo / '.config/systemd/user' / unit
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('[Unit]\n')
         for path in ('.agents/AGENTS.md', '.agents/pi/settings.json', '.agents/pi/keybindings.json'):
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -72,7 +76,7 @@ class SetupTest(unittest.TestCase):
         for path in ('.agents/prompts', '.agents/skills'):
             (self.repo / path).mkdir()
         for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache',
-                     'gem', 'ruby', 'curl'):
+                     'gem', 'ruby', 'curl', 'systemctl'):
             self.executable(self.bin / name)
         for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
                      'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
@@ -268,6 +272,34 @@ class SetupTest(unittest.TestCase):
                                 FAIL_COMMAND='gem', FAIL_ARG='install')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('try install failed; continuing', result.stdout)
+
+    def test_linux_links_and_enables_the_refresh_timer(self):
+        # The Mac gets this schedule from launchd via dfm; Linux has to get it
+        # here, and a linked unit that is never enabled does nothing.
+        result = self.run_setup(platform='linux-gnu')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for unit in ('dotfiles-refresh.service', 'dotfiles-refresh.timer'):
+            link = self.home / '.config/systemd/user' / unit
+            self.assertTrue(link.is_symlink(), f'{unit} was not linked')
+            self.assertEqual(os.readlink(link), str(self.repo / '.config/systemd/user' / unit))
+        systemctl = [c['args'] for c in self.records() if c['command'] == 'systemctl']
+        self.assertIn(['--user', 'daemon-reload'], systemctl)
+        self.assertIn(['--user', 'enable', '--now', 'dotfiles-refresh.timer'], systemctl)
+
+    def test_mac_does_not_install_the_linux_timer(self):
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c for c in self.records() if c['command'] == 'systemctl'], [])
+        self.assertFalse((self.home / '.config/systemd/user').exists())
+
+    def test_linux_without_a_user_bus_still_succeeds(self):
+        # A container or WSL without systemd has no user bus. Saying so is right;
+        # failing the whole refresh over a schedule it cannot install is not.
+        result = self.run_setup(platform='linux-gnu', FAIL_COMMAND='systemctl')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('enable dotfiles-refresh.timer by hand', result.stdout)
+        link = self.home / '.config/systemd/user/dotfiles-refresh.timer'
+        self.assertTrue(link.is_symlink(), result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

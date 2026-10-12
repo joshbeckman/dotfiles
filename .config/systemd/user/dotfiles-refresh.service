@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh dotfiles by running setup unattended
+
+[Service]
+Type=oneshot
+ExecStart=%h/dotfiles/bin/dotfiles-refresh
+# setup installs packages and clones plugins, so keep it out of the way of
+# interactive work. The Mac's launchd job asks for the same thing with
+# ProcessType=Background.
+Nice=10
