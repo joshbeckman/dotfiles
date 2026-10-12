@@ -35,6 +35,16 @@ function symlink_agent_config() {
         ln -s "$source_path" "$target_path"
 }
 
+# dfm's recurse into Library/LaunchAgents uses a plain mkdir and then chdir's into the
+# result, without checking either. macOS always has ~/Library, so this is only a Linux
+# problem, and there it fails silently: the mkdir cannot create the leaf because the
+# parent is missing, the chdir leaves dfm sitting in $HOME, and the plists land as
+# dangling symlinks in the home directory instead of the one they were built for. The
+# link text is right for Library/LaunchAgents, which is how you can tell it was placed
+# wrong rather than computed wrong. Making the directory first keeps dfm doing its own
+# work, and survives a dfm version bump in a way patching the vendored copy would not.
+mkdir -p "$HOME/Library/LaunchAgents"
+
 # symlink up dotfiles
 echo '  ======  installing dotfiles via dfm'
 "$DOTFILES_DIR/bin/dfm" install
