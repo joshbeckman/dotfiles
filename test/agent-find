@@ -94,6 +94,32 @@ class AgentFindTest(unittest.TestCase):
         self.assertNotIn('x' * 500, result.stdout)
         self.assertLess(len(result.stdout), 5000, 'the enormous record leaked into the output')
 
+    def test_excerpts_come_from_ripgrep_and_not_python_re(self):
+        # `\p{L}` is a ripgrep construct that Python's re rejects outright, so a pattern
+        # using it can only produce excerpts if ripgrep is doing the matching. That is
+        # not only tidiness: re backtracks and ripgrep does not, so a pattern ripgrep
+        # answers instantly could hang the tool on a 651k-character thinking block.
+        records = json.loads(self.run_cli('--json', r'persimmon\p{L}*').stdout)
+        self.assertEqual([r['matches'] for r in records], [3, 1])
+        self.assertEqual(len(records[0]['samples']), 3)
+        self.assertIn('persimmon', records[0]['samples'][0]['text'])
+
+    def test_excerpts_are_the_earliest_matches_not_the_latest(self):
+        # The latest matches can be passing mentions of something the session concluded
+        # long before, so the earliest are the ones worth showing. Pinned because it is
+        # a choice and not an accident of the implementation.
+        self.model_fixture([
+            {'type': 'message', 'id': letter, 'timestamp': f'2026-01-01T0{n}:00:00Z',
+             'message': {'role': 'user', 'content': f'persimmon {word}'}}
+            for n, (letter, word) in enumerate(
+                [('a', 'first'), ('b', 'second'), ('c', 'third'), ('d', 'fourth')], start=1)
+        ])
+        record = next(r for r in json.loads(self.run_cli('--json', 'persimmon').stdout)
+                      if r['sessionId'] == self.sid)
+        self.assertEqual(record['matches'], 4)
+        self.assertEqual([s['text'] for s in record['samples']],
+                         ['persimmon first', 'persimmon second', 'persimmon third'])
+
     def test_a_match_in_metadata_still_shows_where_it_is(self):
         # Not every match is in prose: searching for a working directory name finds the
         # session header. Showing where it matched beats dropping an excerpt that the

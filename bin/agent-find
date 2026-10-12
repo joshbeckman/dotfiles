@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Find agent sessions by transcript topic, or inspect one exact contact.
 
-A search result carries the matching line count and a few excerpts, because a count
-alone does not say what matched and a count is easy to inflate: a session that dumped a
-file mentioning the term fifty times outranks one that discussed it twice.
+A search result carries the matching line count and a few excerpts. The count is the
+number of transcript records that matched, since one record is one line: it says nothing
+about what matched, and it rewards a session that mentions a term in many separate
+records rather than one that concluded something about it. The excerpts are what let a
+caller judge one result against another.
 """
 import argparse
 from datetime import datetime, timezone
@@ -110,33 +112,81 @@ def text_candidates(record):
     return candidates
 
 
-def excerpt(text, match, width=60):
-    start = max(0, match.start() - width)
-    end = min(len(text), match.end() + width)
+def excerpt(text, start, end, width=60):
+    start = max(0, start - width)
+    end = min(len(text), end + width)
     body = ' '.join(text[start:end].split())
     return ('\u2026' if start else '') + body + ('\u2026' if end < len(text) else '')
 
 
-def sample_from(record, line, pattern):
-    """One excerpt for an already-parsed matching record, or None."""
-    for kind, text in text_candidates(record):
-        found = pattern.search(text)
-        if found is not None:
-            return {'at': record.get('timestamp'), 'kind': kind, 'text': excerpt(text, found)}
-    # The match is in metadata rather than in any text field. Show where it is instead
-    # of dropping an excerpt the count says exists.
-    found = pattern.search(line)
-    if found is None:
+def sample_from(record, raw, matched):
+    """One excerpt for a record ripgrep matched, or None.
+
+    `matched` is the text ripgrep matched, so the window is found with a literal
+    search. Python's re is deliberately not involved: it backtracks and ripgrep does
+    not, so a pattern one handles instantly can hang the other on a record holding a
+    651,615-character thinking block, and the caller here is an agent.
+    """
+    if not matched:
         return None
-    return {'at': record.get('timestamp'), 'kind': 'metadata', 'text': excerpt(line, found)}
+    if isinstance(record, dict):
+        for kind, text in text_candidates(record):
+            at = text.find(matched)
+            if at >= 0:
+                return {'at': record.get('timestamp'), 'kind': kind,
+                        'text': excerpt(text, at, at + len(matched))}
+    # The match is in metadata rather than in any text field. Show where it is rather
+    # than dropping an excerpt that the count says exists.
+    at = raw.find(matched)
+    if at < 0:
+        return None
+    return {'at': record.get('timestamp') if isinstance(record, dict) else None,
+            'kind': 'metadata', 'text': excerpt(raw, at, at + len(matched))}
 
 
-def hydrate(file, hits, claims, mail_root, pane_titles, pattern=None, samples=0):
+def sample_matches(file, pattern, limit):
+    """The first `limit` matching records in one transcript, windowed.
+
+    ripgrep does the matching and hands back the text it matched, so the excerpts come
+    from the same matcher as the count and the tool has one regex dialect rather than
+    two. It also means the matches are not re-derived: the first version ran Python's
+    regex over every field of every record in the file, including the huge ones.
+    """
+    if limit < 1:
+        return []
+    result = subprocess.run(['rg', '--json', '-i', '-m', str(limit), '--', pattern, str(file)],
+                            capture_output=True)
+    if result.returncode not in (0, 1):
+        return []
+    samples = []
+    for event in result.stdout.splitlines():
+        try:
+            event = json.loads(event)
+        except ValueError:
+            continue
+        if event.get('type') != 'match':
+            continue
+        data = event.get('data') or {}
+        raw = (data.get('lines') or {}).get('text')
+        submatches = data.get('submatches') or []
+        if not isinstance(raw, str) or not submatches:
+            continue
+        matched = (submatches[0].get('match') or {}).get('text')
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            record = None
+        sample = sample_from(record, raw, matched)
+        if sample is not None:
+            samples.append(sample)
+    return samples
+
+
+def hydrate(file, hits, claims, mail_root, pane_titles, samples=()):
     sid = file.stem.rpartition('_')[2]
     handle = claims.get(sid, '')
     cwd, title, harness = '', '', None
     entries, used, leaf = {}, {}, None
-    collected = []
     with file.open(errors='replace') as transcript:
         for index, line in enumerate(transcript):
             try:
@@ -145,12 +195,6 @@ def hydrate(file, hits, claims, mail_root, pane_titles, pattern=None, samples=0)
                 continue
             if not isinstance(record, dict):
                 continue
-            if pattern is not None and samples:
-                sample = sample_from(record, line, pattern)
-                if sample is not None:
-                    collected.append(sample)
-                    if len(collected) > samples:
-                        collected.pop(0)
             if index == 0:
                 if isinstance(record.get('cwd'), str):
                     cwd = record['cwd']
@@ -186,7 +230,7 @@ def hydrate(file, hits, claims, mail_root, pane_titles, pattern=None, samples=0)
     resume = f'cd {shlex.quote(cwd or "?")} && pi --session {shlex.quote(str(file))}'
     return {'handle': '@+' + handle if handle else None, 'title': title or '(untitled)',
             'sessionId': sid, 'sessionShort': sid[:8], 'started': file.name[:10],
-            'matches': hits, 'samples': collected, 'cwd': cwd or '?', 'liveness': live, 'scratchpad': pad,
+            'matches': hits, 'samples': list(samples), 'cwd': cwd or '?', 'liveness': live, 'scratchpad': pad,
             'sessionFile': str(file), 'resume': resume, 'harness': harness,
             'provider': current['provider'] if current else None,
             'model': current['model'] if current else None,
@@ -237,7 +281,7 @@ def main():
     parser = argparse.ArgumentParser(description='Find agent sessions by case-insensitive transcript regex, or inspect an exact @+handle.')
     parser.add_argument('pattern', nargs='*', help='transcript search pattern, or a single @+handle for exact lookup')
     parser.add_argument('--limit', type=positive_int, default=5, help='maximum results (default: 5)')
-    parser.add_argument('--samples', type=non_negative_int, default=3, help='matching excerpts to show per session (default: 3; 0 disables)')
+    parser.add_argument('--samples', type=non_negative_int, default=3, help='excerpts to show per session, earliest matches first (default: 3; 0 disables)')
     parser.add_argument('--json', action='store_true', help='emit session metadata, latest recorded model, observed-model history, and matching excerpts as JSON')
     parser.add_argument('--agent', help='inspect an exact registry handle instead of searching transcripts')
     args = parser.parse_intermixed_args()
@@ -246,14 +290,6 @@ def main():
         parser.error('provide either a search pattern or --agent HANDLE')
     if not args.agent and re.fullmatch(r'@\+[a-z0-9][a-z0-9._-]*', pattern):
         args.agent = pattern
-    search_pattern = None
-    if pattern and args.samples:
-        try:
-            search_pattern = re.compile(pattern, re.IGNORECASE)
-        except re.error:
-            # ripgrep's dialect is not Python's. Excerpts are optional, so a pattern
-            # only ripgrep can compile costs the excerpts and nothing else.
-            search_pattern = None
     root = Path(os.environ.get('PI_SESSIONS_DIR', '~/.pi/agent/sessions')).expanduser()
     registry = Path(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')).expanduser()
     mail_root = Path(os.environ.get('AGENT_MAIL_ROOT', os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))).expanduser()
@@ -280,7 +316,9 @@ def main():
             pane_titles = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_title}'], capture_output=True, text=True, timeout=5).stdout
         except (OSError, subprocess.TimeoutExpired):
             pane_titles = ''
-        results = [hydrate(file, hits, claims, mail_root, pane_titles, search_pattern, args.samples)
+        # No pattern means an exact-handle lookup, which has nothing to excerpt.
+        wanted = args.samples if pattern else 0
+        results = [hydrate(file, hits, claims, mail_root, pane_titles, sample_matches(file, pattern, wanted))
                    for hits, file in ranked[:args.limit]]
         memberships, team_warning = team_memberships() if results else ({}, None)
         for result in results:
