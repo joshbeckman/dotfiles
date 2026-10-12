@@ -62,6 +62,58 @@ class AgentFindTest(unittest.TestCase):
             self.assertIn(field, text)
         self.assertNotIn('birch-weaver', text)
 
+    def test_search_reports_what_matched_not_only_how_many(self):
+        records = json.loads(self.run_cli('--json', 'persimmon').stdout)
+        self.assertEqual([r['matches'] for r in records], [3, 1])
+        self.assertEqual([s['kind'] for s in records[0]['samples']], ['user'] * 3)
+        self.assertEqual([s['kind'] for s in records[1]['samples']], ['user'])
+        for sample in records[0]['samples']:
+            self.assertIn('persimmon migration', sample['text'])
+        # No timestamp on the fixture record, so the excerpt says so rather than lying.
+        self.assertIsNone(records[0]['samples'][0]['at'])
+        text = self.run_cli('persimmon', '--limit', '1').stdout
+        self.assertEqual(text.count('match:'), 3)
+        self.assertIn('unknown time  user  persimmon migration', text)
+
+    def test_excerpt_is_bounded_even_when_the_record_is_enormous(self):
+        # A transcript line is a whole record, and one record can hold a tool result or
+        # a thinking block of hundreds of thousands of characters, so the matching line
+        # is not printable as it stands. This is the reason the excerpt is extracted
+        # from the parsed record instead.
+        huge = 'x' * 200_000 + ' persimmon ' + 'y' * 200_000
+        self.model_fixture([
+            {'type': 'message', 'id': 'a', 'timestamp': '2026-01-01T02:00:00Z',
+             'message': {'role': 'assistant', 'content': [{'type': 'thinking', 'thinking': huge}]}},
+        ])
+        result = self.run_cli('--json', 'persimmon')
+        record = next(r for r in json.loads(result.stdout) if r['sessionId'] == self.sid)
+        self.assertEqual(record['matches'], 1)
+        self.assertEqual([s['kind'] for s in record['samples']], ['assistant thinking'])
+        self.assertIn('persimmon', record['samples'][0]['text'])
+        self.assertLess(len(record['samples'][0]['text']), 200)
+        self.assertNotIn('x' * 500, result.stdout)
+        self.assertLess(len(result.stdout), 5000, 'the enormous record leaked into the output')
+
+    def test_a_match_in_metadata_still_shows_where_it_is(self):
+        # Not every match is in prose: searching for a working directory name finds the
+        # session header. Showing where it matched beats dropping an excerpt that the
+        # count says exists.
+        records = json.loads(self.run_cli('--json', 'directory').stdout)
+        self.assertEqual([r['matches'] for r in records], [1, 1])
+        self.assertEqual([s['kind'] for s in records[0]['samples']], ['metadata'])
+        self.assertIn('directory', records[0]['samples'][0]['text'])
+
+    def test_excerpts_can_be_turned_off(self):
+        records = json.loads(self.run_cli('--json', 'persimmon', '--samples', '0').stdout)
+        self.assertEqual([r['matches'] for r in records], [3, 1])
+        self.assertEqual(records[0]['samples'], [])
+        self.assertNotIn('match:', self.run_cli('persimmon', '--limit', '1', '--samples', '0').stdout)
+        self.assertNotEqual(self.run_cli('persimmon', '--samples', '-1').returncode, 0)
+
+    def test_exact_handle_lookup_carries_no_excerpts(self):
+        # There is no pattern to excerpt, and the result already says "metadata only".
+        self.assertEqual(self.model_result()['samples'], [])
+
     def model_fixture(self, entries):
         header = {'type': 'session', 'version': 3, 'id': self.sid, 'cwd': '/fixture'}
         self.file.write_text('\n'.join(json.dumps(e) for e in [header, *entries]) + '\n')
