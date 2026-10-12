@@ -9,11 +9,12 @@
 // the behaviour around them.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { deflateSync } from "node:zlib";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSIONS = join(root, ".agents/pi/extensions");
@@ -79,11 +80,34 @@ function fakePi() {
   const handlers = {};
   const sent = [];
   const modelCalls = [];
+  const entries = [];
+  const notices = [];
+  const statuses = [];
+  // The context a handler is given, with the side effects an extension can have on the session
+  // recorded rather than performed: aborting is what the loop breaker is for, so it has to be
+  // observable.
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    model: { provider: "test", id: "looping" },
+    aborts: 0,
+    ui: {
+      notify: (message, type) => notices.push({ message, type }),
+      setStatus: (key, text) => statuses.push({ key, text }),
+    },
+    abort: () => {
+      ctx.aborts += 1;
+    },
+  };
   return {
     tools,
     commands,
     sent,
     modelCalls,
+    entries,
+    notices,
+    statuses,
+    ctx,
     api: {
       registerTool: (tool) => {
         tools[tool.name] = tool;
@@ -101,9 +125,10 @@ function fakePi() {
       },
       setThinkingLevel: (level) => modelCalls.push(`thinking:${level}`),
       getThinkingLevel: () => "high",
+      appendEntry: (customType, data) => entries.push({ customType, data }),
     },
     async emit(event, payload = {}) {
-      for (const handler of handlers[event] || []) await handler(payload);
+      for (const handler of handlers[event] || []) await handler(payload, ctx);
     },
   };
 }
@@ -404,6 +429,313 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
       && /pi\.on\("agent_end"[\s\S]*?turnInFlight = false/.test(source)
       && /if \(turnInFlight\) return/.test(source),
   );
+}
+
+// --- thinking loop breaker ---------------------------------------------------
+
+// A reasoning model that degenerates streams one thinking block of hundreds of thousands of
+// characters over many minutes, with no tool calls and no visible text. The provider's own
+// thinking budget does not stop it, so the guard measures the stream instead. These cases pin
+// the measurement: what it catches, what it must not catch, and the sizes it was set from.
+const loopBreakerModule = await import(pathToFileURL(join(EXTENSIONS, "thinking-loop-breaker.ts")).href);
+const loopBreaker = loopBreakerModule.default;
+const LIMITS = {
+  ratio: loopBreakerModule.REPEAT_RATIO,
+  window: loopBreakerModule.TAIL_WINDOW,
+  max: loopBreakerModule.MAX_THINKING_CHARS,
+};
+
+const compression = (text) => deflateSync(text).length / Buffer.byteLength(text, "utf8");
+
+function breaker() {
+  const pi = fakePi();
+  loopBreaker(pi.api);
+  return pi;
+}
+
+// Delivers a thinking stream in chunks, stopping as soon as the guard aborts, and reports how
+// many characters it took. That number is the whole point: a guard that trips at 5,000
+// characters is a different thing from one that trips at 600,000.
+async function driveThinking(pi, text, chunk = 64) {
+  await pi.emit("message_start", { message: { role: "assistant" } });
+  return driveDeltas(pi, text, chunk);
+}
+
+async function driveDeltas(pi, text, chunk = 64) {
+  let delivered = 0;
+  for (let at = 0; at < text.length; at += chunk) {
+    const delta = text.slice(at, at + chunk);
+    await pi.emit("message_update", { assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta } });
+    delivered += delta.length;
+    if (pi.ctx.aborts > 0) break;
+  }
+  return delivered;
+}
+
+// The recorded runaway shape, taken from the session store: the block collapses into one short
+// unit repeated without end. Everything below is the same length class, so the guard is being
+// asked to separate shapes rather than sizes.
+const RUNAWAY = "Hmm. ".repeat(40_000);
+const RUNAWAY_LINES = "Hmm. Hmm. Hmm. Hmm. Hmm. Hmm. Hmm. Hmm. Hmm. Hmm. Hmm. Hmm.\n\n".repeat(3_000);
+// A loop need not repeat five characters. This one repeats a 2,000-character passage, which is
+// what the measurement window has to be wide enough to see.
+const SLOW_LOOP = "The expectation has to exist before the measurement, and a control that confirms a quantity needs a prior publication, which is the part I keep missing. "
+  .repeat(20)
+  .slice(0, 2_000)
+  .repeat(50);
+// Redundant without being degenerate: a block that is mostly a file listing compresses to about
+// 0.085, which is why the threshold sits at 0.05 rather than somewhere more comfortable.
+// Sized under the size cap on purpose: a longer one would be stopped by the backstop and the
+// case would no longer be about the repetition rule.
+const LISTING = Array.from(
+  { length: 900 },
+  (_, i) => `-rw-r--r-- josh josh ${4096 + i * 37} Oct 12 08:40 /home/josh/dotfiles/bin/agent-mail-helper-${String(i).padStart(3, "0")}.sh`,
+).join("\n");
+const PROSE = readFileSync(join(root, ".agents/skills/own-pr/SKILL.md"), "utf8").repeat(20);
+
+{
+  const pi = breaker();
+  const delivered = await driveThinking(pi, RUNAWAY);
+  check("a repeating thinking block is broken", pi.ctx.aborts === 1, `aborts ${pi.ctx.aborts}`);
+  check("it is broken in thousands of characters, not hundreds of thousands", delivered < 20_000, `${delivered} characters`);
+  eq("the reason recorded is the repetition", pi.entries[0]?.data.reason, "repetition");
+  check(
+    "the entry records the size and the ratio it tripped at",
+    pi.entries[0]?.data.chars === delivered && pi.entries[0]?.data.ratio < LIMITS.ratio,
+    JSON.stringify(pi.entries[0]?.data),
+  );
+  check(
+    "the notice says what happened and that the turn ended",
+    /Thinking loop broken: [\d,]+ characters \(repetition\)\. Turn aborted\./.test(pi.notices[0]?.message ?? ""),
+    JSON.stringify(pi.notices),
+  );
+}
+
+{
+  const pi = breaker();
+  const delivered = await driveThinking(pi, RUNAWAY_LINES);
+  check("the multi-sentence line shape the recorder shows is broken too", pi.ctx.aborts === 1 && delivered < 20_000, `${delivered} characters`);
+}
+
+{
+  const pi = breaker();
+  const delivered = await driveThinking(pi, SLOW_LOOP);
+  check(
+    "a loop whose repeated unit is 2,000 characters is broken too",
+    pi.ctx.aborts === 1 && delivered < 20_000,
+    `aborts ${pi.ctx.aborts}, ${delivered} characters`,
+  );
+}
+
+{
+  const pi = breaker();
+  const delivered = await driveThinking(pi, LISTING);
+  check(
+    "redundant but honest content is left alone",
+    pi.ctx.aborts === 0 && delivered === LISTING.length,
+    `${delivered} of ${LISTING.length} characters, aborts ${pi.ctx.aborts}`,
+  );
+}
+
+{
+  // The backstop, for a block that degenerates without ever repeating: prose can be fed for
+  // ever and only the size cap stops it.
+  const pi = breaker();
+  const fixture = compression(PROSE.slice(0, LIMITS.window));
+  check("the prose fixture is ordinary enough to be a control", fixture > 0.25, String(fixture));
+  const delivered = await driveThinking(pi, PROSE);
+  check("a block that never repeats is stopped by the size cap", pi.ctx.aborts === 1 && delivered === LIMITS.max, `${delivered} of ${LIMITS.max}`);
+  eq("the reason recorded is the length", pi.entries[0]?.data.reason, "length");
+}
+
+{
+  const pi = breaker();
+  await driveThinking(pi, RUNAWAY.slice(0, 3_000));
+  check("a block too short to measure is left alone", pi.ctx.aborts === 0 && pi.notices.length === 0, JSON.stringify(pi.notices));
+}
+
+{
+  const pi = breaker();
+  await pi.emit("message_start", { message: { role: "assistant" } });
+  for (let at = 0; at < 60_000; at += 64) {
+    await pi.emit("message_update", { assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x".repeat(64) } });
+  }
+  check("an ordinary text stream is untouched", pi.ctx.aborts === 0 && pi.statuses.length === 0, JSON.stringify(pi.statuses));
+}
+
+{
+  const pi = breaker();
+  await pi.emit("message_start", { message: { role: "assistant" } });
+  await pi.emit("message_update", { assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: PROSE.slice(0, 20_000) } });
+  check("a long thinking block shows its size", pi.statuses.some((s) => /^thinking \d+k$/.test(s.text ?? "")), JSON.stringify(pi.statuses));
+  await pi.emit("message_end", { message: { role: "assistant" } });
+  eq("the status is cleared when the message ends", pi.statuses.at(-1)?.text, undefined);
+}
+
+{
+  // Two ordinary blocks in a row add up to more than the cap, so the counter has to reset when
+  // a message ends rather than accumulate across a turn.
+  const pi = breaker();
+  await pi.emit("message_start", { message: { role: "assistant" } });
+  await driveDeltas(pi, PROSE.slice(0, 100_000));
+  await pi.emit("message_end", { message: { role: "assistant" } });
+  const delivered = await driveDeltas(pi, PROSE.slice(0, 100_000));
+  check("the counter resets when a message ends", pi.ctx.aborts === 0 && delivered === 100_000, `${delivered} characters, aborts ${pi.ctx.aborts}`);
+}
+
+{
+  const pi = breaker();
+  await pi.commands["thinking-loop-breaker"].handler("off", pi.ctx);
+  const off = await driveThinking(pi, RUNAWAY);
+  check("the command can turn the guard off", pi.ctx.aborts === 0 && off === RUNAWAY.length, `${off} characters, aborts ${pi.ctx.aborts}`);
+  await pi.commands["thinking-loop-breaker"].handler("on", pi.ctx);
+  const on = await driveThinking(pi, RUNAWAY);
+  check("and back on", pi.ctx.aborts === 1 && on < 20_000, `${on} characters`);
+  await pi.commands["thinking-loop-breaker"].handler("limits", pi.ctx);
+  check("the limits are reported", new RegExp(`ratio ${LIMITS.ratio}`).test(pi.notices.at(-1)?.message ?? ""), JSON.stringify(pi.notices.at(-1)));
+}
+
+// The cases above prove the decision. This one proves the decision binds, which is the part a
+// configuration knob cannot promise: a real pi process, a provider that streams 600,000
+// characters of the recorded runaway shape, and the guard loaded the way a session loads it.
+// Unguarded, the same provider runs to the end of the block.
+const DEGENERATE_PROVIDER = `
+import {
+  createAssistantMessageEventStream,
+} from "@earendil-works/pi-ai";
+import { writeFileSync } from "node:fs";
+
+const UNIT = "Hmm. ";
+const TOTAL = 600_000;
+
+export default function (pi) {
+  pi.registerProvider("degenerate", {
+    baseUrl: "http://127.0.0.1:1",
+    api: "degenerate-api",
+    apiKey: "fake",
+    models: [{
+      id: "loop",
+      name: "Loop",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    }],
+    streamSimple(model, _context, options) {
+      const stream = createAssistantMessageEventStream();
+      (async () => {
+        const output = {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "", thinkingSignature: "" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "pending",
+          timestamp: Date.now(),
+        };
+        stream.push({ type: "start", partial: output });
+        stream.push({ type: "thinking_start", contentIndex: 0, partial: output });
+        let n = 0;
+        while (n < TOTAL && !options?.signal?.aborted) {
+          output.content[0].thinking += UNIT;
+          stream.push({ type: "thinking_delta", contentIndex: 0, delta: UNIT, partial: output });
+          n += UNIT.length;
+          // A real stream arrives over minutes; pacing it lets the reader act on what it has.
+          if (n % 512 === 0) await new Promise((r) => setTimeout(r, 0));
+        }
+        if (process.env.DEGENERATE_CHARS_FILE) writeFileSync(process.env.DEGENERATE_CHARS_FILE, String(n));
+        stream.push({ type: "thinking_end", contentIndex: 0, content: output.content[0].thinking, partial: output });
+        output.stopReason = options?.signal?.aborted ? "aborted" : "stop";
+        stream.push({ type: "done", reason: output.stopReason, message: output });
+      })();
+      return stream;
+    },
+  });
+}
+`;
+
+{
+  const PI_BIN = process.env.PI_BIN ?? "pi";
+  let installed = true;
+  try {
+    execFileSync(PI_BIN, ["--version"], { stdio: "ignore" });
+  } catch {
+    installed = false;
+  }
+  check("pi is installed, so the binding case can run", installed);
+
+  if (installed) {
+    const dir = mkdtempSync(join(tmpdir(), "pi-loop-breaker-"));
+    const provider = join(dir, "degenerate-provider.ts");
+    writeFileSync(provider, DEGENERATE_PROVIDER);
+
+    const run = (guarded) => {
+      const charsFile = join(dir, guarded ? "guarded.txt" : "unguarded.txt");
+      const sessionDir = join(dir, guarded ? "s-guarded" : "s-unguarded");
+      mkdirSync(sessionDir, { recursive: true });
+      const args = ["-ne"];
+      if (guarded) args.push("-e", join(EXTENSIONS, "thinking-loop-breaker.ts"));
+      args.push(
+        "-e",
+        provider,
+        "--session-dir",
+        sessionDir,
+        "--no-skills",
+        "--no-context-files",
+        "--no-themes",
+        "--model",
+        "degenerate/loop",
+        "-p",
+        "think about it",
+      );
+      let stderr = "";
+      try {
+        execFileSync(PI_BIN, args, { encoding: "utf8", cwd: dir, timeout: 180_000, env: { ...process.env, DEGENERATE_CHARS_FILE: charsFile }, stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        // The guarded run ends by aborting, which print mode reports as a non-zero exit.
+        stderr = String(error.stderr ?? "");
+      }
+      const sessionFile = readdirSync(sessionDir).find((f) => f.endsWith(".jsonl"));
+      const records = readFileSync(join(sessionDir, sessionFile), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      return { chars: Number(readFileSync(charsFile, "utf8")), records, stderr };
+    };
+
+    const unguarded = run(false);
+    check(
+      "unguarded, the same provider streams the whole runaway block",
+      unguarded.chars === 600_000,
+      `${unguarded.chars} characters`,
+    );
+
+    const guarded = run(true);
+    check("guarded, a real pi process breaks the loop mid-stream", guarded.chars > 0 && guarded.chars < 20_000, `${guarded.chars} characters`);
+    check("the guard runs headless without an extension error", !/extension/i.test(guarded.stderr) || !/error/i.test(guarded.stderr), guarded.stderr.slice(0, 300));
+
+    const trip = guarded.records.find((record) => record.customType === "thinking-loop-breaker");
+    check(
+      "the trip is recorded in the session it happened in",
+      trip?.data?.reason === "repetition" && trip.data.chars > LIMITS.window && trip.data.chars < 8_000,
+      JSON.stringify(trip?.data),
+    );
+
+    const message = guarded.records.find(
+      (record) => record.type === "message" && Array.isArray(record.message?.content) && record.message.content.some((part) => part.type === "thinking"),
+    );
+    const thinking = message?.message.content.find((part) => part.type === "thinking")?.thinking ?? "";
+    check(
+      "the aborted message stops short of the size it would have reached",
+      message?.message.stopReason === "aborted" && thinking.length < 20_000,
+      `${thinking.length} characters, stopReason ${message?.message.stopReason}`,
+    );
+  }
 }
 
 // --- result -----------------------------------------------------------------
