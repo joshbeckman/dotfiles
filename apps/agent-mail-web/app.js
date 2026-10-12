@@ -1522,12 +1522,17 @@ getContacts().catch(error);
 // Badges are decoration: a failed team lookup leaves plain avatars.
 loadTeamBadges().catch(() => {});
 setInterval(() => loadTeamBadges().catch(() => {}), 300000);
-setInterval(() => {
+function refreshVisible() {
   if (document.hidden) return;
   if (view === "mail-list") refresh(true).catch(error);
   // The thread stays visible beside an inline reply draft.
   else if (current && !$("reader").hidden) refreshThread().catch(error);
-}, 10000);
+}
+setInterval(refreshVisible, 10000);
+// A hidden page is the normal state on a phone, and the interval above does nothing
+// while hidden, so returning to the app would otherwise show mail up to a full interval
+// old. The transcript view already refreshes on becoming visible; this is the same rule.
+document.addEventListener("visibilitychange", refreshVisible);
 
 // Notifications need a running bridge and an open app window (even in the
 // background); nothing here can deliver mail while the app is closed.
