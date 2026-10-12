@@ -554,11 +554,12 @@ async function loadDraft(value) {
   $("draft-status").textContent = "Saved on disk";
   if (value.parent && !(await openThread(value))) return;
   show("editor");
-  if (value.to) composer.focus();
-  else $("to").focus();
-  // Focusing scrolls the field into view, which on a phone can leave the action
-  // row above the viewport. Anchor on the section instead.
+  // Position the section first, then focus without letting the focus scroll: on a phone the
+  // focus scroll and the section scroll arrive as two jumps, which reads as flicker. The
+  // action row is at the top of the section, so this is what keeps it on screen.
   $("editor").scrollIntoView({ block: "start" });
+  if (value.to) $("body").focus({ preventScroll: true });
+  else $("to").focus({ preventScroll: true });
 }
 function saveDraft() {
   clearTimeout(timer);

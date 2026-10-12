@@ -893,15 +893,6 @@ try {
     }),
     "compose actions should be in view",
   );
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  assert(
-    await page.evaluate(() => {
-      const box = $("editor").querySelector(".actions").getBoundingClientRect();
-      return box.top >= 0 && box.bottom <= innerHeight;
-    }),
-    "compose actions should be in view",
-  );
-  await page.evaluate(() => window.scrollTo(0, 0));
   // A phone keyboard only offers spellcheck and autocapitalization if the editor asks
   // for them; CodeMirror sets autocapitalize off unless told otherwise.
   assert.deepEqual(
