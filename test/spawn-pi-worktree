@@ -62,6 +62,13 @@ grep -Fq 'pi: /fake/bin/pi' <<<"$output"
 grep -Fq -- '--approve' <<<"$output"
 grep -Fq -- '--approve\ --\ ' <<<"$output"
 grep -Fq -- 'inspect' <<<"$output"
+
+# A directory outside any repository is allowed: a session started from the web app
+# lands in the home directory, and the collision guard has nothing to guard there.
+mkdir "$tmp/plain"
+output="$(run --dry-run --tmux-session test --title plain --cwd "$tmp/plain" --prompt '- start here')"
+grep -Fq "worktree: $tmp/plain" <<<"$output"
+grep -Fq 'branch: not a repository' <<<"$output"
 # The provider key comes from settings.json, and `s` is present in the fixture
 # PATH, so the window command must be wrapped with it.
 grep -Fq 'secrets: FIREWORKS_API_KEY' <<<"$output"

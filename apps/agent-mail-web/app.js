@@ -632,6 +632,28 @@ async function sendDraft() {
       );
   }
 }
+// Starting an agent is not sending. Nothing is delivered to a mailbox: the message
+// becomes the first task a new session reads. The session names itself once it starts,
+// so the only thing there is to report back is where it was started.
+async function spawnAgent() {
+  if (busy) return;
+  const body = composer.value().trim();
+  if (!body) throw new Error("Write the task for the new agent first.");
+  busy = true;
+  const controls = [...document.querySelectorAll("button,input,textarea")].map(
+    (el) => [el, el.disabled],
+  );
+  controls.forEach(([el]) => (el.disabled = true));
+  try {
+    const started = await api("spawn", { subject: $("subject").value, body });
+    status(
+      `Started an agent in ${started.session}:${started.window}. It names itself once it starts.`,
+    );
+  } finally {
+    busy = false;
+    controls.forEach(([el, disabled]) => (el.disabled = disabled));
+  }
+}
 async function deleteDraft() {
   if (!draft || busy) return;
   if (uploading) throw new Error("Wait for the image upload before deleting.");
@@ -1353,6 +1375,7 @@ $("reply-all").onclick = () => newDraft("reply-all").catch(error);
 $("save-draft").onclick = () => saveDraft().catch(error);
 $("close-draft").onclick = () => navigate("drafts").catch(error);
 $("send").onclick = () => sendDraft().catch(error);
+$("spawn").onclick = () => spawnAgent().catch(error);
 $("delete-draft").onclick = () => deleteDraft().catch(error);
 for (const id of ["to", "subject"]) $(id).addEventListener("input", changed);
 $("to").addEventListener("input", () => renderRecipientCards(false));

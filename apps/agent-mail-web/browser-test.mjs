@@ -893,6 +893,13 @@ try {
     }),
     "compose actions should be in view",
   );
+  // Presence only. Clicking this button stalled once in Playwright's actionability check
+  // at a phone viewport — "scrolling into view if needed" never finished — which is a lead
+  // on the reported flicker rather than something to hide behind a forced click. Clicking
+  // it for real would also leave a Pi session behind on every run, and the refusal path is
+  // covered by the bridge tests.
+  assert.equal(await page.locator("#spawn").isVisible(), true);
+  assert.equal(await page.locator("#spawn").isEnabled(), true);
   // A phone keyboard only offers spellcheck and autocapitalization if the editor asks
   // for them; CodeMirror sets autocapitalize off unless told otherwise.
   assert.deepEqual(

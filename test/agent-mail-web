@@ -621,6 +621,58 @@ class WebTest(unittest.TestCase):
         self.assertTrue(self.box.path(invalid['key']).exists())
         self.assertEqual(len(self.box.listing('sent', '')['messages']), 0)
 
+    def test_spawn_starts_a_session_at_home_with_the_message_as_its_task(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, '', '')
+
+        with patch.object(web.subprocess, 'run', side_effect=fake_run):
+            status, body = self.request('/api/spawn', {'subject': 'Fix the Flaky Test', 'body': 'Investigate the retry.'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {'ok': True, 'window': 'fix-the-flaky-test', 'session': web.spawn_session()})
+        launcher = calls[-1]
+        self.assertEqual(launcher[0], str(ROOT / 'bin/spawn-pi-worktree'))
+        # The home directory, because the agent chooses its own workspace; a proactive
+        # try directory was considered and rejected.
+        self.assertEqual(launcher[launcher.index('--cwd') + 1], str(Path.home()))
+        self.assertEqual(launcher[launcher.index('--title') + 1], 'fix-the-flaky-test')
+        prompt = launcher[launcher.index('--prompt') + 1]
+        self.assertIn('Fix the Flaky Test', prompt)
+        self.assertIn('Investigate the retry.', prompt)
+
+    def test_spawn_creates_the_tmux_session_when_it_is_missing(self):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 1 if command[:2] == ['tmux', 'has-session'] else 0, '', '')
+
+        with patch.object(web.subprocess, 'run', side_effect=fake_run):
+            status, body = self.request('/api/spawn', {'subject': '!!!', 'body': 'Do a thing.'})
+        self.assertEqual(status, 200)
+        # A subject with nothing usable still has to name a window.
+        self.assertEqual(json.loads(body)['window'], 'spawn')
+        self.assertIn(['tmux', 'new-session', '-d', '-s', web.spawn_session()], calls)
+
+    def test_spawn_requires_a_task_and_reports_why_a_launch_failed(self):
+        with patch.object(web.subprocess, 'run') as run:
+            status, body = self.request('/api/spawn', {'subject': 'Empty', 'body': '   '})
+            self.assertEqual(status, 400)
+            self.assertIn('task', json.loads(body)['error'])
+            run.assert_not_called()
+
+        def failing(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0 if command[:2] == ['tmux', 'has-session'] else 1,
+                                               '', 'macOS memory pressure is 4; defer this launch')
+
+        with patch.object(web.subprocess, 'run', side_effect=failing):
+            status, body = self.request('/api/spawn', {'subject': 'Deferred', 'body': 'Later.'})
+        self.assertEqual(status, 400)
+        # The launcher's own refusal is what the sender needs to read, not a generic one.
+        self.assertIn('memory pressure', json.loads(body)['error'])
+
     def test_http_boundary(self):
         status, icon = self.request('/favicon.svg', **{'X-Agent-Mail-Token': ''})
         self.assertEqual(status, 200)

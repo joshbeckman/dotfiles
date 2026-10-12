@@ -26,6 +26,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / 'apps/agent-mail-web'
 CLI = ROOT / 'bin/agent-mail'
+SPAWN = ROOT / 'bin/spawn-pi-worktree'
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_IMAGE = 5 * 1024 * 1024
 MAX_AVATAR = 100 * 1024
@@ -43,6 +44,58 @@ def cli(*args):
     if result.returncode:
         raise MailError(result.stderr.strip() or 'Agent Mail command failed')
     return result.stdout.strip()
+
+
+def spawn_session():
+    # The tmux session the wake path already uses, so a started agent lands beside the
+    # sessions that were resumed rather than in a session of its own.
+    return os.environ.get('AGENT_MAIL_SPAWN_SESSION') or 'dotfiles'
+
+
+def spawn_title(subject):
+    """A tmux window name from a subject.
+
+    Lowercased, runs of anything else collapsed to single dashes, capped, with a
+    fallback: a window name is a label, so nothing here should be able to fail a launch.
+    """
+    return re.sub(r'[^a-z0-9]+', '-', subject.lower()).strip('-')[:40].strip('-') or 'spawn'
+
+
+def spawn_prompt(subject, body):
+    # The message is the task. It is not delivered to a mailbox, because the session
+    # names itself after it starts and there is no handle to deliver to yet.
+    lines = ['You were started from the Agent Mail web app. This message is your first task.', '']
+    if subject:
+        lines += [f'Subject: {subject}', '']
+    lines.append(body)
+    return '\n'.join(lines)
+
+
+def spawn(data):
+    subject = str(data.get('subject') or '').strip()
+    body = str(data.get('body') or '').strip()
+    if not body:
+        raise MailError('Write the task for the new agent first')
+    title = spawn_title(subject)
+    session = spawn_session()
+    command = [str(SPAWN), '--tmux-session', session, '--title', title,
+               '--cwd', str(Path.home()), '--prompt', spawn_prompt(subject, body)]
+    try:
+        # A window needs a session to live in, and the launcher refuses a session that
+        # does not exist. Creating it is the difference between a first spawn working
+        # and a first spawn failing with a message about tmux.
+        if subprocess.run(['tmux', 'has-session', '-t', session], capture_output=True).returncode:
+            created = subprocess.run(['tmux', 'new-session', '-d', '-s', session], capture_output=True, text=True)
+            if created.returncode:
+                raise MailError(created.stderr.strip() or f'Could not create tmux session {session}')
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError as error:
+        raise MailError(f'{error.filename} is not installed') from error
+    except subprocess.TimeoutExpired as error:
+        raise MailError('Starting the session timed out') from error
+    if result.returncode:
+        raise MailError(result.stderr.strip() or 'Could not start the session')
+    return {'ok': True, 'window': title, 'session': session}
 
 
 def local_keywords():
@@ -795,6 +848,8 @@ class Handler(BaseHTTPRequestHandler):
             result = {'ok': True, 'key': 'sent:' + delivered.name}
         elif route == '/api/attachment':
             result = box.attachment(data)
+        elif route == '/api/spawn':
+            result = spawn(data)
         else:
             raise MailError('Unknown endpoint', 404)
         self.reply(200, result)

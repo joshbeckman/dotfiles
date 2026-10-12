@@ -7,8 +7,11 @@ Usage:
   spawn-pi-worktree [--dry-run] [--approve] [--secret KEY]... --tmux-session SESSION \
     --title TITLE --cwd PATH --prompt TEXT
 
-Starts Pi in an existing git worktree and a new detached tmux window.
-Repository-specific worktree creation and setup must already be complete.
+Starts Pi in an existing directory and a new detached tmux window. The directory
+must already exist. When it is a git worktree, repository-specific setup must
+already be complete, and a worktree belonging to the caller is refused so that two
+agents cannot share one checkout. A directory outside any repository is allowed:
+the guard exists to protect a checkout, and a plain directory has none.
 
 Pi's provider key is injected with `s` when that tool is available. The key
 name comes from --secret (repeatable), then $SPAWN_PI_SECRETS, then Pi's own
@@ -71,10 +74,14 @@ done
 [[ "$cwd" = /* ]] || die '--cwd must be an absolute path'
 [[ -d "$cwd" ]] || die "cwd does not exist: $cwd"
 [[ "$title" != *$'\n'* ]] || die '--title must be one line'
-git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "cwd is not a git worktree: $cwd"
-worktree_root="$(git -C "$cwd" rev-parse --show-toplevel)"
-if caller_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" && [[ "$worktree_root" == "$caller_root" ]]; then
-  die "cwd belongs to the coordinator's current worktree: $worktree_root"
+in_repo=false
+if worktree_root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then
+  in_repo=true
+  if caller_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" && [[ "$worktree_root" == "$caller_root" ]]; then
+    die "cwd belongs to the coordinator's current worktree: $worktree_root"
+  fi
+else
+  worktree_root="$cwd"
 fi
 
 command -v tmux >/dev/null 2>&1 || die 'tmux is not installed'
@@ -135,10 +142,11 @@ env_args=()
 
 inner='pi_path=$1; shift; printf "Starting Pi: %s\n" "$pi_path"; "$@"; status=$?; printf "Pi exited with %s; leaving an interactive shell open.\n" "$status"; exec "${SHELL:-/bin/sh}" -l'
 window_command="$(shell_join /bin/sh -c "$inner" spawn-pi-worktree "$pi_path" "${pi_command[@]}")"
-branch="$(git -C "$cwd" branch --show-current)"
+branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
+if $in_repo; then branch_label="${branch:-detached HEAD}"; else branch_label="not a repository"; fi
 
 if $dry_run; then
-  printf 'worktree: %s\nbranch: %s\npi: %s\n' "$worktree_root" "${branch:-detached HEAD}" "$pi_path"
+  printf 'worktree: %s\nbranch: %s\npi: %s\n' "$worktree_root" "$branch_label" "$pi_path"
   if $wrapped; then printf 'secrets: %s\n' "${secrets[*]}"; fi
   env_display=""
   # Guarded expansion: Bash 3.2 (stock macOS) aborts an empty array under set -u.
