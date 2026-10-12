@@ -197,6 +197,26 @@ __setup_linux(){
                 *)
                         __setup_unsupported;;
         esac
+
+        # The refresh schedule. On macOS this is a launchd job that dfm links from
+        # Library/LaunchAgents; here it is a user timer, linked the same way so that
+        # editing the unit in the repo is what the machine runs. Linking is not
+        # enough on its own, so enable it, and say so rather than failing when there
+        # is no user bus to enable it on: a container, or WSL without systemd, still
+        # has every other part of setup to do.
+        echo '  ======  installing the dotfiles refresh schedule'
+        for unit in dotfiles-refresh.service dotfiles-refresh.timer; do
+                unit_source="$DOTFILES_DIR/.config/systemd/user/$unit"
+                [ -f "$unit_source" ] || continue
+                symlink_agent_config "$unit_source" "$HOME/.config/systemd/user/$unit"
+        done
+        if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+                systemctl --user daemon-reload
+                systemctl --user enable --now dotfiles-refresh.timer || echo 'could not enable dotfiles-refresh.timer; continuing'
+        else
+                echo '  ======  no user systemd bus here; enable dotfiles-refresh.timer by hand'
+        fi
+        echo '  ======  installed the dotfiles refresh schedule'
 }
 
 __setup_mac(){

@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Exercise bin/dotfiles-refresh without running a real setup.
+
+The point of this file is the lock. It used to call /usr/bin/shlock, which is an INN
+tool: not installed on this machine, not an apt package, and not in the Brewfile. With
+the binary missing, the old code read "command not found" as "a refresh is already
+running", logged that, and exited 0. A scheduled refresh would therefore have reported
+success for ever without running anything at all, so the first test below is simply
+that setup runs.
+"""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = Path(os.environ.get('REFRESH_UNDER_TEST', ROOT / 'bin/dotfiles-refresh'))
+
+
+class RefreshTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='dotfiles-refresh-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.home = self.root / 'home'
+        self.dotfiles = self.root / 'dotfiles'
+        self.fakebin = self.root / 'fakebin'
+        for path in (self.home / 'bin', self.dotfiles, self.fakebin):
+            path.mkdir(parents=True)
+        self.script = self.root / 'dotfiles-refresh'
+        shutil.copyfile(SOURCE, self.script)
+        self.script.chmod(0o700)
+        self.setup_log = self.root / 'setup.log'
+        self.notify_log = self.root / 'notify.log'
+        self.stub_setup(0)
+        # notify-josh is resolved from $HOME/bin, which the script puts first on the
+        # PATH it rebuilds, so the stub has to live there rather than in fakebin.
+        self.executable(self.home / 'bin' / 'notify-josh',
+                        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NOTIFY_LOG"\nexit 0\n')
+        self.executable(self.fakebin / 'uname', '#!/bin/sh\nprintf "%s\\n" "$FAKE_UNAME"\n')
+        self.env = {
+            'HOME': str(self.home),
+            'DOTFILES_DIR': str(self.dotfiles),
+            'PATH': os.pathsep.join([str(self.fakebin), '/usr/bin', '/bin']),
+            'SHELL': shutil.which('bash') or '/bin/sh',
+            'SETUP_LOG': str(self.setup_log),
+            'NOTIFY_LOG': str(self.notify_log),
+            'FAKE_UNAME': 'Linux',
+        }
+
+    def executable(self, path, body):
+        path.write_text(body)
+        path.chmod(0o700)
+
+    def stub_setup(self, status):
+        self.executable(self.dotfiles / 'setup',
+                        '#!/bin/sh\nprintf "setup ran\\n" >> "$SETUP_LOG"\nexit %d\n' % status)
+
+    def run_refresh(self, **environment):
+        return subprocess.run([str(self.script)], env={**self.env, **environment},
+                              capture_output=True, text=True, timeout=60)
+
+    def state(self):
+        return self.home / '.local/state/dotfiles-refresh'
+
+    def test_setup_runs_at_all(self):
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.setup_log.read_text(), 'setup ran\n')
+
+    def test_linux_keeps_the_log_out_of_a_library_directory(self):
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('ok', (self.state() / 'refresh.log').read_text())
+        self.assertFalse((self.home / 'Library').exists())
+
+    def test_mac_keeps_the_log_under_library(self):
+        result = self.run_refresh(FAKE_UNAME='Darwin')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.home / 'Library/Logs/dotfiles-refresh.log').is_file())
+
+    def test_a_live_lock_skips_without_running_setup(self):
+        self.state().mkdir(parents=True)
+        (self.state() / 'refresh.lock').write_text('%d\n' % os.getpid())
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.setup_log.exists())
+        self.assertIn('skipped: a refresh is already running',
+                      (self.state() / 'refresh.log').read_text())
+
+    def test_a_stale_lock_is_taken_over(self):
+        dead = subprocess.Popen(['/bin/true'])
+        dead.wait()
+        self.state().mkdir(parents=True)
+        (self.state() / 'refresh.lock').write_text('%d\n' % dead.pid)
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.setup_log.read_text(), 'setup ran\n')
+
+    def test_the_lock_is_released_after_a_run(self):
+        self.run_refresh()
+        self.assertFalse((self.state() / 'refresh.lock').exists())
+
+    def test_a_failing_setup_exits_non_zero_and_notifies(self):
+        self.stub_setup(7)
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn('dotfiles refresh failed', self.notify_log.read_text())
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

@@ -14,7 +14,7 @@ The [`setup`](setup) script handles everything: symlinking dotfiles via `dfm ins
 
 Refreshes are noninteractive: plugin updates must fast-forward, Homebrew upgrades do not ask for confirmation or quit running apps, and privileged Homebrew installers are refused. Required-step failures stop the run; optional completion-keyword failures are reported and skipped. Perform any required privileged installation manually, then retry.
 
-[`bin/dotfiles-refresh`](bin/dotfiles-refresh) runs `setup` every two hours through `Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist`, which `dfm install` links into `~/Library/LaunchAgents`. Intervals missed during sleep are skipped, and a lock prevents overlapping runs. The job uses the login shell's PATH, so machine-specific toolchains resolve. It appends to `~/Library/Logs/dotfiles-refresh.log` and notifies only when a run fails. Load it once after the first install:
+[`bin/dotfiles-refresh`](bin/dotfiles-refresh) runs `setup` every two hours. On macOS that is `Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist`, which `dfm install` links into `~/Library/LaunchAgents`; on Linux it is `.config/systemd/user/dotfiles-refresh.timer`, which `setup` links into `~/.config/systemd/user` and enables. Intervals missed while the machine was off are skipped, and a lock prevents overlapping runs. The job uses the login shell's PATH, so machine-specific toolchains resolve. It appends to `~/Library/Logs/dotfiles-refresh.log` on macOS and `~/.local/state/dotfiles-refresh/refresh.log` elsewhere, and notifies only when a run fails. Load the macOS job once after the first install; the Linux timer is enabled by `setup`:
 
 ```sh
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist
@@ -56,6 +56,8 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 ### Background jobs
 
 - **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh and the Agent Mail web bridge ([details](apps/agent-mail-web/README.md#installed-app-and-notifications))
+
+- **`.config/systemd/user/`** — the same two-hour refresh on Linux, as a user timer that `setup` enables
 
 ### Tools
 

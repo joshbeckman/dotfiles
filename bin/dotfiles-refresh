@@ -8,7 +8,14 @@
 set -euo pipefail
 
 DOTFILES="${DOTFILES_DIR:-$HOME/dotfiles}"
-LOG="${DOTFILES_REFRESH_LOG:-$HOME/Library/Logs/dotfiles-refresh.log}"
+# The log lives where the platform keeps such things. Linux has no Library
+# directory, and the old default made a Linux run create one just to hold this
+# file. DOTFILES_REFRESH_LOG overrides either choice.
+case "$(uname -s)" in
+  Darwin) default_log="$HOME/Library/Logs/dotfiles-refresh.log" ;;
+  *)      default_log="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-refresh/refresh.log" ;;
+esac
+LOG="${DOTFILES_REFRESH_LOG:-$default_log}"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-refresh"
 LOCK="$STATE/refresh.lock"
 NOTIFIER="${DOTFILES_REFRESH_NOTIFIER:-notify-josh}"
@@ -32,9 +39,29 @@ if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" | tr -d ' ')" -gt 524288 ]; then
   mv -f "$LOG" "$LOG.old"
 fi
 
-# shlock rather than a plain mkdir lock: it records the pid, so a run killed at
-# the wrong moment cannot leave a lock that silently blocks every future run.
-if ! /usr/bin/shlock -f "$LOCK" -p $$; then
+# The lock records a pid, so a run killed at the wrong moment cannot leave a lock
+# that silently blocks every future run. It used to be shlock, which is an INN tool:
+# absent here, not an apt package, and not in the Brewfile. With the binary missing
+# the old code read "command not found" as "a refresh is already running", logged
+# that, and exited 0, so a scheduled refresh reported success for ever without
+# running anything at all.
+#
+# set -C makes the redirect refuse to replace an existing file, which is an atomic
+# create, and the pid inside is what separates a live holder from a dead one.
+take_lock() {
+  if ( set -C; printf '%s\n' "$$" > "$LOCK" ) 2>/dev/null; then
+    return 0
+  fi
+  holder="$(cat "$LOCK" 2>/dev/null || true)"
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    return 1
+  fi
+  # The holder is gone: take the lock over rather than leaving it for a human.
+  rm -f "$LOCK"
+  ( set -C; printf '%s\n' "$$" > "$LOCK" ) 2>/dev/null
+}
+
+if ! take_lock; then
   printf '%s  skipped: a refresh is already running\n' "$(date -u +%FT%TZ)" >> "$LOG"
   exit 0
 fi

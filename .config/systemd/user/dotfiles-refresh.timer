@@ -1,0 +1,18 @@
+[Unit]
+Description=Run the dotfiles refresh every two hours
+
+[Timer]
+# An interval rather than calendar times, which is what the Mac's launchd
+# StartInterval does: an interval missed while the machine was off is skipped
+# rather than run late, and systemd never overlaps this job with itself.
+#
+# The boot delay is also what gives the network time to come up. Naming
+# network-online.target here would not help: a user unit cannot order against a
+# system target, so the dependency is accepted and then ignored. Verified by
+# starting a throwaway user unit with it, which ran straight away.
+OnBootSec=15min
+OnUnitActiveSec=2h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
