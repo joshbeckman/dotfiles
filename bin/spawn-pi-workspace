@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# spawn-pi-workspace: create a try workspace and start Pi in it.
+#
+# The difference from spawn-pi-worktree is only who makes the directory: that one
+# requires an existing worktree because repository setup is repository-specific,
+# while this makes a fresh dated workspace from a subject. It delegates the launch
+# rather than repeating the secret injection and tmux handling, because two copies
+# of that would drift.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  spawn-pi-workspace [--dry-run] [--approve] [--secret KEY]... --tmux-session SESSION \
+    --subject SUBJECT [--prompt TEXT] [--root PATH]
+
+Creates $root/<YYYY-MM-DD>-<slug-of-subject> and starts Pi there in a new detached
+tmux window, then prints the directory. The subject names the workspace, so it is
+slugged: lowercase, runs of anything else become single dashes, and an empty or
+entirely punctuation subject falls back to "spawn". A second workspace with the
+same subject on the same day gets a numeric suffix rather than a refusal.
+
+Everything else — the provider key, the tmux window, the interactive shell after
+Pi exits — is spawn-pi-worktree's, which this calls.
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+slug_for() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+    | cut -c1-48 \
+    | sed -E 's/-+$//'
+}
+
+dry_run=false
+tmux_session=""
+subject=""
+prompt=""
+root="${SPAWN_PI_ROOT:-$HOME/src/tries}"
+passthrough=()
+
+while (($#)); do
+  case "$1" in
+    --dry-run) dry_run=true; passthrough+=(--dry-run); shift ;;
+    --approve) passthrough+=(--approve); shift ;;
+    --secret) (($# >= 2)) || die '--secret requires a value'; passthrough+=(--secret "$2"); shift 2 ;;
+    --tmux-session) (($# >= 2)) || die '--tmux-session requires a value'; tmux_session="$2"; shift 2 ;;
+    --subject) (($# >= 2)) || die '--subject requires a value'; subject="$2"; shift 2 ;;
+    --prompt) (($# >= 2)) || die '--prompt requires a value'; prompt="$2"; shift 2 ;;
+    --root) (($# >= 2)) || die '--root requires a value'; root="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[ -n "$tmux_session" ] || die '--tmux-session is required'
+[ -n "$subject" ] || die '--subject is required'
+[ -n "$prompt" ] || prompt="You have been started from the Agent Mail web app. Read your mail with agent-mail read --to your handle, then begin."
+
+slug="$(slug_for "$subject")"
+[ -n "$slug" ] || slug="spawn"
+base="$root/$(date +%Y-%m-%d)-$slug"
+
+# A second workspace for the same subject on the same day gets a suffix. Refusing
+# would leave the sender with a failed spawn and nothing to act on.
+workspace="$base"
+suffix=2
+while [ -e "$workspace" ]; do
+  workspace="$base-$suffix"
+  suffix=$((suffix + 1))
+done
+
+# Printed before delegating, because exec replaces this process and the caller needs
+# to know where the workspace landed.
+printf '%s\n' "$workspace"
+
+if ! $dry_run; then
+  mkdir -p "$workspace" || die "could not create $workspace"
+fi
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+launcher="$script_dir/spawn-pi-worktree"
+[ -x "$launcher" ] || die "spawn-pi-worktree is not next to this script"
+
+exec "$launcher" ${passthrough[@]+"${passthrough[@]}"} \
+  --tmux-session "$tmux_session" --title "$slug" --cwd "$workspace" --prompt "$prompt"
