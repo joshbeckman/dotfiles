@@ -156,19 +156,17 @@ The authenticated bridge resolves registered identities and validates the drawin
 
 ## Composer
 
-The Markdown body uses a locally bundled CodeMirror editor. **Vim mode** is optional and remembered by the browser. **Configure .vimrc** accepts pasted mappings: `map`, `noremap`, their normal/insert/visual/operator-mode variants, and `let mapleader`. Unsupported lines are reported; this does not load desktop Vim plugins or execute arbitrary Vimscript. A configured leader is reserved as a mapping prefix in its mapped modes.
-
-For example:
-
-```vim
-inoremap jk <Esc>
-let mapleader = "\<Space>"
-nnoremap <leader>x dd
-```
+The Markdown body uses a locally bundled CodeMirror editor. Vim mode and its `.vimrc` paste dialog were removed; the editor is plain and the bundle is smaller for it.
 
 Completion uses `$XDG_CONFIG_HOME/nvim/keywords.txt`, defaulting to `~/.config/nvim/keywords.txt`. The authenticated bridge rereads it when a draft opens. The dictionary stays on your machine and is not included in browser assets or this repository. Handles such as `@+name-of-realm`, dotted names, and underscores complete as whole tokens. Ctrl+n / Ctrl+p open or navigate completions in insert mode (or with Vim disabled); Tab accepts and Escape dismisses. With Vim enabled, another Escape returns to normal mode. Missing or invalid dictionaries leave the editor usable with an explanatory status. Dictionaries are limited to 1 MiB, 10,000 distinct words, and 256 characters per word.
 
-Editor undo history starts fresh for each opened draft, while Vim preferences persist separately. Draft bodies remain plain Markdown; autosave, revision conflicts, attachments, and CLI/Neovim interoperability are unchanged. After installing a version that changes the bridge or asset allowlist, restart the bridge and refresh; the token is unchanged.
+Editor undo history starts fresh for each opened draft. Draft bodies remain plain Markdown; autosave, revision conflicts, attachments, and CLI/Neovim interoperability are unchanged. After installing a version that changes the bridge or asset allowlist, restart the bridge and refresh; the token is unchanged.
+
+## Starting an agent
+
+**Start agent** in the compose action row takes the subject and body of the open draft and starts a Pi session with the message as its first task. Nothing is delivered to a mailbox: the session names itself once it starts, so there is no handle to deliver to yet. The session starts in the home directory and chooses its own workspace; the app reports the tmux window it landed in.
+
+The window goes into the tmux session named by `AGENT_MAIL_SPAWN_SESSION`, defaulting to `dotfiles`, and that session is created when it does not exist. The launcher's refusals are shown verbatim, including macOS memory pressure, which defers new work while the machine is under pressure.
 
 ## Keys
 
