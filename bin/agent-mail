@@ -355,31 +355,66 @@ notify_human_delivery() {
   fi
 }
 
-# Resolve a message id inside one inbox, printing the message file. The canonical id
-# is the Message-ID, which is the filename stem, but the trailing <pid>-<rand> pair is
-# unique, so an id that is only a suffix of the stem resolves too: that is what someone
-# pastes when they shorten it, and it is the tail of the filename. Matching the raw
-# string would not work, since the descriptive middle sits between the timestamp and
-# that pair. Callers read the state from the path rather than parsing a second field.
+# Resolve a message id inside one inbox, printing the message file. The canonical id is
+# the Message-ID, which is the filename stem. Two shortened forms resolve, because both
+# are things people paste. A ULID prefix is one, since the ULID leads the stem and its
+# timestamp half is the part worth keeping. The other is the legacy <pid>-<rand> tail,
+# which is the unique end of an older id and the reason a suffix resolves too. Callers
+# read the state from the path rather than parsing a second field.
 message_in_inbox() {
   local inbox="$1" id; id="$(basename "$2" .md)"
-  local state path rand rest pair
+  local state path rand rest last head pair
   for state in new cur; do
     if [ -f "$inbox/$state/$id.md" ]; then
       printf '%s\n' "$inbox/$state/$id.md"; return 0
     fi
   done
-  rand="${id##*-}"; rest="${id%-*}"; pair="-${rest##*-}-${rand}"
   local -a hits=()
+
+  # An older id ends in <pid>-<rand>, and that tail is what makes it unique, so it is
+  # worth matching on. Only when both fields are numeric, though: a ULID id ends in a
+  # slug of its subject, two messages about the same thing share that slug, and matching
+  # on it resolved one message to another, which for discard means deleting the wrong
+  # mail.
+  rand="${id##*-}"; rest="${id%-*}"; last="${rest##*-}"
+  case "$rand" in
+    '' | *[!0-9]*) ;;
+    *)
+      case "$last" in
+        '' | *[!0-9]*) ;;
+        *)
+          pair="-${last}-${rand}"
+          for state in new cur; do
+            for path in "$inbox/$state/"*"$pair.md"; do
+              [ -f "$path" ] && hits+=("$path")
+            done
+          done
+          case ${#hits[@]} in
+            1) printf '%s\n' "${hits[0]}"; return 0 ;;
+            0) hits=() ;;
+            *) die "ambiguous message id '$2'; ${#hits[@]} messages end with that id" ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+
+  # Otherwise the leading field is the identity: a ULID, or a prefix of one, which is
+  # what someone pastes after trimming the slug. Crockford base32 leaves out I, L, O and
+  # U, so the pattern is also what keeps a subject slug from being read as a ULID.
+  head="${id%%-*}"
+  case "$head" in
+    '' | *[!0-9A-HJKMNP-TV-Z]*) return 1 ;;
+  esac
   for state in new cur; do
-    for path in "$inbox/$state/"*"$pair.md"; do
+    for path in "$inbox/$state/$head"*.md; do
       [ -f "$path" ] && hits+=("$path")
     done
   done
   case ${#hits[@]} in
     1) printf '%s\n' "${hits[0]}"; return 0 ;;
     0) return 1 ;;
-    *) die "ambiguous message id '$2'; ${#hits[@]} messages end with that id" ;;
+    *) die "ambiguous message id '$2'; ${#hits[@]} messages start with it" ;;
   esac
 }
 
@@ -419,39 +454,31 @@ idle_hours() {
 # so an unread message could keep looking newly arrived and never escalate.
 # mv preserves mtime, so moving new/ -> cur/ is not what disturbs it.
 message_age_hours() {
-  local path="$1" id ts sent now
-  id=$(basename "$path" .md)
-  ts="${id%%-*}"
-  case "$ts" in
-    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
-    *) idle_hours "$path"; return ;;  # not msgid-shaped: mtime is all we have
+  # The header and the epoch are separate variables on purpose: writing the first
+  # attempt back into the string the second attempt parses empties it, and `date -d ''`
+  # answers with today's midnight rather than failing, which reads as a fifteen-hour-old
+  # message. The same shape as the `stat -f %m || stat -c %Y` trap noted above.
+  local path="$1" stamp sent now
+  stamp="$(message_header "$path" Date)"
+  case "$stamp" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+    *) idle_hours "$path"; return ;;  # no usable stamp: mtime is all we have
   esac
-  sent=$(date -j -u -f '%Y%m%dT%H%M%SZ' "$ts" +%s 2>/dev/null) ||
-    sent=$(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s 2>/dev/null) ||
+  sent=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$stamp" +%s 2>/dev/null) ||
+    sent=$(date -u -d "$stamp" +%s 2>/dev/null) ||
     { idle_hours "$path"; return; }
   now=$(date +%s)
   echo $(( (now - sent) / 3600 ))
 }
 
-filename_component() {
-  local value="$1" limit="$2"
-  LC_ALL=C printf '%s' "$value" |
-    tr '[:upper:]' '[:lower:]' |
-    sed -E 's/[^a-z0-9._@+-]+/-/g; s/-+/-/g; s/^[-.]+//; s/[-.]+$//' |
-    cut -c1-"$limit" |
-    sed -E 's/[-.]+$//'
-}
-
-# The descriptive fields make Maildir listings useful; pid and random retain
-# collision resistance when one sender creates several messages per second.
+# A ULID plus a slug of the subject, minted in one place. This tool and
+# bin/agent-mail2 used to build different shapes, which is what the shared helper
+# prevents. The ULID is the identity; the slug is for a person reading a filename.
 gen_msgid() {
-  local from to subject
-  from="$(filename_component "$1" 48)"
-  to="$(filename_component "$2" 48)"
-  subject="$(filename_component "$3" 48)"
-  printf '%s--from-%s--to-%s--%s--%s-%s\n' \
-    "$(date -u +%Y%m%dT%H%M%SZ)" "${from:-unknown}" "${to:-unknown}" \
-    "${subject:-no-subject}" "$$" "${RANDOM}${RANDOM}"
+  local helper
+  helper="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/agent-mail-id"
+  [ -x "$helper" ] || die "sibling agent-mail-id not found (required to mint a message id)"
+  "$helper" "$1"
 }
 
 message_header() {
@@ -586,7 +613,7 @@ cmd_send() {
   done
 
   local effective_subject="${subject:-(no subject)}"
-  local msgid; msgid="$(gen_msgid "$from" "$to_filename" "$effective_subject")"
+  local msgid; msgid="$(gen_msgid "$effective_subject")"
   local thread_id="$msgid"
   [ -z "$in_reply_to" ] || thread_id="$(thread_id_for_parent "$in_reply_to")"
   # A recipient may read/move its copy before we retain the sender's Sent copy.
@@ -709,7 +736,7 @@ cmd_receipt() {
     # tells the caller the id to use next time.
     printf '%s\t%s\tto:%s\tdelivered:%s\t%sh ago\n' \
       "$(message_state "$path")" "$(basename "$path" .md)" \
-      "$recipient" "$(basename "$path" .md | cut -d- -f1)" "$age"
+      "$recipient" "$(message_header "$path" Date)" "$age"
   done
   [ "$found" -eq 0 ] || return 0
 
@@ -837,7 +864,7 @@ create_reply_draft() {
   in_reply_to="$(message_header "$path" Message-ID)"
   thread_id="$(thread_id_for_message "$path")"
   to_filename="${to//, /+}"
-  msgid="$(gen_msgid josh "$to_filename" "$subject")"
+  msgid="$(gen_msgid "$subject")"
   thread_id="${thread_id:-$msgid}"
   drafts="$HUMAN_MAIL_ROOT/josh/drafts"
   mkdir -p "$drafts"
@@ -944,7 +971,7 @@ cmd_deliver() {
   done
 
   local had_msgid="$msgid"
-  [ -n "$msgid" ] || msgid="$(gen_msgid "$from" "$to_filename" "${subject:-(no subject)}")"
+  [ -n "$msgid" ] || msgid="$(gen_msgid "${subject:-(no subject)}")"
   for inbox in "${inboxes[@]}"; do
     dst="$inbox/new/$msgid.md"
     [ ! -e "$dst" ] || die "delivery destination already exists: $dst"

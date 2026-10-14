@@ -28,6 +28,8 @@ receipt_state() {
 root_id="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
   --to bob-agent-22222222 --subject 'Coordinate work' --body 'I will own file A.')"
 [[ "$($command head "$root_id")" == "$root_id" ]]
+# A ULID and a slug of the subject, from the same helper the shell tool uses.
+[[ "$root_id" =~ ^[0-9A-HJKMNP-TV-Z]{26}-coordinate-work$ ]]
 
 scan="$($command scan --to bob-agent-22222222)"
 grep -Fq "$root_id" <<<"$scan"

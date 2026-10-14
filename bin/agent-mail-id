@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Mint an Agent Mail message id.
+
+An id is a ULID, optionally followed by a dash and a slug of the subject:
+
+    01M4XH8CMR8SP14580ATQW2XXD
+    01M4XH8CMR8SP14580ATQW2XXD-re-stackchan
+
+The ULID is the identity and the only part that resolves. The slug is for a person
+reading a filename, a log line or a mail body, and nothing depends on it, which is why
+a subject edited after the fact cannot break a link.
+
+Both id generators call this. There used to be two, `bin/agent-mail` in Bash and
+`bin/agent-mail2` in Python, and they had already drifted into different shapes, which
+is the reason this is one file rather than a function in each.
+
+A ULID is 48 bits of milliseconds and 80 bits of randomness in Crockford base32, so ids
+sort by creation order and leave out I, L, O and U, which are the characters people
+mistype. The timestamp is the first ten characters, which is the property the old
+`<UTC stamp>--from-...` ids got from their leading stamp.
+"""
+import os
+import sys
+import time
+import unicodedata
+
+ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+# The old ids truncated each component to 48 characters, and a slug is decoration, so
+# there is no reason to let one grow a filename without limit.
+SLUG_LIMIT = 48
+
+
+def encode(value, length):
+    out = ""
+    for _ in range(length):
+        out = ALPHABET[value & 31] + out
+        value >>= 5
+    return out
+
+
+def ulid(milliseconds=None):
+    ms = time.time_ns() // 1_000_000 if milliseconds is None else milliseconds
+    return encode(ms, 10) + encode(int.from_bytes(os.urandom(10), "big"), 16)
+
+
+def slug(subject):
+    """A subject reduced to something safe in a filename and a URL path.
+
+    Accents are folded rather than dropped, so a subject of "Ünïcödé" slugs to
+    "unicode" and not to "n-c-d", which is what dropping the letters and keeping the
+    separators would produce. A subject with no ASCII left in it yields no slug at all,
+    and the id is then the bare ULID.
+    """
+    folded = unicodedata.normalize("NFKD", subject)
+    kept = []
+    for character in folded.strip().lower():
+        if unicodedata.combining(character):
+            continue
+        if character.isalnum() and character.isascii():
+            kept.append(character)
+        elif kept and kept[-1] != "-":
+            kept.append("-")
+    return "".join(kept).strip("-")[:SLUG_LIMIT].rstrip("-")
+
+
+def message_id(subject="", milliseconds=None):
+    identifier = ulid(milliseconds)
+    tail = slug(subject)
+    return f"{identifier}-{tail}" if tail else identifier
+
+
+def main(argv):
+    if len(argv) > 1 and argv[0] in ("-h", "--help"):
+        print("usage: agent-mail-id [SUBJECT]", file=sys.stderr)
+        return 2
+    print(message_id(" ".join(argv)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
