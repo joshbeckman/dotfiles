@@ -170,11 +170,53 @@ async function api(path, data, extra = {}) {
 // Opening a thread should land on the newest message rather than the oldest. The
 // last message renders its Markdown asynchronously, so the scroll runs again once
 // that finishes; a closed message has no such growth and settles immediately.
+// A link carries an id rather than a key: archiving moves a message from inbox/new to
+// inbox/cur, so a key changes underneath a link while an id does not. The id is URL-safe
+// as minted, so a path needs no escaping, and the origin is whatever the page was opened
+// on, which is what makes a link copied on a phone carry the tailnet name.
+function linkFor(kind, id) {
+  return location.origin + "/" + kind + "/" + id;
+}
+function linkPath(kind, id) {
+  return "/" + kind + "/" + id;
+}
+function pushUrl(path) {
+  if (location.pathname === path) return;
+  history.pushState({}, "", path);
+}
+// navigator.clipboard wants a secure context, which loopback and the tailnet name both
+// are, but it can still be refused, so fall back to selecting a throwaway field instead
+// of failing silently.
+async function copyLink(url) {
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch {
+    const field = document.createElement("textarea");
+    field.value = url;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    try {
+      document.execCommand("copy");
+    } catch {
+      /* the status line still shows the link, which is the other half of copying it */
+    }
+    field.remove();
+  }
+  status("Link copied: " + url);
+}
 function scrollToLatestMessage() {
   const last = $("thread").lastElementChild;
   if (last) last.scrollIntoView({ block: "end" });
 }
 function show(name) {
+  // Leaving a thread for the list puts the address bar back at the root, so a link is not
+  // left showing while you are looking at something else. Guarded on having been in the
+  // reader, because startup also shows the list and that must not overwrite a link before
+  // the route has been read.
+  if (name === "mail-list" && view === "reader") pushUrl("/");
   view = name;
   const replying = name === "editor" && Boolean(draft?.parent);
   document.querySelector("main").classList.toggle("replying", replying);
@@ -411,18 +453,25 @@ async function openItem(index = selected) {
     return loadDraft(await api("draft?key=" + encodeURIComponent(m.key)));
   await openThread(m);
 }
-async function openThread(m) {
+// `m` is either a list item, which has a key, or a bare {id} from a link. `focus` names
+// the message to open when the link was to a message rather than to the thread.
+async function openThread(m, focus = "") {
   const generation = ++threadGeneration;
-  const messages = await api("thread?key=" + encodeURIComponent(m.key));
+  const messages = await api(
+    m.key
+      ? "thread?key=" + encodeURIComponent(m.key)
+      : "thread?id=" + encodeURIComponent(m.id),
+  );
   if (generation !== threadGeneration) return false;
-  const key =
-    m.folder === "drafts"
-      ? messages.find((message) => message.id === m.parent)?.key ||
-        messages.at(-1)?.key ||
-        m.key
-      : m.key;
+  const wanted = focus || (m.folder === "drafts" ? m.parent : "");
+  const opened = messages.find((message) => message.id === wanted);
+  const key = opened?.key || messages.at(-1)?.key || m.key;
   current = { key, messages };
-  $("thread-title").textContent = m.subject || "(no subject)";
+  $("thread-title").textContent = m.subject || messages[0]?.subject || "(no subject)";
+  $("thread-link").textContent = linkPath(
+    opened ? "message" : "thread",
+    opened?.id || messages[0]?.thread || messages[0]?.id || "",
+  );
   threadSummary(messages);
   $("thread").replaceChildren();
   show("reader");
@@ -436,6 +485,8 @@ async function openThread(m) {
     $("thread").textContent =
       "Earlier messages are not available for this draft.";
   scrollToLatestMessage();
+  // The address bar follows what is open, so the link is always there to read or copy.
+  pushUrl($("thread-link").textContent);
   return true;
 }
 function threadSummary(messages) {
@@ -515,7 +566,12 @@ function appendThreadMessage(message, open) {
   actions.append(
     button("Reply to this message", () => newDraft("reply", message.key)),
     button("Reply all", () => newDraft("reply-all", message.key)),
+    button("Copy link", () => copyLink(linkFor("message", message.id))),
   );
+  const permalink = document.createElement("code");
+  permalink.className = "permalink";
+  permalink.textContent = linkPath("message", message.id);
+  actions.append(permalink);
   detail.append(actions);
 }
 async function archiveThread() {
@@ -1582,12 +1638,29 @@ async function openMail(message) {
 navigator.serviceWorker?.addEventListener("message", (event) => {
   if (event.data?.type === "open") openMail(event.data).catch(error);
 });
+$("copy-thread-link").onclick = () => {
+  const path = $("thread-link").textContent;
+  if (path) copyLink(location.origin + path);
+};
 $("notify-button").onclick = () =>
   Notification.requestPermission().then(notifyState).catch(error);
 notifyState();
 checkNewMail().catch(() => {});
 // Background windows are throttled to about once a minute, which is enough here.
 setInterval(() => checkNewMail().catch(() => {}), 30000);
+async function openRoute() {
+  const route = location.pathname.match(/^\/(thread|message)\/([^/]+)$/);
+  if (!route) {
+    show("mail-list");
+    return;
+  }
+  const id = decodeURIComponent(route[2]);
+  await openThread({ id }, route[1] === "message" ? id : "");
+}
+window.addEventListener("popstate", () => openRoute().catch(error));
+if (/^\/(thread|message)\//.test(location.pathname)) openRoute().catch(error);
+// The notification link. A path is the form new links use, but this one is already on a
+// phone somewhere, so it keeps working.
 const opening = new URLSearchParams(location.search).get("open");
 if (opening) {
   history.replaceState(null, "", "/");

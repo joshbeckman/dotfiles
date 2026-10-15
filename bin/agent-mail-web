@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
@@ -251,7 +251,41 @@ class Mailbox:
             raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
         return path
 
+    def key_for(self, reference):
+        """A message key from a key or from an id.
+
+        A link carries an id, and a key is not a stable thing to put in one: archiving
+        moves a message from inbox/new to inbox/cur, so the same message has two keys over
+        its life and a link made before archiving would break after. An id is the
+        Message-ID, which is the filename stem, so resolving one is a search across the
+        folders rather than a lookup.
+
+        A shortened id is deliberately not resolved here. That rule lives in
+        bin/agent-mail, which is also what mints ids, and having one implementation of it
+        is the reason ids became opaque strings.
+        """
+        if not isinstance(reference, str) or not reference or len(reference) > 250:
+            raise MailError('Invalid message reference')
+        if ':' in reference:
+            # A key names its folder, and path() is what validates it.
+            self.path(reference)
+            return reference
+        if not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,200}', reference):
+            raise MailError('Invalid message id')
+        hits = []
+        for folder in FOLDERS:
+            path = self.directory(folder) / (reference + '.md')
+            if path.is_file() and not path.is_symlink():
+                hits.append(folder + ':' + path.name)
+        if not hits:
+            raise MailError('No message has that id; it may have been discarded', 404)
+        # One message can sit in two folders, and the inbox copy is the one to show,
+        # which is how a thread deduplicates by id too.
+        hits.sort(key=lambda candidate: (candidate.split(':')[0] != 'inbox', candidate))
+        return hits[0]
+
     def message(self, key):
+        key = self.key_for(key)
         path = self.path(key)
         stat = path.stat()
         stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
@@ -757,6 +791,18 @@ class Handler(BaseHTTPRequestHandler):
                     raise MailError('Not found', 404)
             elif url.path in static:
                 p = ASSETS / static[url.path]
+            elif re.fullmatch(r'/(?:thread|message)/[A-Za-z0-9_.@+-]{1,200}', unquote(url.path)):
+                # A link to a thread or a message is the app itself, which reads the id
+                # out of the path. This is a second way to serve index.html rather than an
+                # endpoint, and it is a prefix match rather than a catch-all on purpose:
+                # everything else outside the whitelist above stays a 404.
+                #
+                # The path is decoded before matching because a browser encodes `+`, which
+                # an id carries when a message has more than one recipient, so the link the
+                # page builds and the path the server sees are not the same bytes. Decoding
+                # cannot reach the filesystem: the id never becomes a path here, and the
+                # pattern above still excludes a separator.
+                p = ASSETS / 'index.html'
             else:
                 raise MailError('Not found', 404)
             mime = 'application/manifest+json' if p.suffix == '.webmanifest' else mimetypes.guess_type(p)[0]
@@ -783,7 +829,10 @@ class Handler(BaseHTTPRequestHandler):
                 os.close(fd)
             result = box.listing(args.get('folder', ['inbox'])[0], args.get('q', [''])[0])
         elif route == '/api/thread':
-            result = box.thread(key)
+            # An id as well as a key, because a link carries an id and only the thread
+            # endpoint is a read. Archive and discard still take a key, which names the
+            # folder they act on.
+            result = box.thread(key or args.get('id', [''])[0])
         elif route == '/api/draft':
             box.path(key, 'drafts')
             result = box.message(key)

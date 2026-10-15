@@ -380,6 +380,41 @@ class WebTest(unittest.TestCase):
         reply.symlink_to(moved)
         self.assertEqual({m['id'] for m in self.box.thread(self.key)}, {selected['id']})
 
+    def test_a_link_resolves_by_id_and_the_page_is_served_for_it(self):
+        # A link carries an id rather than a key. The thread endpoint is a read, so it
+        # takes either; archive and discard still take a key, which names their folder.
+        status, body = self.request('/api/thread?id=' + quote(self.id))
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)[0]['id'], self.id)
+        status, body = self.request('/api/thread?key=' + quote(self.key))
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)[0]['id'], self.id)
+        # The path a link uses serves the app, which reads the id out of it.
+        status, body = self.request('/message/' + self.id)
+        self.assertEqual(status, 200, body)
+        self.assertIn(b'<title>Agent Mail</title>', body)
+
+    def test_a_link_id_survives_archiving_where_a_key_does_not(self):
+        # The reason for the change: archiving moves the file from inbox/new to inbox/cur,
+        # so the key changes and a link made before archiving would break after.
+        status, _ = self.request('/api/archive', {'key': self.key})
+        self.assertEqual(status, 200)
+        status, body = self.request('/api/thread?key=' + quote(self.key))
+        self.assertNotEqual(status, 200, 'the archived key should no longer resolve')
+        status, body = self.request('/api/thread?id=' + quote(self.id))
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)[0]['folder'], 'archive')
+
+    def test_unknown_ids_and_unmatched_paths_still_fail(self):
+        status, _ = self.request('/api/thread?id=01M4XH8CMR8SP14580ATQW2XXD-nothing')
+        self.assertEqual(status, 404)
+        status, _ = self.request('/api/thread?id=' + quote('bad id!'))
+        self.assertEqual(status, 400)
+        # The new route is a prefix match, not a catch-all: everything else stays a 404.
+        for path in ('/not-a-route', '/message/../../etc/passwd', '/message/', '/thread'):
+            status, _ = self.request(path)
+            self.assertEqual(status, 404, path)
+
     def test_contact_search_matches_headers_and_aliases_across_folders(self):
         fixtures = [
             ('sent', 'outbound', 'josh', '@+birch-weaver, +alder-turner-12345678'),

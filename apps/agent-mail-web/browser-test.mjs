@@ -1357,6 +1357,35 @@ try {
   await page.waitForFunction(() => document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img')?.src.startsWith("data:image/svg+xml;charset=utf-8,"));
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
+  // A link carries an id, and the address bar follows what is open so the link is always
+  // there to read and copy.
+  // `url` carries the launch token in its fragment, and a link is a path, so build from
+  // the origin rather than from the launch URL.
+  const origin = new URL(url).origin;
+  await page.waitForFunction(() => !document.querySelector("#reader").hidden);
+  assert.equal(decodeURIComponent(new URL(page.url()).pathname), "/message/" + id);
+  assert.equal(await page.locator("#thread-link").textContent(), "/message/" + id);
+  const permalinks = await page.locator(".message .render-tools .permalink").allTextContents();
+  assert.ok(permalinks.includes("/message/" + id), permalinks.join(" "));
+  assert.ok(await page.locator('.message .render-tools button:has-text("Copy link")').count());
+  // Copying falls back to a hidden field when the clipboard is refused, so assert the
+  // feedback rather than the clipboard contents.
+  await page.locator("#copy-thread-link").click();
+  assert.match(await page.locator("#status").textContent(), /Link copied: http/);
+  // Back to the list returns the address bar to the root.
+  await page.locator("#back").click();
+  await page.waitForFunction(() => !document.querySelector("#mail-list").hidden);
+  assert.equal(new URL(page.url()).pathname, "/");
+  // And opening from the list writes the thread's own link.
+  await page.getByRole("button", { name: /alder-turner Markdown conversation/ }).click();
+  await page.waitForFunction(() => !document.querySelector("#reader").hidden);
+  assert.match(new URL(page.url()).pathname, /^\/thread\//);
+  assert.equal(await page.locator("#thread-link").textContent(), decodeURIComponent(new URL(page.url()).pathname));
+  // A link to the thread rather than to a message opens the same conversation.
+  await page.goto(origin + new URL(page.url()).pathname);
+  await page.waitForFunction(() => !document.querySelector("#reader").hidden);
+  assert.equal(decodeURIComponent(new URL(page.url()).pathname), await page.locator("#thread-link").textContent());
+
   console.log(
     "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
   );
