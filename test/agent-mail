@@ -118,19 +118,35 @@ short_id="$(printf '%s' "$msgid" | cut -c1-12)"
 # The slug is decoration, so the bare ULID is the identity and resolves without it.
 bare_id="$(printf '%s' "$msgid" | cut -d- -f1)"
 "$command" receipt "$bare_id" | grep -Fq $'read\t'
-# The legacy tail still resolves, since ids minted before this change are still mail.
+# A legacy id resolves whole and by its unique tail. The reconstructed <stamp>-<pid>-<rand>
+# form that used to resolve is gone with the rule that guessed a direction from the query,
+# and the tail is what actually survives trimming.
 legacy="$tmp/humans/josh/inbox/cur/20260101T000000Z--from-old--to-josh--legacy--1234-5678.md"
 printf 'Date: 2026-01-01T00:00:00Z\nMessage-ID: 20260101T000000Z--from-old--to-josh--legacy--1234-5678\nThread-ID: 20260101T000000Z--from-old--to-josh--legacy--1234-5678\nSubject: Legacy\n\nold.\n' >"$legacy"
-"$command" receipt --to @josh 20260101T000000Z-1234-5678 | grep -Fq $'read\t'
+"$command" receipt --to @josh 20260101T000000Z--from-old--to-josh--legacy--1234-5678 | grep -Fq $'read\t'
+"$command" receipt --to @josh 1234-5678 | grep -Fq $'read\t'
+# A query that names nothing must match nothing. It used to resolve to a real message by
+# its numeric tail whenever one file ended that way, which for discard is the wrong mail.
+if "$command" receipt --to @josh completely-made-up-2026-10 >/dev/null 2>&1; then
+  echo 'a query naming nothing resolved to a message' >&2; exit 1
+fi
 rm -f "$legacy"
-# The age comes from the Date header, not from the id, which is no longer a timestamp
-# and which a ULID cannot be read as. A message whose header is hours old has to report
-# as hours old, which reading the id would get wrong now that the id carries no time a
-# human can see.
-aged="$tmp/humans/josh/inbox/cur/$msgid.md"
-aged_stamp="$(date -u -d '5 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-5H +%Y-%m-%dT%H:%M:%SZ)"
-sed -i.bak "s/^Date: .*/Date: $aged_stamp/" "$aged" && rm -f "$aged.bak"
-"$command" receipt "$msgid" | grep -Fq $'5h ago'
+# The age comes from the id, which is minted locally when the message is delivered, and
+# not from the Date header, which the sender writes. A future header must not read as a
+# negative age and quietly stop the message ever escalating, so the header here is the
+# year 2999 and the age still has to come from the id.
+aged_stamp="$(date -u -d '5 hours ago' +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -v-5H +%Y%m%dT%H%M%SZ)"
+aged_id="$aged_stamp--from-old--to-josh--aged--1234-5679"
+aged="$tmp/humans/josh/inbox/cur/$aged_id.md"
+printf 'Date: 2999-01-01T00:00:00Z\nMessage-ID: %s\nThread-ID: %s\nSubject: Aged\n\nbody\n' "$aged_id" "$aged_id" >"$aged"
+"$command" receipt --to @josh 1234-5679 | grep -Fq $'5h ago'
+rm -f "$aged"
+# And a ULID id carries its timestamp too, so the same rung serves both shapes. This one
+# encodes 2025-06-15, which is thousands of hours old; reading mtime instead would say 0.
+ulid_aged="01JXT21Q00ABCDEFGHJKMNPQRS-aged"
+printf 'Message-ID: %s\nThread-ID: %s\nSubject: Aged\n\nbody\n' "$ulid_aged" "$ulid_aged" >"$tmp/humans/josh/inbox/cur/$ulid_aged.md"
+"$command" receipt --to @josh "$ulid_aged" | grep -Eq '[0-9]{4,}h ago'
+rm -f "$tmp/humans/josh/inbox/cur/$ulid_aged.md"
 [[ ! -e "$inbox/.escalated-$msgid" ]]
 if "$command" discard --to @josh --id "19700101T000000Z-1-1" >/dev/null 2>&1; then
   echo 'discard reported success for an id that matches nothing' >&2; exit 1

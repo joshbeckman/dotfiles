@@ -356,66 +356,46 @@ notify_human_delivery() {
 }
 
 # Resolve a message id inside one inbox, printing the message file. The canonical id is
-# the Message-ID, which is the filename stem. Two shortened forms resolve, because both
-# are things people paste. A ULID prefix is one, since the ULID leads the stem and its
-# timestamp half is the part worth keeping. The other is the legacy <pid>-<rand> tail,
-# which is the unique end of an older id and the reason a suffix resolves too. Callers
+# the Message-ID, which is the filename stem. A shortened id resolves too, because that is
+# what people paste, and it is tried as a prefix and then as a suffix rather than by
+# reconstructing anything: a ULID shortens from the front, a legacy <pid>-<rand> tail from
+# the back, and a query that matches more than one file either way is refused rather than
+# routed to a guess.
+#
+# Reading a property of the query to decide which direction it was, which is what this did
+# before, concluded a property of the id from a property of the text. A subject ending in
+# two numbers makes a ULID id end in two numbers, so a query naming nothing at all resolved
+# to a real message by its tail, and for discard that is deleting the wrong mail. Callers
 # read the state from the path rather than parsing a second field.
 message_in_inbox() {
   local inbox="$1" id; id="$(basename "$2" .md)"
-  local state path rand rest last head pair
+  local state path direction
   for state in new cur; do
     if [ -f "$inbox/$state/$id.md" ]; then
       printf '%s\n' "$inbox/$state/$id.md"; return 0
     fi
   done
   local -a hits=()
-
-  # An older id ends in <pid>-<rand>, and that tail is what makes it unique, so it is
-  # worth matching on. Only when both fields are numeric, though: a ULID id ends in a
-  # slug of its subject, two messages about the same thing share that slug, and matching
-  # on it resolved one message to another, which for discard means deleting the wrong
-  # mail.
-  rand="${id##*-}"; rest="${id%-*}"; last="${rest##*-}"
-  case "$rand" in
-    '' | *[!0-9]*) ;;
-    *)
-      case "$last" in
-        '' | *[!0-9]*) ;;
-        *)
-          pair="-${last}-${rand}"
-          for state in new cur; do
-            for path in "$inbox/$state/"*"$pair.md"; do
-              [ -f "$path" ] && hits+=("$path")
-            done
-          done
-          case ${#hits[@]} in
-            1) printf '%s\n' "${hits[0]}"; return 0 ;;
-            0) hits=() ;;
-            *) die "ambiguous message id '$2'; ${#hits[@]} messages end with that id" ;;
-          esac
-          ;;
-      esac
-      ;;
-  esac
-
-  # Otherwise the leading field is the identity: a ULID, or a prefix of one, which is
-  # what someone pastes after trimming the slug. Crockford base32 leaves out I, L, O and
-  # U, so the pattern is also what keeps a subject slug from being read as a ULID.
-  head="${id%%-*}"
-  case "$head" in
-    '' | *[!0-9A-HJKMNP-TV-Z]*) return 1 ;;
-  esac
-  for state in new cur; do
-    for path in "$inbox/$state/$head"*.md; do
-      [ -f "$path" ] && hits+=("$path")
+  for direction in prefix suffix; do
+    hits=()
+    for state in new cur; do
+      if [ "$direction" = prefix ]; then
+        for path in "$inbox/$state/$id"*.md; do
+          [ -f "$path" ] && hits+=("$path")
+        done
+      else
+        for path in "$inbox/$state/"*"$id.md"; do
+          [ -f "$path" ] && hits+=("$path")
+        done
+      fi
     done
+    case ${#hits[@]} in
+      1) printf '%s\n' "${hits[0]}"; return 0 ;;
+      0) continue ;;
+      *) die "ambiguous message id '$2'; ${#hits[@]} messages $([ "$direction" = prefix ] && echo start || echo end) with it" ;;
+    esac
   done
-  case ${#hits[@]} in
-    1) printf '%s\n' "${hits[0]}"; return 0 ;;
-    0) return 1 ;;
-    *) die "ambiguous message id '$2'; ${#hits[@]} messages start with it" ;;
-  esac
+  return 1
 }
 
 # A message file's state is its directory, which is the whole design.
@@ -448,26 +428,57 @@ idle_hours() {
   echo $(( (now - mtime) / 3600 ))
 }
 
-# Hours since a message was delivered, read from the timestamp already in its
-# msgid rather than from mtime. mtime cannot answer this: the same restamping
-# that keeps a live session's scratchpad from being reaped walks the inbox too,
-# so an unread message could keep looking newly arrived and never escalate.
-# mv preserves mtime, so moving new/ -> cur/ is not what disturbs it.
+# The timestamp in a ULID, in seconds. Ten characters of Crockford base32 hold the 48 bits
+# of milliseconds, and a bash integer carries that comfortably. This is what lets the age
+# keep coming from the id now that ids are ULIDs.
+ulid_seconds() {
+  local rest="$1" char index value=0 alphabet=0123456789ABCDEFGHJKMNPQRSTVWXYZ
+  # The caller hands over a whole id, whose leading field is a 26-character ULID, so only
+  # the first ten characters carry the timestamp.
+  [ ${#rest} -ge 10 ] || return 1
+  rest="${rest:0:10}"
+  while [ -n "$rest" ]; do
+    char="${rest%"${rest#?}"}"
+    rest="${rest#?}"
+    index=0
+    while [ "$index" -lt 32 ] && [ "${alphabet:$index:1}" != "$char" ]; do
+      index=$(( index + 1 ))
+    done
+    [ "$index" -lt 32 ] || return 1
+    value=$(( value * 32 + index ))
+  done
+  printf '%d' $(( value / 1000 ))
+}
+
+# Hours since a message was delivered, read from the timestamp in its id rather than from
+# its Date header or its mtime.
+#
+# Not the header: it is written by whoever composed the message, so it can be absent, can
+# be in a format this does not parse, and can be in the future, which reads as a negative
+# age and would silently stop that message ever escalating. An id is minted locally when
+# the message is delivered and cannot be any of those things.
+#
+# Not mtime either: the same restamping that keeps a live session's scratchpad from being
+# reaped walks the inbox too, so an unread message could keep looking newly arrived and
+# never escalate. mv preserves mtime, so moving new/ -> cur/ is not what disturbs it.
 message_age_hours() {
-  # The header and the epoch are separate variables on purpose: writing the first
-  # attempt back into the string the second attempt parses empties it, and `date -d ''`
-  # answers with today's midnight rather than failing, which reads as a fifteen-hour-old
-  # message. The same shape as the `stat -f %m || stat -c %Y` trap noted above.
-  local path="$1" stamp sent now
-  stamp="$(message_header "$path" Date)"
-  case "$stamp" in
-    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
-    *) idle_hours "$path"; return ;;  # no usable stamp: mtime is all we have
+  local path="$1" id ts sent now
+  id=$(basename "$path" .md)
+  ts="${id%%-*}"
+  case "$ts" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z)
+      # An id minted before ids became ULIDs. The stamp is the leading field.
+      sent=$(date -j -u -f '%Y%m%dT%H%M%SZ' "$ts" +%s 2>/dev/null) ||
+        sent=$(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s 2>/dev/null) ||
+        sent=""
+      ;;
+    *)
+      sent=$(ulid_seconds "$ts" 2>/dev/null) || sent=""
+      ;;
   esac
-  sent=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$stamp" +%s 2>/dev/null) ||
-    sent=$(date -u -d "$stamp" +%s 2>/dev/null) ||
-    { idle_hours "$path"; return; }
+  [ -n "$sent" ] || { idle_hours "$path"; return; }  # not an id this can read: mtime
   now=$(date +%s)
+  [ "$sent" -le "$now" ] || { idle_hours "$path"; return; }
   echo $(( (now - sent) / 3600 ))
 }
 
