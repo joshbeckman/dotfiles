@@ -11,6 +11,10 @@ command="$tmp/bin/agent-mail"
 # Use the test runner's Bash, including system Bash 3.2, for every invocation.
 { printf '#!%s\n' "$BASH"; tail -n +2 "$root/bin/agent-mail"; } >"$command"
 chmod +x "$command"
+# agent-mail mints ids through its sibling, found beside the script rather than on
+# PATH, so the copy under test needs one too.
+cp "$root/bin/agent-mail-id" "$tmp/bin/agent-mail-id"
+chmod +x "$tmp/bin/agent-mail-id"
 
 cat >"$tmp/bin/notify-josh" <<'EOF'
 #!/bin/sh
@@ -58,7 +62,8 @@ default_id="$(env -u AGENT_MAIL_ROOT AGENT_SCRATCH_ROOT="$tmp/shared" "$command"
 [[ -f "$tmp/shared/default-agent/inbox/new/$default_id.md" ]]
 
 msgid="$("$command" send --to @josh --from test-agent --subject 'Needs attention' --body 'Please review this.')"
-[[ "$msgid" =~ ^[0-9]{8}T[0-9]{6}Z--from-test-agent--to-josh--needs-attention--[0-9]+-[0-9]+$ ]]
+# A ULID then a slug of the subject. Crockford base32 leaves out I, L, O and U.
+[[ "$msgid" =~ ^[0-9A-HJKMNP-TV-Z]{26}-needs-attention$ ]]
 mail_root="$(CDPATH= cd -- "$tmp/mail" && pwd -P)"
 human_root="$(CDPATH= cd -- "$tmp/humans" && pwd -P)"
 inbox="$human_root/josh/inbox"
@@ -104,13 +109,45 @@ message="$inbox/cur/$msgid.md"
 # read and scan take --to, so callers write it here too. It used to reach basename,
 # which reported "illegal option -- -" while the command still exited 0.
 "$command" receipt --to @josh "$msgid" | grep -Fq $'read\t'
-# A shortened id is what people paste when they trim the descriptive middle, and it
-# used to report "never delivered" with exit 1. The <pid>-<rand> tail is unique, so a
-# suffix resolves; the timestamp and the pair are what survive trimming.
-short_id="$(printf '%s' "$msgid" | cut -d- -f1)-$(printf '%s' "$msgid" | awk -F- '{print $(NF-1)"-"$NF}')"
+# A shortened id is what people paste when they trim the slug off, so a ULID prefix
+# resolves. The timestamp half leads the id, which is the part worth keeping.
+short_id="$(printf '%s' "$msgid" | cut -c1-12)"
 [[ "$short_id" != "$msgid" ]]
 "$command" receipt "$short_id" | grep -Fq $'read\t'
 "$command" read --to @josh --id "$short_id" >/dev/null 2>/dev/null
+# The slug is decoration, so the bare ULID is the identity and resolves without it.
+bare_id="$(printf '%s' "$msgid" | cut -d- -f1)"
+"$command" receipt "$bare_id" | grep -Fq $'read\t'
+# A legacy id resolves whole and by its unique tail. The reconstructed <stamp>-<pid>-<rand>
+# form that used to resolve is gone with the rule that guessed a direction from the query,
+# and the tail is what actually survives trimming.
+legacy="$tmp/humans/josh/inbox/cur/20260101T000000Z--from-old--to-josh--legacy--1234-5678.md"
+printf 'Date: 2026-01-01T00:00:00Z\nMessage-ID: 20260101T000000Z--from-old--to-josh--legacy--1234-5678\nThread-ID: 20260101T000000Z--from-old--to-josh--legacy--1234-5678\nSubject: Legacy\n\nold.\n' >"$legacy"
+"$command" receipt --to @josh 20260101T000000Z--from-old--to-josh--legacy--1234-5678 | grep -Fq $'read\t'
+"$command" receipt --to @josh 1234-5678 | grep -Fq $'read\t'
+# A query that names nothing must match nothing. It used to resolve to a real message by
+# its numeric tail whenever one file ended that way, which for discard is the wrong mail.
+if "$command" receipt --to @josh completely-made-up-2026-10 >/dev/null 2>&1; then
+  echo 'a query naming nothing resolved to a message' >&2; exit 1
+fi
+rm -f "$legacy"
+# The age comes from the id, which is minted locally when the message is delivered, and
+# not from the Date header, which the sender writes. A future header must not read as a
+# negative age and quietly stop the message ever escalating, so the header here is the
+# year 2999 and the age still has to come from the id.
+aged_stamp="$(date -u -d '5 hours ago' +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -v-5H +%Y%m%dT%H%M%SZ)"
+aged_id="$aged_stamp--from-old--to-josh--aged--1234-5679"
+aged="$tmp/humans/josh/inbox/cur/$aged_id.md"
+printf 'Date: 2999-01-01T00:00:00Z\nMessage-ID: %s\nThread-ID: %s\nSubject: Aged\n\nbody\n' "$aged_id" "$aged_id" >"$aged"
+"$command" receipt --to @josh 1234-5679 | grep -Fq $'5h ago'
+rm -f "$aged"
+# And a ULID id carries its timestamp too, so the same rung serves both shapes. This one
+# encodes 2025-06-15, which is thousands of hours old; reading mtime instead would say 0.
+ulid_aged="01JXT21Q00ABCDEFGHJKMNPQRS-aged"
+printf 'Message-ID: %s\nThread-ID: %s\nSubject: Aged\n\nbody\n' "$ulid_aged" "$ulid_aged" >"$tmp/humans/josh/inbox/cur/$ulid_aged.md"
+"$command" receipt --to @josh "$ulid_aged" | grep -Eq '[0-9]{4,}h ago'
+rm -f "$tmp/humans/josh/inbox/cur/$ulid_aged.md"
+[[ ! -e "$inbox/.escalated-$msgid" ]]
 if "$command" discard --to @josh --id "19700101T000000Z-1-1" >/dev/null 2>&1; then
   echo 'discard reported success for an id that matches nothing' >&2; exit 1
 fi
@@ -131,7 +168,7 @@ multi_id="$(printf 'Shared body.\n' | "$command" send --to '@josh, @+test-agent'
 multi_agent="$mail_root/test-agent-session/inbox/new/$multi_id.md"
 multi_human="$inbox/new/$multi_id.md"
 [[ -f "$multi_agent" && -f "$multi_human" ]]
-[[ "$multi_id" == *'--from-test-agent--to-josh+test-agent--shared-update--'* ]]
+[[ "$multi_id" =~ ^[0-9A-HJKMNP-TV-Z]{26}-shared-update$ ]]
 grep -Fxq 'To: josh, test-agent' "$multi_agent"
 grep -Fq 'Shared body.' "$multi_agent"
 cmp -s "$multi_agent" "$multi_human"
@@ -182,7 +219,7 @@ grep -Fxq 'To: test-agent' "$draft"
 grep -Fxq "In-Reply-To: $msgid" "$draft"
 grep -Fxq "Thread-ID: $msgid" "$draft"
 grep -Fxq 'Subject: Re: Needs attention' "$draft"
-[[ "$(basename "$draft" .md)" =~ ^[0-9]{8}T[0-9]{6}Z--from-josh--to-test-agent--re-needs-attention--[0-9]+-[0-9]+$ ]]
+[[ "$(basename "$draft" .md)" =~ ^[0-9A-HJKMNP-TV-Z]{26}-re-needs-attention$ ]]
 printf 'Reply body.\n' >>"$draft"
 
 delivered="$("$command" deliver "$draft")"

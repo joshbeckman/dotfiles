@@ -10,7 +10,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import uuid
 from datetime import datetime, timezone
 
 STALE_THREAD = 3
@@ -95,9 +94,21 @@ def format_time(value: int) -> str:
     return datetime.fromtimestamp(value / 1_000_000, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def message_id() -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    return f"{stamp}--{uuid.uuid4().hex[:12]}"
+def message_id(subject: str | None) -> str:
+    """Mint an id through the shared helper, so both stores mint one shape.
+
+    This used to build a stamp plus twelve hex characters of a UUID: a homemade ULID
+    with less randomness and no ordering inside a millisecond. It runs the helper as a
+    process rather than importing it because the two tools are scripts, not a package,
+    and one generator is the point.
+    """
+    helper = Path(__file__).resolve().with_name("agent-mail-id")
+    if not helper.is_file():
+        raise MailError(f"sibling agent-mail-id not found at {helper}")
+    result = subprocess.run([str(helper), subject or ""], capture_output=True, text=True)
+    if result.returncode or not result.stdout.strip():
+        raise MailError(result.stderr.strip() or "could not mint a message id")
+    return result.stdout.strip()
 
 
 def database_path() -> Path:
@@ -360,7 +371,7 @@ def append_message(args: argparse.Namespace) -> str:
 
         db.execute("BEGIN IMMEDIATE")
         try:
-            mid = message_id()
+            mid = message_id(subject)
             timestamp = now_us()
             if new_thread:
                 thread_id = mid
