@@ -398,6 +398,14 @@ try {
   await copiedStatus("Id copied: " + id);
   await page.locator(".message .render-tools button:has-text('Copy id')").first().click();
   await copiedStatus("Id copied: " + id);
+  // A screenshot of the thing itself, so the pull request can show it rather than describe
+  // it. Same convention as the other captures: set the prefix, get the files.
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) {
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-message-ids.png", fullPage: true });
+    // The detail, because the full page is mostly the rest of the app.
+    await page.locator(".message .render-tools").last().screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-message-ids-detail.png" });
+    await page.locator("#thread-id").screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-thread-id.png" });
+  }
   assert.equal(inspectionCalls, 0);
   const sidebar = page.getByRole("complementary", {
     name: "Thread participants",
