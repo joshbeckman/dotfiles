@@ -170,6 +170,33 @@ async function api(path, data, extra = {}) {
 // Opening a thread should land on the newest message rather than the oldest. The
 // last message renders its Markdown asynchronously, so the scroll runs again once
 // that finishes; a closed message has no such growth and settles immediately.
+// Copying an id is how a message gets passed around. An agent reads one with
+// `agent-mail read --id <id>`, and an id is what survives archiving while a key does not,
+// so the id is the thing worth putting on the clipboard.
+async function copyId(id) {
+  if (!id) return;
+  try {
+    await navigator.clipboard.writeText(id);
+  } catch {
+    // navigator.clipboard wants a secure context, which loopback and the tailnet name both
+    // are, but it can still be refused, so fall back to a hidden field rather than failing
+    // silently.
+    const field = document.createElement("textarea");
+    field.value = id;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    try {
+      document.execCommand("copy");
+    } catch {
+      /* the status line still shows the id, which is the other half of copying it */
+    }
+    field.remove();
+  }
+  status("Id copied: " + id);
+}
 function scrollToLatestMessage() {
   const last = $("thread").lastElementChild;
   if (last) last.scrollIntoView({ block: "end" });
@@ -423,6 +450,9 @@ async function openThread(m) {
       : m.key;
   current = { key, messages };
   $("thread-title").textContent = m.subject || "(no subject)";
+  // A thread's id is the id of its root message, which is the reference for the whole
+  // conversation rather than for one message in it.
+  $("thread-id").textContent = messages[0]?.thread || messages[0]?.id || "";
   threadSummary(messages);
   $("thread").replaceChildren();
   show("reader");
@@ -515,7 +545,12 @@ function appendThreadMessage(message, open) {
   actions.append(
     button("Reply to this message", () => newDraft("reply", message.key)),
     button("Reply all", () => newDraft("reply-all", message.key)),
+    button("Copy id", () => copyId(message.id)),
   );
+  const identifier = document.createElement("code");
+  identifier.className = "permalink";
+  identifier.textContent = message.id;
+  actions.append(identifier);
   detail.append(actions);
 }
 async function archiveThread() {
@@ -1582,6 +1617,7 @@ async function openMail(message) {
 navigator.serviceWorker?.addEventListener("message", (event) => {
   if (event.data?.type === "open") openMail(event.data).catch(error);
 });
+$("copy-thread-id").onclick = () => copyId($("thread-id").textContent);
 $("notify-button").onclick = () =>
   Notification.requestPermission().then(notifyState).catch(error);
 notifyState();

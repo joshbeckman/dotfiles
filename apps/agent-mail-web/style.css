@@ -423,6 +423,19 @@ details.message summary time {
   gap: 0.5rem;
   margin: 0.5rem 0;
   flex-wrap: wrap;
+  align-items: baseline;
+}
+/* The id a copy button copies, shown so it can be read and selected as well. Muted and
+   monospace because it is an identifier, and allowed to wrap because a legacy id is 85
+   characters and a ULID with a slug is 75. */
+.permalink {
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+#thread-id {
+  display: block;
+  margin: 0.25rem 0 0.75rem;
 }
 .render-tools button {
   font-size: 0.85rem;
