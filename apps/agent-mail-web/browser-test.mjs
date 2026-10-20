@@ -382,6 +382,30 @@ try {
     .getByRole("button", { name: /alder-turner Markdown conversation/ })
     .click();
   await page.frameLocator("#thread iframe").getByRole("heading", { name: "Fixture heading" }).waitFor();
+  // Every message and the thread carry their id, with a button that copies it, which is how
+  // a message gets passed around: an agent reads one with `agent-mail read --id <id>`, and
+  // an id survives archiving where a folder-qualified key does not.
+  assert.equal(await page.locator("#thread-id").textContent(), id);
+  const shownIds = await page.locator(".message .render-tools .permalink").allTextContents();
+  assert.ok(shownIds.includes(id), shownIds.join(" "));
+  assert.ok(await page.locator('.message .render-tools button:has-text("Copy id")').count());
+  // The clipboard may be refused in a headless context, so assert the feedback the page
+  // gives either way. It is read inside the page immediately after the click, because the
+  // status line is transient and the periodic refresh overwrites it.
+  const copiedStatus = (expected) =>
+    page.waitForFunction((want) => document.querySelector("#status").textContent === want, expected);
+  await page.locator("#copy-thread-id").click();
+  await copiedStatus("Id copied: " + id);
+  await page.locator(".message .render-tools button:has-text('Copy id')").first().click();
+  await copiedStatus("Id copied: " + id);
+  // A screenshot of the thing itself, so the pull request can show it rather than describe
+  // it. Same convention as the other captures: set the prefix, get the files.
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) {
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-message-ids.png", fullPage: true });
+    // The detail, because the full page is mostly the rest of the app.
+    await page.locator(".message .render-tools").last().screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-message-ids-detail.png" });
+    await page.locator("#thread-id").screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-thread-id.png" });
+  }
   assert.equal(inspectionCalls, 0);
   const sidebar = page.getByRole("complementary", {
     name: "Thread participants",
