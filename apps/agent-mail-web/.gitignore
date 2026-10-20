@@ -1,1 +1,3 @@
-node_modules/
+# A trailing slash matches a directory only, so a symlink named node_modules slipped
+# into the repository once and was not ignored. Both forms are covered without it.
+node_modules
