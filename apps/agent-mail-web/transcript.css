@@ -1,25 +1,29 @@
 :root {
   color-scheme: light dark;
-  --bg: #fff;
-  --alt: #f6f6f3;
-  --text: #0d0d0d;
-  --muted: #555;
-  --border: #c9c9c4;
+  /* The site palette: https://www.joshbeckman.org/style-guide/ */
+  --bg: hsl(0, 0%, 100%);
+  --alt: hsl(0, 0%, 94%);
+  --text: hsl(0, 0%, 5%);
+  --muted: hsl(0, 0%, 50%);
+  --border: hsl(0, 0%, 50%);
+  --link: #002fa7;
+  --josh: #903465;
   --user: #002fa7;
-  --assistant: #1d6b3c;
-  --tool: #7a398f;
-  --error: #a51d27;
+  --assistant: #237f52;
+  --tool: #903465;
+  --error: #bd2024;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121212;
-    --alt: #202020;
-    --text: #eee;
-    --muted: #bbb;
-    --border: #555;
-    --user: #9ab6ff;
-    --assistant: #8bd5a8;
-    --tool: #d7a1e8;
+    --bg: hsl(0, 0%, 5%);
+    --alt: hsl(0, 0%, 18%);
+    --text: hsl(0, 0%, 100%);
+    --muted: hsl(0, 0%, 60%);
+    --border: hsl(0, 0%, 60%);
+    --link: #6ca0f2;
+    --user: #6ca0f2;
+    --assistant: #4caf82;
+    --tool: #c58fd0;
     --error: #ff969c;
   }
 }
@@ -38,7 +42,7 @@ header {
   align-items: end;
   justify-content: space-between;
 }
-h1 { margin: 0; font: 600 1.75rem/1.2 "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif; }
+h1 { margin: 0; font: 700 1.35rem/1.2 "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--josh); padding-bottom: 0.3rem; }
 #session-info, .metadata, .lineage, time { color: var(--muted); font-size: 0.875rem; }
 #session-info { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
 button {
