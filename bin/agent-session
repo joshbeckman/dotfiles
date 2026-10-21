@@ -596,6 +596,32 @@ def pi_secrets(s_path):
     return [name] if any(line.split()[:1] == [name] for line in listing.stdout.splitlines()) else []
 
 
+def transcript_holders(session_file):
+    """PIDs whose command line names this transcript as a Pi session, lease or not.
+
+    A process that stops at a startup prompt never reaches the code that takes the
+    session lease, so the lease alone cannot tell it apart from a session that is not
+    running at all. Four wakes accumulated that way before anyone noticed, because each
+    new one passed the lease check.
+
+    Both fields have to match as whole arguments. Testing for the path alone flags any
+    process that merely mentions it, such as a grep or an editor, and a false positive
+    here refuses a wake that should have happened.
+    """
+    needle = str(session_file).encode()
+    holders = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            arguments = (entry / 'cmdline').read_bytes().split(b'\0')
+        except OSError:
+            continue
+        if needle in arguments and b'--session' in arguments:
+            holders.append(int(entry.name))
+    return holders
+
+
 def resume(handle, tmux_session, dry_run, extensions=()):
     import shlex
     import subprocess
@@ -616,6 +642,11 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         holder = lease_holder(root, sid)
         if holder:
             raise ValueError(f'session is already running (pid {holder})')
+        # One transcript must have one process, and the lease only proves that for a
+        # process that got far enough to take it. Test the invariant directly.
+        blocked = transcript_holders(evidence['sessionFile'])
+        if blocked:
+            raise ValueError(f'session file is already held by pid {blocked[0]}')
         if not evidence['cwdExists']:
             raise ValueError('stored cwd is missing; recover it explicitly before waking')
         if evidence['status'] != 'existing':
@@ -632,7 +663,10 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         # Pi needs its provider key, and a new tmux window inherits the server's
         # environment, which has none. Inject it with `s`, as the service that
         # holds the resident session does.
-        pi_command = ['pi', *[a for path in extensions for a in ('-e', str(absolute(path)))],
+        # `--approve` because a detached window has no human to answer a prompt: without
+        # it Pi stops at the project-trust question for a seat whose cwd is a repository,
+        # and a wake that never answers never reads its mail and never parks again.
+        pi_command = ['pi', '--approve', *[a for path in extensions for a in ('-e', str(absolute(path)))],
                       '--session', evidence['sessionFile'], prompt]
         s_path = login_s_path()
         secrets = pi_secrets(s_path)
