@@ -172,6 +172,7 @@ def agent_run_entries(path):
     entries, offset, skipped = [], 0, 0
     group = None
     seen_model = None
+    pending_change = False
 
     def flush():
         nonlocal group
@@ -198,30 +199,38 @@ def agent_run_entries(path):
             # Deliberately no flush: a signature can arrive mid-turn, and the prose on either
             # side of it belongs to the same group.
             continue
-        if record.get('type') == 'model_request':
-            # A runtime reports the model before every API call, including the calls that write
-            # summaries, so an identical report is not a change and must not draw a card. Only a
-            # difference in provider, model, api or thinking is news, and a difference in thinking
-            # alone is the one the viewer renders as a thinking level change. No flush either way,
-            # because these arrive mid-turn.
+        if record.get('type') in ('model_request', 'model_changed', 'model_change_rejected'):
+            # These arrive before every API call, including the calls that write summaries, and
+            # they arrive mid-turn, so none of them flushes the prose group. One record produces
+            # exactly one entry, keyed by its own offset: two entries under one key would collide
+            # in the viewer's keyed map and one of them would be erased.
             model = record.get('model') or {}
             state = (model.get('provider'), model.get('model'), model.get('api'), model.get('thinking'))
-            if state == seen_model:
+            if record.get('type') == 'model_request':
+                if state == seen_model or pending_change:
+                    # Identical to the last one is not news, and the request that follows a
+                    # projected change is describing that same change.
+                    pending_change = False
+                    seen_model = state
+                    continue
+                seen_model = state
+                entries.append({'key': str(start), 'entry': {
+                    'type': 'model_change', 'timestamp': record.get('at_ms'),
+                    'provider': model.get('provider'), 'modelId': model.get('model'),
+                    'api': model.get('api'), 'thinkingLevel': model.get('thinking')}})
                 continue
-            previous = seen_model
-            seen_model = state
-            if previous is not None and state[:3] == previous[:3]:
-                entries.append({'key': str(start), 'entry': {'type': 'thinking_level_change',
-                                                             'timestamp': record.get('at_ms'),
-                                                             'thinkingLevel': model.get('thinking')}})
+            if record.get('type') == 'model_changed':
+                change = record.get('change') or {}
+                selection = change.get('selection')
+                selection = selection if isinstance(selection, dict) else {}
+                entries.append({'key': str(start), 'entry': {
+                    'type': 'model_change', 'timestamp': record.get('at_ms'),
+                    'provider': selection.get('provider') or change.get('provider'),
+                    'modelId': selection.get('model') or change.get('model') or str(selection.get('id') or change.get('id') or ''),
+                    'api': selection.get('api'), 'thinkingLevel': selection.get('thinking')}})
+                pending_change = True
                 continue
-            entries.append({'key': str(start), 'entry': {
-                'type': 'model_change', 'timestamp': record.get('at_ms'),
-                'provider': model.get('provider'), 'modelId': model.get('model')}})
-            if previous is not None and state[3] != previous[3]:
-                entries.append({'key': str(start), 'entry': {'type': 'thinking_level_change',
-                                                             'timestamp': record.get('at_ms'),
-                                                             'thinkingLevel': model.get('thinking')}})
+            entries.append({'key': str(start), 'entry': record})
             continue
         if record.get('type') == 'delta' and kind in ('content', 'reasoning_content', 'arguments'):
             if (group is not None and group['turn'] == record.get('turn') and group['kind'] == kind
