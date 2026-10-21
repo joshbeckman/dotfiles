@@ -830,8 +830,56 @@ class WebTest(unittest.TestCase):
                  and any(part.get('type') == 'toolCall' for part in item['entry']['message'].get('content', []))]
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]['message']['content'][0]['id'], 'call-1')
-        fragments = [item['entry'] for item in data['entries'] if item['entry'].get('type') == 'delta']
-        self.assertEqual([item['kind'] for item in fragments], ['arguments'])
+        # Argument pieces become one labelled entry rather than a call or a card per piece. The
+        # role is one the viewer leaves collapsed, so a long argument stream does not fill the page.
+        arguments = [item['entry'] for item in data['entries']
+                     if item['entry'].get('type') == 'message'
+                     and item['entry']['message'].get('role') == 'tool_arguments']
+        self.assertEqual(len(arguments), 1)
+        self.assertEqual(arguments[0]['message']['content'][0]['text'], '{"cmd":')
+
+    def test_agent_run_coalesces_a_streamed_turn_into_readable_entries(self):
+        records = [{'type': 'init', 'at_ms': 0, 'cwd': '/fixture', 'model': 'm', 'system': 's'}]
+        records += [{'type': 'delta', 'at_ms': 1000 + i, 'turn': 1, 'kind': 'content', 'data': piece}
+                    for i, piece in enumerate(['Sto', 'pp', 'ing', ' the', ' run'])]
+        records += [{'type': 'delta', 'at_ms': 2000, 'turn': 1, 'kind': 'reasoning_content', 'data': 'thin'},
+                    {'type': 'delta', 'at_ms': 2100, 'turn': 1, 'kind': 'reasoning_content', 'data': 'king'},
+                    {'type': 'delta', 'at_ms': 3000, 'turn': 2, 'kind': 'content', 'data': 'second turn'}]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        entries = [item['entry'] for item in data['entries']]
+        # The init record, one content group, one thinking group, then a new turn's group.
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(entries[1]['message']['content'], [{'type': 'text', 'text': 'Stopping the run'}])
+        self.assertEqual(entries[1]['timestamp'], 1000)
+        self.assertEqual(entries[2]['message']['content'], [{'type': 'thinking', 'thinking': 'thinking'}])
+        self.assertEqual(entries[3]['message']['content'], [{'type': 'text', 'text': 'second turn'}])
+        # Keyed by the first piece, so a poll during the stream re-sends it under a stable key.
+        self.assertEqual(int(data['entries'][1]['key']), len(json.dumps(records[0]).encode()) + 1)
+        self.assertEqual([int(item['key']) for item in data['entries']],
+                         sorted(int(item['key']) for item in data['entries']))
+
+    def test_agent_run_bounds_a_group_and_keeps_the_tail_open(self):
+        records = [{'type': 'delta', 'at_ms': 1000 + i, 'turn': 1, 'kind': 'content', 'data': 'x' * 100}
+                   for i in range(10)]
+        thread, _ = self.agent_run(records=records)
+        with patch.object(web, 'AGENT_RUN_GROUP', 250):
+            data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        texts = [item['entry']['message']['content'][0]['text'] for item in data['entries']]
+        # Three pieces fill a group and the fourth starts the next, so a group can exceed the
+        # budget by one piece. That is bounded, and simpler than splitting a streamed piece.
+        self.assertEqual(texts, ['x' * 300, 'x' * 300, 'x' * 300, 'x' * 100])
+        self.assertFalse(data['truncated'])
+
+    def test_agent_run_handles_a_real_sized_fragment_stream(self):
+        # The live demo streamed one turn as 319 pieces of two characters. One entry per piece
+        # drew that turn as 319 cards, which is what this guards against.
+        records = [{'type': 'delta', 'at_ms': 1000 + i, 'turn': 6, 'kind': 'content', 'data': 'ab'}
+                   for i in range(319)]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(len(data['entries']), 1)
+        self.assertEqual(len(data['entries'][0]['entry']['message']['content'][0]['text']), 638)
 
     def test_agent_run_labels_truncation_and_a_torn_tail(self):
         thread, root = self.agent_run(records=self.agent_run_records())
