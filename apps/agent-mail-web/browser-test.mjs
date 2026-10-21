@@ -219,9 +219,11 @@ try {
   });
   const errors = [],
     remote = [],
+    assets = new Set(),
     dialogs = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("request", (r) => {
+    assets.add(new URL(r.url()).pathname);
     if (r.url().startsWith("https://")) remote.push(r.url());
   });
   let cancelNextDialog = false;
@@ -237,6 +239,18 @@ try {
   await page.waitForSelector(".row");
   await page.locator("#realm").waitFor({ state: "visible" });
   assert.equal(await page.locator("#realm").textContent(), "Testrealm");
+  // Reading mail must not pull the editor or the diagram renderer: each is deferred
+  // until the app actually needs it, which is what keeps the first load small.
+  assert.equal(assets.has("/composer-vendor.js"), false, "the editor bundle must not load with the inbox");
+  assert.equal(assets.has("/mermaid-vendor.js"), false, "the diagram bundle must not load with the inbox");
+  assert.equal(assets.has("/vendor.js"), true);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list.png", fullPage: true });
+  // The same desktop list in dark, so the theme can be reviewed without a phone.
+  await page.emulateMedia({ colorScheme: "dark" });
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list-dark.png", fullPage: true });
+  await page.emulateMedia({ colorScheme: "light" });
   const dates = await page.evaluate((now) => ({
     recent: date(now - 2 * 60 * 60 * 1000),
     old: date(now - 4 * 24 * 60 * 60 * 1000),
@@ -416,6 +430,8 @@ try {
     .getByRole("button", { name: /alder-turner Markdown conversation/ })
     .click();
   await page.frameLocator("#thread iframe").getByRole("heading", { name: "Fixture heading" }).waitFor();
+  assert.equal(assets.has("/mermaid-vendor.js"), true, "a diagram should fetch the deferred renderer");
+  assert.equal(assets.has("/composer-vendor.js"), false, "opening a thread must not fetch the editor");
   // Every message and the thread carry their id, with a button that copies it, which is how
   // a message gets passed around: an agent reads one with `agent-mail read --id <id>`, and
   // an id survives archiving where a folder-qualified key does not.
@@ -1115,10 +1131,12 @@ try {
   assert.equal(await body.textContent(), "@+new-fixture-agent");
   await page.emulateMedia({ colorScheme: "dark" });
   await page.setViewportSize({ width: 390, height: 844 });
+  // Narrowing the window moves the sidebar from the desktop grid to its off-canvas
+  // position, which the CSS transition animates; let it settle before capturing.
+  await page.waitForTimeout(250);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({
       path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-dark.png",
-      fullPage: true,
     });
   assert(
     await page.evaluate(
@@ -1316,6 +1334,47 @@ try {
   });
   assert(safeTeam.text.includes("<script>bad()</script>"));
   assert.equal(safeTeam.unsafe, 0);
+  // A phone gets a drawer and a bottom tab bar rather than a wrapped desktop row:
+  // the sidebar is off-canvas until the menu button opens it, and choosing a folder
+  // closes it again.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "light" });
+  // A reload, not a goto: the launch URL differs from the current "/" only by its
+  // fragment, and a fragment-only navigation would not rebuild the app.
+  await page.reload();
+  await page.locator("#mail-list").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#nav-toggle").isVisible(), true);
+  assert.equal(await page.locator(".rail").isVisible(), true);
+  assert.equal(await page.evaluate(() => document.body.classList.contains("nav-open")), false);
+  assert.equal(
+    await page.evaluate(() => {
+      const sidebar = document.getElementById("sidebar");
+      return getComputedStyle(sidebar).position === "fixed" && sidebar.getBoundingClientRect().right <= 0;
+    }),
+    true,
+    "the sidebar should start off-canvas on a phone",
+  );
+  await page.locator("#nav-toggle").click();
+  assert.equal(await page.evaluate(() => document.body.classList.contains("nav-open")), true);
+  assert.equal(await page.locator("#nav-toggle").getAttribute("aria-expanded"), "true");
+  await page.waitForFunction(() => document.getElementById("sidebar").getBoundingClientRect().left >= -1);
+  assert.equal(
+    await page.evaluate(() => document.getElementById("sidebar").getBoundingClientRect().left >= -1),
+    true,
+    "opening the drawer should bring the sidebar on screen",
+  );
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-drawer-mobile.png" });
+  await page.locator('[data-folder="all"]').click();
+  await page.getByRole("heading", { name: "All mail", exact: true }).waitFor();
+  await page.waitForSelector(".row");
+  assert.equal(await page.evaluate(() => document.body.classList.contains("nav-open")), false);
+  assert.equal(await page.locator("#nav-toggle").getAttribute("aria-expanded"), "false");
+  await page.waitForFunction(() => document.getElementById("sidebar").getBoundingClientRect().right <= 0);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1200, height: 850 });
+
   // Installed app: the token must survive a launch at "/" without the fragment,
   // and new inbox mail must notify only while the window lacks focus.
   const app = await browser.newContext({ viewport: { width: 1000, height: 800 } });
@@ -1445,6 +1504,7 @@ try {
   await rm(avatarFile);
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img')?.src.startsWith("data:image/svg+xml;charset=utf-8,"));
+  assert.equal(assets.has("/composer-vendor.js"), true, "composing should fetch the deferred editor");
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(

@@ -825,6 +825,29 @@ class WebTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(headers.get('Content-Encoding'))
 
+    def test_heavy_bundles_are_deferred_out_of_the_first_load(self):
+        # The editor and the diagram renderer are the two heaviest things the app can
+        # ship, and neither is needed to read mail. The document references only the
+        # small renderer bundle, and each heavy bundle is fetched by the app on demand.
+        index = (ROOT / 'apps/agent-mail-web/index.html').read_text()
+        self.assertIn('/vendor.js', index)
+        self.assertIn('/app.js', index)
+        self.assertNotIn('composer-vendor.js', index)
+        self.assertNotIn('mermaid-vendor.js', index)
+        # They are still served, compressed and revalidating, for the moment the app
+        # asks for them, and the diagram bundle is still reachable at its own path.
+        for name in ('composer-vendor.js', 'mermaid-vendor.js'):
+            asset = (ROOT / 'apps/agent-mail-web' / name).read_bytes()
+            status, headers, body = self.request_with_headers('/' + name, **{'Accept-Encoding': 'gzip'})
+            self.assertEqual(status, 200)
+            self.assertEqual(headers.get('Content-Encoding'), 'gzip')
+            self.assertEqual(__import__('gzip').decompress(body), asset)
+        # The split is what buys the speed: the renderer that loads first is a small
+        # fraction of the diagram bundle, so deferring it is most of the first load.
+        vendor = (ROOT / 'apps/agent-mail-web/vendor.js').stat().st_size
+        mermaid = (ROOT / 'apps/agent-mail-web/mermaid-vendor.js').stat().st_size
+        self.assertLess(vendor * 10, mermaid)
+
     def test_agent_run_poll_sends_only_what_is_new(self):
         thread, root = self.agent_run(records=self.agent_run_records())
         first = json.loads(self.request('/api/transcript?thread=' + thread)[1])

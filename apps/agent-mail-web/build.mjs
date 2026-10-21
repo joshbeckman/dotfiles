@@ -10,6 +10,17 @@ await build({
   outfile: "vendor.js",
   legalComments: "eof",
 });
+// Mermaid is by far the largest dependency and most messages have no diagram, so it is a
+// separate bundle the app fetches on demand rather than part of the first load.
+await build({
+  entryPoints: ["mermaid-renderer.js"],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  globalName: "MailMermaid",
+  outfile: "mermaid-vendor.js",
+  legalComments: "eof",
+});
 await build({
   entryPoints: ["composer.js"],
   bundle: true,
