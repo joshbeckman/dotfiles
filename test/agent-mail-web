@@ -778,7 +778,7 @@ class WebTest(unittest.TestCase):
     def agent_run_records(self):
         return [
             {'type': 'init', 'at_ms': 1000, 'cwd': '/fixture/agent-run', 'model': 'gpt-6.1-sol', 'system': 'sys'},
-            {'type': 'user', 'at_ms': 2000, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'content': 'From: @josh\n\nBuild the thing.'},
+            {'type': 'user', 'at_ms': 2000, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'origin_job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'content': 'From: @josh\n\nBuild the thing.'},
             {'type': 'assistant_start', 'at_ms': 3000, 'turn': 1, 'purpose': 'agent'},
             {'type': 'delta', 'at_ms': 3100, 'turn': 1, 'kind': 'reasoning_content', 'data': 'Considering.'},
             {'type': 'delta', 'at_ms': 3200, 'turn': 1, 'kind': 'content', 'data': 'I will.\n'},
@@ -805,7 +805,10 @@ class WebTest(unittest.TestCase):
         # Byte offsets are the keys, so a poll after a new record appends rather than renumbers.
         self.assertEqual([int(item['key']) for item in data['entries']], sorted(int(item['key']) for item in data['entries']))
         self.assertEqual(entries[0], {'type': 'session', 'cwd': '/fixture/agent-run', 'timestamp': 1000})
-        self.assertEqual(entries[1]['message']['role'], 'user')
+        # Whole-entry equality, so a field the projection does not map, such as origin_job on
+        # a user record, cannot leak into the rendered message.
+        self.assertEqual(entries[1], {'type': 'message', 'timestamp': 2000, 'message': {
+            'role': 'user', 'content': [{'type': 'text', 'text': 'From: @josh\n\nBuild the thing.'}]}})
         self.assertEqual(entries[2]['type'], 'assistant_start')
         self.assertEqual(entries[3]['message']['content'], [{'type': 'thinking', 'thinking': 'Considering.'}])
         self.assertEqual(entries[4]['message']['content'], [{'type': 'text', 'text': 'I will.\n'}])
