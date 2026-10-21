@@ -873,6 +873,40 @@ class WebTest(unittest.TestCase):
         third = json.loads(self.request('/api/transcript?thread=' + thread + '&version=x&after=' + str(again['end']))[1])
         self.assertEqual([item['entry']['type'] for item in third['entries']], ['settled'])
 
+    def test_agent_run_recognizes_the_optional_native_records(self):
+        # A runtime appends these for operator context, image input and output, and silent
+        # settlement. They are references rather than bodies, and recognizing them is what stops
+        # a valid record being counted as unreadable.
+        attachment = 'a' * 32 + '.png'
+        records = self.agent_run_records() + [
+            {'type': 'runtime_context', 'at_ms': 5000, 'policy': 'bounded native interface',
+             'snapshot': {'path': '/root/contexts/' + 'b' * 64 + '.md', 'sha256': 'b' * 64, 'bytes': 1234}},
+            {'type': 'image_export', 'at_ms': 5100, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT',
+             'source': 'file:///original/capture.png',
+             'image': {'path': '/root/media/' + 'c' * 64 + '.png', 'mime': 'image/png',
+                       'sha256': 'c' * 64, 'bytes': 1234},
+             'url': 'file:///home/josh/.local/state/agent-mail/humans/josh/attachments/' + attachment},
+            {'type': 'reply_skipped', 'at_ms': 5200, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT',
+             'reason': 'no response requested'},
+        ]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        kinds = [entry['type'] for entry in entries]
+        for expected in ('runtime_context', 'image_export', 'reply_skipped'):
+            self.assertIn(expected, kinds)
+        # The record is shown as itself, so nothing about it is lost or invented.
+        exported = next(entry for entry in entries if entry['type'] == 'image_export')
+        self.assertEqual(exported['url'].rsplit('/', 1)[-1], attachment)
+        self.assertEqual(exported['reason'] if 'reason' in exported else exported['job'],
+                         '01M5DW50J4HP2ZEHYHEMEGYBJT')
+        # References stay references. The bridge must not start serving the native media or
+        # context paths a record happens to name.
+        self.assertEqual(self.request('/media/' + 'c' * 64 + '.png')[0], 404)
+        self.assertEqual(self.request('/contexts/' + 'b' * 64 + '.md')[0], 404)
+        self.assertEqual(self.request('/api/attachment?name=' + attachment)[0], 404)
+
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
         status, body = self.request('/api/transcript?thread=' + thread)
