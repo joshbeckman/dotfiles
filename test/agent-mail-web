@@ -985,6 +985,33 @@ class WebTest(unittest.TestCase):
         # The other two are recognized and shown as themselves rather than as messages.
         self.assertEqual([entry['type'] for entry in entries[2:]], ['model_changed', 'model_change_rejected'])
 
+    def test_agent_run_reports_only_real_model_changes(self):
+        # A runtime reports the model before every API call, including the summary calls, so most
+        # of these records say the same thing. Only a real difference is news.
+        base = {'provider': 'fireworks', 'model': 'deepseek-v4p1-flash', 'api': 'chat'}
+        records = [{'type': 'delta', 'at_ms': 1000, 'turn': 1, 'kind': 'content', 'data': 'Prose '},
+                   {'type': 'model_request', 'at_ms': 1100, 'turn': 1, 'model': dict(base)}]
+        records += [{'type': 'model_request', 'at_ms': 1100 + i, 'turn': 1, 'model': dict(base)}
+                    for i in range(1, 12)]
+        records += [{'type': 'delta', 'at_ms': 1200, 'turn': 1, 'kind': 'content', 'data': 'continues.'},
+                    {'type': 'model_request', 'at_ms': 1300, 'turn': 2,
+                     'model': dict(base, model='kimi-k3')},
+                    {'type': 'model_request', 'at_ms': 1400, 'turn': 2, 'model': dict(base, model='kimi-k3')},
+                    {'type': 'model_request', 'at_ms': 1500, 'turn': 3,
+                     'model': dict(base, model='kimi-k3', thinking='high')}]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        # The prose is one group, so the eleven identical requests did not split it either.
+        self.assertEqual(entries[0]['message']['content'], [{'type': 'text', 'text': 'Prose continues.'}])
+        # Initial model, then one switch, then one thinking change. Twelve requests, three cards.
+        self.assertEqual([entry['type'] for entry in entries[1:]],
+                         ['model_change', 'model_change', 'thinking_level_change'])
+        self.assertEqual(entries[1]['modelId'], 'deepseek-v4p1-flash')
+        self.assertEqual(entries[2]['modelId'], 'kimi-k3')
+        self.assertEqual(entries[3]['thinkingLevel'], 'high')
+
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
         status, body = self.request('/api/transcript?thread=' + thread)
