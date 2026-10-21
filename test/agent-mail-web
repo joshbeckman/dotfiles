@@ -78,6 +78,16 @@ class WebTest(unittest.TestCase):
         except urllib.error.HTTPError as r:
             return r.code, r.read()
 
+    def request_with_headers(self, path, **headers):
+        defaults = {'X-Agent-Mail-Token': 'fixture-token', 'Origin': self.url}
+        defaults.update(headers)
+        req = urllib.request.Request(self.url + path, headers=defaults)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, dict(r.headers), r.read()
+        except urllib.error.HTTPError as r:
+            return r.code, dict(r.headers), r.read()
+
     def transcript(self, suffix=''):
         status, body = self.request('/api/transcript?handle=' + quote('@+alder-turner') + suffix)
         return status, json.loads(body)
@@ -792,6 +802,53 @@ class WebTest(unittest.TestCase):
             {'type': 'reply_sent', 'at_ms': 4000, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'message_id': '01M5DW60J4HP2ZEHYHEMEGYBJT-sent'},
             {'type': 'settled', 'at_ms': 4100, 'outcome': 'complete'},
         ]
+
+    def test_assets_are_compressed_and_revalidate(self):
+        asset = (ROOT / 'apps/agent-mail-web/app.js').read_bytes()
+        status, headers, body = self.request_with_headers('/app.js', **{'Accept-Encoding': 'gzip'})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get('Content-Encoding'), 'gzip')
+        self.assertEqual(headers.get('Vary'), 'Accept-Encoding')
+        self.assertEqual(headers.get('Cache-Control'), 'no-cache')
+        self.assertEqual(__import__('gzip').decompress(body), asset)
+        self.assertLess(len(body), len(asset) // 2)
+        # A client that does not ask for gzip still gets the bytes, uncompressed.
+        status, headers, plain = self.request_with_headers('/app.js')
+        self.assertEqual((status, headers.get('Content-Encoding'), plain), (200, None, asset))
+        # Revalidating costs a round trip and no body rather than the whole asset again.
+        etag = headers.get('ETag')
+        self.assertTrue(etag)
+        status, _, body = self.request_with_headers('/app.js', **{'If-None-Match': etag})
+        self.assertEqual((status, body), (304, b''))
+        # A small response is not worth compressing.
+        status, headers, _ = self.request_with_headers('/api/config', **{'Accept-Encoding': 'gzip'})
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get('Content-Encoding'))
+
+    def test_agent_run_poll_sends_only_what_is_new(self):
+        thread, root = self.agent_run(records=self.agent_run_records())
+        first = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        cut = str(first['end'])
+        data = json.loads(self.request('/api/transcript?thread=' + thread + '&version=x&after=' + cut)[1])
+        # The log ends with a completed record rather than a streaming group, so nothing is new.
+        self.assertEqual(data['entries'], [])
+        with (root / 'sessions' / (thread + '.jsonl')).open('ab') as log:
+            for piece in ('Hel', 'lo', ' world'):
+                log.write(json.dumps({'type': 'delta', 'at_ms': 9000, 'turn': 9, 'kind': 'content',
+                                      'data': piece}).encode() + b'\n')
+        data = json.loads(self.request('/api/transcript?thread=' + thread + '&version=x&after=' + cut)[1])
+        self.assertEqual(len(data['entries']), 1)
+        self.assertEqual(data['entries'][0]['entry']['message']['content'][0]['text'], 'Hello world')
+        # The group is still streaming, so the next poll carries it again even though its start
+        # is behind the offset the client has read to. Without that it would freeze mid-sentence.
+        again = json.loads(self.request('/api/transcript?thread=' + thread + '&version=x&after=' + str(data['end']))[1])
+        self.assertEqual(len(again['entries']), 1)
+        self.assertEqual(again['entries'][0]['entry']['message']['content'][0]['text'], 'Hello world')
+        # And a completed record behind the offset is not resent.
+        with (root / 'sessions' / (thread + '.jsonl')).open('ab') as log:
+            log.write(json.dumps({'type': 'settled', 'at_ms': 9100, 'outcome': 'complete'}).encode() + b'\n')
+        third = json.loads(self.request('/api/transcript?thread=' + thread + '&version=x&after=' + str(again['end']))[1])
+        self.assertEqual([item['entry']['type'] for item in third['entries']], ['settled'])
 
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
