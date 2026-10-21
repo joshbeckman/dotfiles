@@ -32,6 +32,9 @@ ASSETS = ROOT / 'apps/agent-mail-web'
 # the same reason.
 AGENT_RUN_ROOT = Path(os.environ.get('AGENT_RUN_ROOT', '~/.local/state/agent-run')).expanduser()
 AGENT_RUN_WINDOW = 8 * 1024 * 1024
+# A provider streams a turn as hundreds of word pieces, so one entry per streamed record draws
+# a readable turn as a thousand cards. Pieces are coalesced up to this much text per group.
+AGENT_RUN_GROUP = 64 * 1024
 AGENT_RUN_RECORD_TYPES = frozenset(('init', 'user', 'assistant_start', 'delta', 'assistant_end',
                                     'tool_intent', 'tool_result', 'checkpoint', 'retry', 'settled',
                                     'reply_sending', 'reply_sent'))
@@ -115,12 +118,33 @@ def agent_run_entry(record):
     return None
 
 
+def agent_run_group_entry(group):
+    """One entry for a coalesced run of streamed pieces.
+
+    Argument pieces are labelled rather than made a tool call, so a view of streamed input can
+    never imply that a call was made. The role is one the viewer does not open by default, which
+    is what keeps a long argument stream collapsed instead of filling the page.
+    """
+    if group['kind'] == 'arguments':
+        return {'type': 'message', 'timestamp': group['at_ms'],
+                'message': {'role': 'tool_arguments', 'content': [{'type': 'text', 'text': group['text']}]}}
+    part = ({'type': 'thinking', 'thinking': group['text']} if group['kind'] == 'reasoning_content'
+            else {'type': 'text', 'text': group['text']})
+    return {'type': 'message', 'timestamp': group['at_ms'],
+            'message': {'role': 'assistant', 'content': [part]}}
+
+
 def agent_run_entries(path):
     """Entries for an agent-run log, from its start, bounded, with truncation labelled.
 
     Read from the start rather than the tail because the viewer keys entries by byte offset, so
     a window that slides as the file grows would renumber every entry on each poll. A log larger
     than the window therefore stops advancing, and says so, instead of pretending to be whole.
+
+    Streamed pieces are coalesced by turn and kind into one entry keyed by the first piece's
+    offset. The trailing group stays open while a turn is streaming, and because this reads the
+    whole window on every request rather than only what follows the client's offset, a poll
+    during a live stream re-sends it and the viewer replaces that entry in place.
     """
     size = path.stat().st_size
     with path.open('rb') as log:
@@ -134,6 +158,14 @@ def agent_run_entries(path):
         complete = found + 1 if found >= 0 else 0
         raw = raw[:complete]
     entries, offset, skipped = [], 0, 0
+    group = None
+
+    def flush():
+        nonlocal group
+        if group is not None:
+            entries.append({'key': str(group['key']), 'entry': agent_run_group_entry(group)})
+            group = None
+
     for line in raw.splitlines(keepends=True):
         start = offset
         offset += len(line)
@@ -148,10 +180,22 @@ def agent_run_entries(path):
         if not isinstance(record, dict) or record.get('type') not in AGENT_RUN_RECORD_TYPES:
             skipped += 1
             continue
+        kind = record.get('kind')
+        if record.get('type') == 'delta' and kind in ('content', 'reasoning_content', 'arguments'):
+            if (group is not None and group['turn'] == record.get('turn') and group['kind'] == kind
+                    and len(group['text']) < AGENT_RUN_GROUP):
+                group['text'] += str(record.get('data') or '')
+                continue
+            flush()
+            group = {'key': start, 'turn': record.get('turn'), 'kind': kind, 'at_ms': record.get('at_ms'),
+                     'text': str(record.get('data') or '')}
+            continue
+        flush()
         entry = agent_run_entry(record)
         if entry is None:
             entry = record
         entries.append({'key': str(start), 'entry': entry})
+    flush()
     if truncated:
         entries.append({'key': str(offset),
                         'entry': {'type': 'transcript_oversize', 'bytes': size - len(raw), 'continued': True}})
