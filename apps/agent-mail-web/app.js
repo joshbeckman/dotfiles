@@ -1673,6 +1673,27 @@ setInterval(refreshVisible, 10000);
 // old. The transcript view already refreshes on becoming visible; this is the same rule.
 document.addEventListener("visibilitychange", refreshVisible);
 
+// iOS and Android float a fixed bottom bar above the on-screen keyboard, where it covers
+// the composer. A keyboard shrinks the visual viewport by far more than a URL bar moves
+// when it hides, so the bar stands down whenever the viewport drops well below the tallest
+// one seen. Tracking the maximum rather than window.innerHeight also covers Android
+// resizing the layout viewport instead of only the visual one. The CSS does the hiding.
+const viewport = window.visualViewport;
+if (viewport) {
+  let tallest = viewport.height;
+  const syncKeyboard = () => {
+    if (!document.body.classList.contains("keyboard-open"))
+      tallest = Math.max(tallest, viewport.height);
+    document.body.classList.toggle(
+      "keyboard-open",
+      viewport.height < tallest - 150,
+    );
+  };
+  viewport.addEventListener("resize", syncKeyboard);
+  viewport.addEventListener("scroll", syncKeyboard);
+  syncKeyboard();
+}
+
 // Notifications need a running bridge and an open app window (even in the
 // background); nothing here can deliver mail while the app is closed.
 const worker =

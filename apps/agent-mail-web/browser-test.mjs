@@ -1339,12 +1339,39 @@ try {
   // closes it again.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: "light" });
+  // The keyboard detector keys off the visual viewport shrinking. Install a controllable
+  // stand-in before the app loads so the test exercises the wiring, not only the CSS.
+  await page.addInitScript(() => {
+    const listeners = new Map();
+    window.__vvHeight = window.innerHeight;
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: {
+        get height() {
+          return window.__vvHeight;
+        },
+        addEventListener(type, listener) {
+          if (!listeners.has(type)) listeners.set(type, []);
+          listeners.get(type).push(listener);
+        },
+        removeEventListener() {},
+        dispatch(type) {
+          for (const listener of listeners.get(type) || []) listener();
+        },
+      },
+    });
+  });
   // A reload, not a goto: the launch URL differs from the current "/" only by its
   // fragment, and a fragment-only navigation would not rebuild the app.
   await page.reload();
   await page.locator("#mail-list").waitFor({ state: "visible" });
   assert.equal(await page.locator("#nav-toggle").isVisible(), true);
   assert.equal(await page.locator(".rail").isVisible(), true);
+  assert.equal(
+    await page.evaluate(() => getComputedStyle(document.querySelector(".topbar")).position),
+    "static",
+    "the phone header should scroll with the page, not pin over it",
+  );
   assert.equal(await page.evaluate(() => document.body.classList.contains("nav-open")), false);
   assert.equal(
     await page.evaluate(() => {
@@ -1373,6 +1400,41 @@ try {
   await page.waitForFunction(() => document.getElementById("sidebar").getBoundingClientRect().right <= 0);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list-mobile.png", fullPage: true });
+
+  // The fixed bottom bar must not sit on the end of the page: the reserved space below
+  // the last row has to be at least the bar's height, or the last conversation stays
+  // under it at the bottom of the scroll.
+  const clearance = await page.evaluate(() => {
+    const rail = document.querySelector(".rail").getBoundingClientRect();
+    const rows = document.querySelectorAll(".row");
+    const last = rows[rows.length - 1].getBoundingClientRect();
+    return {
+      railHeight: rail.height,
+      reserved: document.documentElement.scrollHeight - (last.bottom + window.scrollY),
+    };
+  });
+  assert(
+    clearance.reserved >= clearance.railHeight,
+    `the last row should clear the bottom bar: ${JSON.stringify(clearance)}`,
+  );
+
+  // While the on-screen keyboard is up the bar stands down instead of floating over the
+  // editor, which is what a fixed bar does on iOS.
+  assert.equal(await page.evaluate(() => document.body.classList.contains("keyboard-open")), false);
+  await page.evaluate(() => {
+    window.__vvHeight = window.innerHeight - 320;
+    window.visualViewport.dispatch("resize");
+  });
+  assert.equal(await page.evaluate(() => document.body.classList.contains("keyboard-open")), true);
+  assert.equal(await page.locator(".rail").isVisible(), false);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-keyboard-mobile.png" });
+  await page.evaluate(() => {
+    window.__vvHeight = window.innerHeight;
+    window.visualViewport.dispatch("resize");
+  });
+  assert.equal(await page.evaluate(() => document.body.classList.contains("keyboard-open")), false);
+  assert.equal(await page.locator(".rail").isVisible(), true);
   await page.setViewportSize({ width: 1200, height: 850 });
 
   // Installed app: the token must survive a launch at "/" without the fragment,

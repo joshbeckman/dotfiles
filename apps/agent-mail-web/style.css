@@ -1121,9 +1121,31 @@ dd {
   body.search-open .topbar {
     margin-bottom: 3rem;
   }
+  /* A sticky bar covered the first line of whatever was scrolled under it, so on a
+     phone the header scrolls with the page and the reading area owns the whole
+     viewport. Desktop keeps it pinned. */
+  .topbar {
+    position: static;
+  }
+  html {
+    scroll-padding-top: 0.5rem;
+  }
+  main > section {
+    scroll-margin-top: 0.5rem;
+  }
   .shell {
     grid-template-columns: minmax(0, 1fr);
-    padding-bottom: 3.75rem;
+    padding-bottom: calc(4.25rem + env(safe-area-inset-bottom));
+  }
+  /* The bottom bar is fixed, so content passes under it and the end of the page needs
+     room for it. While the on-screen keyboard is up the bar is not useful and iOS
+     floats a fixed bar above the keyboard, where it covers the editor, so it stands
+     down and gives the space back. */
+  body.keyboard-open .rail {
+    display: none;
+  }
+  body.keyboard-open .shell {
+    padding-bottom: 1rem;
   }
   .rail {
     position: fixed;
