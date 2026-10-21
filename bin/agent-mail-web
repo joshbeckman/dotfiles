@@ -36,9 +36,14 @@ AGENT_RUN_WINDOW = 8 * 1024 * 1024
 # A provider streams a turn as hundreds of word pieces, so one entry per streamed record draws
 # a readable turn as a thousand cards. Pieces are coalesced up to this much text per group.
 AGENT_RUN_GROUP = 64 * 1024
+# runtime_context, image_export and reply_skipped are optional records an upgraded runtime appends
+# for operator context, image input and output, and silent settlement. They carry references rather
+# than image bodies, and the generic projection below shows them as themselves, so recognizing them
+# is enough to stop a valid record being counted as unreadable.
 AGENT_RUN_RECORD_TYPES = frozenset(('init', 'user', 'assistant_start', 'delta', 'assistant_end',
                                     'tool_intent', 'tool_result', 'checkpoint', 'retry', 'settled',
-                                    'reply_sending', 'reply_sent'))
+                                    'reply_sending', 'reply_sent',
+                                    'runtime_context', 'image_export', 'reply_skipped'))
 
 
 def agent_run_log(thread_id):
