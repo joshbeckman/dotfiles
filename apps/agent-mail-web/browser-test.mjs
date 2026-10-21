@@ -182,6 +182,9 @@ await writeFile(
     { type: "delta", at_ms: at(2200), turn: 1, kind: "content", data: "I will run it.\n" },
     { type: "tool_intent", at_ms: at(2300), turn: 1, id: "call-1", name: "shell", arguments: { cmd: "ls" } },
     { type: "tool_result", at_ms: at(2400), turn: 1, id: "call-1", content: "fixture-output", is_error: false },
+    { type: "model_changed", at_ms: at(2440), change: { id: "CONTROL_ID", selection: { provider: "openai", id: "gpt-4.1-nano", api: "openai-responses", thinking: "high" } } },
+    { type: "model_request", at_ms: at(2450), turn: 1, model: { provider: "openai", model: "gpt-4.1-nano", api: "openai-responses", thinking: "high" } },
+    { type: "model_request", at_ms: at(2460), turn: 1, model: { provider: "openai", model: "gpt-4.1-nano", api: "openai-responses", thinking: "off" } },
     { type: "assistant_end", at_ms: at(2500), turn: 1, finish: "stop", success: true },
     { type: "settled", at_ms: at(2600), outcome: "complete" },
   ]
@@ -481,6 +484,14 @@ try {
   assert.ok(transcriptText.includes("Considering the fixture."), transcriptText);
   assert.equal(await transcriptPage.getByText("I will run it.").count(), 1);
   assert.equal(await transcriptPage.getByText("fixture-output").count(), 1);
+  // A model change shows which model answered and with what api and thinking, and the request
+  // that repeats it adds nothing while a thinking-only change draws its own card. A control id
+  // must never appear as a model id.
+  assert.ok(transcriptText.includes("openai/gpt-4.1-nano"), transcriptText);
+  assert.ok(transcriptText.includes("openai-responses"), transcriptText);
+  assert.ok(transcriptText.includes("thinking high"), transcriptText);
+  assert.ok(transcriptText.includes("thinking off"), transcriptText);
+  assert.ok(!transcriptText.includes("CONTROL_ID"), transcriptText);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT) {
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-thread-transcript-link.png", fullPage: true });
     await transcriptPage.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-thread-transcript.png", fullPage: true });

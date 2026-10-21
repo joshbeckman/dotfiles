@@ -172,7 +172,6 @@ def agent_run_entries(path):
     entries, offset, skipped = [], 0, 0
     group = None
     seen_model = None
-    pending_change = False
 
     def flush():
         nonlocal group
@@ -204,14 +203,26 @@ def agent_run_entries(path):
             # they arrive mid-turn, so none of them flushes the prose group. One record produces
             # exactly one entry, keyed by its own offset: two entries under one key would collide
             # in the viewer's keyed map and one of them would be erased.
-            model = record.get('model') or {}
-            state = (model.get('provider'), model.get('model'), model.get('api'), model.get('thinking'))
+            if record.get('type') == 'model_changed':
+                # A selection names the model as id where a request names it as model, so the tuple
+                # is normalised here and the applied change becomes the state a later request is
+                # compared against. A control id is never used as a model id.
+                selection = (record.get('change') or {}).get('selection')
+                selection = selection if isinstance(selection, dict) else {}
+                seen_model = (selection.get('provider'), selection.get('id'),
+                              selection.get('api'), selection.get('thinking'))
+                entries.append({'key': str(start), 'entry': {
+                    'type': 'model_change', 'timestamp': record.get('at_ms'),
+                    'provider': selection.get('provider'), 'modelId': selection.get('id'),
+                    'api': selection.get('api'), 'thinkingLevel': selection.get('thinking')}})
+                continue
             if record.get('type') == 'model_request':
-                if state == seen_model or pending_change:
-                    # Identical to the last one is not news, and the request that follows a
-                    # projected change is describing that same change.
-                    pending_change = False
-                    seen_model = state
+                model = record.get('model') or {}
+                state = (model.get('provider'), model.get('model'),
+                         model.get('api'), model.get('thinking'))
+                if state == seen_model:
+                    # Identical to what is already shown, which is the ordinary case: a request
+                    # precedes every API call and most of them change nothing.
                     continue
                 seen_model = state
                 entries.append({'key': str(start), 'entry': {
@@ -219,17 +230,7 @@ def agent_run_entries(path):
                     'provider': model.get('provider'), 'modelId': model.get('model'),
                     'api': model.get('api'), 'thinkingLevel': model.get('thinking')}})
                 continue
-            if record.get('type') == 'model_changed':
-                change = record.get('change') or {}
-                selection = change.get('selection')
-                selection = selection if isinstance(selection, dict) else {}
-                entries.append({'key': str(start), 'entry': {
-                    'type': 'model_change', 'timestamp': record.get('at_ms'),
-                    'provider': selection.get('provider') or change.get('provider'),
-                    'modelId': selection.get('model') or change.get('model') or str(selection.get('id') or change.get('id') or ''),
-                    'api': selection.get('api'), 'thinkingLevel': selection.get('thinking')}})
-                pending_change = True
-                continue
+            # A rejection is its own entry and does not adopt the model it refused.
             entries.append({'key': str(start), 'entry': record})
             continue
         if record.get('type') == 'delta' and kind in ('content', 'reasoning_content', 'arguments'):

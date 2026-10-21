@@ -133,6 +133,13 @@ function entryNode(key, entry) {
     addText(body, entry.cwd || "Unknown working directory");
   } else if (entry.type === "model_change") {
     addText(body, `${text(entry.provider)}/${text(entry.modelId)}`);
+    // An absent thinking is the provider's own default, which is not the same as off, so only an
+    // explicit value is shown. Pi model changes carry neither property and render as before.
+    const modelFacts = [
+      entry.api && text(entry.api),
+      entry.thinkingLevel != null && entry.thinkingLevel !== "" ? `thinking ${text(entry.thinkingLevel)}` : "",
+    ].filter(Boolean);
+    if (modelFacts.length) addText(body, modelFacts.join(" · "), "metadata");
   } else if (entry.type === "thinking_level_change") {
     addText(body, entry.thinkingLevel);
   } else if (entry.type === "compaction" || entry.type === "branch_summary") {
