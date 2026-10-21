@@ -246,6 +246,11 @@ try {
   assert.equal(assets.has("/vendor.js"), true);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list.png", fullPage: true });
+  // The same desktop list in dark, so the theme can be reviewed without a phone.
+  await page.emulateMedia({ colorScheme: "dark" });
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list-dark.png", fullPage: true });
+  await page.emulateMedia({ colorScheme: "light" });
   const dates = await page.evaluate((now) => ({
     recent: date(now - 2 * 60 * 60 * 1000),
     old: date(now - 4 * 24 * 60 * 60 * 1000),
