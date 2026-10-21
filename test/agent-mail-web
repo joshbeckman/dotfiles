@@ -758,5 +758,146 @@ class WebTest(unittest.TestCase):
         self.assertEqual(self.request('/api/contact?handle=../../secrets')[0], 400)
 
 
+    def agent_run(self, thread='01M5DW50J4HP2ZEHYHEMEGYBJT-fixture-thread', records=None, log_bytes=None, binding=None):
+        root = self.root / 'agent-run'
+        (root / 'threads').mkdir(parents=True, exist_ok=True)
+        (root / 'sessions').mkdir(exist_ok=True)
+        if records is not None:
+            log_bytes = b''.join(json.dumps(record).encode() + b'\n' for record in records)
+        if log_bytes is not None:
+            (root / 'sessions' / (thread + '.jsonl')).write_bytes(log_bytes)
+        record = {'version': 1, 'format': 'agent-run-v1', 'thread_id': thread,
+                  'log': 'sessions/' + thread + '.jsonl'}
+        record.update(binding or {})
+        (root / 'threads' / (thread + '.json')).write_text(json.dumps(record))
+        patcher = patch.object(web, 'AGENT_RUN_ROOT', root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return thread, root
+
+    def agent_run_records(self):
+        return [
+            {'type': 'init', 'at_ms': 1000, 'cwd': '/fixture/agent-run', 'model': 'gpt-6.1-sol', 'system': 'sys'},
+            {'type': 'user', 'at_ms': 2000, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'content': 'From: @josh\n\nBuild the thing.'},
+            {'type': 'assistant_start', 'at_ms': 3000, 'turn': 1, 'purpose': 'agent'},
+            {'type': 'delta', 'at_ms': 3100, 'turn': 1, 'kind': 'reasoning_content', 'data': 'Considering.'},
+            {'type': 'delta', 'at_ms': 3200, 'turn': 1, 'kind': 'content', 'data': 'I will.\n'},
+            {'type': 'delta', 'at_ms': 3300, 'turn': 1, 'kind': 'arguments', 'id': 'call-1', 'name': 'shell', 'data': '{"cmd":'},
+            {'type': 'tool_intent', 'at_ms': 3400, 'turn': 1, 'id': 'call-1', 'name': 'shell', 'arguments': {'cmd': 'ls'}},
+            {'type': 'tool_result', 'at_ms': 3500, 'turn': 1, 'id': 'call-1', 'content': 'ok', 'is_error': False},
+            {'type': 'assistant_end', 'at_ms': 3600, 'turn': 1, 'finish': 'tool_use', 'success': True},
+            {'type': 'checkpoint', 'at_ms': 3700, 'summary': 'Compacted after turn one.'},
+            {'type': 'retry', 'at_ms': 3800, 'reason': 'rate limited'},
+            {'type': 'reply_sending', 'at_ms': 3900, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'body': '/private/reply.md'},
+            {'type': 'reply_sent', 'at_ms': 4000, 'job': '01M5DW50J4HP2ZEHYHEMEGYBJT', 'message_id': '01M5DW60J4HP2ZEHYHEMEGYBJT-sent'},
+            {'type': 'settled', 'at_ms': 4100, 'outcome': 'complete'},
+        ]
+
+    def test_agent_run_projects_records_for_the_existing_viewer(self):
+        thread, _ = self.agent_run(records=self.agent_run_records())
+        status, body = self.request('/api/transcript?thread=' + thread)
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data['thread'], thread)
+        self.assertEqual(data['before'], 0)
+        self.assertFalse(data['partial'])
+        entries = [item['entry'] for item in data['entries']]
+        # Byte offsets are the keys, so a poll after a new record appends rather than renumbers.
+        self.assertEqual([int(item['key']) for item in data['entries']], sorted(int(item['key']) for item in data['entries']))
+        self.assertEqual(entries[0], {'type': 'session', 'cwd': '/fixture/agent-run', 'timestamp': 1000})
+        self.assertEqual(entries[1]['message']['role'], 'user')
+        self.assertEqual(entries[2]['type'], 'assistant_start')
+        self.assertEqual(entries[3]['message']['content'], [{'type': 'thinking', 'thinking': 'Considering.'}])
+        self.assertEqual(entries[4]['message']['content'], [{'type': 'text', 'text': 'I will.\n'}])
+        self.assertEqual(entries[6]['message']['content'][0]['type'], 'toolCall')
+        self.assertEqual(entries[6]['message']['content'][0]['arguments'], {'cmd': 'ls'})
+        self.assertEqual(entries[7]['message']['role'], 'toolResult')
+        self.assertEqual(entries[8]['message']['stopReason'], 'tool_use')
+        self.assertFalse(entries[8]['message']['isError'])
+        self.assertEqual(entries[9], {'type': 'compaction', 'summary': 'Compacted after turn one.', 'timestamp': 3700})
+        # Records that are not prose keep their own shape rather than becoming invented messages.
+        self.assertEqual([item['type'] for item in entries[10:]], ['retry', 'reply_sending', 'reply_sent', 'settled'])
+
+    def test_agent_run_keeps_argument_fragments_out_of_tool_calls(self):
+        thread, _ = self.agent_run(records=self.agent_run_records())
+        status, body = self.request('/api/transcript?thread=' + thread)
+        data = json.loads(body)
+        calls = [item['entry'] for item in data['entries']
+                 if item['entry'].get('type') == 'message'
+                 and any(part.get('type') == 'toolCall' for part in item['entry']['message'].get('content', []))]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['message']['content'][0]['id'], 'call-1')
+        fragments = [item['entry'] for item in data['entries'] if item['entry'].get('type') == 'delta']
+        self.assertEqual([item['kind'] for item in fragments], ['arguments'])
+
+    def test_agent_run_labels_truncation_and_a_torn_tail(self):
+        thread, root = self.agent_run(records=self.agent_run_records())
+        path = root / 'sessions' / (thread + '.jsonl')
+        with patch.object(web, 'AGENT_RUN_WINDOW', 200):
+            data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertTrue(data['truncated'])
+        label = data['entries'][-1]['entry']
+        self.assertEqual(label['type'], 'transcript_oversize')
+        self.assertTrue(label['continued'])
+        self.assertGreater(label['bytes'], 0)
+        path.write_bytes(path.read_bytes() + b'{"type":"delta","turn":2,"kind":"content","data":"torn')
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertTrue(data['partial'])
+        self.assertEqual(data['entries'][-1]['entry']['type'], 'settled')
+        self.assertLess(data['end'], path.stat().st_size)
+
+    def test_agent_run_refuses_bindings_that_disagree_or_escape(self):
+        thread, root = self.agent_run(records=self.agent_run_records())
+        record = root / 'threads' / (thread + '.json')
+        for bad, message in (({'thread_id': 'someone-else-thread'}, 'different thread'),
+                             ({'log': '/etc/passwd'}, 'invalid log path'),
+                             ({'log': '../../etc/passwd'}, 'invalid log path'),
+                             ({'version': 2}, 'Unsupported')):
+            with self.subTest(message=message):
+                record.write_text(json.dumps(dict({'version': 1, 'format': 'agent-run-v1',
+                                                   'thread_id': thread, 'log': 'sessions/' + thread + '.jsonl'}, **bad)))
+                status, body = self.request('/api/transcript?thread=' + thread)
+                self.assertEqual(status, 422)
+                self.assertIn(message, json.loads(body)['error'])
+        # A log reached through a link is not the log the binding names.
+        record.write_text(json.dumps({'version': 1, 'format': 'agent-run-v1', 'thread_id': thread,
+                                      'log': 'sessions/' + thread + '.jsonl'}))
+        target = root / 'sessions' / (thread + '.jsonl')
+        outside = self.root / 'outside.jsonl'
+        outside.write_bytes(target.read_bytes())
+        target.unlink()
+        target.symlink_to(outside)
+        self.assertEqual(self.request('/api/transcript?thread=' + thread)[0], 404)
+
+    def test_agent_run_leaves_ordinary_threads_alone(self):
+        thread, root = self.agent_run(records=self.agent_run_records())
+        self.assertEqual(self.request('/api/transcript?thread=unmanaged-thread')[0], 404)
+        status, body = self.request('/api/transcript?thread=' + thread + '&probe=1')
+        self.assertEqual((status, json.loads(body)), (200, {'thread': thread, 'available': True}))
+        self.assertEqual(json.loads(self.request('/api/transcript?thread=unmanaged-thread&probe=1')[1]),
+                         {'thread': 'unmanaged-thread', 'available': False})
+        # An absent binding is the ordinary case for Pi mail, so it is not an error.
+        self.assertEqual(self.request('/api/transcript?handle=' + quote('@+alder-turner'))[0], 200)
+
+    def test_agent_run_poll_is_free_when_nothing_changed(self):
+        thread, root = self.agent_run(records=self.agent_run_records())
+        first = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        status, body = self.request('/api/transcript?thread=' + thread + '&version=' + quote(first['version']))
+        self.assertEqual((status, json.loads(body)), (200, {'unchanged': True, 'version': first['version']}))
+        with (root / 'sessions' / (thread + '.jsonl')).open('ab') as log:
+            log.write(json.dumps({'type': 'delta', 'at_ms': 5000, 'turn': 1, 'kind': 'content', 'data': 'more'}).encode() + b'\n')
+        grown = json.loads(self.request('/api/transcript?thread=' + thread + '&version=' + quote(first['version']))[1])
+        self.assertNotIn('unchanged', grown)
+        self.assertEqual(len(grown['entries']), len(first['entries']) + 1)
+        self.assertEqual(grown['entries'][-1]['entry']['message']['content'][0]['text'], 'more')
+
+    def test_agent_run_skips_unparsable_records(self):
+        thread, _ = self.agent_run(log_bytes=b'not json\n' + json.dumps({'type': 'nonsense'}).encode() + b'\n' +
+                                  json.dumps({'type': 'delta', 'turn': 1, 'kind': 'content', 'data': 'kept'}).encode() + b'\n')
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 2)
+        self.assertEqual([item['entry']['message']['content'][0]['text'] for item in data['entries']], ['kept'])
+
+
 if __name__ == '__main__':
     unittest.main()

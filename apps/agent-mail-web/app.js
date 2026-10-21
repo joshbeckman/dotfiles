@@ -466,6 +466,7 @@ async function openThread(m) {
     $("thread").textContent =
       "Earlier messages are not available for this draft.";
   scrollToLatestMessage();
+  offerThreadTranscript();
   return true;
 }
 function threadSummary(messages) {
@@ -501,6 +502,27 @@ async function refreshThread() {
   status(`New ${fresh.length === 1 ? "message" : "messages"} from ${senders}.`);
 }
 // Attach before rendering: the sandboxed reader frame sizes itself once loaded.
+// A thread can have a transcript of its own when an agent-run runtime owns it. The link is
+// offered only after a probe says the transcript exists, so it never leads to a 404, and the
+// probe is fire-and-forget so the reader is not held behind it.
+async function offerThreadTranscript() {
+  const id = $("thread-id").textContent;
+  const link = $("thread-transcript");
+  link.hidden = true;
+  if (!id) return;
+  try {
+    const probe = await api(
+      "transcript?thread=" + encodeURIComponent(id) + "&probe=1",
+    );
+    // A slower probe for a thread the reader has already left must not add its link here.
+    if (probe.available && $("thread-id").textContent === id) {
+      link.href = "/transcript.html?thread=" + encodeURIComponent(id);
+      link.hidden = false;
+    }
+  } catch {
+    // An unavailable probe is not something the reader needs to be told about.
+  }
+}
 function appendThreadMessage(message, open) {
   const detail = document.createElement("details");
   detail.className = "message";

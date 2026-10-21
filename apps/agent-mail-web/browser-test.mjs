@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   mkdtemp,
   mkdir,
+  unlink,
   writeFile,
   appendFile,
   rename,
@@ -52,6 +53,7 @@ const env = {
   PI_SESSIONS_DIR: join(tmp, "sessions"),
   XDG_CONFIG_HOME: join(tmp, "config"),
   AGENT_REALM: "testrealm",
+  AGENT_RUN_ROOT: join(tmp, "agent-run"),
 };
 await mkdir(join(env.XDG_CONFIG_HOME, "nvim"), { recursive: true });
 const keywordFile = join(env.XDG_CONFIG_HOME, "nvim/keywords.txt");
@@ -137,6 +139,38 @@ const id = cli(
   "Markdown conversation",
   "--body",
   '# Fixture heading\n\n**Bold text** and a searchable persimmon.\n\n```mermaid\ngraph LR\n Mail --> Reply\n```\n\n![remote](https://example.invalid/tracker.png)\n\n<script>parent.document.body.dataset.compromised="yes"</script>\n\n[unsafe](javascript:alert(1))',
+);
+// The agent-run runtime keeps a binding per thread and one append-only log per thread. The
+// fixture writes both, keyed by the Thread-ID of the root message, which is what the app
+// shows as the thread's id.
+const agentRunRoot = env.AGENT_RUN_ROOT;
+await mkdir(join(agentRunRoot, "threads"), { recursive: true });
+await mkdir(join(agentRunRoot, "sessions"));
+const at = (offset) => Date.parse("2026-01-01T00:00:00Z") + offset;
+await writeFile(
+  join(agentRunRoot, "sessions", id + ".jsonl"),
+  [
+    { type: "init", at_ms: at(0), cwd: "/fixture/agent-run", model: "gpt-6.1-sol", system: "sys" },
+    { type: "user", at_ms: at(1000), job: id, content: "From: @josh\n\nRun the fixture turn." },
+    { type: "assistant_start", at_ms: at(2000), turn: 1, purpose: "agent" },
+    { type: "delta", at_ms: at(2100), turn: 1, kind: "reasoning_content", data: "Considering the fixture." },
+    { type: "delta", at_ms: at(2200), turn: 1, kind: "content", data: "I will run it.\n" },
+    { type: "tool_intent", at_ms: at(2300), turn: 1, id: "call-1", name: "shell", arguments: { cmd: "ls" } },
+    { type: "tool_result", at_ms: at(2400), turn: 1, id: "call-1", content: "fixture-output", is_error: false },
+    { type: "assistant_end", at_ms: at(2500), turn: 1, finish: "stop", success: true },
+    { type: "settled", at_ms: at(2600), outcome: "complete" },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n") + "\n",
+);
+await writeFile(
+  join(agentRunRoot, "threads", id + ".json"),
+  JSON.stringify({
+    version: 1,
+    format: "agent-run-v1",
+    thread_id: id,
+    log: "sessions/" + id + ".jsonl",
+  }),
 );
 const processServer = spawn(
   join(root, "bin/agent-mail-web"),
@@ -386,6 +420,38 @@ try {
   // a message gets passed around: an agent reads one with `agent-mail read --id <id>`, and
   // an id survives archiving where a folder-qualified key does not.
   assert.equal(await page.locator("#thread-id").textContent(), id);
+  // A thread an agent-run runtime owns carries a link to its own transcript, and the link is
+  // there because a binding exists rather than because the reader always offers one: remove
+  // the binding and the link goes away again.
+  const transcriptLink = page.locator("#thread-transcript");
+  await transcriptLink.waitFor();
+  assert.equal(await transcriptLink.isVisible(), true);
+  const opened = page.context().waitForEvent("page");
+  await transcriptLink.click();
+  const transcriptPage = await opened;
+  await transcriptPage.waitForLoadState();
+  // Each of these comes from a different record type, so a page that has all three is a page
+  // that projected the log rather than one that rendered a single record by luck. Entries are
+  // collapsed by default, so this asserts the text is in the document rather than visible.
+  await transcriptPage.waitForFunction(
+    () => document.querySelectorAll(".prose").length > 0,
+  );
+  const transcriptText = await transcriptPage.locator("body").textContent();
+  assert.ok(transcriptText.includes("Considering the fixture."), transcriptText);
+  assert.equal(await transcriptPage.getByText("I will run it.").count(), 1);
+  assert.equal(await transcriptPage.getByText("fixture-output").count(), 1);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT) {
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-thread-transcript-link.png", fullPage: true });
+    await transcriptPage.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-thread-transcript.png", fullPage: true });
+  }
+  await transcriptPage.close();
+  await unlink(join(env.AGENT_RUN_ROOT, "threads", id + ".json"));
+  await page.locator("#back").click();
+  await page
+    .getByRole("button", { name: /alder-turner Markdown conversation/ })
+    .click();
+  await page.waitForFunction(() => document.querySelector("#thread-id").textContent.length > 0);
+  await page.waitForFunction(() => document.querySelector("#thread-transcript").hidden);
   const shownIds = await page.locator(".message .render-tools .permalink").allTextContents();
   assert.ok(shownIds.includes(id), shownIds.join(" "));
   assert.ok(await page.locator('.message .render-tools button:has-text("Copy id")').count());

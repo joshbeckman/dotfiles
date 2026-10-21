@@ -1,6 +1,9 @@
 "use strict";
 const params = new URLSearchParams(location.search);
 const handle = params.get("handle") || "";
+// A thread transcript is an agent-run log rather than a Pi session, so the page is addressed
+// by the mail Thread-ID and the bridge resolves the log itself.
+const thread = params.get("thread") || "";
 const token =
   localStorage.getItem("agent-mail-token") ||
   sessionStorage.getItem("agent-mail-token") ||
@@ -181,8 +184,9 @@ function render(data, older = false) {
   $("entries").replaceChildren(fragment);
   before = data.reset || before == null ? data.before : Math.min(before, data.before);
   $("older").hidden = before <= 0;
-  $("session-info").textContent = `${data.handle} · ${data.header.cwd || "unknown cwd"}`;
-  document.title = `${data.handle} · Session transcript`;
+  const subject = data.thread || data.handle;
+  $("session-info").textContent = `${subject} · ${data.header?.cwd || "agent-run"}`;
+  document.title = `${subject} · Session transcript`;
   if (position) {
     const restored = document.querySelector(`[data-key="${CSS.escape(position.key)}"]`);
     if (restored) scrollBy(0, restored.getBoundingClientRect().top - position.top);
@@ -215,12 +219,12 @@ async function load({ older = false } = {}) {
     return;
   }
   if (document.hidden) return;
-  if (!handle) return status("No contact handle was provided.", true);
+  if (!handle && !thread) return status("No contact handle or thread was provided.", true);
   loading = true;
   const request = ++requestNumber;
   controller = new AbortController();
   try {
-    const query = new URLSearchParams({ handle });
+    const query = new URLSearchParams(thread ? { thread } : { handle });
     if (older && before != null) query.set("before", before);
     else if (version) {
       query.set("version", version);
@@ -234,7 +238,9 @@ async function load({ older = false } = {}) {
       status(error.message, true);
       if ([400, 404, 409, 422].includes(error.status)) clearJournal();
       if (error.status === 403) $("empty").textContent = "Open Agent Mail from its launch URL to authorize this tab.";
-      else if (error.status === 404) $("empty").textContent = "No retained Pi transcript is registered for this contact.";
+      else if (error.status === 404) $("empty").textContent = thread
+        ? error.message
+        : "No retained Pi transcript is registered for this contact.";
       else $("empty").textContent = error.message;
     }
   } finally {
