@@ -1,6 +1,6 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-const { marked, DOMPurify, mermaid } = MailRenderers;
+const { marked, DOMPurify } = MailRenderers;
 const launchToken = location.hash.slice(1);
 // localStorage, not sessionStorage: an installed app launches at "/" without
 // the fragment, so the token must outlive the tab. The bridge keeps it stable.
@@ -130,7 +130,52 @@ const describeTime = (element, value) => {
   element.dateTime = d.toISOString();
   element.title = d.toLocaleString();
 };
-const composer = MailComposer.create($("body-editor"), changed, error);
+// The editor and the diagram renderer are the two heaviest bundles in the app, and
+// neither is needed to read mail. Each is fetched the first time it is used, so the
+// first load carries the list and the reader rather than a code editor.
+let composer = null;
+let composerLoading = null;
+function ensureComposer() {
+  if (composer) return Promise.resolve(composer);
+  if (!composerLoading) {
+    composerLoading = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/composer-vendor.js";
+      script.onload = () => {
+        if (!window.MailComposer) {
+          reject(new Error("The editor bundle did not expose MailComposer."));
+          return;
+        }
+        composer = MailComposer.create($("body-editor"), changed, error);
+        resolve(composer);
+      };
+      script.onerror = () => reject(new Error("The editor bundle failed to load."));
+      document.head.append(script);
+    });
+  }
+  return composerLoading;
+}
+let mermaidLoading = null;
+function ensureMermaid() {
+  if (window.MailMermaid?.mermaid) return Promise.resolve(window.MailMermaid.mermaid);
+  if (!mermaidLoading) {
+    mermaidLoading = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/mermaid-vendor.js";
+      script.onload = () => {
+        const lib = window.MailMermaid?.mermaid;
+        if (!lib) {
+          reject(new Error("The diagram bundle did not expose mermaid."));
+          return;
+        }
+        resolve(lib);
+      };
+      script.onerror = () => reject(new Error("The diagram bundle failed to load."));
+      document.head.append(script);
+    });
+  }
+  return mermaidLoading;
+}
 let keywordGeneration = 0;
 async function loadKeywords() {
   const generation = ++keywordGeneration;
@@ -138,13 +183,13 @@ async function loadKeywords() {
   try {
     const result = await api("keywords");
     if (generation !== keywordGeneration) return;
-    composer.keywords(result.words);
+    (await ensureComposer()).keywords(result.words);
     $("keyword-status").textContent = result.available
       ? `${result.words.length} local keyword${result.words.length === 1 ? "" : "s"} · Ctrl+n / Ctrl+p to complete, Tab to accept`
       : "No local keywords.txt found; editor remains available.";
   } catch (e) {
     if (generation !== keywordGeneration) return;
-    composer.keywords([]);
+    composer?.keywords([]);
     $("keyword-status").textContent =
       "Keyword completion unavailable: " + e.message;
   }
@@ -208,6 +253,7 @@ function show(name) {
   for (const id of ["mail-list", "reader", "editor", "contacts", "teams"])
     $(id).hidden = id !== name && !(replying && id === "reader");
   setFolderButtons();
+  setNavOpen(false);
   if (name === "editor") renderRecipientCards();
 }
 function button(text, action) {
@@ -217,14 +263,13 @@ function button(text, action) {
   return b;
 }
 function setFolderButtons() {
+  const onMail = !["contacts", "teams"].includes(view);
   document
     .querySelectorAll("[data-folder]")
     .forEach((b) =>
       b.setAttribute(
         "aria-current",
-        b.dataset.folder === folder && !["contacts", "teams"].includes(view)
-          ? "page"
-          : "false",
+        b.dataset.folder === folder && onMail ? "page" : "false",
       ),
     );
   for (const name of ["contacts", "teams"])
@@ -232,6 +277,11 @@ function setFolderButtons() {
       "aria-current",
       view === name ? "page" : "false",
     );
+  $("mail-button").setAttribute("aria-current", onMail ? "page" : "false");
+}
+function setNavOpen(open) {
+  document.body.classList.toggle("nav-open", open);
+  $("nav-toggle").setAttribute("aria-expanded", open ? "true" : "false");
 }
 async function refresh(quiet = false) {
   const generation = ++listGeneration;
@@ -257,7 +307,7 @@ async function refresh(quiet = false) {
     $("count-" + f).textContent = result.counts[f] || "";
   $("folder-title").textContent = $("search").value
     ? "Search results"
-    : folder[0].toUpperCase() + folder.slice(1);
+    : { inbox: "Inbox", archive: "Archive", sent: "Sent", drafts: "Drafts", all: "All mail" }[folder] || folder;
   if (listChanged || !$("rows").children.length) renderList();
   if (result.warnings.length) status(result.warnings.join("; "), true);
   else if (!quiet)
@@ -398,7 +448,9 @@ function renderList() {
   const rows = $("rows");
   rows.replaceChildren();
   if (!items.length) {
-    rows.textContent = "No messages here.";
+    const empty = document.createElement("p");
+    empty.textContent = "No messages here.";
+    rows.append(empty);
     return;
   }
   items.forEach((m, i) => {
@@ -407,7 +459,7 @@ function renderList() {
     row.innerHTML =
       '<span class="sender">' +
       escape(m.from || "Draft") +
-      "</span><span><strong>" +
+      '</span><span class="subject-line"><strong>' +
       escape(m.subject || "(no subject)") +
       "</strong>" +
       (m.count > 1 ? " (" + m.count + ")" : "") +
@@ -426,6 +478,7 @@ async function navigate(target, clearSearch = true, query = "") {
   ++threadGeneration;
   folder = target;
   if (clearSearch) $("search").value = query;
+  document.body.classList.remove("search-open");
   setFolderButtons();
   show("mail-list");
   await refresh();
@@ -604,7 +657,7 @@ async function loadDraft(value) {
   $("to").value = value.to;
   $("recipient-cards").replaceChildren();
   $("subject").value = value.subject;
-  composer.load(value.body);
+  (await ensureComposer()).load(value.body);
   loadKeywords();
   $("preview").hidden = true;
   $("preview").replaceChildren();
@@ -625,10 +678,11 @@ function saveDraft() {
     .then(async () => {
       while (draft && dirty) {
         const old = draft;
+        const editor = await ensureComposer();
         const fields = {
           to: $("to").value,
           subject: $("subject").value,
-          body: composer.value(),
+          body: editor.value(),
         };
         const result = await api("save", {
           key: old.key,
@@ -638,7 +692,7 @@ function saveDraft() {
         if (draft === old) {
           draft = result;
           dirty = Object.entries(fields).some(
-            ([k, v]) => (k === "body" ? composer.value() : $(k).value) !== v,
+            ([k, v]) => (k === "body" ? editor.value() : $(k).value) !== v,
           );
           $("draft-status").textContent =
             "Saved on disk · " + new Date().toLocaleTimeString();
@@ -661,7 +715,8 @@ async function sendDraft() {
     (el) => [el, el.disabled],
   );
   controls.forEach(([el]) => (el.disabled = true));
-  composer.readOnly(true);
+  const editor = await ensureComposer();
+  editor.readOnly(true);
   try {
     await saveDraft();
     const sent = await api("send", {
@@ -682,7 +737,7 @@ async function sendDraft() {
   } finally {
     busy = false;
     controls.forEach(([el, disabled]) => (el.disabled = disabled));
-    composer.readOnly(false);
+    editor.readOnly(false);
     if (view === "reader" && current)
       $("archive").disabled = !current.messages.some(
         (m) => m.folder === "inbox",
@@ -694,7 +749,7 @@ async function sendDraft() {
 // so the only thing there is to report back is where it was started.
 async function spawnAgent() {
   if (busy) return;
-  const body = composer.value().trim();
+  const body = (await ensureComposer()).value().trim();
   if (!body) throw new Error("Write the task for the new agent first.");
   busy = true;
   const controls = [...document.querySelectorAll("button,input,textarea")].map(
@@ -726,7 +781,8 @@ async function deleteDraft() {
     (el) => [el, el.disabled],
   );
   controls.forEach(([el]) => (el.disabled = true));
-  composer.readOnly(true);
+  const editor = await ensureComposer();
+  editor.readOnly(true);
   try {
     // A pending save may advance the revision; deletion still checks disk state if it failed.
     await saving.catch(() => {});
@@ -738,7 +794,7 @@ async function deleteDraft() {
   } finally {
     busy = false;
     controls.forEach(([el, disabled]) => (el.disabled = disabled));
-    composer.readOnly(false);
+    editor.readOnly(false);
   }
 }
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -804,7 +860,7 @@ async function attach() {
       throw new Error(
         "Draft changed during image upload. Attach it again to the intended message.",
       );
-    composer.insert(
+    (await ensureComposer()).insert(
       "\n![" +
         file.name.replace(/[\[\]<>\r\n]/g, "") +
         "](" +
@@ -1329,31 +1385,46 @@ async function renderMarkdown(source, target, remote = false) {
         "]";
   }
   const dark = matchMedia("(prefers-color-scheme:dark)").matches;
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    theme: dark ? "dark" : "neutral",
-    htmlLabels: false,
-    flowchart: { htmlLabels: false },
-    maxTextSize: 20000,
-    suppressErrorRendering: true,
-  });
-  for (const code of doc.querySelectorAll("pre > code.language-mermaid")) {
+  const diagrams = doc.querySelectorAll("pre > code.language-mermaid");
+  // Mermaid is a megabyte of renderer for a message feature most threads never use,
+  // so the bundle is fetched only when a message actually carries a diagram. A failed
+  // load leaves the diagram's source visible rather than failing the whole message.
+  if (diagrams.length) {
     try {
-      const { svg } = await mermaid.render(
-        "mail-diagram-" + ++renderCounter,
-        code.textContent,
-      );
-      const container = doc.createElement("div");
-      container.innerHTML = DOMPurify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true },
+      const mermaid = await ensureMermaid();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: dark ? "dark" : "neutral",
+        htmlLabels: false,
+        flowchart: { htmlLabels: false },
+        maxTextSize: 20000,
+        suppressErrorRendering: true,
       });
-      code.parentNode.replaceWith(container);
+      for (const code of diagrams) {
+        try {
+          const { svg } = await mermaid.render(
+            "mail-diagram-" + ++renderCounter,
+            code.textContent,
+          );
+          const container = doc.createElement("div");
+          container.innerHTML = DOMPurify.sanitize(svg, {
+            USE_PROFILES: { svg: true, svgFilters: true },
+          });
+          code.parentNode.replaceWith(container);
+        } catch {
+          code.parentNode.insertAdjacentText(
+            "beforebegin",
+            "Diagram could not be rendered; source follows.",
+          );
+        }
+      }
     } catch {
-      code.parentNode.insertAdjacentText(
-        "beforebegin",
-        "Diagram could not be rendered; source follows.",
-      );
+      for (const code of diagrams)
+        code.parentNode.insertAdjacentText(
+          "beforebegin",
+          "Diagram renderer unavailable; source follows.",
+        );
     }
   }
   for (const a of doc.querySelectorAll("a")) {
@@ -1405,6 +1476,16 @@ async function renderMarkdown(source, target, remote = false) {
 }
 
 $("compose").onclick = () => newDraft().catch(error);
+$("compose-mobile").onclick = () => newDraft().catch(error);
+$("mail-button").onclick = () => navigate(folder).catch(error);
+$("nav-toggle").onclick = () =>
+  setNavOpen(!document.body.classList.contains("nav-open"));
+$("nav-backdrop").onclick = () => setNavOpen(false);
+$("search-toggle").onclick = () => {
+  const open = !document.body.classList.contains("search-open");
+  document.body.classList.toggle("search-open", open);
+  if (open) $("search").focus();
+};
 $("refresh").onclick = () => {
   const update =
     view === "teams"
@@ -1438,9 +1519,9 @@ for (const id of ["to", "subject"]) $(id).addEventListener("input", changed);
 $("to").addEventListener("input", () => renderRecipientCards(false));
 $("to").addEventListener("change", () => renderRecipientCards());
 $("image").onchange = () => attach().catch(error);
-$("preview-button").onclick = () => {
+$("preview-button").onclick = async () => {
   $("preview").hidden = false;
-  renderMarkdown(composer.value(), $("preview")).catch(error);
+  renderMarkdown((await ensureComposer()).value(), $("preview")).catch(error);
 };
 $("contacts-button").onclick = async () => {
   try {
@@ -1522,6 +1603,7 @@ document.addEventListener("keydown", (e) => {
     $("help").showModal();
     e.preventDefault();
   } else if (key === "/") {
+    document.body.classList.add("search-open");
     $("search").focus();
     e.preventDefault();
   } else if (key === "c") {

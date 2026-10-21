@@ -973,7 +973,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.get(url.path, parse_qs(url.query))
             if self.command != 'GET':
                 raise MailError('Unknown endpoint', 404)
-            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'fonts.css', 'vendor.js', 'composer-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'transcript.html', 'transcript.css', 'transcript.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
+            static = {'/': 'index.html', **{'/' + name: name for name in ('app.js', 'style.css', 'fonts.css', 'vendor.js', 'composer-vendor.js', 'mermaid-vendor.js', 'reader.html', 'reader.css', 'reader.js', 'transcript.html', 'transcript.css', 'transcript.js', 'favicon.svg', 'josh-avatar.png', 'manifest.webmanifest', 'sw.js', 'icon-192.png', 'icon-512.png')}}
             if url.path.startswith('/fonts/'):
                 # Self-hosted so the app does not depend on fonts installed on the
                 # machine; the name is whitelisted rather than joined, because a

@@ -1,3 +1,4 @@
 # Dependency template literals retain their upstream whitespace.
 vendor.js -whitespace linguist-vendored=true
 composer-vendor.js -whitespace linguist-vendored=true
+mermaid-vendor.js -whitespace linguist-vendored=true

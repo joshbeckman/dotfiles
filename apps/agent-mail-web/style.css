@@ -1,69 +1,956 @@
 :root {
   color-scheme: light dark;
-  --c-bg: #fff;
-  --c-bg-alt: #f6f6f3;
-  --c-text: #0d0d0d;
-  --c-muted: #555;
-  --c-border: #c9c9c4;
+  --c-bg: #ffffff;
+  --c-chrome: #1f3357;
+  --c-chrome-text: #eef2f9;
+  --c-chrome-muted: #b9c6dd;
+  --c-sidebar: #f4f6fa;
+  --c-bg-alt: #eef1f6;
+  --c-text: #17202e;
+  --c-muted: #5c6878;
+  --c-border: #d7dde6;
+  --c-border-strong: #b9c2cf;
   --c-link: #002fa7;
   --c-red: #bd2024;
   --c-focus: #002fa7;
-  --c-selected: #eef1fa;
+  --c-selected: #e6edfb;
+  --c-hover: #eef2f8;
+  --c-accent: #002fa7;
+  --c-accent-soft: #dfe8fb;
+  --topbar-h: 3.5rem;
+  --rail-w: 4.75rem;
+  --sidebar-w: 15rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --c-bg: #121212;
-    --c-bg-alt: #202020;
-    --c-text: #eee;
-    --c-muted: #b9b9b9;
-    --c-border: #555;
+    --c-bg: #14171c;
+    --c-chrome: #0c1016;
+    --c-chrome-text: #e8eaed;
+    --c-chrome-muted: #8f9aa9;
+    --c-sidebar: #191d24;
+    --c-bg-alt: #1e232b;
+    --c-text: #e8eaed;
+    --c-muted: #9aa4b1;
+    --c-border: #2b323c;
+    --c-border-strong: #3b434f;
     --c-link: #9ab6ff;
     --c-red: #ff969c;
     --c-focus: #ffcc00;
-    --c-selected: #263047;
+    --c-selected: #22304d;
+    --c-hover: #1c222b;
+    --c-accent: #6f96ff;
+    --c-accent-soft: #22304d;
   }
 }
 * {
   box-sizing: border-box;
+}
+html {
+  scroll-padding-top: calc(var(--topbar-h) + 0.5rem);
 }
 body {
   margin: 0;
   background: var(--c-bg);
   color: var(--c-text);
   font:
-    16px/1.5 "IBM Plex Sans",
+    15px/1.5 "IBM Plex Sans",
     system-ui,
+    -apple-system,
     sans-serif;
-}
-header {
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--c-border);
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  flex-wrap: wrap;
 }
 h1,
 h2,
-h3 {
+h3,
+h4 {
   font-family:
     "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
   line-height: 1.25;
-}
-h1 {
-  font-size: 1.5rem;
   margin: 0;
-  white-space: nowrap;
-  /* Flex so the wordmark, the avatar/@josh group and the realm pill share one
-     centre line. As inline boxes, the group sat a few pixels below the wordmark. */
+}
+h2 {
+  font-size: 1.35rem;
+}
+h3 {
+  font-size: 1.05rem;
+}
+a {
+  color: var(--c-link);
+}
+.icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  border: 1px solid var(--c-border);
+  border-radius: 0.4rem;
+  background: var(--c-bg);
+  padding: 0.4rem 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+button:hover {
+  background: var(--c-hover);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+input,
+textarea {
+  border: 1px solid var(--c-border);
+  border-radius: 0.4rem;
+  background: var(--c-bg);
+  padding: 0.45rem 0.65rem;
+  min-width: 0;
+}
+:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+kbd {
+  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
+  font-size: 0.85em;
+  border: 1px solid var(--c-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 0.25rem;
+  padding: 0 0.3rem;
+  background: var(--c-bg-alt);
+}
+[hidden] {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------- top bar */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 0.9rem;
+  background: var(--c-chrome);
+  color: var(--c-chrome-text);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.15);
+}
+.brand {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  font-size: 1.15rem;
+  white-space: nowrap;
+  min-width: 0;
 }
-h1 small {
-  font-size: 1rem;
-  color: var(--c-muted);
+.brand-mark {
+  display: inline-flex;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  flex: none;
+}
+.brand-mark svg {
+  width: 100%;
+  height: 100%;
+}
+.brand-name {
+  font-weight: 600;
+}
+.brand small {
+  font-size: 0.9rem;
   font-weight: 400;
+  color: var(--c-chrome-muted);
+}
+#current-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+#current-user .avatar-wrap {
+  margin-inline-end: 0;
+}
+#current-user .avatar {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+#realm {
+  padding: 0.05rem 0.5rem;
+  border: 1px solid rgb(255 255 255 / 0.25);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+#search-form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  max-width: 38rem;
+  margin-inline: auto;
+  position: relative;
+  background: rgb(255 255 255 / 0.12);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 0.5rem;
+  padding: 0 0.5rem;
+  height: 2.25rem;
+}
+#search-form label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+#search-form .search-icon {
+  color: var(--c-chrome-muted);
+}
+#search {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--c-chrome-text);
+  padding: 0.25rem 0;
+}
+#search::placeholder {
+  color: var(--c-chrome-muted);
+}
+#search:focus {
+  outline: none;
+}
+#search-form .search-submit {
+  border: 0;
+  background: transparent;
+  color: var(--c-chrome-muted);
+  padding: 0.2rem 0.3rem;
+}
+#search-form .search-submit:hover {
+  color: var(--c-chrome-text);
+  background: transparent;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+.topbar .icon-button,
+.topbar .ghost-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-chrome-text);
+}
+.topbar .icon-button:hover,
+.topbar .ghost-button:hover {
+  background: rgb(255 255 255 / 0.14);
+}
+.icon-button {
+  padding: 0.4rem;
+  border-radius: 0.5rem;
+}
+#nav-toggle,
+#compose-mobile,
+#search-toggle {
+  display: none;
+}
+#notify-button {
+  font-size: 0.85rem;
+}
+
+/* ----------------------------------------------------------------- status */
+#status {
+  margin: 0;
+  padding: 0.35rem 1rem;
+  min-height: 1.75rem;
+  font-size: 0.85rem;
+  color: var(--c-muted);
+  background: var(--c-bg-alt);
+  border-bottom: 1px solid var(--c-border);
+}
+#status.error {
+  color: var(--c-red);
+}
+
+/* ------------------------------------------------------------------ shell */
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--sidebar-w) minmax(0, 1fr);
+  align-items: start;
+}
+.rail {
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100dvh - var(--topbar-h));
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.6rem 0.4rem;
+  background: var(--c-chrome);
+  border-right: 1px solid rgb(0 0 0 / 0.2);
+}
+.rail button {
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 0;
+  background: transparent;
+  color: var(--c-chrome-muted);
+  padding: 0.5rem 0.2rem;
+  border-radius: 0.5rem;
+}
+.rail button .icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+.rail-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.01em;
+}
+.rail button:hover {
+  background: rgb(255 255 255 / 0.12);
+  color: var(--c-chrome-text);
+}
+.rail button[aria-current="page"] {
+  background: rgb(255 255 255 / 0.16);
+  color: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .rail button[aria-current="page"] {
+    color: #fff;
+  }
+}
+.sidebar {
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100dvh - var(--topbar-h));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.9rem 0.7rem;
+  background: var(--c-sidebar);
+  border-right: 1px solid var(--c-border);
+}
+#compose {
+  justify-content: center;
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 0.6rem 0.8rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+}
+#compose:hover {
+  filter: brightness(1.08);
+  background: var(--c-accent);
+}
+.folders {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.folders button,
+.sidebar-foot button {
+  justify-content: flex-start;
+  gap: 0.65rem;
+  border: 0;
+  background: transparent;
+  color: var(--c-text);
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.45rem;
+  font-weight: 500;
+}
+.folders button:hover,
+.sidebar-foot button:hover {
+  background: var(--c-hover);
+}
+.folders button[aria-current="page"] {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.folders .icon {
+  color: var(--c-muted);
+}
+.folders button[aria-current="page"] .icon {
+  color: currentColor;
+}
+.folder-name {
+  flex: 1;
+  text-align: left;
+}
+.count:empty {
+  display: none;
+}
+.count {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--c-muted);
+  background: var(--c-bg-alt);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+.folders button[aria-current="page"] .count {
+  color: var(--c-accent);
+  background: rgb(255 255 255 / 0.7);
+}
+.sidebar-foot {
+  margin-top: auto;
+  border-top: 1px solid var(--c-border);
+  padding-top: 0.6rem;
+}
+.sidebar-note {
+  margin: 0.6rem 0.2rem 0;
+  font-size: 0.75rem;
+  color: var(--c-muted);
+}
+.nav-backdrop {
+  display: none;
+}
+
+/* ------------------------------------------------------------------- main */
+#main {
+  min-width: 0;
+  padding: 1rem 1.25rem 4rem;
+  max-width: 92rem;
+}
+main > section {
+  scroll-margin-top: calc(var(--topbar-h) + 0.75rem);
+}
+.list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.list-header .hint {
+  margin: 0;
+}
+.hint {
+  font-size: 0.85rem;
+  color: var(--c-muted);
+}
+.actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+button[aria-current="page"] {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+#status.error,
+.hint.error {
+  color: var(--c-red);
+}
+#authorize {
+  margin-bottom: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--c-border);
+  border-radius: 0.6rem;
+  background: var(--c-bg-alt);
+  max-width: 52rem;
+}
+#authorize h2 {
+  font-size: 1.05rem;
+  margin-bottom: 0.5rem;
+}
+#authorize p {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  color: var(--c-muted);
+}
+#authorize form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+#authorize label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--c-muted);
+}
+#authorize input {
+  min-width: min(22rem, 70vw);
+}
+#authorize-status {
+  margin: 0.5rem 0 0;
+}
+
+/* ------------------------------------------------------------------- list */
+#rows {
+  border: 1px solid var(--c-border);
+  border-radius: 0.6rem;
+  overflow: hidden;
+  background: var(--c-bg);
+}
+#rows > :empty {
+  display: none;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.35rem 1rem;
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  border: 0;
+  border-bottom: 1px solid var(--c-border);
+  border-radius: 0;
+  background: var(--c-bg);
+  text-align: left;
+  box-shadow: inset 3px 0 transparent;
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.row:hover {
+  background: var(--c-hover);
+}
+.row.selected {
+  background: var(--c-selected);
+  box-shadow: inset 3px 0 var(--c-accent);
+}
+.row .sender {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: var(--c-text);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.row .avatar-wrap {
+  flex: none;
+}
+.row .avatar {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+  display: block;
+}
+.row strong {
+  font-weight: 600;
+}
+.row .subject-line {
+  display: block;
+  color: var(--c-text);
+}
+.row .count {
+  font-weight: 500;
+  color: var(--c-muted);
+}
+.row .excerpt {
+  display: block;
+  color: var(--c-muted);
+  font-size: 0.85rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 72ch;
+}
+.row time {
+  font-size: 0.78rem;
+  color: var(--c-muted);
+  white-space: nowrap;
+  padding-top: 0.15rem;
+}
+#rows:has(.row:only-child) .row {
+  border-bottom: 0;
+}
+#rows > p {
+  padding: 1.25rem 1rem;
+  margin: 0;
+  color: var(--c-muted);
+}
+
+/* ----------------------------------------------------------------- reader */
+.pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.6rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--c-border);
+}
+.pane-bar-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-left: auto;
+}
+.pane-back {
+  font-weight: 600;
+}
+.pane-bar button,
+.pane-bar a {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.4rem;
+}
+.pane-bar a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--c-border);
+  text-decoration: none;
+}
+.pane-bar a:hover {
+  background: var(--c-hover);
+}
+.pane-title {
+  font-size: 1.15rem;
+}
+.reader-head {
+  margin-bottom: 1rem;
+}
+#thread-title {
+  font-size: 1.5rem;
+  overflow-wrap: anywhere;
+}
+#participants {
+  color: var(--c-muted);
+  overflow-wrap: anywhere;
+  max-width: 85ch;
+  margin: 0.3rem 0 0.25rem;
+  font-size: 0.9rem;
+}
+.permalink {
+  color: var(--c-muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
+}
+#thread-id {
+  display: block;
+}
+#thread-layout > *,
+#compose-layout > * {
+  min-width: 0;
+}
+details.message {
+  border: 1px solid var(--c-border);
+  border-radius: 0.6rem;
+  margin-bottom: 0.75rem;
+  overflow: clip;
+  background: var(--c-bg);
+}
+details.message > summary {
+  cursor: pointer;
+  padding: 0.65rem 0.85rem;
+  background: var(--c-bg-alt);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+details.message > summary .avatar {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.4rem;
+}
+details.message > summary time {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--c-muted);
+  white-space: nowrap;
+}
+details.message > .metadata {
+  padding: 0.5rem 0.85rem 0;
+}
+.metadata {
+  font-size: 0.82rem;
+  color: var(--c-muted);
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.rendered {
+  width: 100%;
+  border: 0;
+  min-height: 12rem;
+  height: 28rem;
+  display: block;
+  background: var(--c-bg);
+}
+.source {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  font:
+    13px/1.5 "Berkeley Mono",
+    "IBM Plex Mono",
+    monospace;
+  padding: 0 0.85rem;
+}
+.render-tools {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.5rem 0.85rem 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.render-tools button {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.55rem;
+}
+.render-tools .permalink {
+  margin-left: auto;
+}
+#thread-contacts,
+#compose-contacts {
+  border-top: 1px solid var(--c-border);
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+#thread-contacts h3,
+#compose-contacts h3 {
+  margin-bottom: 0.5rem;
+}
+#participant-cards .session-details,
+#recipient-cards .session-details {
+  grid-template-columns: 1fr;
+  gap: 0.25rem;
+}
+#participant-cards .session-details dd,
+#recipient-cards .session-details dd {
+  margin-bottom: 0.75rem;
+}
+.replying #reader > .pane-bar,
+.replying #thread > .message > .render-tools {
+  display: none;
+}
+
+/* ----------------------------------------------------------------- editor */
+#editor {
+  max-width: 78rem;
+}
+#compose-fields {
+  display: flex;
+  flex-direction: column;
+}
+#editor label,
+#body-label {
+  display: block;
+  margin: 0.8rem 0 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--c-muted);
+}
+.attach-label {
+  display: flex !important;
+  align-items: center;
+  gap: 0.4rem;
+}
+#body-editor {
+  margin-top: 0.25rem;
+}
+#body-editor .cm-editor {
+  border: 1px solid var(--c-border);
+  border-radius: 0.5rem;
+  background: var(--c-bg);
+  color: var(--c-text);
+}
+#body-editor .cm-editor.cm-focused {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+#body-editor .cm-scroller {
+  max-height: 65vh;
+}
+#body-editor .cm-content {
+  min-height: 18rem;
+  overflow-wrap: anywhere;
+  padding: 0.75rem;
+}
+#body-editor .cm-cursor {
+  border-left-color: var(--c-text);
+}
+#body-editor .cm-fat-cursor {
+  background: var(--c-focus);
+  color: var(--c-bg) !important;
+}
+#body-editor .cm-editor:not(.cm-focused) .cm-fat-cursor {
+  background: transparent;
+  outline: 1px solid var(--c-focus);
+  color: transparent !important;
+}
+#body-editor .cm-selectionBackground {
+  background: var(--c-selection, #a9c2f180);
+}
+#body-editor .cm-tooltip,
+#body-editor .cm-panels {
+  background: var(--c-bg);
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+#body-editor .cm-tooltip-autocomplete ul li[aria-selected] {
+  background: var(--c-selected);
+  color: var(--c-text);
+  outline: 1px solid var(--c-focus);
+}
+#body {
+  font:
+    15px/1.6 "Berkeley Mono",
+    "IBM Plex Mono",
+    monospace;
+}
+/* iOS zooms the page when a focusable field is under 16px, which is why the composer
+   jumped on a phone. Keyed to a coarse pointer rather than a narrow window: a small
+   desktop window does not zoom, and the 15px is deliberate on a real keyboard. */
+@media (pointer: coarse) {
+  #body {
+    font-size: 16px;
+  }
+}
+#draft-status,
+#keyword-status {
+  font-size: 0.82rem;
+  color: var(--c-muted);
+}
+#preview {
+  margin-top: 1rem;
+}
+
+/* ------------------------------------------------------- contacts and teams */
+#contacts > p,
+#teams > p {
+  max-width: 75ch;
+}
+#contact-search-form,
+#team-search-form {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+#contact-search,
+#team-search {
+  flex: 1;
+  min-width: 12rem;
+  max-width: 34rem;
+}
+#contact-search-form label,
+#team-search-form label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+#contact-status,
+#team-status {
+  color: var(--c-muted);
+  font-size: 0.85rem;
+}
+.contact,
+.team-card {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--c-border);
+  border-radius: 0.6rem;
+  margin-bottom: 0.6rem;
+  background: var(--c-bg);
+}
+.team-card {
+  padding: 0;
+  overflow: clip;
+}
+.team-card > summary,
+.contact > summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  padding: 0.6rem 0.85rem;
+  font-weight: 500;
+}
+.team-card > summary {
+  background: var(--c-bg-alt);
+}
+.contact summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+}
+.contact {
+  padding: 0.6rem 0.85rem;
+}
+.contact > button,
+.team-card > button {
+  margin: 0.6rem 0.85rem 0;
+}
+.team-card > dl,
+.team-card > h3,
+.team-card > div,
+.team-card > details,
+.contact > .contact-content {
+  margin-inline: 0.85rem;
+}
+.team-card > *:last-child {
+  margin-bottom: 0.85rem;
+}
+.contact-content,
+.team-card {
+  max-width: 90ch;
+}
+.contact-content {
+  margin-top: 0.6rem;
+}
+.session-details {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  gap: 0.2rem 0.75rem;
+  margin: 0.5rem 0;
+}
+.session-details dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.session-details dt {
+  color: var(--c-muted);
+  font-size: 0.85rem;
+}
+.team-memberships {
+  margin: 0.75rem 0;
+  overflow-wrap: anywhere;
+}
+.team-memberships h4 {
+  margin: 0 0 0.5rem;
+}
+.team-memberships details + details {
+  margin-top: 0.5rem;
+}
+.model-history {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+.model-history dd {
+  margin-bottom: 0.75rem;
 }
 .avatar {
   width: 1.75rem;
@@ -113,243 +1000,54 @@ h1 small {
 #team-list .avatar {
   width: 3rem;
   height: 3rem;
+  border-radius: 0.5rem;
 }
 #team-list > .team-card > summary > .team-badge {
   width: 3rem;
   height: 3rem;
   font-size: 1.125rem;
 }
-/* Flex rather than baseline-aligned inline boxes: the avatar and the name were a
-   hair off each other inside the heading's line box. */
-#current-user {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-#current-user .avatar-wrap {
-  margin-inline-end: 0;
-}
-#current-user .avatar {
-  width: 1.4rem;
-  height: 1.4rem;
-}
-#realm {
-  padding: 0.1rem 0.55rem;
+
+/* ----------------------------------------------------------------- dialog */
+dialog {
   border: 1px solid var(--c-border);
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--c-muted);
-}
-h2 {
-  font-size: 1.35rem;
-}
-h3 {
-  font-size: 1.1rem;
-}
-#search-form {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex: 1;
-}
-#search-form label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-#search {
-  min-width: 10rem;
-  width: 100%;
-  max-width: 42rem;
-}
-button,
-input,
-textarea {
-  font: inherit;
-  border: 1px solid var(--c-border);
-  border-radius: 3px;
-  color: inherit;
+  border-radius: 0.75rem;
   background: var(--c-bg);
-  padding: 0.4rem 0.65rem;
+  color: var(--c-text);
+  max-width: 36rem;
+  width: min(36rem, 92vw);
+  padding: 0 1.25rem 1.25rem;
+  box-shadow: 0 20px 50px rgb(0 0 0 / 0.35);
 }
-button {
-  cursor: pointer;
-}
-button:hover {
-  background: var(--c-bg-alt);
-}
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-button[aria-current="page"] {
-  border-bottom: 3px solid var(--c-link);
-  color: var(--c-link);
-}
-:focus-visible {
-  outline: 2px solid var(--c-focus);
-  outline-offset: 3px;
-}
-nav {
+.dialog-head {
   display: flex;
-  gap: 0.4rem;
-  padding: 0.8rem 1.5rem;
-  flex-wrap: wrap;
-  background: var(--c-bg-alt);
-}
-nav span {
-  font-size: 0.8rem;
-  color: var(--c-muted);
-}
-#compose,
-#send {
-  background: var(--c-link);
-  color: var(--c-bg);
-}
-#status {
-  padding: 0 1.5rem;
-  color: var(--c-muted);
-  min-height: 1.5rem;
-  font-size: 0.9rem;
-}
-#status.error {
-  color: var(--c-red);
-}
-/* A Dock-launched app cannot inherit the token a browser tab stored, so this
-   panel is the only way in for an installed window. */
-#authorize {
-  margin: 0 1.5rem 1rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid var(--c-border);
-  border-radius: 0.5rem;
-  background: var(--c-bg-alt);
-}
-#authorize h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-}
-#authorize p {
-  margin: 0 0 0.75rem;
-  font-size: 0.9rem;
-  color: var(--c-muted);
-}
-#authorize form {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-#authorize label {
-  display: block;
-  font-size: 0.85rem;
-  color: var(--c-muted);
-}
-#authorize input {
-  min-width: 22rem;
-}
-#authorize-status {
-  margin: 0.5rem 0 0;
-}
-main {
-  padding: 0 1.5rem 2rem;
-  max-width: 100rem;
-  margin: auto;
-}
-main > section {
-  max-width: 100%;
-}
-.replying #reader > .actions,
-.replying #thread > .message > .render-tools {
-  display: none;
-}
-@media (min-width: 1000px) {
-  main.replying {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 2rem;
-    align-items: start;
-  }
-  main.replying > section {
-    min-width: 0;
-  }
-}
-[hidden] {
-  display: none !important;
-}
-.hint {
-  font-size: 0.9rem;
-  color: var(--c-muted);
-}
-#rows {
-  border-top: 1px solid var(--c-border);
-}
-.row {
-  display: grid;
-  grid-template-columns: minmax(10rem, 22%) 1fr auto;
-  width: 100%;
-  border: 0;
-  border-bottom: 1px solid var(--c-border);
-  border-radius: 0;
-  text-align: left;
+  align-items: center;
+  justify-content: space-between;
   gap: 1rem;
-  padding: 0.85rem 0.6rem;
+  position: sticky;
+  top: 0;
+  background: var(--c-bg);
+  padding: 1rem 0 0.5rem;
 }
-.row.selected {
-  background: var(--c-selected);
-  box-shadow: inset 3px 0 var(--c-link);
+dialog::backdrop {
+  background: #0008;
+  backdrop-filter: blur(1px);
 }
-.row .sender {
-  overflow-wrap: anywhere;
-  color: var(--c-muted);
-  font-size: 0.9rem;
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
 }
-.row strong {
-  font-weight: 550;
+dt {
+  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
 }
-.row .excerpt {
-  display: block;
-  color: var(--c-muted);
-  font-size: 0.9rem;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  max-width: 65ch;
+dd {
+  margin: 0;
 }
-.row time {
-  font-size: 0.8rem;
-  color: var(--c-muted);
-}
-.actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin: 1rem 0;
-}
-#editor {
-  max-width: 78rem;
-}
-#thread-layout > *,
-#compose-layout > * {
-  min-width: 0;
-}
-#thread-contacts,
-#compose-contacts {
-  border-top: 1px solid var(--c-border);
-  margin-top: 1rem;
-  font-size: 0.9rem;
-}
-#participant-cards .session-details,
-#recipient-cards .session-details {
-  grid-template-columns: 1fr;
-  gap: 0.25rem;
-}
-#participant-cards .session-details dd,
-#recipient-cards .session-details dd {
-  margin-bottom: 0.75rem;
-}
+
+/* ------------------------------------------------------------- responsive */
 @media (min-width: 1000px) {
   #thread-layout,
   #compose-layout {
@@ -365,6 +1063,12 @@ main > section {
     padding-left: 1rem;
     margin-top: 0;
   }
+  main.replying {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+  }
   .replying #thread-layout,
   .replying #compose-layout {
     display: block;
@@ -377,268 +1081,143 @@ main > section {
     margin-top: 1rem;
   }
 }
-#participants {
-  color: var(--c-muted);
-  overflow-wrap: anywhere;
-  max-width: 85ch;
-}
-details.message {
-  border-top: 1px solid var(--c-border);
-  padding: 0.8rem 0;
-}
-details.message summary {
-  cursor: pointer;
-  overflow-wrap: anywhere;
-}
-details.message summary time {
-  float: right;
-  font-size: 0.85rem;
-  color: var(--c-muted);
-  margin-left: 1rem;
-}
-.metadata {
-  font-size: 0.85rem;
-  color: var(--c-muted);
-  overflow-wrap: anywhere;
-}
-.rendered {
-  width: 100%;
-  border: 0;
-  min-height: 12rem;
-  height: 28rem;
-  display: block;
-  background: var(--c-bg);
-}
-.source {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-width: 100%;
-  font:
-    14px/1.5 "Berkeley Mono",
-    "IBM Plex Mono",
-    monospace;
-}
-.render-tools {
-  display: flex;
-  gap: 0.5rem;
-  margin: 0.5rem 0;
-  flex-wrap: wrap;
-  align-items: baseline;
-}
-/* The id a copy button copies, shown so it can be read and selected as well. Muted and
-   monospace because it is an identifier, and allowed to wrap because a legacy id is 85
-   characters and a ULID with a slug is 75. */
-.permalink {
-  color: var(--muted);
-  font-size: 0.8rem;
-  overflow-wrap: anywhere;
-}
-#thread-id {
-  display: block;
-  margin: 0.25rem 0 0.75rem;
-}
-.render-tools button {
-  font-size: 0.85rem;
-}
-#editor label,
-#body-label {
-  display: block;
-  margin: 0.8rem 0 0.3rem;
-}
-#body-editor {
-  margin-top: 0.5rem;
-}
-#body-editor .cm-editor {
-  border: 1px solid var(--c-border);
-  background: var(--c-bg);
-  color: var(--c-text);
-}
-#body-editor .cm-scroller {
-  max-height: 65vh;
-}
-#body-editor .cm-content {
-  min-height: 18rem;
-  overflow-wrap: anywhere;
-}
-#body-editor .cm-cursor {
-  border-left-color: var(--c-text);
-}
-#body-editor .cm-fat-cursor {
-  background: var(--c-focus);
-  color: var(--c-bg) !important;
-}
-#body-editor .cm-editor:not(.cm-focused) .cm-fat-cursor {
-  background: transparent;
-  outline: 1px solid var(--c-focus);
-  color: transparent !important;
-}
-#body-editor .cm-selectionBackground {
-  background: var(--c-selection, #a9c2f180);
-}
-#body-editor .cm-tooltip,
-#body-editor .cm-panels {
-  background: var(--c-bg);
-  color: var(--c-text);
-  border-color: var(--c-border);
-}
-#body-editor .cm-tooltip-autocomplete ul li[aria-selected] {
-  background: var(--c-selected);
-  color: var(--c-text);
-  outline: 1px solid var(--c-focus);
-}
-#body {
-  font:
-    15px/1.6 "Berkeley Mono",
-    "IBM Plex Mono",
-    monospace;
-}
-/* iOS zooms the page when a focusable field is under 16px, which is why the composer
-   jumped on a phone. Keyed to a coarse pointer rather than a narrow window: a small
-   desktop window does not zoom, and the 15px is deliberate on a real keyboard. */
-@media (pointer: coarse) {
-  #body {
-    font-size: 16px;
+
+@media (max-width: 860px) {
+  :root {
+    --topbar-h: 3.25rem;
   }
-}
-#draft-status {
-  font-size: 0.85rem;
-  color: var(--c-muted);
-}
-.contact,
-.team-card {
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--c-border);
-}
-.contact summary,
-.team-card summary {
-  cursor: pointer;
-  overflow-wrap: anywhere;
-}
-.contact button,
-.team-card > button {
-  overflow-wrap: anywhere;
-  margin-top: 0.75rem;
-}
-.contact-content,
-.team-card {
-  max-width: 85ch;
-}
-.session-details {
-  grid-template-columns: 10rem minmax(0, 1fr);
-}
-.session-details dd {
-  overflow-wrap: anywhere;
-}
-.team-memberships {
-  margin: 0.75rem 0;
-  overflow-wrap: anywhere;
-}
-.team-memberships h4 {
-  margin: 0 0 0.5rem;
-}
-.team-memberships details + details {
-  margin-top: 0.5rem;
-}
-.model-history {
-  grid-template-columns: minmax(0, 1fr);
-  overflow-wrap: anywhere;
-}
-.model-history dd {
-  margin-bottom: 0.75rem;
-}
-#contact-search-form,
-#team-search-form {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-#contact-search,
-#team-search {
-  flex: 1;
-  min-width: 12rem;
-}
-@media (max-width: 600px) {
-  .session-details {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
+  #nav-toggle,
+  #compose-mobile,
+  #search-toggle {
+    display: inline-flex;
   }
-  .session-details dd {
-    margin-bottom: 0.75rem;
+  #notify-button span {
+    display: none;
   }
-}
-dialog {
-  border: 1px solid var(--c-border);
-  background: var(--c-bg);
-  color: var(--c-text);
-  max-width: 36rem;
-}
-dialog::backdrop {
-  background: #0008;
-}
-dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.5rem 1.5rem;
-}
-dt,
-kbd {
-  font-family: "Berkeley Mono", "IBM Plex Mono", monospace;
-}
-dd {
-  margin: 0;
-}
-footer {
-  padding: 1rem 1.5rem;
-  color: var(--c-muted);
-  border-top: 1px solid var(--c-border);
-  font-size: 0.8rem;
-}
-@media (max-width: 700px) {
-  header,
-  nav,
-  main {
-    padding-left: 0.75rem;
-    padding-right: 0.75rem;
-  }
-  /* Nine nav buttons wrapped to three rows and took a third of the screen, so the list
-     started below the fold. Compact rather than scrollable: a scroller hides tabs, and
-     these all fit in two rows at this size. */
-  header {
-    gap: 0.5rem 0.75rem;
-    padding-top: 0.6rem;
-    padding-bottom: 0.6rem;
-  }
-  h1 {
-    font-size: 1.15rem;
-  }
-  h1 small {
-    font-size: 0.9rem;
-  }
-  nav {
-    gap: 0.3rem;
-    padding-top: 0.5rem;
-    padding-bottom: 0.5rem;
-  }
-  nav button,
   #notify-button {
-    padding: 0.3rem 0.5rem;
-    font-size: 0.9rem;
+    padding: 0.4rem;
+  }
+  .brand-name {
+    display: none;
+  }
+  .brand-mark {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+  #search-form {
+    display: none;
+    position: absolute;
+    left: 0.5rem;
+    right: 0.5rem;
+    top: calc(var(--topbar-h) + 0.35rem);
+    max-width: none;
+    background: var(--c-chrome);
+    box-shadow: 0 8px 20px rgb(0 0 0 / 0.3);
+    z-index: 40;
+  }
+  body.search-open #search-form {
+    display: flex;
+  }
+  body.search-open .topbar {
+    margin-bottom: 3rem;
+  }
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    padding-bottom: 3.75rem;
+  }
+  .rail {
+    position: fixed;
+    inset: auto 0 0;
+    height: auto;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 0.3rem 0.4rem calc(0.3rem + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-top: 1px solid rgb(0 0 0 / 0.2);
+    z-index: 30;
+  }
+  .rail button {
+    flex: 1;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(18rem, 82vw);
+    height: 100dvh;
+    z-index: 50;
+    transform: translateX(-102%);
+    transition: transform 0.18s ease;
+    box-shadow: 0 0 40px rgb(0 0 0 / 0.4);
+  }
+  body.nav-open .sidebar {
+    transform: none;
+  }
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgb(0 0 0 / 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+    z-index: 45;
+  }
+  body.nav-open .nav-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #main {
+    padding: 0.85rem 0.85rem 2rem;
   }
   .row {
-    grid-template-columns: 1fr auto;
-    gap: 0.3rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.15rem 0.5rem;
+    padding: 0.6rem 0.7rem;
   }
   .row .sender {
-    grid-column: 1/-1;
+    grid-column: 1 / -1;
   }
   .row .excerpt {
-    max-width: 60vw;
+    max-width: 72vw;
   }
   .rendered {
     height: 32rem;
   }
-  #help-button {
+  .session-details {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+  .session-details dd {
+    margin-bottom: 0.6rem;
+  }
+  #thread-title {
+    font-size: 1.25rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar {
+    gap: 0.4rem;
+    padding: 0 0.55rem;
+  }
+  .brand small {
+    font-size: 0.8rem;
+  }
+  .pane-bar-actions button span,
+  .pane-bar a span {
     display: none;
+  }
+  .pane-bar-actions button,
+  .pane-bar a {
+    padding: 0.4rem;
+  }
+  #contact-list .avatar,
+  #team-list .avatar {
+    width: 2.5rem;
+    height: 2.5rem;
   }
 }
