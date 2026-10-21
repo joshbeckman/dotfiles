@@ -25,6 +25,139 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / 'apps/agent-mail-web'
+
+# The agent-run runtime keeps one append-only log per mail thread, and a small binding record
+# per thread naming it. The bridge reads the binding itself rather than accepting a path from a
+# caller: a transcript is not a file browser, and the existing Pi path resolves server-side for
+# the same reason.
+AGENT_RUN_ROOT = Path(os.environ.get('AGENT_RUN_ROOT', '~/.local/state/agent-run')).expanduser()
+AGENT_RUN_WINDOW = 8 * 1024 * 1024
+AGENT_RUN_RECORD_TYPES = frozenset(('init', 'user', 'assistant_start', 'delta', 'assistant_end',
+                                    'tool_intent', 'tool_result', 'checkpoint', 'retry', 'settled',
+                                    'reply_sending', 'reply_sent'))
+
+
+def agent_run_log(thread_id):
+    """The log a thread's binding names, or None when the thread is not agent-run managed.
+
+    An absent binding is the ordinary case for Pi mail, so it is not an error. A binding that
+    exists but disagrees with itself is an error, because a wrong binding must be refused rather
+    than read as a log that happens to parse.
+    """
+    if not isinstance(thread_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._@+-]{0,239}', thread_id):
+        raise MailError('Invalid thread id')
+    record = AGENT_RUN_ROOT / 'threads' / (thread_id + '.json')
+    if record.is_symlink() or not record.is_file():
+        return None
+    try:
+        binding = json.loads(record.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise MailError('Agent-run binding is unreadable', 422)
+    if not isinstance(binding, dict) or binding.get('version') != 1 or binding.get('format') != 'agent-run-v1':
+        raise MailError('Unsupported agent-run binding', 422)
+    if binding.get('thread_id') != thread_id:
+        raise MailError('Agent-run binding names a different thread', 422)
+    relative = binding.get('log')
+    if not isinstance(relative, str) or not relative or os.path.isabs(relative):
+        raise MailError('Agent-run binding has an invalid log path', 422)
+    parts = [part for part in relative.split('/') if part not in ('', '.')]
+    if not parts or any(part == '..' for part in parts):
+        raise MailError('Agent-run binding has an invalid log path', 422)
+    log = AGENT_RUN_ROOT.joinpath(*parts)
+    if log.is_symlink() or not log.is_file():
+        return None
+    # Resolved last, so a path that leaves the root through a link or a relative jump is
+    # refused rather than read.
+    if not log.resolve().is_relative_to(AGENT_RUN_ROOT.resolve()):
+        raise MailError('Agent-run log is outside the runtime root', 422)
+    return log
+
+
+def agent_run_entry(record):
+    """One Pi-shaped entry for one agent-run record, or None to pass the record through.
+
+    The mapping is small on purpose: the viewer already renders Pi messages and a compaction
+    summary, and everything else falls to its generic fallback, which shows the record rather
+    than an interpretation of it. Argument fragments deliberately do not become tool calls,
+    because a streamed argument is not an executed call and only tool_intent is the handoff.
+    """
+    kind = record.get('type')
+    stamp = record.get('at_ms')
+    if kind == 'init':
+        return {'type': 'session', 'cwd': record.get('cwd'), 'timestamp': stamp}
+    if kind == 'user':
+        return {'type': 'message', 'timestamp': stamp,
+                'message': {'role': 'user', 'content': [{'type': 'text', 'text': str(record.get('content') or '')}]}}
+    if kind == 'delta':
+        data = str(record.get('data') or '')
+        if record.get('kind') == 'reasoning_content':
+            part = {'type': 'thinking', 'thinking': data}
+        elif record.get('kind') == 'content':
+            part = {'type': 'text', 'text': data}
+        else:
+            return None  # argument fragments stay as records, not as calls
+        return {'type': 'message', 'timestamp': stamp, 'message': {'role': 'assistant', 'content': [part]}}
+    if kind == 'assistant_end':
+        return {'type': 'message', 'timestamp': stamp,
+                'message': {'role': 'assistant', 'content': [], 'stopReason': record.get('finish'),
+                            'isError': record.get('success') is False}}
+    if kind == 'tool_intent':
+        return {'type': 'message', 'timestamp': stamp,
+                'message': {'role': 'assistant', 'content': [
+                    {'type': 'toolCall', 'id': record.get('id'), 'name': record.get('name'),
+                     'arguments': record.get('arguments')}]}}
+    if kind == 'tool_result':
+        return {'type': 'message', 'timestamp': stamp,
+                'message': {'role': 'toolResult', 'isError': record.get('is_error') is True,
+                            'content': [{'type': 'text', 'text': str(record.get('content') or '')}]}}
+    if kind == 'checkpoint':
+        return {'type': 'compaction', 'summary': record.get('summary'), 'timestamp': stamp}
+    return None
+
+
+def agent_run_entries(path):
+    """Entries for an agent-run log, from its start, bounded, with truncation labelled.
+
+    Read from the start rather than the tail because the viewer keys entries by byte offset, so
+    a window that slides as the file grows would renumber every entry on each poll. A log larger
+    than the window therefore stops advancing, and says so, instead of pretending to be whole.
+    """
+    size = path.stat().st_size
+    with path.open('rb') as log:
+        raw = log.read(AGENT_RUN_WINDOW)
+    truncated = size > len(raw)
+    complete = len(raw)
+    if raw and not raw.endswith(b'\n'):
+        # A torn final record is a run that is still writing. It is not an entry and not an
+        # error; the next poll will see it complete.
+        found = raw.rfind(b'\n')
+        complete = found + 1 if found >= 0 else 0
+        raw = raw[:complete]
+    entries, offset, skipped = [], 0, 0
+    for line in raw.splitlines(keepends=True):
+        start = offset
+        offset += len(line)
+        text = line.decode('utf-8', 'replace').strip()
+        if not text:
+            continue
+        try:
+            record = json.loads(text)
+        except ValueError:
+            skipped += 1
+            continue
+        if not isinstance(record, dict) or record.get('type') not in AGENT_RUN_RECORD_TYPES:
+            skipped += 1
+            continue
+        entry = agent_run_entry(record)
+        if entry is None:
+            entry = record
+        entries.append({'key': str(start), 'entry': entry})
+    if truncated:
+        entries.append({'key': str(offset),
+                        'entry': {'type': 'transcript_oversize', 'bytes': size - len(raw), 'continued': True}})
+    return {'entries': entries, 'skipped': skipped, 'truncated': truncated,
+            'partial': complete < size, 'end': complete}
+
 CLI = ROOT / 'bin/agent-mail'
 SPAWN = ROOT / 'bin/spawn-pi-worktree'
 MAX_MESSAGE = 2 * 1024 * 1024
@@ -367,6 +500,24 @@ class Mailbox:
         if result.returncode:
             raise MailError(result.stderr.strip() or 'Agent search failed')
         return json.loads(result.stdout)
+
+    def thread_transcript(self, thread_id, version):
+        """Entries for a thread's agent-run log, or a 404 when the thread has none.
+
+        The version stamp is the shape the Pi path uses, so a poll that changed nothing costs
+        one stat and returns no entries.
+        """
+        log = agent_run_log(thread_id)
+        if log is None:
+            raise MailError('This thread has no agent-run transcript', 404)
+        info = log.stat()
+        stamp = ':'.join(map(str, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)))
+        if version == stamp:
+            return {'unchanged': True, 'version': stamp}
+        read = agent_run_entries(log)
+        return {'thread': thread_id, 'version': stamp, 'entries': read['entries'],
+                'before': 0, 'end': read['end'], 'reset': False, 'skipped': read['skipped'],
+                'partial': read['partial'], 'truncated': read['truncated']}
 
     def avatar(self, address):
         unavailable = MailError('Avatar unavailable', 404)
@@ -802,11 +953,20 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/contact':
             result = box.find_sessions(handle=args.get('handle', [''])[0])
         elif route == '/api/transcript':
+            thread_id = args.get('thread', [''])[0]
             handle = args.get('handle', [''])[0]
             version = args.get('version', [None])[0]
             before = args.get('before', [None])[0]
             after = args.get('after', [None])[0]
-            result = box.transcript(handle, version, before, after)
+            if thread_id:
+                # Availability is answered first, so the app offers a link only to a transcript
+                # that exists rather than to one that would 404.
+                if args.get('probe', [''])[0]:
+                    result = {'thread': thread_id, 'available': agent_run_log(thread_id) is not None}
+                else:
+                    result = box.thread_transcript(thread_id, version)
+            else:
+                result = box.transcript(handle, version, before, after)
         elif route == '/api/avatar':
             return self.reply(200, box.avatar(args.get('handle', [''])[0]), 'image/svg+xml')
         elif route == '/api/attachment':
