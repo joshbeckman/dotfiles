@@ -1126,10 +1126,12 @@ try {
   assert.equal(await body.textContent(), "@+new-fixture-agent");
   await page.emulateMedia({ colorScheme: "dark" });
   await page.setViewportSize({ width: 390, height: 844 });
+  // Narrowing the window moves the sidebar from the desktop grid to its off-canvas
+  // position, which the CSS transition animates; let it settle before capturing.
+  await page.waitForTimeout(250);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({
       path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-dark.png",
-      fullPage: true,
     });
   assert(
     await page.evaluate(
