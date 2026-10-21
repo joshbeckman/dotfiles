@@ -604,11 +604,19 @@ def transcript_holders(session_file):
     running at all. Four wakes accumulated that way before anyone noticed, because each
     new one passed the lease check.
 
-    Both fields have to match as whole arguments. Testing for the path alone flags any
-    process that merely mentions it, such as a grep or an editor, and a false positive
-    here refuses a wake that should have happened.
+    Testing for the path alone flags any process that merely mentions it, such as a grep
+    or an editor, so the flag has to be there. But the flag and the reference each have
+    more than one spelling - `--session <path>`, `--session=<path>` and `--session
+    <partial id>` all reach the same transcript - and a guard that knows one spelling is
+    blind to the rest, which is the failure it exists to prevent.
+
+    The asymmetry settles which way to lean: a false positive refuses one wake and heals
+    when the process that caused it exits, while a false negative puts a second process
+    on one transcript, silently. So the flag is matched in both spellings and the
+    reference accepts a partial id.
     """
-    needle = str(session_file).encode()
+    session_id = str(session_file).rsplit('_', 1)[-1].split('.')[0].encode()
+    reference = str(session_file).encode()
     holders = []
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit():
@@ -617,7 +625,14 @@ def transcript_holders(session_file):
             arguments = (entry / 'cmdline').read_bytes().split(b'\0')
         except OSError:
             continue
-        if needle in arguments and b'--session' in arguments:
+        references = []
+        for index, argument in enumerate(arguments):
+            if argument == b'--session' and index + 1 < len(arguments):
+                references.append(arguments[index + 1])
+            elif argument.startswith(b'--session='):
+                references.append(argument.split(b'=', 1)[1])
+        if any(reference in value or (len(value) >= 8 and session_id.startswith(value))
+               for value in references):
             holders.append(int(entry.name))
     return holders
 
