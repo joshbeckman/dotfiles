@@ -954,6 +954,37 @@ class WebTest(unittest.TestCase):
         self.assertEqual(self.request('/contexts/' + 'b' * 64 + '.md')[0], 404)
         self.assertEqual(self.request('/api/attachment?name=' + attachment)[0], 404)
 
+    def test_agent_run_hides_provider_signatures_and_projects_model_requests(self):
+        # Signatures are opaque blobs a provider needs to resume its own reasoning, not prose.
+        # They must not appear, must not be counted as unreadable, and must not break the group
+        # of prose on either side of them.
+        records = [
+            {'type': 'delta', 'at_ms': 1000, 'turn': 1, 'kind': 'content', 'data': 'Before '},
+            {'type': 'delta', 'at_ms': 1050, 'turn': 1, 'kind': 'reasoning_signature', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1060, 'turn': 1, 'kind': 'tool_signature', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1070, 'turn': 1, 'kind': 'reasoning_redacted', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1080, 'turn': 1, 'kind': 'reasoning_opaque', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1090, 'turn': 1, 'kind': 'text_signature', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1100, 'turn': 1, 'kind': 'content', 'data': 'after.', 'index': 3},
+            {'type': 'model_request', 'at_ms': 1200, 'turn': 2,
+             'model': {'provider': 'fireworks', 'model': 'deepseek-v4p1-flash', 'api': 'chat'}},
+            {'type': 'model_changed', 'at_ms': 1300, 'change': {'id': 'c1', 'selection': 'auto'}},
+            {'type': 'model_change_rejected', 'at_ms': 1400, 'id': 'c2', 'reason': 'not available'},
+        ]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        # No entry mentions a signature, and the prose on both sides is one group.
+        self.assertNotIn('opaque-blob', json.dumps(entries))
+        self.assertEqual(entries[0]['message']['content'], [{'type': 'text', 'text': 'Before after.'}])
+        self.assertEqual(len(entries), 4)
+        # A model request reads as the provider and model that answered the turn.
+        self.assertEqual(entries[1], {'type': 'model_change', 'timestamp': 1200,
+                                      'provider': 'fireworks', 'modelId': 'deepseek-v4p1-flash'})
+        # The other two are recognized and shown as themselves rather than as messages.
+        self.assertEqual([entry['type'] for entry in entries[2:]], ['model_changed', 'model_change_rejected'])
+
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
         status, body = self.request('/api/transcript?thread=' + thread)

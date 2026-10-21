@@ -43,7 +43,13 @@ AGENT_RUN_GROUP = 64 * 1024
 AGENT_RUN_RECORD_TYPES = frozenset(('init', 'user', 'assistant_start', 'delta', 'assistant_end',
                                     'tool_intent', 'tool_result', 'checkpoint', 'retry', 'settled',
                                     'reply_sending', 'reply_sent',
-                                    'runtime_context', 'image_export', 'reply_skipped'))
+                                    'runtime_context', 'image_export', 'reply_skipped',
+                                    'model_request', 'model_changed', 'model_change_rejected'))
+# Provider signatures are opaque blobs a provider needs to resume its own reasoning, not answer
+# text and not something a reader can use. They are hidden rather than projected, and hidden rather
+# than counted as unreadable, so a turn reads as uninterrupted prose.
+AGENT_RUN_HIDDEN_DELTA_KINDS = frozenset(('reasoning_signature', 'reasoning_redacted',
+                                          'reasoning_opaque', 'tool_signature', 'text_signature'))
 
 
 def agent_run_log(thread_id):
@@ -119,6 +125,12 @@ def agent_run_entry(record):
         return {'type': 'message', 'timestamp': stamp,
                 'message': {'role': 'toolResult', 'isError': record.get('is_error') is True,
                             'content': [{'type': 'text', 'text': str(record.get('content') or '')}]}}
+    if kind == 'model_request':
+        model = record.get('model') or {}
+        # Shaped as the entry the viewer already renders for a Pi model change, so a reader sees
+        # which provider and model answered the turn without a new renderer.
+        return {'type': 'model_change', 'timestamp': stamp,
+                'provider': model.get('provider'), 'modelId': model.get('model')}
     if kind == 'checkpoint':
         return {'type': 'compaction', 'summary': record.get('summary'), 'timestamp': stamp}
     return None
@@ -187,6 +199,10 @@ def agent_run_entries(path):
             skipped += 1
             continue
         kind = record.get('kind')
+        if record.get('type') == 'delta' and kind in AGENT_RUN_HIDDEN_DELTA_KINDS:
+            # Deliberately no flush: a signature can arrive mid-turn, and the prose on either
+            # side of it belongs to the same group.
+            continue
         if record.get('type') == 'delta' and kind in ('content', 'reasoning_content', 'arguments'):
             if (group is not None and group['turn'] == record.get('turn') and group['kind'] == kind
                     and len(group['text']) < AGENT_RUN_GROUP):
