@@ -333,6 +333,17 @@ kbd {
   background: rgb(255 255 255 / 0.16);
   color: #fff;
 }
+/* Compose lives in the rail on a phone, where it is in thumb reach and the top bar is
+   left to navigation and search. */
+.rail .rail-compose {
+  background: var(--c-accent);
+  color: #fff;
+}
+.rail .rail-compose:hover {
+  background: var(--c-accent);
+  filter: brightness(1.1);
+  color: #fff;
+}
 @media (prefers-color-scheme: dark) {
   .rail button[aria-current="page"] {
     color: #fff;
@@ -1101,8 +1112,9 @@ dd {
     display: none;
   }
   .brand-mark {
-    width: 1.6rem;
-    height: 1.6rem;
+    width: 44px;
+    height: 44px;
+    padding: 0.5625rem;
   }
   #search-form {
     display: none;
@@ -1111,6 +1123,8 @@ dd {
     right: 0.5rem;
     top: calc(var(--topbar-h) + 0.35rem);
     max-width: none;
+    height: auto;
+    min-height: 44px;
     background: var(--c-chrome);
     box-shadow: 0 8px 20px rgb(0 0 0 / 0.3);
     z-index: 40;
@@ -1161,6 +1175,52 @@ dd {
   .rail button {
     flex: 1;
   }
+  /* Touch targets: WCAG 2.5.8 asks for 24px and Apple's HIG for 44pt. The top bar icon
+     buttons, folder rows, pane actions and summaries were 30-38px tall. */
+  .topbar .icon-button,
+  .topbar .ghost-button {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  button,
+  summary,
+  input,
+  select,
+  textarea,
+  .attach-label,
+  .pane-bar a {
+    min-height: 44px;
+  }
+  .pane-bar button,
+  .pane-bar a,
+  .render-tools button {
+    min-width: 44px;
+    justify-content: center;
+  }
+  /* The phone reading view is the message, so its actions move to a bottom bar in thumb
+     reach and the section rail stands down for the duration. The labels are hidden and
+     carried by aria-label instead, to keep the bar one row. */
+  body.reader-open .rail {
+    display: none;
+  }
+  body.reader-open .shell {
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  }
+  body.reader-open #reader > .pane-bar {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 30;
+    margin: 0;
+    padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom));
+    background: var(--c-bg);
+    border-top: 1px solid var(--c-border);
+    border-bottom: 0;
+  }
+  .pane-bar-actions button span,
+  .pane-bar-actions a span {
+    display: none;
+  }
   .sidebar {
     position: fixed;
     top: 0;
@@ -1193,7 +1253,7 @@ dd {
     pointer-events: auto;
   }
   #main {
-    padding: 0.85rem 0.85rem 2rem;
+    padding: 1rem 1rem 2rem;
   }
   .row {
     grid-template-columns: minmax(0, 1fr) auto;

@@ -32,6 +32,31 @@ async function assertReaderFits(reader) {
   }
   assert.fail("Unexpected message scrollbar: " + JSON.stringify(size));
 }
+async function assertTouchTargets(page, view) {
+  const small = await page.evaluate(() => {
+    const selector = "button, a[href], input, select, textarea, summary, [role='button']";
+    const out = [];
+    for (const el of document.querySelectorAll(selector)) {
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") continue;
+      // Links inside message text are inline and exempt from target-size rules.
+      if (el.tagName === "A" && el.closest("p, li, blockquote, .prose")) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      if (rect.width < 44 || rect.height < 44)
+        out.push({
+          tag: el.tagName,
+          id: el.id,
+          cls: String(el.className).slice(0, 40),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          text: (el.textContent || "").trim().slice(0, 24),
+        });
+    }
+    return out;
+  });
+  assert.deepEqual(small, [], `${view} has touch targets under 44px`);
+}
 const root = resolve("../.."),
   tmp = await mkdtemp(join(tmpdir(), "agent-mail-browser-"));
 const bin = join(tmp, "bin"),
@@ -645,6 +670,11 @@ try {
   await assertReaderFits(reader);
   await page.setViewportSize({ width: 375, height: 850 });
   await assertReaderFits(reader);
+  await assertTouchTargets(page, "phone reader");
+  // The viewport just narrowed, which animates the sidebar off-canvas; let it settle.
+  await page.waitForTimeout(250);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-reader-mobile.png" });
   assert(
     await page.evaluate(
       () =>
@@ -1143,6 +1173,7 @@ try {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   );
+  await assertTouchTargets(page, "phone editor");
   await rm(keywordFile);
   await page.locator("#close-draft").click();
   await page.locator(".row").click();
@@ -1211,6 +1242,7 @@ try {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   );
+  await assertTouchTargets(page, "phone teams");
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({
       path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-teams-mobile.png",
@@ -1385,6 +1417,7 @@ try {
   assert.equal(await page.evaluate(() => document.body.classList.contains("nav-open")), true);
   assert.equal(await page.locator("#nav-toggle").getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.getElementById("sidebar").getBoundingClientRect().left >= -1);
+  await assertTouchTargets(page, "phone drawer");
   assert.equal(
     await page.evaluate(() => document.getElementById("sidebar").getBoundingClientRect().left >= -1),
     true,
@@ -1398,6 +1431,7 @@ try {
   assert.equal(await page.evaluate(() => document.body.classList.contains("nav-open")), false);
   assert.equal(await page.locator("#nav-toggle").getAttribute("aria-expanded"), "false");
   await page.waitForFunction(() => document.getElementById("sidebar").getBoundingClientRect().right <= 0);
+  await assertTouchTargets(page, "phone list");
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list-mobile.png", fullPage: true });
 

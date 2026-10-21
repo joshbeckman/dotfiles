@@ -252,6 +252,9 @@ function show(name) {
   document.querySelector("main").classList.toggle("replying", replying);
   for (const id of ["mail-list", "reader", "editor", "contacts", "teams"])
     $(id).hidden = id !== name && !(replying && id === "reader");
+  // The phone reading view swaps the section rail for the message action bar, so the
+  // layout needs to know the reader, not just the current view name.
+  document.body.classList.toggle("reader-open", !$("reader").hidden);
   setFolderButtons();
   setNavOpen(false);
   if (name === "editor") renderRecipientCards();

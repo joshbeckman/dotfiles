@@ -15,8 +15,10 @@ html.dark {
 body {
   /* Keep child margins inside the body measured for the iframe's height. */
   display: flow-root;
-  margin: 0.5rem 0;
-  padding: 0 0.75rem 1rem 0;
+  margin: 0;
+  /* Symmetric, and the same on both panes: the old right-only padding left every
+     message flush against the left edge of its card. */
+  padding: 0.5rem 1rem 1rem;
   color: var(--text);
   background: var(--bg);
   font:

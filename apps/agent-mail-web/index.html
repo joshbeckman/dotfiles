@@ -73,13 +73,10 @@
         <button type="submit" class="search-submit">Search</button>
       </form>
       <div class="topbar-actions">
-        <button id="compose-mobile" class="icon-button" type="button" aria-label="Compose">
-          <svg class="icon" aria-hidden="true"><use href="#i-compose" /></svg>
-        </button>
         <button id="search-toggle" class="icon-button" type="button" aria-label="Search mail">
           <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
         </button>
-        <button id="notify-button" class="ghost-button" hidden>
+        <button id="notify-button" class="ghost-button" type="button" aria-label="Enable notifications" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-bell" /></svg>
           <span>Enable notifications</span>
         </button>
@@ -106,6 +103,10 @@
         <button id="teams-button" data-section="teams" type="button">
           <svg class="icon" aria-hidden="true"><use href="#i-team" /></svg>
           <span class="rail-label">Teams</span>
+        </button>
+        <button id="compose-mobile" class="rail-compose" type="button" aria-label="Compose">
+          <svg class="icon" aria-hidden="true"><use href="#i-compose" /></svg>
+          <span class="rail-label">Compose</span>
         </button>
       </nav>
 
@@ -188,23 +189,23 @@
               <span>Back</span>
             </button>
             <div class="pane-bar-actions">
-              <button id="archive" type="button">
+              <button id="archive" type="button" aria-label="Archive conversation">
                 <svg class="icon" aria-hidden="true"><use href="#i-archive" /></svg>
                 <span>Archive</span>
               </button>
-              <button id="reply" type="button">
+              <button id="reply" type="button" aria-label="Reply">
                 <svg class="icon" aria-hidden="true"><use href="#i-reply" /></svg>
                 <span>Reply</span>
               </button>
-              <button id="reply-all" type="button">
+              <button id="reply-all" type="button" aria-label="Reply all">
                 <svg class="icon" aria-hidden="true"><use href="#i-reply-all" /></svg>
                 <span>Reply all</span>
               </button>
-              <button id="copy-thread-id" type="button">
+              <button id="copy-thread-id" type="button" aria-label="Copy thread id">
                 <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>
                 <span>Copy id</span>
               </button>
-              <a id="thread-transcript" target="_blank" rel="noopener" hidden>
+              <a id="thread-transcript" target="_blank" rel="noopener" aria-label="View transcript" hidden>
                 <svg class="icon" aria-hidden="true"><use href="#i-external" /></svg>
                 <span>View transcript</span>
               </a>
