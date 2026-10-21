@@ -1,22 +1,27 @@
 html {
   color-scheme: light;
-  --bg: #fff;
-  --alt: #f6f6f3;
-  --text: #0d0d0d;
+  /* The site palette: https://www.joshbeckman.org/style-guide/ */
+  --bg: hsl(0, 0%, 100%);
+  --alt: hsl(0, 0%, 94%);
+  --text: hsl(0, 0%, 5%);
+  --border: hsl(0, 0%, 50%);
   --link: #002fa7;
 }
 html.dark {
   color-scheme: dark;
-  --bg: #121212;
-  --alt: #202020;
-  --text: #eee;
-  --link: #9ab6ff;
+  --bg: hsl(0, 0%, 5%);
+  --alt: hsl(0, 0%, 18%);
+  --text: hsl(0, 0%, 100%);
+  --border: hsl(0, 0%, 60%);
+  --link: #6ca0f2;
 }
 body {
   /* Keep child margins inside the body measured for the iframe's height. */
   display: flow-root;
-  margin: 0.5rem 0;
-  padding: 0 0.75rem 1rem 0;
+  margin: 0;
+  /* Symmetric, and the same on both panes: the old right-only padding left every
+     message flush against the left edge of its card. */
+  padding: 0.5rem 1rem 1rem;
   color: var(--text);
   background: var(--bg);
   font:
@@ -44,7 +49,7 @@ pre {
   background: var(--alt);
 }
 blockquote {
-  border-left: 2px solid #888;
+  border-left: 2px solid var(--border);
   margin-left: 0;
   padding-left: 1rem;
 }
@@ -53,7 +58,7 @@ table {
 }
 td,
 th {
-  border: 1px solid #888;
+  border: 1px solid var(--border);
   padding: 0.4rem;
 }
 img,
@@ -68,7 +73,7 @@ h3 {
 }
 hr {
   border: 0;
-  border-top: 1px solid #888;
+  border-top: 1px solid var(--border);
 }
 :focus-visible {
   outline: 2px solid var(--link);

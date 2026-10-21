@@ -1,45 +1,51 @@
 :root {
   color-scheme: light dark;
-  --c-bg: #ffffff;
-  --c-chrome: #1f3357;
-  --c-chrome-text: #eef2f9;
-  --c-chrome-muted: #b9c6dd;
-  --c-sidebar: #f4f6fa;
-  --c-bg-alt: #eef1f6;
-  --c-text: #17202e;
-  --c-muted: #5c6878;
-  --c-border: #d7dde6;
-  --c-border-strong: #b9c2cf;
+  /* The palette and typography from https://www.joshbeckman.org/style-guide/: notebook-like,
+     borders before shadows, both modes tuned rather than inverted. */
+  --c-bg: hsl(0, 0%, 100%);
+  --c-bg-alt: hsl(0, 0%, 94%);
+  --c-text: hsl(0, 0%, 5%);
+  --c-text-alt: hsl(0, 0%, 50%);
   --c-link: #002fa7;
+  --c-link-visited: rebeccapurple;
+  --c-button: aliceblue;
   --c-red: #bd2024;
-  --c-focus: #002fa7;
-  --c-selected: #e6edfb;
-  --c-hover: #eef2f8;
-  --c-accent: #002fa7;
-  --c-accent-soft: #dfe8fb;
+  --c-orange: #ff7900;
+  --c-yellow: #ffcc00;
+  --c-green: #237f52;
+  --c-dark-green: #3c341f;
+  --c-klein-blue: #002fa7;
+  --c-purple: #9370d8;
+  --c-josh: #903465;
+  /* The app's own names, aliased onto the palette so the rules below stay readable. */
+  --c-muted: var(--c-text-alt);
+  --c-border: var(--c-text-alt);
+  --c-border-strong: var(--c-text-alt);
+  --c-chrome: var(--c-bg-alt);
+  --c-chrome-text: var(--c-text);
+  --c-chrome-muted: var(--c-text-alt);
+  --c-sidebar: var(--c-bg-alt);
+  --c-hover: var(--c-bg-alt);
+  --c-selected: var(--c-button);
+  --c-accent: var(--c-link);
+  --c-accent-soft: var(--c-button);
+  --c-focus: var(--c-klein-blue);
   --topbar-h: 3.5rem;
   --rail-w: 4.75rem;
   --sidebar-w: 15rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --c-bg: #14171c;
-    --c-chrome: #0c1016;
-    --c-chrome-text: #e8eaed;
-    --c-chrome-muted: #8f9aa9;
-    --c-sidebar: #191d24;
-    --c-bg-alt: #1e232b;
-    --c-text: #e8eaed;
-    --c-muted: #9aa4b1;
-    --c-border: #2b323c;
-    --c-border-strong: #3b434f;
-    --c-link: #9ab6ff;
-    --c-red: #ff969c;
-    --c-focus: #ffcc00;
-    --c-selected: #22304d;
-    --c-hover: #1c222b;
-    --c-accent: #6f96ff;
-    --c-accent-soft: #22304d;
+    --c-bg: hsl(0, 0%, 5%);
+    --c-bg-alt: hsl(0, 0%, 18%);
+    --c-text: hsl(0, 0%, 100%);
+    --c-text-alt: hsl(0, 0%, 60%);
+    --c-link: #6ca0f2;
+    --c-link-visited: plum;
+    --c-button: darkblue;
+    --c-focus: #6ca0f2;
+    --c-selected: #1b2c4d;
+    --c-accent-soft: #152a4d;
   }
 }
 * {
@@ -53,7 +59,7 @@ body {
   background: var(--c-bg);
   color: var(--c-text);
   font:
-    15px/1.5 "IBM Plex Sans",
+    16px/1.5 "IBM Plex Sans",
     system-ui,
     -apple-system,
     sans-serif;
@@ -64,17 +70,32 @@ h3,
 h4 {
   font-family:
     "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
-  line-height: 1.25;
+  line-height: 1.2;
   margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 h2 {
-  font-size: 1.35rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-top: 1px solid var(--c-josh);
+  padding-top: 0.5rem;
 }
 h3 {
-  font-size: 1.05rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--c-text-alt);
 }
 a {
   color: var(--c-link);
+}
+a:visited {
+  color: var(--c-link-visited);
+}
+a:hover,
+a:focus {
+  color: var(--c-text);
+  text-decoration-style: dashed;
 }
 .icon {
   width: 1.15rem;
@@ -101,15 +122,16 @@ textarea {
 button {
   cursor: pointer;
   border: 1px solid var(--c-border);
-  border-radius: 0.4rem;
-  background: var(--c-bg);
-  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+  background: var(--c-button);
+  color: var(--c-text);
+  padding: 0.45rem 0.8rem;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
 }
 button:hover {
-  background: var(--c-hover);
+  background: var(--c-bg-alt);
 }
 button:disabled {
   opacity: 0.5;
@@ -118,9 +140,10 @@ button:disabled {
 input,
 textarea {
   border: 1px solid var(--c-border);
-  border-radius: 0.4rem;
+  border-radius: 4px;
   background: var(--c-bg);
-  padding: 0.45rem 0.65rem;
+  color: var(--c-text);
+  padding: 0.45rem 0.7rem;
   min-width: 0;
 }
 :focus-visible {
@@ -150,9 +173,9 @@ kbd {
   align-items: center;
   gap: 0.75rem;
   padding: 0 0.9rem;
-  background: var(--c-chrome);
-  color: var(--c-chrome-text);
-  box-shadow: 0 1px 0 rgb(0 0 0 / 0.15);
+  background: var(--c-bg);
+  color: var(--c-text);
+  border-bottom: 1px solid var(--c-text-alt);
 }
 .brand {
   display: flex;
@@ -166,7 +189,7 @@ kbd {
   display: inline-flex;
   width: 1.9rem;
   height: 1.9rem;
-  border-radius: 0.5rem;
+  border-radius: 4px;
   overflow: hidden;
   flex: none;
 }
@@ -175,12 +198,15 @@ kbd {
   height: 100%;
 }
 .brand-name {
-  font-weight: 600;
+  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .brand small {
   font-size: 0.9rem;
   font-weight: 400;
-  color: var(--c-chrome-muted);
+  color: var(--c-text-alt);
 }
 #current-user {
   display: inline-flex;
@@ -196,7 +222,7 @@ kbd {
 }
 #realm {
   padding: 0.05rem 0.5rem;
-  border: 1px solid rgb(255 255 255 / 0.25);
+  border: 1px solid var(--c-text-alt);
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 500;
@@ -209,9 +235,9 @@ kbd {
   max-width: 38rem;
   margin-inline: auto;
   position: relative;
-  background: rgb(255 255 255 / 0.12);
-  border: 1px solid rgb(255 255 255 / 0.18);
-  border-radius: 0.5rem;
+  background: var(--c-bg);
+  border: 1px solid var(--c-text-alt);
+  border-radius: 4px;
   padding: 0 0.5rem;
   height: 2.25rem;
 }
@@ -223,17 +249,17 @@ kbd {
   clip-path: inset(50%);
 }
 #search-form .search-icon {
-  color: var(--c-chrome-muted);
+  color: var(--c-text-alt);
 }
 #search {
   flex: 1;
   border: 0;
   background: transparent;
-  color: var(--c-chrome-text);
+  color: var(--c-text);
   padding: 0.25rem 0;
 }
 #search::placeholder {
-  color: var(--c-chrome-muted);
+  color: var(--c-text-alt);
 }
 #search:focus {
   outline: none;
@@ -241,11 +267,11 @@ kbd {
 #search-form .search-submit {
   border: 0;
   background: transparent;
-  color: var(--c-chrome-muted);
+  color: var(--c-text-alt);
   padding: 0.2rem 0.3rem;
 }
 #search-form .search-submit:hover {
-  color: var(--c-chrome-text);
+  color: var(--c-text);
   background: transparent;
 }
 .topbar-actions {
@@ -258,15 +284,15 @@ kbd {
 .topbar .ghost-button {
   border-color: transparent;
   background: transparent;
-  color: var(--c-chrome-text);
+  color: var(--c-text);
 }
 .topbar .icon-button:hover,
 .topbar .ghost-button:hover {
-  background: rgb(255 255 255 / 0.14);
+  background: var(--c-bg-alt);
 }
 .icon-button {
   padding: 0.4rem;
-  border-radius: 0.5rem;
+  border-radius: 4px;
 }
 #nav-toggle,
 #compose-mobile,
@@ -305,17 +331,17 @@ kbd {
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.6rem 0.4rem;
-  background: var(--c-chrome);
-  border-right: 1px solid rgb(0 0 0 / 0.2);
+  background: var(--c-bg-alt);
+  border-right: 1px solid var(--c-text-alt);
 }
 .rail button {
   flex-direction: column;
   gap: 0.15rem;
   border: 0;
   background: transparent;
-  color: var(--c-chrome-muted);
+  color: var(--c-text-alt);
   padding: 0.5rem 0.2rem;
-  border-radius: 0.5rem;
+  border-radius: 4px;
 }
 .rail button .icon {
   width: 1.35rem;
@@ -326,17 +352,23 @@ kbd {
   letter-spacing: 0.01em;
 }
 .rail button:hover {
-  background: rgb(255 255 255 / 0.12);
-  color: var(--c-chrome-text);
+  background: var(--c-bg);
+  color: var(--c-text);
 }
 .rail button[aria-current="page"] {
-  background: rgb(255 255 255 / 0.16);
+  background: var(--c-button);
+  color: var(--c-link);
+}
+/* Compose lives in the rail on a phone, where it is in thumb reach and the top bar is
+   left to navigation and search. */
+.rail .rail-compose {
+  background: var(--c-klein-blue);
   color: #fff;
 }
-@media (prefers-color-scheme: dark) {
-  .rail button[aria-current="page"] {
-    color: #fff;
-  }
+.rail .rail-compose:hover {
+  background: var(--c-klein-blue);
+  filter: brightness(1.1);
+  color: #fff;
 }
 .sidebar {
   position: sticky;
@@ -347,21 +379,20 @@ kbd {
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.9rem 0.7rem;
-  background: var(--c-sidebar);
-  border-right: 1px solid var(--c-border);
+  background: var(--c-bg-alt);
+  border-right: 1px solid var(--c-text-alt);
 }
 #compose {
   justify-content: center;
-  background: var(--c-accent);
-  border-color: var(--c-accent);
+  background: var(--c-klein-blue);
+  border-color: var(--c-klein-blue);
   color: #fff;
   font-weight: 600;
   padding: 0.6rem 0.8rem;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
 }
 #compose:hover {
-  filter: brightness(1.08);
-  background: var(--c-accent);
+  filter: brightness(1.1);
+  background: var(--c-klein-blue);
 }
 .folders {
   display: flex;
@@ -376,7 +407,7 @@ kbd {
   background: transparent;
   color: var(--c-text);
   padding: 0.5rem 0.6rem;
-  border-radius: 0.45rem;
+  border-radius: 4px;
   font-weight: 500;
 }
 .folders button:hover,
@@ -404,14 +435,10 @@ kbd {
 .count {
   font-size: 0.78rem;
   font-weight: 600;
-  color: var(--c-muted);
-  background: var(--c-bg-alt);
-  border-radius: 999px;
-  padding: 0.05rem 0.45rem;
+  color: var(--c-text-alt);
 }
 .folders button[aria-current="page"] .count {
-  color: var(--c-accent);
-  background: rgb(255 255 255 / 0.7);
+  color: var(--c-link);
 }
 .sidebar-foot {
   margin-top: auto;
@@ -469,7 +496,7 @@ button[aria-current="page"] {
   margin-bottom: 1rem;
   padding: 1rem 1.25rem;
   border: 1px solid var(--c-border);
-  border-radius: 0.6rem;
+  border-radius: 4px;
   background: var(--c-bg-alt);
   max-width: 52rem;
 }
@@ -503,7 +530,7 @@ button[aria-current="page"] {
 /* ------------------------------------------------------------------- list */
 #rows {
   border: 1px solid var(--c-border);
-  border-radius: 0.6rem;
+  border-radius: 4px;
   overflow: hidden;
   background: var(--c-bg);
 }
@@ -549,7 +576,7 @@ button[aria-current="page"] {
 .row .avatar {
   width: 1.75rem;
   height: 1.75rem;
-  border-radius: 0.5rem;
+  border-radius: 4px;
   display: block;
 }
 .row strong {
@@ -611,7 +638,7 @@ button[aria-current="page"] {
 .pane-bar a {
   font-size: 0.85rem;
   padding: 0.35rem 0.6rem;
-  border-radius: 0.4rem;
+  border-radius: 4px;
 }
 .pane-bar a {
   display: inline-flex;
@@ -630,7 +657,12 @@ button[aria-current="page"] {
   margin-bottom: 1rem;
 }
 #thread-title {
-  font-size: 1.5rem;
+  font-size: 1.35rem;
+  /* The subject is not a label, so it keeps sentence case and no rule above it. */
+  text-transform: none;
+  letter-spacing: 0;
+  border-top: 0;
+  padding-top: 0;
   overflow-wrap: anywhere;
 }
 #participants {
@@ -655,7 +687,7 @@ button[aria-current="page"] {
 }
 details.message {
   border: 1px solid var(--c-border);
-  border-radius: 0.6rem;
+  border-radius: 4px;
   margin-bottom: 0.75rem;
   overflow: clip;
   background: var(--c-bg);
@@ -673,7 +705,7 @@ details.message > summary {
 details.message > summary .avatar {
   width: 1.5rem;
   height: 1.5rem;
-  border-radius: 0.4rem;
+  border-radius: 4px;
 }
 details.message > summary time {
   margin-left: auto;
@@ -772,7 +804,7 @@ details.message > .metadata {
 }
 #body-editor .cm-editor {
   border: 1px solid var(--c-border);
-  border-radius: 0.5rem;
+  border-radius: 4px;
   background: var(--c-bg);
   color: var(--c-text);
 }
@@ -873,7 +905,7 @@ details.message > .metadata {
 .team-card {
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--c-border);
-  border-radius: 0.6rem;
+  border-radius: 4px;
   margin-bottom: 0.6rem;
   background: var(--c-bg);
 }
@@ -886,7 +918,18 @@ details.message > .metadata {
   cursor: pointer;
   overflow-wrap: anywhere;
   padding: 0.6rem 0.85rem;
-  font-weight: 500;
+  font-weight: 700;
+}
+/* The site treats details summaries as compact uppercase labels. Message summaries
+   carry a sender and date, so they keep their own case. */
+.contact > summary,
+.team-card > summary,
+.session-details summary,
+.team-memberships summary {
+  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.85rem;
 }
 .team-card > summary {
   background: var(--c-bg-alt);
@@ -1000,7 +1043,7 @@ details.message > .metadata {
 #team-list .avatar {
   width: 3rem;
   height: 3rem;
-  border-radius: 0.5rem;
+  border-radius: 4px;
 }
 #team-list > .team-card > summary > .team-badge {
   width: 3rem;
@@ -1011,7 +1054,7 @@ details.message > .metadata {
 /* ----------------------------------------------------------------- dialog */
 dialog {
   border: 1px solid var(--c-border);
-  border-radius: 0.75rem;
+  border-radius: 4px;
   background: var(--c-bg);
   color: var(--c-text);
   max-width: 36rem;
@@ -1101,8 +1144,9 @@ dd {
     display: none;
   }
   .brand-mark {
-    width: 1.6rem;
-    height: 1.6rem;
+    width: 44px;
+    height: 44px;
+    padding: 0.5625rem;
   }
   #search-form {
     display: none;
@@ -1111,7 +1155,9 @@ dd {
     right: 0.5rem;
     top: calc(var(--topbar-h) + 0.35rem);
     max-width: none;
-    background: var(--c-chrome);
+    height: auto;
+    min-height: 44px;
+    background: var(--c-bg);
     box-shadow: 0 8px 20px rgb(0 0 0 / 0.3);
     z-index: 40;
   }
@@ -1121,9 +1167,31 @@ dd {
   body.search-open .topbar {
     margin-bottom: 3rem;
   }
+  /* A sticky bar covered the first line of whatever was scrolled under it, so on a
+     phone the header scrolls with the page and the reading area owns the whole
+     viewport. Desktop keeps it pinned. */
+  .topbar {
+    position: static;
+  }
+  html {
+    scroll-padding-top: 0.5rem;
+  }
+  main > section {
+    scroll-margin-top: 0.5rem;
+  }
   .shell {
     grid-template-columns: minmax(0, 1fr);
-    padding-bottom: 3.75rem;
+    padding-bottom: calc(4.25rem + env(safe-area-inset-bottom));
+  }
+  /* The bottom bar is fixed, so content passes under it and the end of the page needs
+     room for it. While the on-screen keyboard is up the bar is not useful and iOS
+     floats a fixed bar above the keyboard, where it covers the editor, so it stands
+     down and gives the space back. */
+  body.keyboard-open .rail {
+    display: none;
+  }
+  body.keyboard-open .shell {
+    padding-bottom: 1rem;
   }
   .rail {
     position: fixed;
@@ -1138,6 +1206,52 @@ dd {
   }
   .rail button {
     flex: 1;
+  }
+  /* Touch targets: WCAG 2.5.8 asks for 24px and Apple's HIG for 44pt. The top bar icon
+     buttons, folder rows, pane actions and summaries were 30-38px tall. */
+  .topbar .icon-button,
+  .topbar .ghost-button {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  button,
+  summary,
+  input,
+  select,
+  textarea,
+  .attach-label,
+  .pane-bar a {
+    min-height: 44px;
+  }
+  .pane-bar button,
+  .pane-bar a,
+  .render-tools button {
+    min-width: 44px;
+    justify-content: center;
+  }
+  /* The phone reading view is the message, so its actions move to a bottom bar in thumb
+     reach and the section rail stands down for the duration. The labels are hidden and
+     carried by aria-label instead, to keep the bar one row. */
+  body.reader-open .rail {
+    display: none;
+  }
+  body.reader-open .shell {
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  }
+  body.reader-open #reader > .pane-bar {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 30;
+    margin: 0;
+    padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom));
+    background: var(--c-bg);
+    border-top: 1px solid var(--c-border);
+    border-bottom: 0;
+  }
+  .pane-bar-actions button span,
+  .pane-bar-actions a span {
+    display: none;
   }
   .sidebar {
     position: fixed;
@@ -1171,7 +1285,7 @@ dd {
     pointer-events: auto;
   }
   #main {
-    padding: 0.85rem 0.85rem 2rem;
+    padding: 1rem 1rem 2rem;
   }
   .row {
     grid-template-columns: minmax(0, 1fr) auto;
