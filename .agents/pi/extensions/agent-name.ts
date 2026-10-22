@@ -308,12 +308,22 @@ export function sqliteUnread(mailbox: string, stateRoot = mailStateRoot(), now =
 	const cached = sqliteUnreadCache.get(mailbox);
 	if (cached && cached.bell === bell && now - cached.at < 60_000) return cached.unread;
 	try {
-		const out = execFileSync("agent-mail", ["scan", "--to", mailbox, "--json", "--limit", "200"], {
-			encoding: "utf8",
-			timeout: 10_000,
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		const unread: Unread[] = (JSON.parse(out).messages ?? []).map((m: { message_id: string; from?: string; subject?: string; date?: string }) => ({
+		// Every page, not the first: unread mail left alone must not hide what arrives after it.
+		const messages: { message_id: string; from?: string; subject?: string; date?: string }[] = [];
+		let cursor: string | null = null;
+		for (let page = 0; page < 50; page++) {
+			const out = execFileSync("agent-mail", ["scan", "--to", mailbox, "--json", "--limit", "200", ...(cursor ? ["--after", cursor] : [])], {
+				encoding: "utf8",
+				timeout: 10_000,
+				maxBuffer: 16 * 1024 * 1024,
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			const parsed = JSON.parse(out);
+			messages.push(...(parsed.messages ?? []));
+			cursor = parsed.next ?? null;
+			if (!cursor) break;
+		}
+		const unread: Unread[] = messages.map((m) => ({
 			// The Maildir filename, so a notice announced before the flip is not announced again after it.
 			file: `${m.message_id}.md`,
 			from: m.from || "unknown",

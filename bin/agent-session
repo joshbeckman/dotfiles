@@ -728,11 +728,19 @@ def unread_sqlite(pad, human_root):
     import subprocess
     env = dict(os.environ, AGENT_MAIL_ROOT=str(pad.parent), AGENT_HUMAN_MAIL_ROOT=str(human_root))
     env.pop('AGENT_SCRATCHPAD', None)
-    result = subprocess.run([str(Path(__file__).resolve().with_name('agent-mail')), 'scan', '--to', pad.name,
-                             '--json', '--limit', '1000'], capture_output=True, text=True, env=env, timeout=30)
-    if result.returncode:
-        raise ValueError(f'agent-mail scan failed for {pad.name}: {result.stderr.strip()}')
-    messages = json.loads(result.stdout)['messages']
+    messages, cursor = [], None
+    # Every page: a human's message past the first must still bypass the wake budget.
+    for _ in range(100):
+        result = subprocess.run([str(Path(__file__).resolve().with_name('agent-mail')), 'scan', '--to', pad.name,
+                                 '--json', '--limit', '1000', *(['--after', cursor] if cursor else [])],
+                                capture_output=True, text=True, env=env, timeout=30)
+        if result.returncode:
+            raise ValueError(f'agent-mail scan failed for {pad.name}: {result.stderr.strip()}')
+        page = json.loads(result.stdout)
+        messages += page['messages']
+        cursor = page.get('next')
+        if not cursor:
+            break
     humans = {n for n in os.listdir(human_root) if not n.startswith('.')} if human_root.is_dir() else set()
     names = sorted(m['message_id'] + '.md' for m in messages)
     return names, {m['message_id'] + '.md' for m in messages if m['from'].removeprefix('@') in humans}

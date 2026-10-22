@@ -1176,6 +1176,25 @@ class SqliteWebTest(WebTest):
         rows = json.loads(self.request('/api/messages?folder=inbox&q=&group=1')[1])['messages']
         self.assertEqual([(r['key'], r['count']) for r in rows], [('inbox:' + reply + '.md', 2)])
 
+    def test_a_send_retried_after_a_lost_outcome_delivers_once(self):
+        draft = self.box.save(dict(self.box.draft('compose'), to='@+birch-weaver', subject='Once', body='Only once.'))
+        path = self.box.path(draft['key'])
+        with patch.object(web.Path, 'unlink', side_effect=OSError('killed before the draft was removed')):
+            with self.assertRaises(OSError):
+                self.box.send_draft(path)
+        self.assertTrue(path.exists())
+        retried = self.box.send_draft(path)
+        sent = [m for m in self.box.listing('sent', 'Only once')['messages']]
+        self.assertEqual([m['key'] for m in sent], ['sent:' + retried + '.md'])
+
+    def test_a_draft_keeps_its_reply_to_and_thread(self):
+        draft = self.box.draft('compose')
+        path = self.box.path(draft['key'])
+        path.write_text('From: josh\nTo: @+birch-weaver\nReply-To: @+alder-turner\nThread-ID: ' + self.id +
+                        '\nSubject: Routed\n\nRoute replies elsewhere.')
+        sent = self.box.message('sent:' + self.box.send_draft(path) + '.md')
+        self.assertEqual((sent['reply_to'], sent['thread']), ('alder-turner-12345678', self.id))
+
     def test_the_bridge_follows_a_flip_without_restarting(self):
         (self.root / 'store').write_text('both\n')
         self.assertNotIn(self.key, [m['key'] for m in self.box.listing('all', '')['messages']])

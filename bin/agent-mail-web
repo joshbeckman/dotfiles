@@ -437,8 +437,11 @@ class Mailbox:
         human_root = Path(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans')).expanduser()
         (human_root / 'josh').mkdir(parents=True, mode=0o700, exist_ok=True)
         self.home = Path(cli('addr', '@josh')).parent.resolve()
-        # The marker and the database sit beside the human mailboxes, as agent-mail places them.
-        self.state = self.home.parent.parent
+        # Beside the resolved human root, as agent-mail derives it, not beside Josh's mailbox:
+        # a symlinked mailbox would otherwise put the marker somewhere agent-mail never looks.
+        self.state = human_root.resolve().parent
+        raw = os.environ.get('AGENT_MAIL2_DB')
+        self.database = Path(raw).expanduser().absolute() if raw else self.state / 'mail2.sqlite3'
         self.cache = {}
         for folder in FOLDERS:
             self.directory(folder)
@@ -480,7 +483,7 @@ class Mailbox:
         """Josh's delivered and sent mail from the SQLite store, keyed as the Maildir keys it,
         so the app cannot tell which store answered. Drafts stay files: they are documents
         Josh is still editing, not mail."""
-        db = sqlite3.connect(f'file:{self.state / "mail2.sqlite3"}?mode=ro', uri=True, timeout=5)
+        db = sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=5)
         db.row_factory = sqlite3.Row
         try:
             recipients = dict(db.execute(
@@ -627,18 +630,35 @@ class Mailbox:
     def send_draft(self, path):
         """Deliver a draft through agent-mail send, which under sqlite is agent-mail2, then
         remove it. Returns the delivered message's id."""
-        draft = parse_mail(path)
-        if not draft['to'].strip():
+        text = path.read_text(encoding='utf-8')
+        header, _, body_text = text.partition('\n\n')
+        fields = {}
+        for line in header.splitlines():
+            key, sep, value = line.partition(':')
+            if sep:
+                fields.setdefault(key.strip().lower(), value.strip())
+        if not fields.get('to'):
             raise MailError('Add a recipient before sending')
+        key = fields.get('idempotency-key')
+        if not key:
+            # Written into the draft before the first attempt, so a retry after a lost outcome
+            # carries the same key and returns the delivered message instead of a second one.
+            key = secrets.token_hex(16)
+            atomic_write(path, ('Idempotency-Key: ' + key + '\n' + text).encode())
         fd, body = tempfile.mkstemp(prefix='.send-', dir=path.parent)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(draft['body'])
-            command = ['send', '--from', 'josh', '--to', draft['to'], '--body-file', body]
-            if draft['subject']:
-                command += ['--subject', draft['subject']]
-            if draft['parent']:
-                command += ['--in-reply-to', draft['parent']]
+                f.write(body_text)
+            command = ['send', '--from', 'josh', '--to', fields['to'], '--body-file', body,
+                       '--idempotency-key', key]
+            if fields.get('subject'):
+                command += ['--subject', fields['subject']]
+            if fields.get('reply-to'):
+                command += ['--reply-to', fields['reply-to']]
+            if fields.get('in-reply-to'):
+                command += ['--in-reply-to', fields['in-reply-to']]
+            elif fields.get('thread-id'):
+                command += ['--thread', fields['thread-id']]
             delivered = cli(*command).splitlines()[-1]
         finally:
             os.unlink(body)
