@@ -412,8 +412,12 @@ lost="$(tail -1 "$tmp/fail-out")"
 grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/fail-err" || fail "a failed straddling import was silent"
 grep -Fq "$lost" "$dir/state/mirror-failures" || fail "a failed straddling import was not logged"
 cmd receipt "$lost" >/dev/null 2>&1 && fail "the failed import somehow reached SQLite"
+set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'not repaired' "$tmp/err" || fail "--finish ran with an unrepaired import"
 migrate --import-only >/dev/null
 cmd read --to $bob --id "$lost" --peek 2>/dev/null | grep -Fxq 'imported later' || fail "an import-only pass did not repair the straddler"
+migrate --finish >/dev/null || fail "--finish refused after the repair"
+[[ -f "$dir/state/mirror-failures.repaired" && ! -e "$dir/state/mirror-failures" ]] || fail "--finish did not retire the repaired failure log"
 
 # A migration that passed its first check just before the flip refuses once it holds the lock.
 realm flip-race

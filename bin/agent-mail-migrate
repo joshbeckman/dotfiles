@@ -702,6 +702,20 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
             raise MigrationError(f"{len(problems)} problems; the archives were kept")
+    # An import that failed is only in the Maildir until someone repairs it, and the archive
+    # and the failure log are how anyone would know: both stay until every one is in SQLite.
+    failures = marker.parent / "mirror-failures"
+    if failures.exists():
+        ids = {line.split("\t")[1] for line in failures.read_text(encoding="utf-8").splitlines() if line.count("\t") >= 2}
+        db = open_db(db_path)
+        try:
+            missing = sorted(i for i in ids if not db.execute("SELECT 1 FROM messages WHERE message_id = ?", (i,)).fetchone())
+        finally:
+            db.close()
+        if missing:
+            raise MigrationError(f"{len(missing)} failed mirrors are not repaired ({', '.join(missing[:5])}); "
+                                 "run agent-mail-migrate (or --import-only under sqlite) first")
+        failures.rename(failures.with_name("mirror-failures.repaired"))
     directory = marker.parent / "archives"
     removed = sorted(directory.glob("*.tar.gz")) if directory.is_dir() else []
     for path in removed:
