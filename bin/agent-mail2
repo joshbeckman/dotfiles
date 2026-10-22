@@ -274,6 +274,11 @@ def upgrade_v3(db: sqlite3.Connection) -> None:
                 "UPDATE deliveries SET delivery_seq = (SELECT seq FROM delivery_order WHERE row = deliveries.rowid)",
                 "DROP TABLE delivery_order",
                 "CREATE UNIQUE INDEX deliveries_by_seq ON deliveries(delivery_seq)",
+                # Whoever upgrades, the headers v3 dropped are owed a full pass from the Maildir.
+                # A row, not a flag in this process: the next migrator run sees it whichever
+                # command upgraded, and it survives a crash before the pass.
+                "CREATE TABLE backfill_pending (since INTEGER NOT NULL)",
+                f"INSERT INTO backfill_pending VALUES ({now_us()})",
                 "DROP TRIGGER messages_no_update",
                 f"""CREATE TRIGGER messages_no_update BEFORE UPDATE ON messages WHEN NOT ({APPEND_ONLY})
                     BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END""",
@@ -532,16 +537,18 @@ def ring(recipients: list[Mailbox]) -> None:
 
 
 def notify_josh(title: str, message: str, away_only: bool) -> bool:
+    import shlex
     import shutil
     import subprocess
 
     command = shutil.which("notify-josh")
     if not command:
         return False
-    # The web inbox, not agent-mail inbox: that opened Neovim, which Josh no longer uses and
-    # which the SQLite store does not serve.
+    # agent-mail web, not agent-mail inbox (Neovim, which Josh no longer uses) and not a bare
+    # URL: the launcher starts or reuses the bridge and opens it with the tab's token.
+    click = f"{shlex.quote(os.path.join(HERE, 'agent-mail'))} web"
     argv = [command, *(["--away-only"] if away_only else []), "--from", "agent-mail",
-            "--execute", "/usr/bin/open http://127.0.0.1:8765/", title, message]
+            "--execute", click, title, message]
     try:
         return subprocess.run(argv, capture_output=True, timeout=30).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -562,12 +569,17 @@ def notify_delivery(db: sqlite3.Connection, mid: str, author: str, subject: str 
     a private database is a test or an experiment, and must not reach Josh."""
     if not is_runtime_database() or not any(r.id == "josh" for r in recipients):
         return
-    if notify_josh(f"Agent mail: {subject or '(no subject)'}",
-                   f"From {author}. Read with: agent-mail read --to @josh", web_inbox_open()):
-        db.execute("UPDATE deliveries SET escalated_at = COALESCE(escalated_at, ?) "
-                   "WHERE message_id = ? AND recipient_mailbox_id = 'josh'", (now_us(), mid))
-    else:
-        print(f"{PROG}: immediate Josh notification failed; unread sweep will retry", file=sys.stderr)
+    # After the commit, so nothing here may fail the send: a non-zero exit for delivered mail
+    # invites a duplicate. A notification that did not happen is left for the sweep.
+    try:
+        if notify_josh(f"Agent mail: {subject or '(no subject)'}",
+                       f"From {author}. Read with: agent-mail read --to @josh", web_inbox_open()):
+            db.execute("UPDATE deliveries SET escalated_at = ? WHERE message_id = ? "
+                       "AND recipient_mailbox_id = 'josh' AND escalated_at IS NULL", (now_us(), mid))
+            return
+    except (sqlite3.Error, OSError):
+        pass
+    print(f"{PROG}: immediate Josh notification failed; unread sweep will retry", file=sys.stderr)
 
 
 def warn_idle(recipients: list[Mailbox]) -> None:
@@ -772,10 +784,7 @@ def append_message(args: argparse.Namespace) -> str:
             thread_id = source["thread_id"]
             # Reply-To stands in for the sender, as it does in agent-mail.
             answer = source["reply_to_address"] or source["sender_mailbox_id"]
-            direct = [value for value in (answer, *recipients_for(db, reply_to))
-                      if value != author.id]
-            if not direct:
-                raise MailError("--reply-all source has no other recipients")
+            direct = [answer, *recipients_for(db, reply_to)]
             if subject is None:
                 source_subject = source["subject"] or "(no subject)"
                 subject = source_subject if source_subject.startswith("Re: ") else f"Re: {source_subject}"
@@ -791,6 +800,11 @@ def append_message(args: argparse.Namespace) -> str:
 
         teams: list[str] = []
         recipients = expand_recipients(direct, teams)
+        if args.reply_all:
+            # After resolution: a Reply-To alias of the author must not deliver to the author.
+            recipients = [r for r in recipients if r.id != author.id]
+            if not recipients:
+                raise MailError("--reply-all source has no other recipients")
         new_thread = thread_id is None
         if new_thread:
             if expected not in (None, "none"):
@@ -1212,35 +1226,45 @@ def cmd_sweep(args: argparse.Namespace) -> None:
     """Escalate mail nobody has read for --hours, as agent-mail sweep does. Any live session
     can run it, because the recipient of ignored mail is by definition not running."""
     require_authoritative()
+    # An experiment's database never notifies Josh; it only reports what it would escalate.
+    dry_run = args.dry_run or not is_runtime_database()
     db = connect()
     try:
         now = now_us()
+        # escalated_at is positive once Josh was told, negative while a sweep is telling him.
+        # A negative claim older than ten minutes belonged to a sweep that died, so it is open.
+        open_claim = "(d.escalated_at IS NULL OR (d.escalated_at < 0 AND -d.escalated_at < :stale))"
         rows = db.execute(
-            """SELECT d.message_id, d.recipient_mailbox_id, m.sender_mailbox_id, m.subject, m.sent_at
-               FROM deliveries d JOIN messages m USING(message_id)
-               WHERE d.read_at IS NULL AND d.discarded_at IS NULL AND d.escalated_at IS NULL
-                 AND m.sent_at <= ? ORDER BY d.delivery_seq""",
-            (now - int(args.hours * 3600 * 1_000_000),),
+            f"""SELECT d.message_id, d.recipient_mailbox_id, d.escalated_at, m.sender_mailbox_id,
+                       m.subject, m.sent_at
+                FROM deliveries d JOIN messages m USING(message_id)
+                WHERE d.read_at IS NULL AND d.discarded_at IS NULL AND {open_claim}
+                  AND m.sent_at <= :cutoff ORDER BY d.delivery_seq""",
+            {"stale": now - 600_000_000, "cutoff": now - int(args.hours * 3600 * 1_000_000)},
         ).fetchall()
         for row in rows:
             age = (now - row["sent_at"]) // 3_600_000_000
             line = (f"{row['recipient_mailbox_id']}\t{row['message_id']}\tfrom:{row['sender_mailbox_id']}\t"
                     f"{row['subject'] or '(no subject)'}\t{age}h")
-            if args.dry_run:
+            if dry_run:
                 print(f"would escalate\t{line}")
                 continue
-            # The claim is the update: concurrent sweeps race, and only the one that changes
-            # the row notifies.
+            key = (row["message_id"], row["recipient_mailbox_id"])
+            # The claim is the update, re-checking that the mail is still unread: concurrent
+            # sweeps race, and only the one that changes the row notifies.
             claimed = db.execute(
                 "UPDATE deliveries SET escalated_at = ? WHERE message_id = ? AND recipient_mailbox_id = ? "
-                "AND escalated_at IS NULL", (now, row["message_id"], row["recipient_mailbox_id"]),
+                "AND read_at IS NULL AND discarded_at IS NULL AND escalated_at IS ?",
+                (-now, *key, row["escalated_at"]),
             ).rowcount
             if not claimed:
                 continue
-            notify_josh(f"Unread agent mail ({age}h)",
-                        f"{row['recipient_mailbox_id']} has not read \"{row['subject'] or '(no subject)'}\" "
-                        f"from {row['sender_mailbox_id']}", False)
-            print(f"escalated\t{line}")
+            told = notify_josh(f"Unread agent mail ({age}h)",
+                               f"{row['recipient_mailbox_id']} has not read \"{row['subject'] or '(no subject)'}\" "
+                               f"from {row['sender_mailbox_id']}", False)
+            db.execute("UPDATE deliveries SET escalated_at = ? WHERE message_id = ? AND recipient_mailbox_id = ? "
+                       "AND escalated_at = ?", (now if told else None, *key, -now))
+            print(f"{'escalated' if told else 'notification failed'}\t{line}")
     finally:
         db.close()
 

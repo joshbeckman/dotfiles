@@ -414,13 +414,19 @@ def verify(db: sqlite3.Connection, messages: dict[str, Message],
             m.message_id: "unread" if m.recipients[mailbox] is None else "read"
             for m in messages.values() if mailbox in m.recipients
         }
-        actual = {
-            row[0]: "discarded" if row[2] is not None else "unread" if row[1] is None else "read"
-            for row in db.execute(
-                "SELECT message_id, read_at, discarded_at FROM deliveries WHERE recipient_mailbox_id = ?",
-                (mailbox,),
-            )
-        }
+        rows = db.execute(
+            "SELECT message_id, read_at, discarded_at, escalated_at FROM deliveries WHERE recipient_mailbox_id = ?",
+            (mailbox,),
+        ).fetchall()
+        actual = {row[0]: "discarded" if row[2] is not None else "unread" if row[1] is None else "read"
+                  for row in rows}
+        # Escalation only matters while unread, and v1 clears its marker on read.
+        for message_id, _, _, escalated_at in rows:
+            message = messages.get(message_id)
+            if message is not None and expected.get(message_id) == "unread" and actual[message_id] == "unread":
+                if (mailbox in message.escalated) != bool(escalated_at and escalated_at > 0):
+                    problems.append(f"{message_id} is {'' if mailbox in message.escalated else 'not '}escalated "
+                                    f"for {mailbox} in the Maildir, but the database disagrees")
         for message_id, state in sorted(expected.items()):
             if actual.get(message_id) != state:
                 problems.append(f"{message_id} is {state} for {mailbox} in the Maildir, "
@@ -486,11 +492,14 @@ def schema_version(db_path: Path) -> int:
         db.close()
 
 
-def open_db(db_path: Path) -> tuple[sqlite3.Connection, bool]:
-    """The connection, and whether this call upgraded the schema. agent-mail2 owns the
-    schema, so it creates the database and upgrades an older one."""
-    upgraded = db_path.exists() and schema_version(db_path) < 4
-    if not db_path.exists() or upgraded:
+def backfill_pending(db: sqlite3.Connection) -> bool:
+    return bool(db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'backfill_pending'").fetchone()
+                and db.execute("SELECT 1 FROM backfill_pending").fetchone())
+
+
+def open_db(db_path: Path) -> sqlite3.Connection:
+    # agent-mail2 owns the schema, so it creates the database and upgrades an older one.
+    if not db_path.exists() or schema_version(db_path) < 4:
         # --db wins over the ambient default, so init must be told the same path. The
         # sibling, not PATH, so a launchd or systemd caller gets the same tool.
         environment = dict(os.environ, AGENT_MAIL2_DB=str(db_path))
@@ -501,7 +510,7 @@ def open_db(db_path: Path) -> tuple[sqlite3.Connection, bool]:
     db = sqlite3.connect(db_path, timeout=5, isolation_level=None)
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA busy_timeout = 5000")
-    return db, upgraded
+    return db
 
 
 def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
@@ -524,10 +533,9 @@ def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
 
 def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                   only: str | None) -> dict[str, int]:
-    db, upgraded = open_db(db_path)
-    if upgraded:
-        # v3 could not store Reply-To or Team-To, so the upgrade is followed by one full pass
-        # that fills them in from the Maildir before anything verifies against them.
+    db = open_db(db_path)
+    if backfill_pending(db):
+        # The v4 upgrade owes the headers v3 dropped a full pass from the Maildir.
         only = None
     try:
         # The snapshot is taken under the write lock. Collected before it, a migration could
@@ -548,6 +556,8 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                                           for box, state in message.recipients.items()}
                 messages = with_ancestors(boxes, db, messages)
             counts = migrate(db, messages, visibility, boxes, only)
+            if only is None and backfill_pending(db):
+                db.execute("DELETE FROM backfill_pending")
             db.execute("COMMIT")
         except BaseException:
             db.execute("ROLLBACK")
@@ -558,11 +568,11 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
 
 
 def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
-    db, upgraded = open_db(db_path)
-    if upgraded:
+    db = open_db(db_path)
+    if backfill_pending(db):
         db.close()
         run_migration(db_path, roots, "public", None)
-        db, _ = open_db(db_path)
+        db = open_db(db_path)
     try:
         # Under the write lock, so a mirror committing mid-check cannot read as drift.
         db.execute("BEGIN IMMEDIATE")

@@ -1175,6 +1175,7 @@ cmd_sweep() {
           "$recipient has not read \"$subj\" from $from" >/dev/null 2>&1 || true
       fi
       printf 'escalated\t%s\t%s\tfrom:%s\t%s\t%sh\n' "$recipient" "$msgid" "$from" "$subj" "$age"
+      mirror "$msgid"
     done
   done
 }

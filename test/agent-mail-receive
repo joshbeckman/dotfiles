@@ -70,8 +70,20 @@ assert page["next"] and page["version"] == 1 and page["store"] == "sqlite"
 assert all(m["bytes"] > 0 and m["state"] == "unread" for m in page["messages"])
 PY
 next="$(json 'd["next"]' <<<"$page1")"
-# A delivery that arrives mid-drain with a backdated id still comes after the cursor.
-late="$(as bob-agent-22222222 "$cmd" send --to agent-run --subject late -m late | tail -1)"
+# A delivery that arrives mid-drain dated before everything already paged (a sender with a
+# slow clock, or a late mirror) still comes after the cursor: order is delivery, not date.
+late=backdated-late
+python3 - "$tmp/r/state/mail2.sqlite3" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("insert into threads values ('backdated-late', 1, 'public')")
+db.execute("insert into messages(message_id, thread_id, sequence, sender_mailbox_id, sent_at, subject, body) "
+           "values ('backdated-late', 'backdated-late', 1, 'bob-agent-22222222', 1, 'late', 'late')")
+db.execute("insert into message_recipients values ('backdated-late', 'agent-run')")
+db.execute("insert into deliveries(message_id, recipient_mailbox_id, delivery_seq) "
+           "values ('backdated-late', 'agent-run', (select max(delivery_seq) + 1 from deliveries))")
+db.commit()
+PY
 rest="$("$cmd" scan --to agent-run --json --limit 10 --after "$next")"
 python3 - "$rest" "$late" "${ids[@]}" <<'PY' || fail "continuation skipped or repeated mail"
 import json, sys
@@ -104,11 +116,15 @@ first="$("$cmd" receipt "${ids[0]}" | cut -f5)"
 "$cmd" read --to agent-run --id "/old/agent-run/inbox/cur/${ids[1]}.md" --peek >/dev/null 2>&1 || fail "a legacy path did not resolve"
 "$cmd" read --to agent-run --id "/old/agent-run/inbox/cur/${ids[1]:0:20}.md" --peek >/dev/null 2>&1 && fail "a legacy path matched by prefix"
 
-# Under maildir or both, the receive commands refuse the runtime database rather than serve the mirror.
-printf 'both\n' >"$tmp/r/state/store"
-set +e; "$cmd" resolve --json agent-run >"$tmp/out"; "$root/bin/agent-mail2" scan --to agent-run --json >"$tmp/out2" 2>/dev/null; status=$?; set -e
-[[ "$(json 'd["store"]' <"$tmp/out")" == both ]] || fail "resolve did not report the store"
-[[ "$status" == 5 && "$(json '(d["error"], d["store"])' <"$tmp/out2")" == "('store', 'both')" ]] || fail "the receive API served the mirror under both"
+# Under maildir or both, every receive command refuses the runtime database rather than serve the mirror.
+for mode in both maildir; do
+  printf '%s\n' "$mode" >"$tmp/r/state/store"
+  [[ "$("$cmd" resolve --json agent-run | json 'd["store"]')" == "$mode" ]] || fail "resolve did not report $mode"
+  for args in "scan --to agent-run --json" "read --to agent-run --id ${ids[1]} --peek --json" "read --to agent-run --id ${ids[1]} --json"; do
+    set +e; "$root/bin/agent-mail2" $args >"$tmp/out" 2>/dev/null; status=$?; set -e
+    [[ "$status" == 5 && "$(json '(d["error"], d["store"])' <"$tmp/out")" == "('store', '$mode')" ]] || fail "agent-mail2 $args served the mirror under $mode"
+  done
+done
 printf 'sqlite\n' >"$tmp/r/state/store"
 
 # Reply-To steers reply-all, and Team-To survives into the rendered header block.
@@ -131,6 +147,26 @@ pending="$("$cmd" scan --all --json --limit 1000 | json 'sum(1 for m in d["messa
 [[ "$escalated" == "$pending" ]] || fail "concurrent sweeps escalated $escalated of $pending unread deliveries"
 [[ "$(grep -c 'Unread agent mail' "$tmp/r/notified")" == "$pending" ]] || fail "the sweep notified more than once per delivery"
 "$cmd" sweep --hours 0 | grep -q . && fail "a second sweep escalated again"
+
+# A failed notification releases its claim, so the next sweep tries again; a claim left by a
+# sweep that died is reclaimed after ten minutes; a private database never notifies.
+stuck="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --subject stuck -m stuck | tail -1)"
+mv "$tmp/r/bin/notify-josh" "$tmp/r/notify-ok"
+printf '#!/bin/sh\nexit 1\n' >"$tmp/r/bin/notify-josh"; chmod +x "$tmp/r/bin/notify-josh"
+"$cmd" sweep --hours 0 | grep -Fq "notification failed	bob-agent-22222222	$stuck" || fail "a failed notification was reported as escalated"
+mv "$tmp/r/notify-ok" "$tmp/r/bin/notify-josh"
+"$cmd" sweep --hours 0 | grep -Fq "escalated	bob-agent-22222222	$stuck" || fail "a released claim was not retried"
+python3 - "$tmp/r/state/mail2.sqlite3" "$stuck" <<'PY'
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+db.execute("update deliveries set escalated_at = ? where message_id = ?", (-(time.time_ns() // 1000 - 900_000_000), sys.argv[2]))
+db.commit()
+PY
+"$cmd" sweep --hours 0 | grep -Fq "escalated	bob-agent-22222222	$stuck" || fail "a dead sweep's claim was never reclaimed"
+: >"$tmp/r/notified"
+AGENT_MAIL2_DB="$tmp/private.sqlite3" as alice-agent-11111111 "$root/bin/agent-mail2" send --to josh -m private >/dev/null
+AGENT_MAIL2_DB="$tmp/private.sqlite3" "$root/bin/agent-mail2" sweep --hours 0 | grep -q '^would escalate' || fail "a private sweep did not report"
+[[ ! -s "$tmp/r/notified" ]] || fail "a private database notified Josh"
 
 # A v3 database is upgraded in one transaction and its routing headers filled in from the Maildir.
 realm "$tmp/v3"
@@ -165,6 +201,8 @@ PRAGMA user_version = 3;
 """)
 db.commit()
 PY
+# Whatever touches the v3 database first, here a read-only head, the headers are still owed.
+"$root/bin/agent-mail2" head m-team >/dev/null
 "$root/bin/agent-mail-migrate" --verify >/dev/null || fail "verify after the v4 upgrade found drift"
 python3 - "$tmp/v3/state/mail2.sqlite3" <<'PY' || fail "the v4 upgrade is wrong"
 import sqlite3, sys
@@ -172,6 +210,7 @@ db = sqlite3.connect(sys.argv[1])
 assert db.execute("pragma user_version").fetchone()[0] == 4
 assert db.execute("select team_to from messages where message_id = 'm-team'").fetchone()[0] == "@team/crew"
 assert db.execute("select delivery_seq from deliveries").fetchall() == [(1,)]
+assert db.execute("select count(*) from backfill_pending").fetchone()[0] == 0, "the backfill was not recorded as done"
 for change in ("update messages set team_to = 'other'", "update messages set body = 'x'"):
     try:
         db.execute(change)
