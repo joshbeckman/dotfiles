@@ -98,6 +98,10 @@ first and then mirrors that message into the database with
 Maildir stays authoritative: `send`, `scan`, `read`, `receipt` and `discard` still use
 it, and only `head`, `thread`, `search` and `publish` read the mirror.
 
+Under `both`, `agent-mail` refuses a message that is not valid UTF-8 before delivering it
+(exit 1, nothing written), because the SQLite store holds text and the mirror could never
+converge on it. Under `maildir` nothing changes.
+
 `--verify` reconciles the Maildir against the database: every message present with the
 same sender, thread and body, and every delivery in the state its file says (`new/` unread,
 `cur/` read, gone from a live inbox discarded). It exits non-zero on any mismatch. Run it
