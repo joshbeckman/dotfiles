@@ -1,6 +1,6 @@
 # Migrating Agent Mail from the Maildir to SQLite
 
-**Status:** plan; steps 1 to 3 are built and tested, step 5 is blocked. Written against the Beacon store on blueberry, 2026-10-10.
+**Status:** steps 1 to 3 ran on 2026-10-22 (the store is `both`); step 5 is built and waits for agent-run. Written against the Beacon store on blueberry, 2026-10-10.
 
 The Maildir store (`agent-mail`) and the SQLite store (`agent-mail2`) record different
 things, so moving between them is a translation, not a copy. This is the plan I would
@@ -127,27 +127,38 @@ migration is silence. If a mailbox is mis-mapped or a message is dropped, the sy
 "nobody wrote to me", which is indistinguishable from the truth. A count each agent can
 check turns that into a visible discrepancy.
 
-### 5. Flip to sqlite, once nothing reads the Maildir directly
+### 5. Flip to sqlite
 
-Before this step, have an off-box backup that has been restored from once. The archive
-`--set-store both` writes sits on the same disk as the mail: enough while the Maildir stays
-authoritative, not once SQLite is the only record.
+```sh
+agent-mail-migrate --set-store sqlite
+agent-mail store
+```
 
-`agent-mail-migrate --set-store sqlite` refuses today. Four readers go to the Maildir
-directly rather than through `agent-mail`, and each would go quiet after a flip:
+Every reader that used to list the Maildir now picks its store from the marker, so each
+follows the flip without a restart:
 
-- `agent-mail-web` lists Josh's `inbox/new`, `inbox/cur`, `sent` and `drafts`, and sends
-  through `compose`, `reply`, `reply-all`, `deliver` and `archive`;
-- the Pi extension's unread notice and status count list `inbox/new`;
-- `agent-session wake-mail` lists `inbox/new` to wake parked sessions;
-- `agent-run` watches its own service mailbox's `new/`, `cur/` and `tmp/`.
+- `agent-mail-web` serves Josh's inbox, archive and sent from agent-mail2, and keeps
+  drafts as files;
+- the Pi notice and status count, and `agent-session wake-mail`, ask `agent-mail scan
+  --json`;
+- `agent-run` drains through the receive contract (`resolve --json --service`, `scan --json`,
+  `read --peek --json --max-bytes`, `read --id` to acknowledge). Under `maildir` and `both`
+  those commands exit 5 and it keeps its Maildir reader. **Flip only once agent-run's
+  adapter is installed and its restarted worker reports ready.** Passing the fixtures in
+  `test/agent-mail-receive --setup` is necessary but not enough.
 
-The notification to Josh on delivery and the unread `sweep` also exist only in the Maildir
-tool, and the SQLite store does not yet keep `Reply-To` or `Team-To`, which replies under
-`sqlite` would need. Each of these has to read through `agent-mail2` (`scan --json`, `thread --json` and
-`receipt --json` exist for this) before the flip is offered. When it is, the flip is one
-marker write after a clean `--verify`, and the announcement should state the new
-semantics:
+Josh's delivery notification and the unread `sweep` run in agent-mail2 under `sqlite`, and
+Reply-To and Team-To are stored.
+
+The flip only goes from `both`. It does one last full sync and a clean `--verify`, takes a
+fresh archive (the backup, as Josh decided: an archive in a dedicated directory), writes the
+marker, and then runs an import-only pass. After the flip the Maildir can only add to
+SQLite, never subtract. A writer that read the marker before the flip and delivers after it
+has its message imported by its own mirror, and existing state is never changed. The cost
+is that an acknowledgement straddling the flip can leave the SQLite copy unread. That gives
+a redelivery, never a loss.
+
+Announce the new semantics:
 
 - `read` marks a message rather than moving a file, so `cat` no longer matters;
 - `scan` is the inbox, `search` also sees public threads;
@@ -156,6 +167,9 @@ semantics:
 
 A nice touch: leave the announcement itself unread in the new store, so every agent's
 first `agent-mail read` both delivers the news and proves the new path works.
+
+After the flip, `agent-mail-migrate --verify` no longer compares anything with the Maildir.
+It checks the database's integrity, so the hourly drift alarm stays quiet.
 
 ### 6. Finish
 
@@ -188,7 +202,8 @@ While the marker says `both`, `agent-mail-migrate --set-store maildir` stops the
 loses nothing, because every change was written to the Maildir first. The database can
 then be deleted. After a flip to `sqlite` there is no rollback by marker: mail sent since
 exists only in the database, so the migrator refuses to leave `sqlite`, and refuses to sync
-from the Maildir over it.
+from the Maildir over it. The last resort is the `archives/pre-sqlite-*.tar.gz` the flip
+wrote, which restores the store as it was at the flip and loses everything after.
 
 ## Decisions the operator has to make
 

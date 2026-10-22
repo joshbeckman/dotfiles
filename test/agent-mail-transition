@@ -368,6 +368,77 @@ as $alice "$bin/agent-mail2" read --to $bob --peek >/dev/null 2>&1 || true
 AGENT_MAIL2_DB="$tmp/elsewhere.sqlite3" as $alice "$bin/agent-mail2" send --to $bob -m 'a private database' >/dev/null \
   || fail "agent-mail2 refused a database that is not the runtime store"
 
+# --- the flip to sqlite ------------------------------------------------------------------
+# History flips over intact; a send that read the marker before the flip and delivers after
+# it is still in SQLite and drainable; and after the flip the Maildir can only add.
+realm flip
+before="$(as $alice cmd send --to "$bob,josh" --subject History -m 'before the flip' | tail -1)"
+as $bob cmd read --to $bob --id "$before" >/dev/null 2>&1
+migrate --set-store both >/dev/null
+mkfifo "$tmp/straddle-body"
+as $alice cmd send --to $bob --subject Straddle --body-file "$tmp/straddle-body" >"$tmp/straddle-out" 2>"$tmp/straddle-err" &
+sender=$!
+sleep 0.5
+migrate --set-store sqlite >"$tmp/flip-out" || { cat "$tmp/flip-out"; fail "the flip failed"; }
+printf 'written across the flip\n' >"$tmp/straddle-body"
+wait "$sender"
+straddled="$(tail -1 "$tmp/straddle-out")"
+[[ "$(cmd store | cut -f1)" == sqlite ]] || fail "the marker did not flip"
+cmd receipt "$before" | grep -Fq $'read\t'"$before"$'\tto:'"$bob" || fail "a read from before the flip was lost"
+cmd scan --to $bob --json | python3 -c 'import json,sys; ids=[m["message_id"] for m in json.load(sys.stdin)["messages"]]; sys.exit(0 if sys.argv[1] in ids else 1)' "$straddled" \
+  || fail "a send that straddled the flip is not drainable from SQLite"
+cmd read --to $bob --id "$straddled" --peek 2>/dev/null | grep -Fxq 'written across the flip' || fail "the straddling send lost its body"
+set +e; migrate >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'refusing to sync' "$tmp/err" || fail "a full sync ran over the sqlite store"
+migrate --import-only >/dev/null || fail "an import-only pass was refused under sqlite"
+cmd receipt "$before" | grep -Fq $'read\t'"$before"$'\tto:'"$bob" || fail "an import-only pass changed state"
+migrate --verify >/dev/null || fail "verify under sqlite found problems in a sound store"
+set +e; migrate --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'strand' "$tmp/err" || fail "leaving sqlite was allowed"
+
+# A straddling writer whose import fails is not silent: it is logged for the drift alarm,
+# and one import-only pass repairs it, changing nothing else.
+realm flip-fail
+migrate --set-store both >/dev/null
+mkfifo "$tmp/fail-body"
+as $alice env AGENT_MAIL2_DB="$tmp" "$bin/agent-mail" send --to $bob --subject Lost --body-file "$tmp/fail-body" \
+  >"$tmp/fail-out" 2>"$tmp/fail-err" &
+sender=$!
+sleep 0.5
+migrate --set-store sqlite >/dev/null
+printf 'imported later\n' >"$tmp/fail-body"
+wait "$sender"
+lost="$(tail -1 "$tmp/fail-out")"
+grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/fail-err" || fail "a failed straddling import was silent"
+grep -Fq "$lost" "$dir/state/mirror-failures" || fail "a failed straddling import was not logged"
+cmd receipt "$lost" >/dev/null 2>&1 && fail "the failed import somehow reached SQLite"
+set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'not repaired' "$tmp/err" || fail "--finish ran with an unrepaired import"
+migrate --import-only >/dev/null
+cmd read --to $bob --id "$lost" --peek 2>/dev/null | grep -Fxq 'imported later' || fail "an import-only pass did not repair the straddler"
+migrate --finish >/dev/null || fail "--finish refused after the repair"
+[[ -f "$dir/state/mirror-failures.repaired" && ! -e "$dir/state/mirror-failures" ]] || fail "--finish did not retire the repaired failure log"
+
+# A migration that passed its first check just before the flip refuses once it holds the lock.
+realm flip-race
+migrate --set-store both >/dev/null
+python3 - "$db" <<'PY' &
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute("begin immediate")
+time.sleep(2)
+db.execute("rollback")
+PY
+locker=$!
+sleep 0.3
+migrate >/dev/null 2>"$tmp/race-err" &
+racer=$!
+sleep 0.7
+printf 'sqlite\n' >"$dir/state/store"
+set +e; wait "$racer"; status=$?; set -e
+wait "$locker"
+[[ "$status" == 1 ]] && grep -Fq 'became sqlite' "$tmp/race-err" || fail "a migration that began before the flip synced after it"
+
 # --- a long random run of every mutating command keeps the mirror exact ------------------
 realm fuzz
 migrate --set-store both >/dev/null

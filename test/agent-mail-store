@@ -128,15 +128,16 @@ if verified 2>/dev/null; then fail "verify passed with a message missing from th
 verified || fail "a full migrate did not repair the mirror"
 
 # Leaving both is safe, because the Maildir never stopped being the record.
-set +e; "$migrate" --set-store sqlite >/dev/null 2>"$tmp/err"; status=$?; set -e
-[[ "$status" == 1 ]] && grep -Fq 'agent-mail-web' "$tmp/err" || fail "the flip to sqlite was allowed before its readers are ported"
 "$migrate" --set-store maildir >/dev/null
 [[ "$("$cmd" store | cut -f1)" == maildir ]]
 
 # --- sqlite: agent-mail2 alone; nothing is written to the Maildir ---------------------
 realm sqlite
-# Written by hand: --set-store refuses sqlite until the Maildir readers are ported.
-printf 'sqlite\n' >"$marker"
+set +e; "$migrate" --set-store sqlite >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'switch to both first' "$tmp/err" || fail "the flip to sqlite skipped the verified mirror"
+"$migrate" --set-store both >/dev/null
+"$migrate" --set-store sqlite >/dev/null || fail "the flip from a clean mirror failed"
+[[ "$(cat "$marker")" == sqlite ]]
 conversation sqlite
 [[ -z "$(find "$AGENT_MAIL_ROOT" "$AGENT_HUMAN_MAIL_ROOT" -name '*.md' -print -quit)" ]] || fail "the sqlite store wrote Maildir files"
 [[ "$("$cmd" addr $bob)" == "$AGENT_MAIL_ROOT/$bob/inbox" ]] || fail "addr stopped resolving"
