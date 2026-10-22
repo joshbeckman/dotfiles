@@ -366,6 +366,9 @@ ulid="${by_handle:0:26}"
 followup="$(AGENT_SCRATCHPAD="$dana" "$command" send --reply-all "/old/inbox/cur/$by_handle.md" \
   --if-head "$by_handle" --body 'path form')"
 [[ "$($command head "$by_handle")" == "$followup" ]]
+# A path is exact: its stem never falls back to prefix or suffix matching.
+expect_failure 1 env AGENT_SCRATCHPAD="$dana" "$command" send --reply-all "/old/inbox/cur/$ulid.md" --body x
+grep -Fq "unknown message: $ulid" "$tmp/failure-err"
 
 # A reply without --if-head lands after mail the sender had not seen, and says so.
 AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send --reply-all "$by_handle" \

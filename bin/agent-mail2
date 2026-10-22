@@ -535,7 +535,10 @@ def find_message(db: sqlite3.Connection, identifier: str, mailbox: str | None = 
     row = db.execute(base + "m.message_id = :value", params).fetchone()
     if row is not None:
         return row
-    for direction, clause in (
+    # A v1 file path names one message exactly; agent-run stores them in its receipts, and
+    # a path that matched a different message by prefix would reply in the wrong thread.
+    exact_only = "/" in identifier or identifier.strip().endswith(".md")
+    for direction, clause in () if exact_only else (
         ("start", "substr(m.message_id, 1, length(:value)) = :value"),
         ("end", "substr(m.message_id, -length(:value)) = :value"),
     ):
