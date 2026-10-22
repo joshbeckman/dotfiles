@@ -151,5 +151,18 @@ assert sorted(r[0] for r in db.execute("select recipient_mailbox_id from message
 assert db.execute("select count(*) from deliveries where message_id = ?", (sys.argv[2],)).fetchone()[0] == 0
 PY
 migrate --verify | grep -qx verified
+# One copy gone and one surviving: the gone recipient stays in the audience, and a To entry that
+# is only the handle of a surviving copy's mailbox is not added twice.
+g="20261005T090000Z--from-josh--to-partial--7-7"
+write_message "$tmp/humans/josh/sent/$g.md" "josh" "pruned-agent-77777777, birch-agent" "2026-10-05T09:00:00Z" "$g" "$g" "" "Partial" "half kept"
+write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$g.md" "josh" "pruned-agent-77777777, birch-agent" "2026-10-05T09:00:00Z" "$g" "$g" "" "Partial" "half kept"
+migrate >/dev/null
+python3 - "$AGENT_MAIL2_DB" "$g" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert sorted(r[0] for r in db.execute("select recipient_mailbox_id from message_recipients where message_id = ?", (sys.argv[2],))) == ["birch-agent-22222222", "pruned-agent-77777777"]
+assert [r[0] for r in db.execute("select recipient_mailbox_id from deliveries where message_id = ?", (sys.argv[2],))] == ["birch-agent-22222222"]
+PY
+migrate --verify | grep -qx verified
 
 echo "agent-mail-migrate tests passed"
