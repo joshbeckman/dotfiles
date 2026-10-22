@@ -152,6 +152,27 @@ def database_path() -> str:
     return os.path.join(os.path.dirname(os.path.realpath(human_root())), "mail2.sqlite3")
 
 
+def require_writable() -> None:
+    """Refuse to change the runtime database unless the store marker says sqlite.
+
+    Under maildir or both the Maildir is the record, and the next reconciliation would mark
+    a SQLite-only delivery discarded and revert a SQLite-only read: the send would succeed
+    and its recipient would never see it. A database named by AGENT_MAIL2_DB elsewhere is
+    not the runtime store and stays writable.
+    """
+    root = os.path.dirname(os.path.realpath(human_root()))
+    if os.path.realpath(database_path()) != os.path.realpath(os.path.join(root, "mail2.sqlite3")):
+        return
+    try:
+        with open(os.path.join(root, "store"), "rb") as source:
+            marker = re.fullmatch(rb"(maildir|both|sqlite)\n*", source.read())
+    except OSError:
+        marker = None
+    mode = marker.group(1).decode() if marker else "maildir"
+    if mode != "sqlite":
+        raise MailError(f"the store marker says {mode}, so the Maildir holds the mail; use agent-mail")
+
+
 def connect() -> sqlite3.Connection:
     path = database_path()
     parent = os.path.dirname(path)
@@ -596,6 +617,7 @@ def subject_value(value: str | None) -> str | None:
 
 
 def append_message(args: argparse.Namespace) -> str:
+    require_writable()
     db = connect()
     try:
         author = claimed_sender(args.sender) if args.sender else sender()
@@ -885,6 +907,8 @@ def cmd_search(args: argparse.Namespace) -> None:
 
 
 def cmd_read(args: argparse.Namespace) -> None:
+    if not args.peek:
+        require_writable()
     db = connect()
     try:
         mailbox = mailbox_id(args.to) if args.to else sender_id()
@@ -959,6 +983,7 @@ def cmd_receipt(args: argparse.Namespace) -> None:
 
 
 def cmd_discard(args: argparse.Namespace) -> None:
+    require_writable()
     db = connect()
     try:
         mailbox = mailbox_id(args.to) if args.to else sender_id()

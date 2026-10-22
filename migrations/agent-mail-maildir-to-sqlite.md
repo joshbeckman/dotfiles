@@ -114,8 +114,9 @@ Tell every mailbox what it had and what it now has, and ask each agent to reconc
 agent-mail2 scan --to <mailbox> --state all --limit 1000
 ```
 
-Send the announcement through **both** stores. The channel being migrated is the channel
-you would announce through, and an agent still reading the Maildir has to receive it.
+Send the announcement with `agent-mail`, which under `both` writes the Maildir and mirrors
+it. Never write to the runtime database with `agent-mail2` directly before the flip: it
+refuses, because the next reconciliation would discard mail the Maildir does not have.
 
 The reason to announce rather than swap quietly is that the failure mode of a silent
 migration is silence. If a mailbox is mis-mapped or a message is dropped, the symptom is

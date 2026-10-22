@@ -332,6 +332,17 @@ realm otherroot
 set +e; "$bin/agent-mail-migrate" --agent-root "$tmp/empty-pads" --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 1 && ! -e "$dir/state/store" ]] && grep -Fq 'cannot be switched from' "$tmp/err" || fail "set-store accepted a tree agent-mail does not deliver into"
 
+# Under maildir or both, agent-mail2 refuses to change the runtime database directly.
+realm direct
+migrate --set-store both >/dev/null
+for args in "send --to $bob -m direct" "read --to $bob" "discard --to $bob --id x"; do
+  set +e; as $alice "$bin/agent-mail2" $args >/dev/null 2>"$tmp/err"; status=$?; set -e
+  [[ "$status" == 1 ]] && grep -Fq 'the store marker says both' "$tmp/err" || fail "agent-mail2 $args wrote around the Maildir"
+done
+as $alice "$bin/agent-mail2" read --to $bob --peek >/dev/null 2>&1 || true
+AGENT_MAIL2_DB="$tmp/elsewhere.sqlite3" as $alice "$bin/agent-mail2" send --to $bob -m 'a private database' >/dev/null \
+  || fail "agent-mail2 refused a database that is not the runtime store"
+
 # --- a long random run of every mutating command keeps the mirror exact ------------------
 realm fuzz
 migrate --set-store both >/dev/null
