@@ -897,6 +897,14 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(10)
 
+    def handle(self):
+        # A reset while the request line is still being read never reaches handle_request, and
+        # socketserver would print it as a traceback. A client going away is not a bridge error.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def log_message(self, *_):
         pass  # Request paths can contain private search terms.
 
@@ -1023,6 +1031,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(e.status, {'error': str(e)})
         except (ValueError, KeyError, TypeError):
             self.reply(400, {'error': 'Invalid request'})
+        except (BrokenPipeError, ConnectionResetError):
+            # The client left mid-response: a reload, a closed tab, a phone losing signal. Both are
+            # OSErrors, and the clause below would try to send a 503 down the same dead socket.
+            return
         except (OSError, subprocess.TimeoutExpired) as e:
             self.reply(503, {'error': 'Local mail operation failed. Refresh before retrying: ' + str(e)})
 

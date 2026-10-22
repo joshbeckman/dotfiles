@@ -857,6 +857,21 @@ class WebTest(unittest.TestCase):
         self.assertNotEqual(fresh['version'], version)
         self.assertEqual(len(fresh['messages']), 2)
 
+    def test_a_client_that_hangs_up_is_not_an_error(self):
+        import socket, struct, time
+        with patch('sys.stderr', new_callable=io.StringIO) as stderr:
+            for pause in (0, 0.05, 0.05):
+                # The uncompressed diagram bundle is larger than the socket buffers, so the bridge
+                # is still writing when the reset arrives; with no pause it is still reading.
+                s = socket.create_connection(('127.0.0.1', self.server.server_port))
+                s.sendall(f'GET /mermaid-vendor.js HTTP/1.0\r\nHost: {self.server.authority}\r\n\r\n'.encode())
+                time.sleep(pause)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                s.close()
+            # The bridge answers one request at a time, so this one proves it moved on.
+            self.assertEqual(self.request('/api/config')[0], 200)
+        self.assertNotIn('Traceback', stderr.getvalue())
+
     def test_heavy_bundles_are_deferred_out_of_the_first_load(self):
         # The editor and the diagram renderer are the two heaviest things the app can
         # ship, and neither is needed to read mail. The document references only the
