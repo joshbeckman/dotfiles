@@ -313,7 +313,8 @@ class SetupTest(unittest.TestCase):
         # failing the whole refresh over a schedule it cannot install is not.
         result = self.run_setup(platform='linux-gnu', FAIL_COMMAND='systemctl')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('enable dotfiles-refresh.timer by hand', result.stdout)
+        self.assertIn('enable dotfiles-refresh.timer', result.stdout)
+        self.assertIn('agent-mail-verify.timer by hand', result.stdout)
         link = self.home / '.config/systemd/user/dotfiles-refresh.timer'
         self.assertTrue(link.is_symlink(), result.stdout + result.stderr)
 
