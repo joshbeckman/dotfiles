@@ -40,7 +40,10 @@ fail() { echo "agent-mail-store ($mode): $*" >&2; exit 1; }
 
 conversation() {
   mode="$1"
+  rm -rf "$(dirname "$marker")/doorbells"
   m1="$(as $alice "$cmd" send --to "$bob,josh" --subject Plan --body 'I will take file A.' | tail -1)"
+  # Every store rings the recipients' doorbells, and only theirs, in one directory a waker can watch.
+  [[ "$(ls "$(dirname "$marker")/doorbells" | tr '\n' ' ')" == "$bob josh " ]] || fail "delivery did not ring exactly the recipients' doorbells"
   as $bob "$cmd" scan --to $bob | grep -Fq "$m1" || fail "the recipient's scan did not list the message"
   [[ "$(state_of "$m1" $bob)" == unread && "$(state_of "$m1" josh)" == unread ]] || fail "not delivered to the whole audience"
 
@@ -56,6 +59,7 @@ conversation() {
   hint="${hint/#agent-mail /\"\$cmd\" }"
   m2="$(eval "AGENT_SCRATCHPAD=\"\$AGENT_MAIL_ROOT/$bob\" ${hint/%FILE/\"\$tmp/body\"}" | tail -1)"
   as $alice "$cmd" read --to $alice --id "$m2" >"$tmp/reply" 2>/dev/null
+  [[ -f "$(dirname "$marker")/doorbells/$alice" ]] || fail "the reply did not ring its recipient"
   grep -Fxq "In-Reply-To: $m1" "$tmp/reply" || fail "the reply lost its parent"
   grep -Fxq "Thread-ID: $m1" "$tmp/reply" || fail "the reply left its thread"
   grep -Fxq 'I will take file B.' "$tmp/reply" || fail "the reply body changed"

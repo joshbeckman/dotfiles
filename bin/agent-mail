@@ -111,6 +111,11 @@ In sqlite, send, scan, read, receipt and discard are bin/agent-mail2's, addr and
 web stay here, and the Maildir-only commands refuse. Change it only with
 agent-mail-migrate --set-store.
 
+Doorbells: every delivery, in every store, touches doorbells/<mailbox> beside
+the marker (mailbox: the recipient's scratchpad name, or the human handle).
+Watch the directory or stat one file to learn that mail arrived without
+listing an inbox or running this command.
+
 Env:
   AGENT_TEAM_ROOT Override team registry root (see agent-team).
   AGENT_IDENTITIES_DIR Override permanent identity claims (default ~/.pi/agent/identities/by-name).
@@ -133,6 +138,18 @@ die() { echo "agent-mail: $*" >&2; exit 1; }
 delegate() {
   AGENT_MAIL_ROOT="$MAIL_ROOT" AGENT_HUMAN_MAIL_ROOT="$HUMAN_MAIL_ROOT" AGENT_MAIL2_DB="$MAIL2_DB" \
     AGENT_MAIL_PROG=agent-mail exec "$SELF_DIR/agent-mail2" "$@"
+}
+
+# A delivery touches doorbells/<mailbox>, one empty file per mailbox in one directory,
+# in every store, so a waker can watch a single directory and a poller can stat a single
+# file instead of listing an inbox or starting the CLI. Best effort: a missed ring only
+# means the next timed poll finds the mail.
+ring() {
+  local doorbells="$MAIL_STATE_ROOT/doorbells" inbox
+  mkdir -p -m 700 "$doorbells" 2>/dev/null || return 0
+  for inbox in "$@"; do
+    : >"$doorbells/$(basename -- "$(dirname -- "$inbox")")" 2>/dev/null || true
+  done
 }
 
 # While the marker says both, bring one message's copy in the SQLite store into line with
@@ -730,6 +747,7 @@ cmd_send() {
     dst="${inboxes[$i]}/new/$msgid.md"
     mv "$tmp" "$dst"
   done
+  ring "${inboxes[@]}"
 
   retain_human_sent "$source_tmp" "$from" "$msgid"
   rm "$source_tmp"
@@ -1091,6 +1109,7 @@ cmd_deliver() {
     mv "$tmp_dst" "$dst"
     [ -n "$first_dst" ] || first_dst="$dst"
   done
+  ring "${inboxes[@]}"
   retain_human_sent "$draft" "$from" "$msgid"
   rm "$draft"
   for ((i = 0; i < ${#inboxes[@]}; i++)); do

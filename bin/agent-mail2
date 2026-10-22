@@ -429,6 +429,20 @@ def expand_recipients(raw_values: list[str]) -> list[Mailbox]:
     return list(recipients.values())
 
 
+def ring(recipients: list[Mailbox]) -> None:
+    """Touch doorbells/<mailbox> beside the database, as agent-mail does on delivery, so a
+    waker watches one directory and a poller stats one file. Best effort: a missed ring
+    only means the next timed poll finds the mail."""
+    doorbells = os.path.join(os.path.dirname(database_path()), "doorbells")
+    try:
+        os.makedirs(doorbells, mode=0o700, exist_ok=True)
+        for mailbox in recipients:
+            with open(os.path.join(doorbells, mailbox.id), "w"):
+                pass
+    except OSError:
+        pass
+
+
 def warn_idle(recipients: list[Mailbox]) -> None:
     try:
         limit = int(os.environ.get("AGENT_MAIL_STALE_HOURS") or 12)
@@ -708,6 +722,7 @@ def append_message(args: argparse.Namespace) -> str:
                 f"{reply_to}; your reply follows them. Read with: {PROG} thread {thread_id}",
                 file=sys.stderr,
             )
+        ring(recipients)
         warn_idle(recipients)
         return mid
     finally:
