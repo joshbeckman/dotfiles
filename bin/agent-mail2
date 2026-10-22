@@ -35,6 +35,8 @@ SESSION_SUFFIX = re.compile(
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
 HERE = os.path.dirname(os.path.realpath(__file__))
+# bin/agent-mail sets this when it hands a command over, so hints name the command to type.
+PROG = os.environ.get("AGENT_MAIL_PROG") or "agent-mail2"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS mailboxes (
@@ -143,9 +145,12 @@ def message_id(subject: str | None) -> str:
 
 
 def database_path() -> str:
+    """AGENT_MAIL2_DB, or mail2.sqlite3 beside the human mailboxes and the store marker, so
+    relocating the mail state relocates the database with it."""
     raw = os.environ.get("AGENT_MAIL2_DB")
-    path = os.path.expanduser(raw) if raw else os.path.expanduser("~/.local/state/agent-mail/mail2.sqlite3")
-    return os.path.abspath(path)
+    if raw:
+        return os.path.abspath(os.path.expanduser(raw))
+    return os.path.join(os.path.dirname(os.path.abspath(human_root().rstrip("/"))), "mail2.sqlite3")
 
 
 def connect() -> sqlite3.Connection:
@@ -436,7 +441,7 @@ def warn_idle(recipients: list[Mailbox]) -> None:
             except OSError:
                 continue
             if idle >= limit:
-                print(f"agent-mail2: '{mailbox.id}' last active {idle}h ago", file=sys.stderr)
+                print(f"{PROG}: '{mailbox.id}' last active {idle}h ago", file=sys.stderr)
 
 
 def claimed_sender(raw: str) -> Mailbox:
@@ -699,8 +704,8 @@ def append_message(args: argparse.Namespace) -> str:
             raise
         if passed:
             print(
-                f"agent-mail2: {passed} message{'s' if passed != 1 else ''} arrived in this thread after "
-                f"{reply_to}; your reply follows them. Read with: agent-mail2 thread {thread_id}",
+                f"{PROG}: {passed} message{'s' if passed != 1 else ''} arrived in this thread after "
+                f"{reply_to}; your reply follows them. Read with: {PROG} thread {thread_id}",
                 file=sys.stderr,
             )
         warn_idle(recipients)
@@ -934,7 +939,7 @@ def cmd_read(args: argparse.Namespace) -> None:
         else:
             print(render_message(db, row), end="")
         print(
-            f"Reply with: agent-mail2 send --reply-all {row['message_id']} "
+            f"Reply with: {PROG} send --reply-all {row['message_id']} "
             f"--if-head {current['message_id']} --body-file FILE",
             file=sys.stderr,
         )
@@ -1040,7 +1045,7 @@ def parser(only: str | None = None) -> argparse.ArgumentParser:
     """Building every subparser cost more than most commands' work, so a known command
     gets only its own; help and errors still see all of them."""
     result = argparse.ArgumentParser(
-        prog="agent-mail2", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog=PROG, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = result.add_subparsers(dest="command", required=True)
 
@@ -1137,10 +1142,10 @@ def main() -> int:
         args.func(args)
         return 0
     except StaleThread as error:
-        print(f"agent-mail2: {error}", file=sys.stderr)
+        print(f"{PROG}: {error}", file=sys.stderr)
         return STALE_THREAD
     except (MailError, OSError, sqlite3.Error) as error:
-        print(f"agent-mail2: {error}", file=sys.stderr)
+        print(f"{PROG}: {error}", file=sys.stderr)
         return 1
 
 

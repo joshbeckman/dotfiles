@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# One agent-mail command over three store states. The same conversation runs through
+# bin/agent-mail with the marker at maildir, both and sqlite, and the same properties must
+# hold in each: a message is delivered to its whole audience, a read is recorded, a reply
+# stays in its thread, and a discard hides one recipient's copy. Then each state's own
+# promises: maildir never touches SQLite, both keeps SQLite an exact mirror, sqlite never
+# writes the Maildir.
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cmd="$root/bin/agent-mail"
+migrate="$root/bin/agent-mail-migrate"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL_FROM AGENT_MAIL2_DB AGENT_MAIL2_HUMAN AGENT_SCRATCH_ROOT
+export AGENT_MAIL_STALE_HOURS=100000 PATH="$tmp/no-notify:$PATH"
+# Notifications are not under test, and must not reach Josh from a test run.
+mkdir -p "$tmp/no-notify"
+printf '#!/bin/sh\nexit 0\n' >"$tmp/no-notify/notify-josh"
+chmod +x "$tmp/no-notify/notify-josh"
+
+alice=alice-agent-11111111
+bob=bob-agent-22222222
+
+realm() {  # a fresh realm: two agent pads, Josh's mailbox, and the store state
+  local dir="$tmp/$1"
+  rm -rf "$dir"
+  mkdir -p "$dir/pads/$alice" "$dir/pads/$bob" "$dir/state/humans/josh" "$dir/identities"
+  export AGENT_MAIL_ROOT="$dir/pads" AGENT_HUMAN_MAIL_ROOT="$dir/state/humans" AGENT_IDENTITIES_DIR="$dir/identities"
+  db="$dir/state/mail2.sqlite3"
+  marker="$dir/state/store"
+}
+
+as() { local who="$1"; shift; AGENT_SCRATCHPAD="$AGENT_MAIL_ROOT/$who" "$@"; }
+state_of() {  # receipt state for one recipient, in either tool's receipt format
+  "$cmd" receipt "$1" 2>/dev/null | awk -F '\t' -v to="to:$2" '$3 == to { print $1 }' || true
+}
+verified() { "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" >/dev/null; }
+fail() { echo "agent-mail-store ($mode): $*" >&2; exit 1; }
+
+conversation() {
+  mode="$1"
+  m1="$(as $alice "$cmd" send --to "$bob,josh" --subject Plan --body 'I will take file A.' | tail -1)"
+  as $bob "$cmd" scan --to $bob | grep -Fq "$m1" || fail "the recipient's scan did not list the message"
+  [[ "$(state_of "$m1" $bob)" == unread && "$(state_of "$m1" josh)" == unread ]] || fail "not delivered to the whole audience"
+
+  as $bob "$cmd" read --to $bob --id "$m1" >"$tmp/read" 2>"$tmp/hint"
+  grep -Fxq "Message-ID: $m1" "$tmp/read" || fail "read printed the wrong message"
+  [[ "$(state_of "$m1" $bob)" == read && "$(state_of "$m1" josh)" == unread ]] || fail "read was not recorded for that recipient alone"
+  if as $bob "$cmd" scan --to $bob | grep -Fq "$m1"; then fail "a read message stayed in the unread scan"; fi
+
+  # Reply exactly as the hint says, which is what agents are told to do.
+  hint="$(sed -n 's/^Reply with: //p' "$tmp/hint")"
+  [[ "$hint" == "agent-mail send --reply-all "* ]] || fail "the reply hint does not name agent-mail: $hint"
+  printf 'I will take file B.\n' >"$tmp/body"
+  hint="${hint/#agent-mail /\"\$cmd\" }"
+  m2="$(eval "AGENT_SCRATCHPAD=\"\$AGENT_MAIL_ROOT/$bob\" ${hint/%FILE/\"\$tmp/body\"}" | tail -1)"
+  as $alice "$cmd" read --to $alice --id "$m2" >"$tmp/reply" 2>/dev/null
+  grep -Fxq "In-Reply-To: $m1" "$tmp/reply" || fail "the reply lost its parent"
+  grep -Fxq "Thread-ID: $m1" "$tmp/reply" || fail "the reply left its thread"
+  grep -Fxq 'I will take file B.' "$tmp/reply" || fail "the reply body changed"
+  [[ "$(state_of "$m2" josh)" == unread ]] || fail "reply-all dropped a recipient"
+
+  as $alice "$cmd" discard --to $alice --id "$m2"
+  [[ "$(state_of "$m2" $alice)" =~ ^(|discarded)$ ]] || fail "discard left the copy readable"
+  [[ "$(state_of "$m2" josh)" == unread ]] || fail "discard touched another recipient's copy"
+  if as $alice "$cmd" read --to $alice --id "$m2" >/dev/null 2>&1; then fail "a discarded message was still readable"; fi
+}
+
+# --- maildir: the default, and what any unreadable marker means -----------------------
+for value in absent '' garbage 'sqlite-ish'; do
+  realm "maildir-$value"
+  [[ "$value" == absent ]] || printf '%s\n' "$value" >"$marker"
+  conversation maildir
+  [[ ! -e "$db" ]] || fail "the maildir store created a database (marker: $value)"
+  [[ "$("$cmd" store | cut -f1)" == maildir ]] || fail "store did not report maildir"
+  set +e; "$cmd" thread "$m1" >/dev/null 2>"$tmp/err"; status=$?; set -e
+  [[ "$status" == 1 ]] && grep -Fq 'store marker says maildir' "$tmp/err" || fail "thread ran without the SQLite store"
+done
+
+# --- both: the Maildir is authoritative and SQLite mirrors every change ---------------
+realm both
+history="$(as $alice "$cmd" send --to $bob --subject 'Before the switch' --body 'old mail' | tail -1)"
+"$migrate" --set-store both >/dev/null
+[[ "$(cat "$marker")" == both ]] || fail "--set-store both did not write the marker"
+[[ "$("$cmd" store | cut -f1)" == both ]]
+"$cmd" thread "$history" | grep -Fxq 'old mail' || fail "history was not migrated before dual-writing"
+conversation both
+verified || fail "the mirror diverged from the Maildir"
+"$cmd" thread "$m1" --json | python3 -c '
+import json, sys
+thread = json.load(sys.stdin)
+assert [m["sequence"] for m in thread] == [1, 2], thread
+assert thread[1]["in_reply_to"] == thread[0]["message_id"]'
+python3 - "$db" "$m1" "$m2" "$bob" "$alice" <<'PY'
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+m1, m2, bob, alice = sys.argv[2:]
+read_at = db.execute("select read_at from deliveries where message_id = ? and recipient_mailbox_id = ?", (m1, bob)).fetchone()[0]
+# Mirrored as the read happened, rather than the arrival time a whole-store run uses.
+assert read_at and abs(read_at / 1e6 - time.time()) < 120, read_at
+assert db.execute("select discarded_at from deliveries where message_id = ? and recipient_mailbox_id = ?", (m2, alice)).fetchone()[0]
+PY
+# Web-app paths mirror too: archive marks Josh's copy read.
+"$cmd" archive "$AGENT_HUMAN_MAIL_ROOT/josh/inbox/new/$m1.md" >/dev/null
+verified || fail "archive was not mirrored"
+
+# Concurrent replies in one thread are each mirrored once, with distinct sequences.
+head="$(as $bob "$cmd" send --to $alice --subject 'Race' --body root | tail -1)"
+for i in 1 2 3 4 5 6; do
+  as $alice "$cmd" send --to $bob --in-reply-to "$head" --subject "Re: Race" --body "reply $i" >/dev/null &
+done
+wait
+verified || fail "concurrent sends left the mirror behind"
+[[ "$("$cmd" thread "$head" --json | python3 -c 'import json,sys; print(sorted(m["sequence"] for m in json.load(sys.stdin)))')" == "[1, 2, 3, 4, 5, 6, 7]" ]]
+
+# A failed mirror does not fail a delivered send; it is reported, logged, and repairable.
+lost="$(as $alice env AGENT_MAIL2_DB="$tmp" "$cmd" send --to $bob --subject Lost --body 'mirror me' 2>"$tmp/err" | tail -1)"
+[[ -f "$AGENT_MAIL_ROOT/$bob/inbox/new/$lost.md" ]] || fail "the Maildir delivery did not happen"
+grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/err" || fail "the failed mirror was silent"
+grep -Fq "$lost" "$(dirname "$marker")/mirror-failures" || fail "the failed mirror was not logged"
+if verified 2>/dev/null; then fail "verify passed with a message missing from the mirror"; fi
+"$migrate" --db "$db" >/dev/null
+verified || fail "a full migrate did not repair the mirror"
+
+# Leaving both is safe, because the Maildir never stopped being the record.
+set +e; "$migrate" --set-store sqlite >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'agent-mail-web' "$tmp/err" || fail "the flip to sqlite was allowed before its readers are ported"
+"$migrate" --set-store maildir >/dev/null
+[[ "$("$cmd" store | cut -f1)" == maildir ]]
+
+# --- sqlite: agent-mail2 alone; nothing is written to the Maildir ---------------------
+realm sqlite
+# Written by hand: --set-store refuses sqlite until the Maildir readers are ported.
+printf 'sqlite\n' >"$marker"
+conversation sqlite
+[[ -z "$(find "$AGENT_MAIL_ROOT" "$AGENT_HUMAN_MAIL_ROOT" -name '*.md' -print -quit)" ]] || fail "the sqlite store wrote Maildir files"
+[[ "$("$cmd" addr $bob)" == "$AGENT_MAIL_ROOT/$bob/inbox" ]] || fail "addr stopped resolving"
+"$cmd" search Plan | grep -Fq "$m1" || fail "search did not see the conversation"
+for command in sweep inbox compose; do
+  set +e; "$cmd" "$command" >/dev/null 2>"$tmp/err"; status=$?; set -e
+  [[ "$status" == 1 ]] && grep -Fq 'store marker says sqlite' "$tmp/err" || fail "$command ran against the Maildir"
+done
+# Leaving sqlite would strand mail that exists only in the database, and syncing from the
+# Maildir would discard it, so both are refused.
+set +e; "$migrate" --set-store maildir >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'strand' "$tmp/err" || fail "leaving sqlite was allowed"
+set +e; "$migrate" --db "$db" >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'refusing to sync' "$tmp/err" || fail "the migrator synced over the sqlite store"
+
+echo 'agent-mail-store tests passed'
