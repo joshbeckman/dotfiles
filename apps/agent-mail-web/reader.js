@@ -32,3 +32,18 @@ document.addEventListener("keydown", (event) => {
     parent.postMessage({ type: "key", key: event.key }, location.origin);
   }
 });
+// When the parent grows the frame, invalidate the whole document's paint once: Safari otherwise
+// kept showing only the area that was visible before the resize, until something was clicked.
+// An outline changes no layout, so this cannot feed back into the height reported above.
+let repaintPending = false;
+window.addEventListener("resize", () => {
+  if (repaintPending) return;
+  repaintPending = true;
+  requestAnimationFrame(() => {
+    document.documentElement.style.outline = "1px solid transparent";
+    requestAnimationFrame(() => {
+      document.documentElement.style.outline = "";
+      repaintPending = false;
+    });
+  });
+});

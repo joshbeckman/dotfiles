@@ -1480,7 +1480,7 @@ try {
     if (u.pathname === "/api/messages") listQueries.push(u.search);
   });
   const splitOne = cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Split one", "--body", "First split message.");
-  cli("send", "--from", "birch-weaver", "--to", "@josh", "--in-reply-to", splitOne, "--subject", "Re: Split one", "--body", "A reply in the split thread.");
+  cli("send", "--from", "birch-weaver", "--to", "@josh", "--in-reply-to", splitOne, "--subject", "Re: Split one", "--body", "A reply in the split thread.\n\n" + "A long reply has to open at its start, not its end.\n\n".repeat(40));
   cli("send", "--from", "birch-weaver", "--to", "@josh", "--subject", "Split two", "--body", "Second split message.");
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.reload();
@@ -1518,6 +1518,16 @@ try {
   await prefetched;
   await threadRow.click();
   await page.frameLocator("#thread iframe").last().getByText("A reply in the split thread.").waitFor();
+  // A message longer than the pane opens at its start, and stays there as its frame grows.
+  await page.waitForFunction(() => [...document.querySelectorAll("#thread iframe.rendered")].every((f) => f.classList.contains("sized")));
+  await page.waitForTimeout(300);
+  const landing = await page.evaluate(() => {
+    const last = document.getElementById("thread").lastElementChild.getBoundingClientRect();
+    const pane = document.getElementById("reader").getBoundingClientRect();
+    return { top: Math.round(last.top - pane.top), height: Math.round(last.height), pane: Math.round(pane.height) };
+  });
+  assert(landing.height > landing.pane, "the fixture reply should be longer than the pane: " + JSON.stringify(landing));
+  assert(landing.top >= -1 && landing.top < 40, "the newest message should open at its start: " + JSON.stringify(landing));
   assert.equal(await page.locator("#mail-list").isVisible(), true, "the list stays beside the reader");
   assert.equal(await page.locator("#back").isVisible(), false);
   const panes = await page.evaluate(() => ({

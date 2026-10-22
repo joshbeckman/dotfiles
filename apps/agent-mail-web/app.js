@@ -222,9 +222,6 @@ async function api(path, data, extra = {}) {
   }
   return result;
 }
-// Opening a thread should land on the newest message rather than the oldest. The
-// last message renders its Markdown asynchronously, so the scroll runs again once
-// that finishes; a closed message has no such growth and settles immediately.
 // Copying an id is how a message gets passed around. An agent reads one with
 // `agent-mail read --id <id>`, and an id is what survives archiving while a key does not,
 // so the id is the thing worth putting on the clipboard.
@@ -252,10 +249,18 @@ async function copyId(id) {
   }
   status("Id copied: " + id);
 }
+// Opening a thread lands on the start of its newest message. The frames above it and the newest
+// one size themselves after they draw, so the scroll repeats as each reports its height, until
+// the reader scrolls on their own. Aligning the end instead left only the header of a long
+// message in view once its frame grew.
+let anchorLatest = false;
 function scrollToLatestMessage() {
+  if (!anchorLatest) return;
   const last = $("thread").lastElementChild;
-  if (last) last.scrollIntoView({ block: "end" });
+  if (last) last.scrollIntoView({ block: "start" });
 }
+for (const type of ["wheel", "touchstart", "keydown", "pointerdown"])
+  addEventListener(type, () => (anchorLatest = false), { passive: true, capture: true });
 // A wide window shows the list beside the conversation, as a desktop mail client does. Below
 // this the reader replaces the list: at 1,200px the list and a readable message do not both fit
 // beside the rail and the folder sidebar.
@@ -679,6 +684,7 @@ async function openThread(m) {
   if (!messages.length)
     $("thread").textContent =
       "Earlier messages are not available for this draft.";
+  anchorLatest = true;
   scrollToLatestMessage();
   offerThreadTranscript();
   if (reused) refreshThread().catch(() => {});
@@ -2022,6 +2028,7 @@ window.addEventListener("message", (event) => {
     frame.dataset.auto = height;
     if (!frame.dataset.fixed) frame.style.height = height;
     frame.classList.add("sized");
+    if (frame.closest("#thread")) scrollToLatestMessage();
   }
   if (
     event.data?.type === "key" &&
