@@ -9,16 +9,17 @@ set -eu
 state="$(dirname -- "${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}")"
 failures="$state/mirror-failures.d"
 repaired="$failures/repaired"
-legacy="$state/mirror-failures"
 err=$(mktemp)
 trap 'rm -f "$err"' EXIT
 
 # -print -quit stops at the first match, so this stays cheap on a directory with many entries.
 first_file() { find "$1" -maxdepth 1 -type f -name '[!.]*' -print -quit 2>/dev/null; }
 
+# The legacy mirror-failures is no longer renamed when it is retired: its checked length is recorded
+# in mirror-failures.retired-bytes and only what lies past that offset is pending, which --verify
+# reports. Reading the file directly would keep firing on lines that are already retired.
 drift=0
 agent-mail-migrate --verify >/dev/null 2>"$err" || drift=1
-[ -s "$legacy" ] && drift=1
 [ -n "$(first_file "$failures")" ] && drift=1
 
 # Repaired records with no finish stamp mean the migration is waiting to be retired, which is a
@@ -33,7 +34,6 @@ if [ "$drift" = 1 ]; then
     [ -f "$file" ] || continue
     cat "$file" >>"$err" 2>/dev/null || true
   done
-  cat "$legacy" >>"$err" 2>/dev/null || true
 elif [ "$remind" = 1 ]; then
   printf '\nThese ids are already present in SQLite. This is a reminder to run --finish, not new drift.\n' >>"$err"
 fi
