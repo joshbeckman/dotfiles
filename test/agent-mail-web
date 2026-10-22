@@ -825,6 +825,38 @@ class WebTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(headers.get('Content-Encoding'))
 
+    def test_grouped_listing_is_one_row_per_conversation_and_polls_cheaply(self):
+        reply = web.cli('send', '--from', 'birch-weaver', '--to', '@josh', '--in-reply-to', self.id,
+                        '--subject', 'Re: A test thread', '--body', 'A second message in the thread.')
+        status, body = self.request('/api/messages?folder=inbox&q=')
+        self.assertEqual(len(json.loads(body)['messages']), 2)
+        status, body = self.request('/api/messages?folder=inbox&q=&group=1')
+        self.assertEqual(status, 200)
+        grouped = json.loads(body)
+        rows = grouped['messages']
+        # One row for the conversation, led by its newest message, counting both.
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['key'], rows[0]['count']), ('inbox:' + reply + '.md', 2))
+        # A row carries what the list draws and nothing it does not, so no body or revision.
+        self.assertEqual(set(rows[0]), {'key', 'folder', 'thread', 'from', 'to', 'subject', 'excerpt', 'date', 'count'})
+        self.assertEqual(grouped['counts']['inbox'], 2)
+        # A draft is its own row rather than folding into the thread it replies to.
+        draft = self.box.draft('reply', self.key)
+        rows = json.loads(self.request('/api/messages?folder=all&q=&group=1')[1])['messages']
+        self.assertEqual(sorted(r['folder'] for r in rows), ['drafts', 'inbox'])
+        self.assertIn(draft['key'], [r['key'] for r in rows])
+        # An unchanged poll answers with its stamp alone; a change sends the list again. The
+        # draft above changed the folder counts, which are part of the stamp, so read it afresh.
+        version = json.loads(self.request('/api/messages?folder=inbox&q=&group=1')[1])['version']
+        self.assertNotEqual(version, grouped['version'])
+        status, body = self.request('/api/messages?folder=inbox&q=&group=1&version=' + version)
+        self.assertEqual(json.loads(body), {'unchanged': True, 'version': version})
+        self.assertLess(len(body), 80)
+        web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--subject', 'Fresh', '--body', 'New.')
+        fresh = json.loads(self.request('/api/messages?folder=inbox&q=&group=1&version=' + version)[1])
+        self.assertNotEqual(fresh['version'], version)
+        self.assertEqual(len(fresh['messages']), 2)
+
     def test_heavy_bundles_are_deferred_out_of_the_first_load(self):
         # The editor and the diagram renderer are the two heaviest things the app can
         # ship, and neither is needed to read mail. The document references only the
