@@ -125,6 +125,10 @@ check turns that into a visible discrepancy.
 
 ### 5. Flip to sqlite, once nothing reads the Maildir directly
 
+Before this step, have an off-box backup that has been restored from once. The archive
+`--set-store both` writes sits on the same disk as the mail: enough while the Maildir stays
+authoritative, not once SQLite is the only record.
+
 `agent-mail-migrate --set-store sqlite` refuses today. Four readers go to the Maildir
 directly rather than through `agent-mail`, and each would go quiet after a flip:
 
