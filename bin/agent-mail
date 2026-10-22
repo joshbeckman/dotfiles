@@ -171,7 +171,7 @@ mirror() {
     sqlite) scope=(--import-only) ;;
     *) return 0 ;;
   esac
-  if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" "${scope[@]}" \
+  if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" ${scope[@]+"${scope[@]}"} \
       --agent-root "$MAIL_ROOT" --human-root "$HUMAN_MAIL_ROOT" 2>&1)"; then
     echo "agent-mail: delivered, but mirroring $id into the SQLite store failed: $error" >&2
     echo "agent-mail: repair with agent-mail-migrate, then agent-mail-migrate --verify" >&2

@@ -396,6 +396,45 @@ migrate --verify >/dev/null || fail "verify under sqlite found problems in a sou
 set +e; migrate --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 1 ]] && grep -Fq 'strand' "$tmp/err" || fail "leaving sqlite was allowed"
 
+# A straddling writer whose import fails is not silent: it is logged for the drift alarm,
+# and one import-only pass repairs it, changing nothing else.
+realm flip-fail
+migrate --set-store both >/dev/null
+mkfifo "$tmp/fail-body"
+as $alice env AGENT_MAIL2_DB="$tmp" "$bin/agent-mail" send --to $bob --subject Lost --body-file "$tmp/fail-body" \
+  >"$tmp/fail-out" 2>"$tmp/fail-err" &
+sender=$!
+sleep 0.5
+migrate --set-store sqlite >/dev/null
+printf 'imported later\n' >"$tmp/fail-body"
+wait "$sender"
+lost="$(tail -1 "$tmp/fail-out")"
+grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/fail-err" || fail "a failed straddling import was silent"
+grep -Fq "$lost" "$dir/state/mirror-failures" || fail "a failed straddling import was not logged"
+cmd receipt "$lost" >/dev/null 2>&1 && fail "the failed import somehow reached SQLite"
+migrate --import-only >/dev/null
+cmd read --to $bob --id "$lost" --peek 2>/dev/null | grep -Fxq 'imported later' || fail "an import-only pass did not repair the straddler"
+
+# A migration that passed its first check just before the flip refuses once it holds the lock.
+realm flip-race
+migrate --set-store both >/dev/null
+python3 - "$db" <<'PY' &
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute("begin immediate")
+time.sleep(2)
+db.execute("rollback")
+PY
+locker=$!
+sleep 0.3
+migrate >/dev/null 2>"$tmp/race-err" &
+racer=$!
+sleep 0.7
+printf 'sqlite\n' >"$dir/state/store"
+set +e; wait "$racer"; status=$?; set -e
+wait "$locker"
+[[ "$status" == 1 ]] && grep -Fq 'became sqlite' "$tmp/race-err" || fail "a migration that began before the flip synced after it"
+
 # --- a long random run of every mutating command keeps the mirror exact ------------------
 realm fuzz
 migrate --set-store both >/dev/null

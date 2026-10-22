@@ -315,7 +315,7 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                 )
                 sequence += 1
                 counts["messages"] += 1
-            elif message.reply_address or message.team_to:
+            elif (message.reply_address or message.team_to) and not import_only:
                 # Mail migrated before v4 lost these headers; the schema lets them be filled
                 # once, from NULL.
                 db.execute(
@@ -576,6 +576,10 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
         # Checked at commit, so a parent filed under another thread can follow its reply.
         db.execute("PRAGMA defer_foreign_keys = ON")
         try:
+            # Again under the lock: the check above can pass just before a flip, and the flip
+            # writes the marker holding this lock, so only this one is authoritative.
+            if store_mode(roots[1].resolve().parent / "store") == "sqlite" and not import_only:
+                raise MigrationError("the store became sqlite; refusing to sync from the Maildir")
             # Discovered under the lock too: an inbox created since an earlier pass is mail.
             boxes = mailboxes(*roots)
             messages = collect(boxes, only)
@@ -717,7 +721,15 @@ def flip_to_sqlite(marker: Path, db_path: Path, roots: tuple[Path, Path], visibi
         for problem in problems:
             print(f"agent-mail-migrate: {problem}", file=sys.stderr)
         raise MigrationError(f"{len(problems)} problems; the store marker was not changed")
-    write_store(marker, "sqlite")
+    # The marker is written holding the database's write lock, so a migration either finished
+    # before it or sees sqlite when it takes the lock.
+    db = open_db(db_path)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        write_store(marker, "sqlite")
+        db.execute("COMMIT")
+    finally:
+        db.close()
     # Anything delivered between that verify and the marker, by a writer whose mirror then
     # failed or that read the marker before the write, is added now. From here on the same
     # import runs as each straddling writer's mirror.
