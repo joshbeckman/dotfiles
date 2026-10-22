@@ -21,8 +21,8 @@ import sqlite3
 import sys
 import time
 
-# Kept lean on purpose: startup is most of this tool's latency, so subprocess,
-# pathlib and datetime are not imported, and only the invoked subcommand's parser is built.
+# subprocess, pathlib and datetime are left out on purpose: interpreter startup is most of
+# this tool's latency.
 
 STALE_THREAD = 3
 SCHEMA_VERSION = 3
@@ -35,7 +35,6 @@ SESSION_SUFFIX = re.compile(
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]")
 HERE = os.path.dirname(os.path.realpath(__file__))
-# bin/agent-mail sets this when it hands a command over, so hints name the command to type.
 PROG = os.environ.get("AGENT_MAIL_PROG") or "agent-mail2"
 
 SCHEMA = """
@@ -145,8 +144,7 @@ def message_id(subject: str | None) -> str:
 
 
 def database_path() -> str:
-    """AGENT_MAIL2_DB, or mail2.sqlite3 beside the human mailboxes and the store marker, so
-    relocating the mail state relocates the database with it."""
+    # Not a fixed home path: relocating the mail state must never write the real store.
     raw = os.environ.get("AGENT_MAIL2_DB")
     if raw:
         return os.path.abspath(os.path.expanduser(raw))
@@ -211,12 +209,9 @@ def connect() -> sqlite3.Connection:
     return db
 
 
-# --- Addresses -------------------------------------------------------------------------
-#
-# A port of resolve_inbox in bin/agent-mail, kept rule for rule so both tools reach the same
-# mailbox for the same text; test/agent-mail2 compares the two on one fixture tree. Storing the
-# normalized text instead made @+name and name-<session> two mailboxes, and mail sent to the
-# documented handle form sat where its recipient never looked.
+# A rule-for-rule port of resolve_inbox in bin/agent-mail; test/agent-mail2 compares the two.
+# Storing the normalized text instead made @+name and name-<session> two mailboxes, and mail
+# to the documented handle form sat where its recipient never looked.
 
 
 class Mailbox:
@@ -280,8 +275,8 @@ def matching_pads(root: str, prefix: str) -> list[str]:
 
 
 def resolve(raw: str) -> Mailbox:
-    """The mailbox an address reaches. An agent address with no scratchpad still resolves,
-    to the pad it would have, so a sender can say which pad is missing."""
+    """An agent address with no scratchpad still resolves, to the pad it would have, so
+    send can name the missing pad."""
     identifier = strip_sigils(raw)
     address = identifier
     if identifier.startswith("humans/"):
@@ -400,7 +395,6 @@ def idle_hours(pad: str) -> int:
 
 
 def expand_recipients(raw_values: list[str]) -> list[Mailbox]:
-    """Concrete, deduplicated mailboxes, all checked before anything is written."""
     addresses: list[str] = []
     for raw in raw_values:
         for value in raw.split(","):
@@ -430,10 +424,8 @@ def expand_recipients(raw_values: list[str]) -> list[Mailbox]:
 
 
 def ring(recipients: list[Mailbox]) -> None:
-    """Replace doorbells/<mailbox> beside the database by rename, as agent-mail does on
-    delivery, so a waker watches one directory and a poller stats one file. Best effort and
-    only a hint: the sender can die between commit and ring, so consumers still reconcile
-    with a bounded scan."""
+    # Replaced by rename, not touched: a directory watch fires on entries changing, not on
+    # a file's mtime. Best effort, because a ring is only a hint.
     doorbells = os.path.join(os.path.dirname(database_path()), "doorbells")
     try:
         os.makedirs(doorbells, mode=0o700, exist_ok=True)
@@ -462,8 +454,7 @@ def warn_idle(recipients: list[Mailbox]) -> None:
 
 
 def claimed_sender(raw: str) -> Mailbox:
-    """A sender named outright (--from, AGENT_MAIL_FROM). A service such as pr-monitor has
-    no scratchpad and keeps its literal name; an address that reaches a mailbox uses it."""
+    # A service such as pr-monitor has no scratchpad, so it keeps its literal name.
     if is_team(raw):
         raise MailError("a team cannot be a message sender")
     mailbox = resolve(raw)
@@ -503,11 +494,8 @@ def ensure_mailbox(db: sqlite3.Connection, mailbox: Mailbox, timestamp: int) -> 
     )
 
 
-# --- Messages --------------------------------------------------------------------------
-
 
 def message_query(identifier: str) -> str:
-    """Accept what a person pastes: an id, a shortened id, or a v1 message file path."""
     value = os.path.basename(identifier.strip())
     if value.endswith(".md"):
         value = value[:-3]
@@ -518,12 +506,8 @@ def message_query(identifier: str) -> str:
 
 def find_message(db: sqlite3.Connection, identifier: str, mailbox: str | None = None,
                  required: bool = True) -> sqlite3.Row | None:
-    """Exact id first, then a unique prefix, then a unique suffix, like agent-mail.
-
-    A ULID shortens from the front and a legacy <pid>-<rand> tail from the back. More than
-    one match either way is refused rather than routed to a guess. With a mailbox, only
-    that mailbox's undiscarded deliveries are candidates.
-    """
+    # Prefix then suffix, as agent-mail does: a ULID shortens from the front and a legacy
+    # <pid>-<rand> tail from the back. An ambiguous match is refused rather than guessed.
     value = message_query(identifier)
     if mailbox is None:
         base, params = "SELECT m.* FROM messages m WHERE ", {}
@@ -560,7 +544,6 @@ def head(db: sqlite3.Connection, thread_id: str) -> sqlite3.Row | None:
 
 
 def resolve_thread(db: sqlite3.Connection, identifier: str) -> str:
-    """Accept a thread id, or any message id in that thread, shortened or not."""
     if db.execute("SELECT 1 FROM threads WHERE thread_id = ?", (identifier,)).fetchone():
         return identifier
     row = find_message(db, identifier, required=False)
@@ -783,8 +766,6 @@ def cmd_send(args: argparse.Namespace) -> None:
 
 
 def cmd_resolve(args: argparse.Namespace) -> None:
-    """Which mailbox each address reaches. Exits 1 if an agent address has no scratchpad,
-    which is the case send refuses."""
     missing = False
     for raw in args.address:
         mailbox = resolve(raw)
@@ -987,7 +968,7 @@ def cmd_receipt(args: argparse.Namespace) -> None:
             print_json(records)
             return
         for record in records:
-            # Unlike the Maildir, which never knew when, this store records the moment.
+            # agent-mail omits read times because the Maildir never knew them; this store does.
             extra = "".join(f"\t{key[:-3]}:{record[key]}" for key in ("read_at", "discarded_at") if record[key])
             print(f"{record['state']}\t{message}\tto:{record['to']}\tsent:{record['sent']}{extra}")
     finally:
@@ -1063,8 +1044,7 @@ COMMANDS = ("init", "send", "scan", "read", "receipt", "discard", "head", "threa
 
 
 def parser(only: str | None = None) -> argparse.ArgumentParser:
-    """Building every subparser cost more than most commands' work, so a known command
-    gets only its own; help and errors still see all of them."""
+    # Only the invoked subparser: building all of them cost more than most commands' work.
     result = argparse.ArgumentParser(
         prog=PROG, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

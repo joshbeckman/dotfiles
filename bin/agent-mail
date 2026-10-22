@@ -27,12 +27,9 @@ MAIL_ROOT="$(CDPATH= cd -- "$MAIL_ROOT" && pwd -P)"
 HUMAN_MAIL_ROOT="$(CDPATH= cd -- "$HUMAN_MAIL_ROOT" && pwd -P)"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-# The store marker decides which implementation holds the mail: maildir (this file
-# alone), both (this file, with every change mirrored into bin/agent-mail2's SQLite
-# store), or sqlite (bin/agent-mail2 alone). It names a store rather than merely existing,
-# so a missing, empty or garbled marker falls back to the Maildir instead of flipping.
-# It sits beside the human mailboxes, so anything that relocates them relocates it too,
-# and a test can never read or mirror into the real store.
+# The marker names a store rather than merely existing, so a missing or garbled one falls
+# back to the Maildir instead of flipping. It lives beside the human mailboxes so a test
+# that relocates them can never read or mirror into the real store.
 MAIL_STATE_ROOT="$(dirname -- "$HUMAN_MAIL_ROOT")"
 STORE_MARKER="$MAIL_STATE_ROOT/store"
 MAIL2_DB="${AGENT_MAIL2_DB:-$MAIL_STATE_ROOT/mail2.sqlite3}"
@@ -134,18 +131,14 @@ USAGE
 
 die() { echo "agent-mail: $*" >&2; exit 1; }
 
-# Hand a command to bin/agent-mail2 against the same roots this tool delivers into.
 delegate() {
   AGENT_MAIL_ROOT="$MAIL_ROOT" AGENT_HUMAN_MAIL_ROOT="$HUMAN_MAIL_ROOT" AGENT_MAIL2_DB="$MAIL2_DB" \
     AGENT_MAIL_PROG=agent-mail exec "$SELF_DIR/agent-mail2" "$@"
 }
 
-# A delivery touches doorbells/<mailbox>, one empty file per mailbox in one directory,
-# in every store, so a waker can watch a single directory and a poller can stat a single
-# file instead of listing an inbox or starting the CLI. Each ring replaces the file by
-# rename, so a directory watcher sees one IN_MOVED_TO rather than a truncate it could race.
-# Best effort, and only a hint: a sender can die between delivery and ring, so a consumer
-# still reconciles with a bounded scan on start and on an interval.
+# Replaced by rename, not touched: a directory watch fires on entries changing, not on a
+# file's mtime. Best effort, because a ring is only a hint; a sender can die between
+# delivery and ring, so consumers still reconcile with a periodic scan.
 ring() {
   local doorbells="$MAIL_STATE_ROOT/doorbells" inbox name
   mkdir -p -m 700 "$doorbells" 2>/dev/null || return 0
@@ -155,12 +148,10 @@ ring() {
   done
 }
 
-# While the marker says both, bring one message's copy in the SQLite store into line with
-# the Maildir, through the same mapping the migration uses, so the mirror and the
-# migration cannot disagree about what a message is. A failure does not fail the command:
-# the Maildir is authoritative and already changed, and a non-zero exit after a delivery
-# invites a resend. It is reported, logged, and repaired by the next full migrate, and
-# agent-mail-migrate --verify will not pass until it is.
+# Through the migrator rather than agent-mail2, so the mirror and the migration cannot map
+# a message differently. A failure never fails the command: the Maildir change already
+# happened, and a non-zero exit after a delivery invites a duplicate resend. --verify keeps
+# failing until a full migrate repairs it.
 mirror() {
   [ "$STORE_MODE" = both ] || return 0
   local id="$1" error

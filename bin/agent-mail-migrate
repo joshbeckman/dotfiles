@@ -142,8 +142,6 @@ def mailboxes(agent_root: Path, human_root: Path) -> dict[str, dict[str, Path]]:
 
 
 def collect(boxes: dict[str, dict[str, Path]], only: str | None = None) -> dict[str, Message]:
-    """Every message in the Maildir, or with only, that one message's copies, found by
-    name rather than by listing every folder."""
     pattern = f"{only}.md" if only else "*.md"
     messages: dict[str, Message] = {}
     for mailbox, folders in boxes.items():
@@ -352,8 +350,7 @@ def database_path(explicit: str | None, human_root: Path) -> Path:
     raw = os.environ.get("AGENT_MAIL2_DB")
     if raw:
         return Path(raw).expanduser().absolute()
-    # Beside the human mailboxes and the store marker, as agent-mail and agent-mail2 place
-    # it, so relocating the mail state can never write into the real store.
+    # Not a fixed home path: relocating the mail state must never write the real store.
     return human_root.absolute().parent / "mail2.sqlite3"
 
 
@@ -361,7 +358,7 @@ STORES = ("maildir", "both", "sqlite")
 
 
 def store_mode(marker: Path) -> str:
-    """What bin/agent-mail would read: a named store, or maildir for anything else."""
+    """Must read the marker exactly as bin/agent-mail does."""
     try:
         value = marker.read_text(encoding="utf-8").strip()
     except OSError:
@@ -370,7 +367,7 @@ def store_mode(marker: Path) -> str:
 
 
 def write_store(marker: Path, mode: str) -> None:
-    """One rename, so a reader sees the old marker or the new one and never half of one."""
+    """By rename, so a reader never sees half a marker."""
     marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = marker.with_name(f".{marker.name}.{os.getpid()}")
     temporary.write_text(mode + "\n", encoding="utf-8")
@@ -461,8 +458,7 @@ def set_store(target: str, marker: Path, db_path: Path, agent_root: Path, human_
             print(f"agent-mail-migrate: {problem}", file=sys.stderr)
         raise MigrationError(f"{len(problems)} problems; the store marker was not changed")
     write_store(marker, "both")
-    # A send between the verify and the marker was mirrored by nobody; every change from
-    # here on is, so one more pass closes that window.
+    # A send between the verify and the marker write was mirrored by nobody.
     messages = collect(boxes)
     run_migration(db_path, boxes, messages, visibility, None)
     problems = run_verify(db_path, boxes, collect(boxes))
@@ -486,7 +482,7 @@ def main() -> int:
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
-    # The same roots agent-mail delivers into, in the same order of precedence.
+    # agent-mail's precedence, or the two would read different trees.
     agent_root = Path(
         args.agent_root
         or os.environ.get("AGENT_MAIL_ROOT")
@@ -520,8 +516,7 @@ def main() -> int:
         if store_mode(marker) == "sqlite":
             raise MigrationError("the store is sqlite, so the Maildir is no longer the record; refusing to sync from it")
         if args.message is not None:
-            # Run right after the change it mirrors, so a newly read delivery was read now,
-            # which is closer than the arrival time a whole-store run has to fall back on.
+            # Not the file's mtime: that is the arrival time, and this runs right after the read.
             now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
             for message in messages.values():
                 message.recipients = {box: None if state is None else now
