@@ -1,0 +1,7 @@
+[Unit]
+Description=Agent Mail mirror drift alarm
+[Service]
+# PATH matters: the script shells out to agent-mail and agent-mail-migrate.
+Environment=PATH=%h/bin:/usr/local/bin:/usr/bin:/bin
+Type=oneshot
+ExecStart=%h/bin/agent-mail-verify
