@@ -687,6 +687,22 @@ try {
     ]),
   );
   assert.equal(await sidebar.locator(".contact").count(), 3);
+  const sticky = await page.evaluate(() => {
+    const thread = document.getElementById("thread");
+    thread.style.minHeight = "2000px";
+    scrollTo(0, 450);
+    const aside = document.getElementById("thread-contacts");
+    const result = {
+      top: aside.getBoundingClientRect().top,
+      expected: document.querySelector(".topbar").getBoundingClientRect().bottom,
+      visible: aside.getBoundingClientRect().bottom <= innerHeight,
+    };
+    thread.style.minHeight = "";
+    scrollTo(0, 0);
+    return result;
+  });
+  assert(sticky.top >= sticky.expected && sticky.top < sticky.expected + 30, JSON.stringify(sticky));
+  assert(sticky.visible, "the participant sidebar should remain inside the viewport");
   const reader = page.frameLocator("#thread iframe").last();
   await reader.getByRole("heading", { name: "Fixture heading" }).waitFor();
   await reader.getByText("Mail", { exact: true }).waitFor();
@@ -865,7 +881,37 @@ try {
   await page.locator(".row").waitFor();
   assert.equal(await page.locator(".row").count(), 1);
   await page.locator(".row").click();
+  await page.setViewportSize({ width: 375, height: 850 });
+  await page.route("**/api/draft", (route) => route.abort());
   await page.locator("#reply").click();
+  await page.getByText("Failed to fetch", { exact: true }).waitFor();
+  await page.locator("#reader").waitFor({ state: "visible" });
+  await page.unroute("**/api/draft");
+  let releaseReply;
+  const replyGate = new Promise((resolve) => (releaseReply = resolve));
+  await page.route("**/api/draft", async (route) => {
+    await replyGate;
+    await route.continue();
+  });
+  await page.locator("#reply").click();
+  await page.locator("#editor").waitFor({ state: "visible" });
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "to");
+  releaseReply();
+  await page.waitForFunction(() => document.activeElement?.id === "body");
+  await page.unroute("**/api/draft");
+  const mobileReply = await page.evaluate(() => ({
+    editor: document.getElementById("body-editor").getBoundingClientRect().toJSON(),
+    send: document.getElementById("send").getBoundingClientRect().toJSON(),
+    focused: document.activeElement?.id,
+  }));
+  assert(mobileReply.editor.top < 850 && mobileReply.editor.bottom > 0, JSON.stringify(mobileReply));
+  assert(mobileReply.send.top >= 850 - 100 && mobileReply.send.bottom <= 850, JSON.stringify(mobileReply));
+  assert.equal(mobileReply.focused, "body");
+  assert.equal(await page.getByRole("button", { name: "Expand / shrink" }).count(), 0);
+  await assertTouchTargets(page, "phone reply");
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-reply-mobile.png" });
+  await page.setViewportSize({ width: 1200, height: 850 });
   await page.locator("#body").fill("Reply resumed from a saved draft.");
   await page.locator("#close-draft").click();
   await page.reload();

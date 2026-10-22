@@ -1271,6 +1271,10 @@ dd {
   }
   #thread-contacts,
   #compose-contacts {
+    position: sticky;
+    top: calc(var(--topbar-h) + 1rem);
+    max-height: calc(100dvh - var(--topbar-h) - 2rem);
+    overflow-y: auto;
     border-top: 0;
     border-left: 1px solid var(--c-border);
     padding-left: 1rem;
@@ -1288,6 +1292,9 @@ dd {
   }
   .replying #thread-contacts,
   .replying #compose-contacts {
+    position: static;
+    max-height: none;
+    overflow: visible;
     border-left: 0;
     border-top: 1px solid var(--c-border);
     padding-left: 0;
@@ -1334,6 +1341,9 @@ body.split #thread-layout {
   display: block;
 }
 body.split #thread-contacts {
+  position: static;
+  max-height: none;
+  overflow: visible;
   border-left: 0;
   border-top: 1px solid var(--c-border);
   padding-left: 0;
@@ -1471,6 +1481,19 @@ body.split #thread-contacts {
   }
   body.keyboard-open .shell {
     padding-bottom: 1rem;
+  }
+  #editor {
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  }
+  #editor #send {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 30;
+    width: 100%;
+    min-height: 3.5rem;
+    justify-content: center;
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+    border-radius: 0;
   }
   .rail {
     position: fixed;

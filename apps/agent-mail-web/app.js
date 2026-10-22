@@ -877,7 +877,23 @@ async function archiveThread() {
 }
 async function newDraft(mode = "compose", key = current?.key) {
   if (view === "editor") await saveDraft();
-  return loadDraft(await api("draft", { mode, key }));
+  const mobileReply = view === "reader" && innerWidth <= 860 && mode !== "compose";
+  if (mobileReply) {
+    // iOS needs the first focus inside the tap; a focus after the draft request cannot
+    // open its keyboard. Keep the editor visible while loading so focus survives.
+    draft = null;
+    $("to").value = "";
+    $("subject").value = "";
+    show("editor");
+    $("to").focus();
+    $("draft-status").textContent = "Opening reply…";
+  }
+  try {
+    return await loadDraft(await api("draft", { mode, key }));
+  } catch (failure) {
+    if (mobileReply) show("reader");
+    throw failure;
+  }
 }
 async function loadDraft(value) {
   draft = value;
@@ -890,14 +906,14 @@ async function loadDraft(value) {
   $("preview").hidden = true;
   $("preview").replaceChildren();
   $("draft-status").textContent = "Saved on disk";
-  if (value.parent && !(await openThread(value))) return;
+  if (value.parent && !current?.messages.some((message) => message.id === value.parent)
+    && !(await openThread(value))) return;
+  anchorLatest = false;
   show("editor");
-  // Position the section first, then focus without letting the focus scroll: on a phone the
-  // focus scroll and the section scroll arrive as two jumps, which reads as flicker. The
-  // action row is at the top of the section, so this is what keeps it on screen.
+  // Focus may scroll on a phone because the editor sits below a long reply thread.
   $("editor").scrollIntoView({ block: "start" });
-  if (value.to) $("body").focus({ preventScroll: true });
-  else $("to").focus({ preventScroll: true });
+  if (value.to) $("body").focus({ preventScroll: innerWidth > 860 });
+  else $("to").focus({ preventScroll: innerWidth > 860 });
 }
 function saveDraft() {
   clearTimeout(timer);
@@ -1706,13 +1722,6 @@ async function renderMarkdown(source, target, remote = false) {
       sourceView.hidden = !sourceView.hidden;
     }),
   );
-  // The frame sizes itself to its content, so this pins it to a viewport-tall scroller and back.
-  tools.append(
-    button("Expand / shrink", () => {
-      frame.dataset.fixed = frame.dataset.fixed ? "" : "1";
-      frame.style.height = frame.dataset.fixed ? "80vh" : frame.dataset.auto || "";
-    }),
-  );
   tools.classList.add("frame-tools");
   // The message comes first and its tools after it: they are for the occasional look at the
   // source, not the first thing to read.
@@ -2041,8 +2050,7 @@ window.addEventListener("message", (event) => {
   if (event.data?.type === "height" && Number.isFinite(event.data.height)) {
     // A short message gets a short frame; the old 150px floor left most replies in a tall box.
     const height = Math.min(12000, Math.max(48, event.data.height + 16)) + "px";
-    frame.dataset.auto = height;
-    if (!frame.dataset.fixed) frame.style.height = height;
+    frame.style.height = height;
     frame.classList.add("sized");
     if (frame.closest("#thread")) scrollToLatestMessage();
   }
