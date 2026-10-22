@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Copy the Maildir Agent Mail store into the SQLite store.
+
+Read-only on the Maildir: nothing is moved, renamed, or deleted, so the old store
+stays usable and this can be re-run until the cutover is deliberate. Idempotent: a
+message already in the database is not written again, and its delivery state is brought
+into line with the Maildir: a file in new/ is unread, one in cur/ is read, and one that has
+gone from a mailbox that still exists was discarded, which is what v1's discard does.
+
+The audience comes from where a message actually sits, not from its To header. The
+Maildir delivers by writing a file into a mailbox, and the To header mixes canonical
+handles with transport addresses, so the directory is the delivery record: a message
+that reached three inboxes becomes one message with three recipients.
+
+Read state comes from the Maildir too: a file in new/ is unread, one in cur/ has been
+read. The old store never recorded when, so read_at is the file's mtime, which is the
+arrival time rather than the moment anyone looked. A message new to an existing thread is
+appended after that thread's last message, so a re-run never reuses a sequence.
+
+Usage:
+  agent-mail-migrate                 migrate into the default database
+  agent-mail-migrate --dry-run       print the plan and write nothing
+  agent-mail-migrate --verify        compare the Maildir against the database
+
+  --db PATH          target database (default: agent-mail2's)
+  --agent-root DIR   agent scratchpad root (default: AGENT_MAIL_ROOT, then AGENT_SCRATCH_ROOT,
+                     as agent-mail resolves it)
+  --human-root DIR   human mailbox root (default: AGENT_HUMAN_MAIL_ROOT, then
+                     ~/.local/state/agent-mail/humans)
+  --visibility NAME  visibility for migrated threads (public or private; public default)
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HEADER = re.compile(r"^([A-Za-z][A-Za-z0-9-]*):[ \t]?(.*)$")
+ADDRESS = re.compile(r"^[A-Za-z0-9._+@-]+$")
+FOLDERS = (("new", None), ("cur", "read"))
+
+
+class MigrationError(Exception):
+    pass
+
+
+def parse(path: Path) -> tuple[dict[str, str], str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    head, _, body = text.partition("\n\n")
+    headers: dict[str, str] = {}
+    for line in head.splitlines():
+        match = HEADER.match(line)
+        if match:
+            headers.setdefault(match.group(1).lower(), match.group(2).strip())
+    return headers, body
+
+
+def normalize(value: str) -> str:
+    address = value.strip().lower()
+    if address.startswith("@+"):
+        address = address[2:]
+    if not ADDRESS.fullmatch(address):
+        raise MigrationError(f"unusable address: {value!r}")
+    return address
+
+
+def parse_time(value: str | None, fallback: int) -> int:
+    if not value:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return fallback
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1_000_000)
+
+
+def mtime_us(path: Path) -> int:
+    return int(path.stat().st_mtime * 1_000_000)
+
+
+class Message:
+    def __init__(self, message_id: str):
+        self.message_id = message_id
+        self.thread_id: str | None = None
+        self.sender: str | None = None
+        self.reply_to: str | None = None
+        self.sent_at = 0
+        self.subject: str | None = None
+        self.body = ""
+        self.recipients: dict[str, int | None] = {}
+
+    def absorb(self, path: Path, headers: dict[str, str], body: str) -> None:
+        if not self.body and body:
+            self.body = body
+        if self.thread_id is None:
+            self.thread_id = headers.get("thread-id") or self.message_id
+        if self.reply_to is None:
+            self.reply_to = headers.get("in-reply-to")
+        if self.subject is None and headers.get("subject"):
+            self.subject = headers["subject"]
+        if headers.get("from"):
+            self.sender = self.sender or normalize(headers["from"])
+        self.sent_at = self.sent_at or parse_time(headers.get("date"), mtime_us(path))
+
+    def offer_sender(self, mailbox: str) -> None:
+        self.sender = self.sender or mailbox
+
+
+def mailboxes(agent_root: Path, human_root: Path) -> dict[str, dict[str, Path]]:
+    """Mailbox id to its Maildir folders. Agents keep an inbox in their scratchpad;
+    humans keep a full mailbox, sent folder included. A sent copy is redundant wherever
+    the message reached an inbox, since the From header names the sender, so it is only
+    read as a fallback for a message with no inbox copy at all."""
+    found: dict[str, dict[str, Path]] = {}
+    for inbox in sorted(agent_root.glob("*/inbox")):
+        found[inbox.parent.name] = {"inbox": inbox}
+    for box in sorted(human_root.glob("*")):
+        if box.is_dir():
+            found[box.name] = {"inbox": box / "inbox", "sent": box / "sent"}
+    return found
+
+
+def collect(boxes: dict[str, dict[str, Path]]) -> dict[str, Message]:
+    messages: dict[str, Message] = {}
+    for mailbox, folders in boxes.items():
+        inbox = folders.get("inbox")
+        if inbox is not None:
+            for folder, state in FOLDERS:
+                directory = inbox / folder
+                if not directory.is_dir():
+                    continue
+                for path in sorted(directory.glob("*.md")):
+                    headers, body = parse(path)
+                    message_id = headers.get("message-id") or path.name
+                    message = messages.setdefault(message_id, Message(message_id))
+                    message.absorb(path, headers, body)
+                    message.recipients[mailbox] = mtime_us(path) if state else None
+        sent = folders.get("sent")
+        if sent is not None and sent.is_dir():
+            for path in sorted(sent.glob("*.md")):
+                headers, body = parse(path)
+                message_id = headers.get("message-id") or path.name
+                message = messages.setdefault(message_id, Message(message_id))
+                message.absorb(path, headers, body)
+                message.offer_sender(mailbox)
+    return messages
+
+
+def threads(messages: dict[str, Message]) -> dict[str, list[Message]]:
+    grouped: dict[str, list[Message]] = {}
+    for message in messages.values():
+        grouped.setdefault(message.thread_id or message.message_id, []).append(message)
+    for thread in grouped.values():
+        thread.sort(key=lambda item: (item.sent_at, item.message_id))
+    return grouped
+
+
+def kind(address: str) -> str:
+    return "human" if address == "josh" or "@" in address else "agent"
+
+
+def ensure(db: sqlite3.Connection, address: str, timestamp: int) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO mailboxes(mailbox_id, kind, created_at) VALUES (?, ?, ?)",
+        (address, kind(address), timestamp),
+    )
+
+
+def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: str,
+            boxes: dict[str, dict[str, Path]]) -> dict[str, int]:
+    counts = {"messages": 0, "deliveries": 0, "threads": 0, "dangling_replies": 0,
+              "state_changes": 0, "discarded": 0}
+    now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+    for thread_id, group in sorted(threads(messages).items()):
+        db.execute(
+            "INSERT OR IGNORE INTO threads(thread_id, created_at, visibility) VALUES (?, ?, ?)",
+            (thread_id, group[0].sent_at, visibility),
+        )
+        counts["threads"] += db.execute("SELECT changes()").fetchone()[0]
+        # The next free sequence, not the message's position in the Maildir group: v1's
+        # discard deletes files, so that position shifts between runs and would collide.
+        sequence = db.execute(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+        for message in group:
+            sender = message.sender
+            if sender is None:
+                raise MigrationError(f"message {message.message_id} has no sender")
+            exists = db.execute(
+                "SELECT 1 FROM messages WHERE message_id = ?", (message.message_id,)
+            ).fetchone()
+            if not exists:
+                # A reply can name a parent that was never delivered to any mailbox we can
+                # see. Keep the message and its thread, drop the link, and say so.
+                reply_to = message.reply_to
+                if reply_to is not None and reply_to not in messages and not db.execute(
+                    "SELECT 1 FROM messages WHERE message_id = ?", (reply_to,)
+                ).fetchone():
+                    reply_to = None
+                    counts["dangling_replies"] += 1
+                ensure(db, sender, message.sent_at)
+                db.execute(
+                    """INSERT INTO messages(
+                         message_id, thread_id, sequence, sender_mailbox_id,
+                         reply_to_message_id, sent_at, subject, body
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        message.message_id,
+                        thread_id,
+                        sequence,
+                        sender,
+                        reply_to,
+                        message.sent_at,
+                        message.subject,
+                        message.body,
+                    ),
+                )
+                sequence += 1
+                counts["messages"] += 1
+            for recipient, read_at in sorted(message.recipients.items()):
+                ensure(db, recipient, message.sent_at)
+                db.execute(
+                    "INSERT OR IGNORE INTO message_recipients(message_id, recipient_mailbox_id) VALUES (?, ?)",
+                    (message.message_id, recipient),
+                )
+                db.execute(
+                    "INSERT OR IGNORE INTO deliveries(message_id, recipient_mailbox_id, read_at) VALUES (?, ?, ?)",
+                    (message.message_id, recipient, read_at),
+                )
+                if db.execute("SELECT changes()").fetchone()[0]:
+                    counts["deliveries"] += 1
+                    continue
+                # The Maildir is authoritative: a file in new/ is unread and one in cur/ is
+                # read, whatever the database said, and a file that is present is not discarded.
+                db.execute(
+                    """UPDATE deliveries
+                       SET read_at = CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(read_at, ?) END,
+                           discarded_at = NULL
+                       WHERE message_id = ? AND recipient_mailbox_id = ?
+                         AND ((? IS NULL) != (read_at IS NULL) OR discarded_at IS NOT NULL)""",
+                    (read_at, read_at, message.message_id, recipient, read_at),
+                )
+                counts["state_changes"] += db.execute("SELECT changes()").fetchone()[0]
+    # v1's discard deletes the file. A delivery whose file has gone from an inbox that still
+    # exists was discarded; a mailbox whose inbox is gone entirely is left alone, since a
+    # pruned scratchpad or a wrong --agent-root says nothing about what its owner discarded.
+    for mailbox, folders in boxes.items():
+        inbox = folders.get("inbox")
+        if inbox is None or not inbox.is_dir():
+            continue
+        present = {m.message_id for m in messages.values() if mailbox in m.recipients}
+        for (message_id,) in db.execute(
+            "SELECT message_id FROM deliveries WHERE recipient_mailbox_id = ? AND discarded_at IS NULL",
+            (mailbox,),
+        ).fetchall():
+            if message_id not in present:
+                db.execute(
+                    "UPDATE deliveries SET discarded_at = ? WHERE message_id = ? AND recipient_mailbox_id = ?",
+                    (now, message_id, mailbox),
+                )
+                counts["discarded"] += 1
+    return counts
+
+
+def plan(messages: dict[str, Message]) -> str:
+    grouped = threads(messages)
+    lines = [
+        f"maildir messages: {len(messages)}",
+        f"threads: {len(grouped)}",
+        f"deliveries: {sum(len(m.recipients) for m in messages.values())}",
+    ]
+    per_box: dict[str, int] = {}
+    for message in messages.values():
+        for mailbox in message.recipients:
+            per_box[mailbox] = per_box.get(mailbox, 0) + 1
+    for mailbox, count in sorted(per_box.items()):
+        lines.append(f"  {mailbox}: {count}")
+    return "\n".join(lines)
+
+
+def verify(db: sqlite3.Connection, messages: dict[str, Message],
+           boxes: dict[str, dict[str, Path]]) -> list[str]:
+    """Every Maildir message is stored with the same sender, thread and body, and every
+    delivery in a mailbox that still has an inbox is in the state its file says."""
+    problems: list[str] = []
+    stored = {
+        row[0]: tuple(row[1:])
+        for row in db.execute("SELECT message_id, sender_mailbox_id, thread_id, body FROM messages")
+    }
+    missing = sorted(set(messages) - set(stored))
+    if missing:
+        problems.append(f"{len(missing)} maildir messages are not in the database")
+    for message in messages.values():
+        row = stored.get(message.message_id)
+        if row is not None and row != (message.sender, message.thread_id or message.message_id, message.body):
+            problems.append(f"{message.message_id} differs from its Maildir copy")
+    for mailbox, folders in boxes.items():
+        inbox = folders.get("inbox")
+        if inbox is None or not inbox.is_dir():
+            continue
+        expected = {
+            m.message_id: "unread" if m.recipients[mailbox] is None else "read"
+            for m in messages.values() if mailbox in m.recipients
+        }
+        actual = {
+            row[0]: "discarded" if row[2] is not None else "unread" if row[1] is None else "read"
+            for row in db.execute(
+                "SELECT message_id, read_at, discarded_at FROM deliveries WHERE recipient_mailbox_id = ?",
+                (mailbox,),
+            )
+        }
+        for message_id, state in sorted(expected.items()):
+            if actual.get(message_id) != state:
+                problems.append(f"{message_id} is {state} for {mailbox} in the Maildir, "
+                                f"{actual.get(message_id, 'not delivered')} in the database")
+        for message_id, state in sorted(actual.items()):
+            if message_id not in expected and state != "discarded":
+                problems.append(f"{message_id} is {state} for {mailbox} in the database "
+                                "but gone from its Maildir")
+    return problems
+
+
+def database_path(explicit: str | None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser().absolute()
+    raw = os.environ.get("AGENT_MAIL2_DB")
+    if raw:
+        return Path(raw).expanduser().absolute()
+    return Path.home() / ".local" / "state" / "agent-mail" / "mail2.sqlite3"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db")
+    parser.add_argument("--agent-root")
+    parser.add_argument("--human-root")
+    parser.add_argument("--visibility", choices=("public", "private"), default="public")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verify", action="store_true")
+    args = parser.parse_args()
+
+    # The same roots agent-mail delivers into, in the same order of precedence.
+    agent_root = Path(
+        args.agent_root
+        or os.environ.get("AGENT_MAIL_ROOT")
+        or os.environ.get("AGENT_SCRATCH_ROOT")
+        or Path.home() / ".local" / "state" / "agent" / "scratchpads"
+    ).expanduser()
+    human_root = Path(
+        args.human_root
+        or os.environ.get("AGENT_HUMAN_MAIL_ROOT")
+        or Path.home() / ".local" / "state" / "agent-mail" / "humans"
+    ).expanduser()
+    db_path = database_path(args.db)
+
+    try:
+        boxes = mailboxes(agent_root, human_root)
+        messages = collect(boxes)
+    except (MigrationError, OSError) as error:
+        print(f"agent-mail-migrate: {error}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        print(plan(messages))
+        return 0
+
+    if not db_path.exists():
+        # --db wins over the ambient default, so init must be told the same path.
+        environment = dict(os.environ, AGENT_MAIL2_DB=str(db_path))
+        subprocess.run(
+            ["agent-mail2", "init"], check=True, capture_output=True, env=environment
+        )
+    db = sqlite3.connect(db_path, timeout=5, isolation_level=None)
+    db.execute("PRAGMA foreign_keys = ON")
+    db.execute("PRAGMA busy_timeout = 5000")
+    try:
+        if args.verify:
+            problems = verify(db, messages, boxes)
+            for problem in problems:
+                print(f"agent-mail-migrate: {problem}", file=sys.stderr)
+            print("verified" if not problems else f"{len(problems)} problems")
+            return 1 if problems else 0
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            counts = migrate(db, messages, args.visibility, boxes)
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+    except (MigrationError, sqlite3.Error) as error:
+        print(f"agent-mail-migrate: {error}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+    print(
+        f"migrated {counts['messages']} messages, {counts['threads']} new threads, "
+        f"{counts['deliveries']} deliveries into {db_path}"
+    )
+    if counts["state_changes"] or counts["discarded"]:
+        print(f"  {counts['state_changes']} deliveries changed read state, "
+              f"{counts['discarded']} were discarded in the Maildir")
+    if counts["dangling_replies"]:
+        print(
+            f"  {counts['dangling_replies']} replies named a parent that is not in the Maildir; "
+            "the message and its thread were kept and the link dropped",
+            file=sys.stderr,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
