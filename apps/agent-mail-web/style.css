@@ -839,19 +839,14 @@ details.message > .metadata {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-/* The frame starts short and invisible and appears once it has measured its content, rather
-   than flashing a tall empty box and then snapping to size. */
+/* The frame starts short and grows to its content. No fade-in: a frame resizing on a composited
+   layer was left with stale, unpainted tiles in Safari until something was clicked. */
 .rendered {
   width: 100%;
   border: 0;
   height: 3rem;
   display: block;
   background: var(--c-bg);
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-.rendered.sized {
-  opacity: 1;
 }
 .source {
   white-space: pre-wrap;
@@ -1364,9 +1359,6 @@ body.split #thread-contacts {
 @media (prefers-reduced-motion: reduce) {
   .rows-loading span {
     animation: none;
-  }
-  .rendered {
-    transition: none;
   }
 }
 
