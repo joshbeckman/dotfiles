@@ -160,11 +160,18 @@ ring() {
 # happened, and a non-zero exit after a delivery invites a duplicate resend. --verify keeps
 # failing until a full migrate repairs it.
 mirror() {
-  # Read again, not the startup value: a command that began before --set-store both and
-  # delivers after its final migrate pass would otherwise go unmirrored.
-  [ "$(store_mode)" = both ] || return 0
-  local id="$1" error
-  if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" \
+  # Read again, not the startup value: a command that began before a switch and delivers
+  # after it would otherwise go unmirrored. After the flip to sqlite the Maildir change is
+  # only imported, never synced: SQLite is the record, so it can gain mail, not lose state.
+  local id="$1" error mode
+  mode="$(store_mode)"
+  local -a scope=()
+  case "$mode" in
+    both) ;;
+    sqlite) scope=(--import-only) ;;
+    *) return 0 ;;
+  esac
+  if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" "${scope[@]}" \
       --agent-root "$MAIL_ROOT" --human-root "$HUMAN_MAIL_ROOT" 2>&1)"; then
     echo "agent-mail: delivered, but mirroring $id into the SQLite store failed: $error" >&2
     echo "agent-mail: repair with agent-mail-migrate, then agent-mail-migrate --verify" >&2

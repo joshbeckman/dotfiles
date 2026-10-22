@@ -27,6 +27,11 @@ Usage:
   agent-mail-migrate --set-store both     migrate, verify, then start dual-writing
   agent-mail-migrate --set-store maildir  stop dual-writing (the Maildir never stopped
                                           being authoritative, so nothing is lost)
+  agent-mail-migrate --set-store sqlite   from both: sync, verify, archive, then make the
+                                          SQLite store the record (there is no way back)
+  agent-mail-migrate --message ID --import-only
+                                     add one message the database lacks, changing nothing
+                                     (what agent-mail runs for a writer that straddled the flip)
   agent-mail-migrate --finish        stamp the migration done and delete its archives
 
 Before --set-store both changes anything, it archives the inboxes, the human mailboxes,
@@ -255,7 +260,8 @@ def ensure(db: sqlite3.Connection, address: str, timestamp: int, humans: set[str
 
 
 def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: str,
-            boxes: dict[str, dict[str, Path]], only: str | None = None) -> dict[str, int]:
+            boxes: dict[str, dict[str, Path]], only: str | None = None,
+            import_only: bool = False) -> dict[str, int]:
     counts = {"messages": 0, "deliveries": 0, "threads": 0, "dangling_replies": 0,
               "state_changes": 0, "discarded": 0}
     now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
@@ -345,6 +351,8 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                 if db.execute("SELECT changes()").fetchone()[0]:
                     counts["deliveries"] += 1
                     continue
+                if import_only:
+                    continue
                 if recipient in message.escalated:
                     db.execute("UPDATE deliveries SET escalated_at = ? WHERE message_id = ? "
                                "AND recipient_mailbox_id = ? AND escalated_at IS NULL",
@@ -363,7 +371,7 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
     # v1's discard deletes the file. A delivery whose file has gone from an inbox that still
     # exists was discarded; a mailbox whose inbox is gone entirely is left alone, since a
     # pruned scratchpad or a wrong --agent-root says nothing about what its owner discarded.
-    for mailbox, folders in boxes.items():
+    for mailbox, folders in ({} if import_only else boxes).items():
         inbox = folders.get("inbox")
         if inbox is None or not inbox.is_dir():
             continue
@@ -547,14 +555,17 @@ def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
 
 
 def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
-                  only: str | None) -> dict[str, int]:
+                  only: str | None, import_only: bool = False) -> dict[str, int]:
+    """With import_only, mail the database lacks is added and nothing it has is changed:
+    after the flip the Maildir may still add mail, from a writer that straddled it, but it is
+    no longer the record of state, so it can never discard, unread or rewrite anything."""
     # Checked here, not only in main: every path that syncs from the Maildir, the automatic
     # backfill included, must refuse once SQLite is the record, or it would discard mail
     # the Maildir never had and revert reads.
-    if store_mode(roots[1].resolve().parent / "store") == "sqlite":
+    if store_mode(roots[1].resolve().parent / "store") == "sqlite" and not import_only:
         raise MigrationError("the store is sqlite, so the Maildir is no longer the record; refusing to sync from it")
     db = open_db(db_path)
-    if backfill_pending(db):
+    if backfill_pending(db) and not import_only:
         # The v4 upgrade owes the headers v3 dropped a full pass from the Maildir.
         only = None
     try:
@@ -575,8 +586,8 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                     message.recipients = {box: None if state is None else now
                                           for box, state in message.recipients.items()}
                 messages = with_ancestors(boxes, db, messages)
-            counts = migrate(db, messages, visibility, boxes, only)
-            if only is None and backfill_pending(db):
+            counts = migrate(db, messages, visibility, boxes, only, import_only)
+            if only is None and not import_only and backfill_pending(db):
                 db.execute("DELETE FROM backfill_pending")
             db.execute("COMMIT")
         except BaseException:
@@ -697,6 +708,25 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
     return 0
 
 
+def flip_to_sqlite(marker: Path, db_path: Path, roots: tuple[Path, Path], visibility: str) -> int:
+    # One last full sync while the Maildir is still the record, so the backfill and every
+    # read and discard are in, then a clean verify before anything is written.
+    run_migration(db_path, roots, visibility, None)
+    problems = run_verify(db_path, roots)
+    if problems:
+        for problem in problems:
+            print(f"agent-mail-migrate: {problem}", file=sys.stderr)
+        raise MigrationError(f"{len(problems)} problems; the store marker was not changed")
+    write_store(marker, "sqlite")
+    # Anything delivered between that verify and the marker, by a writer whose mirror then
+    # failed or that read the marker before the write, is added now. From here on the same
+    # import runs as each straddling writer's mirror.
+    counts = run_migration(db_path, roots, visibility, None, import_only=True)
+    print(f"store is sqlite: agent-mail2 holds the mail in {db_path}"
+          + (f"; {counts['messages']} messages delivered during the switch were added" if counts["messages"] else ""))
+    return 0
+
+
 def set_store(target: str, marker: Path, db_path: Path, agent_root: Path, human_root: Path,
               visibility: str, registry: Path) -> int:
     import fcntl
@@ -720,11 +750,8 @@ def switch_store(target: str, marker: Path, db_path: Path, agent_root: Path, hum
             "the store is sqlite, so mail since the flip exists only in the database; "
             "leaving it would strand that mail"
         )
-    if target == "sqlite":
-        raise MigrationError(
-            "the flip to sqlite is not available yet: agent-mail-web, the Pi mail notice, "
-            "agent-session wake-mail and agent-run still read the Maildir directly"
-        )
+    if target == "sqlite" and current != "both":
+        raise MigrationError("switch to both first: the flip to sqlite is from a verified mirror, not from the Maildir")
     if target == "maildir":
         write_store(marker, "maildir")
         print("store is maildir; the database is no longer written")
@@ -739,6 +766,8 @@ def switch_store(target: str, marker: Path, db_path: Path, agent_root: Path, hum
         raise MigrationError(f"agent-mail delivers under {runtime_agent_root()}, so the store cannot be switched from {agent_root}")
     saved = archive(marker, db_path, agent_root, human_root, registry, target)
     print(f"archived and restored the mail to {saved}")
+    if target == "sqlite":
+        return flip_to_sqlite(marker, db_path, (agent_root, human_root), visibility)
     run_migration(db_path, (agent_root, human_root), visibility, None)
     problems = run_verify(db_path, (agent_root, human_root))
     if problems:
@@ -767,6 +796,8 @@ def main() -> int:
     mode.add_argument("--message", metavar="ID")
     mode.add_argument("--set-store", choices=STORES)
     mode.add_argument("--finish", action="store_true")
+    parser.add_argument("--import-only", action="store_true",
+                        help="add mail the database lacks and change nothing it has (the mirror after the flip)")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -798,9 +829,7 @@ def main() -> int:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
             print("verified" if not problems else f"{len(problems)} problems")
             return 1 if problems else 0
-        if store_mode(marker) == "sqlite":
-            raise MigrationError("the store is sqlite, so the Maildir is no longer the record; refusing to sync from it")
-        counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message)
+        counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message, args.import_only)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"agent-mail-migrate: {error}", file=sys.stderr)
         return 1
