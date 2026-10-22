@@ -12,7 +12,7 @@ sent="$tmp/sent"
 cat > "$tmp/bin/agent-mail" <<'FAKE'
 #!/bin/sh
 [ "${1:-}" = "send" ] || exit 0
-printf '%s\n' "$*" >> "$AGENT_MAIL_TEST_SENT"
+printf 'SEND %s\n' "$*" >> "$AGENT_MAIL_TEST_SENT"
 # The subject and body arrive as files, so recording the arguments alone would never see the text
 # this test is about.
 while [ $# -gt 0 ]; do
@@ -33,16 +33,16 @@ fail=0
 check() { if [ "$1" = "$2" ]; then echo "  ok: $3"; else echo "  FAIL: $3 (wanted $2, got $1)"; fail=1; fi; }
 
 : > "$sent"; run
-check "$(wc -c < "$sent" | tr -d ' ')" "0" "a clean mirror stays silent"
+check "$(grep -c '^SEND' "$sent" || true)" "0" "a clean mirror stays silent"
 
 : > "$sent"; printf 'mailbox:josh\tmirror write failed\n' > "$state/mirror-failures"; run
-check "$(wc -l < "$sent" | tr -d ' ')" "1" "a failure log beside the marker raises the alarm"
+check "$(grep -c '^SEND' "$sent" || true)" "1" "a failure log beside the marker raises the alarm"
 
 : > "$sent"; printf 'decoy\n' > "$tmp/scratchpads/mirror-failures"; rm -f "$state/mirror-failures"; run
-check "$(wc -c < "$sent" | tr -d ' ')" "0" "a failure log in the scratchpads root is ignored"
+check "$(grep -c '^SEND' "$sent" || true)" "0" "a failure log in the scratchpads root is ignored"
 
 : > "$sent"; rm -f "$state/mirror-failures"; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
-check "$(wc -l < "$sent" | tr -d ' ')" "1" "a failed verify raises the alarm"
+check "$(grep -c '^SEND' "$sent" || true)" "1" "a failed verify raises the alarm"
 
 : > "$sent"; printf 'mailbox:josh\tmirror write failed\n' > "$state/mirror-failures"; : > "$state/mirror-failures.repaired"; run
 if grep -q 'reminder to run --finish' "$sent"; then echo "  ok: a repaired log says so rather than reading as new drift"; else echo "  FAIL: repaired log not distinguished"; fail=1; fi
