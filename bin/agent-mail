@@ -160,22 +160,28 @@ ring() {
 # happened, and a non-zero exit after a delivery invites a duplicate resend. --verify keeps
 # failing until a full migrate repairs it.
 mirror() {
-  # Read again, not the startup value: a command that began before a switch and delivers
-  # after it would otherwise go unmirrored. After the flip to sqlite the Maildir change is
-  # only imported, never synced: SQLite is the record, so it can gain mail, not lose state.
-  local id="$1" error mode
+  # Read again, not the startup value: a command that began before a switch and changes the
+  # Maildir after it would otherwise go unmirrored. After the flip to sqlite the Maildir is
+  # not synced, since SQLite is the record: the message is imported if missing, and a read or
+  # discard this command made is applied to its one delivery. Both only ever move forward,
+  # so a late acknowledgement lands without being able to undo anything.
+  local id="$1" op="${2:-send}" mailbox="${3:-}" error mode
   mode="$(store_mode)"
   local -a scope=()
   case "$mode" in
     both) ;;
-    sqlite) scope=(--import-only) ;;
+    sqlite)
+      scope=(--import-only)
+      [ "$op" = send ] || scope+=(--apply "$op" --mailbox "$mailbox")
+      ;;
     *) return 0 ;;
   esac
   if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" ${scope[@]+"${scope[@]}"} \
       --agent-root "$MAIL_ROOT" --human-root "$HUMAN_MAIL_ROOT" 2>&1)"; then
     echo "agent-mail: delivered, but mirroring $id into the SQLite store failed: $error" >&2
     echo "agent-mail: repair with agent-mail-migrate, then agent-mail-migrate --verify" >&2
-    printf '%s\t%s\t%s\n' "$(now_iso)" "$id" "${error//$'\n'/ }" >>"$MAIL_STATE_ROOT/mirror-failures" || true
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(now_iso)" "$id" "$op" "$mailbox" "${error//[$'\n\t']/ }" \
+      >>"$MAIL_STATE_ROOT/mirror-failures" || true
   fi
 }
 
@@ -888,7 +894,7 @@ cmd_read() {
     reply_source="$inbox/cur/$basename"
     mv "$f" "$reply_source"
     clear_escalation_marker "$inbox" "${basename%.md}"
-    mirror "${basename%.md}"
+    mirror "${basename%.md}" read "$(basename "$(dirname "$inbox")")"
   fi
   printf 'Reply with: agent-mail send --reply-all %q --body-file FILE\n' "$reply_source" >&2
 }
@@ -909,7 +915,7 @@ cmd_discard() {
   local path; path="$(message_in_inbox "$inbox" "$id")" || die "no message '$id' in $inbox"
   rm -f "$path"
   clear_escalation_marker "$inbox" "$(basename "$path" .md)"
-  mirror "$(basename "$path" .md)"
+  mirror "$(basename "$path" .md)" discard "$(basename "$(dirname "$inbox")")"
 }
 
 message_path() {
@@ -950,7 +956,7 @@ cmd_archive() {
   [ ! -e "$dst" ] || die "archive destination already exists: $dst"
   mv "$path" "$dst"
   clear_escalation_marker "$inbox" "$(basename "$path" .md)"
-  mirror "$(basename "$path" .md)"
+  mirror "$(basename "$path" .md)" read "$(basename "$(dirname "$inbox")")"
   printf '%s\n' "$dst"
 }
 

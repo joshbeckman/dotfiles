@@ -154,9 +154,10 @@ The flip only goes from `both`. It does one last full sync and a clean `--verify
 fresh archive (the backup, as Josh decided: an archive in a dedicated directory), writes the
 marker, and then runs an import-only pass. After the flip the Maildir can only add to
 SQLite, never subtract. A writer that read the marker before the flip and delivers after it
-has its message imported by its own mirror, and existing state is never changed. The cost
-is that an acknowledgement straddling the flip can leave the SQLite copy unread. That gives
-a redelivery, never a loss.
+has its message imported by its own mirror. A read or discard it made is applied to that one
+delivery, and only ever sets a timestamp that was still empty, so nothing can be undone. A
+mirror that fails is logged with its operation, and `agent-mail-migrate --replay-failures`
+repairs every logged failure.
 
 Announce the new semantics:
 

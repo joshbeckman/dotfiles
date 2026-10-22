@@ -419,6 +419,55 @@ cmd read --to $bob --id "$lost" --peek 2>/dev/null | grep -Fxq 'imported later' 
 migrate --finish >/dev/null || fail "--finish refused after the repair"
 [[ -f "$dir/state/mirror-failures.repaired" && ! -e "$dir/state/mirror-failures" ]] || fail "--finish did not retire the repaired failure log"
 
+# A read or discard begun under both that changes the Maildir after the flip still reaches
+# SQLite. The probe parks agent-mail at the Maildir change itself: a cat and an rm that wait
+# on a gate for message files, after the command has chosen the Maildir path.
+realm late-ack
+migrate --set-store both >/dev/null
+to_read="$(as $alice cmd send --to $bob --subject 'Read late' -m 'read me' | tail -1)"
+to_drop="$(as $alice cmd send --to $bob --subject 'Drop late' -m 'drop me' | tail -1)"
+shims="$tmp/late-shims"
+mkdir -p "$shims"
+for tool in cat rm; do
+  real="$(command -v $tool)"
+  printf '#!/bin/sh\ncase "$*" in *inbox/new/*) while [ ! -e "%s/go" ]; do sleep 0.05; done ;; esac\nexec %s "$@"\n' "$shims" "$real" >"$shims/$tool"
+  chmod +x "$shims/$tool"
+done
+as $bob env PATH="$shims:$PATH" "$bin/agent-mail" read --to $bob --id "$to_read" >/dev/null 2>"$tmp/late-read-err" &
+reader=$!
+as $bob env PATH="$shims:$PATH" "$bin/agent-mail" discard --to $bob --id "$to_drop" 2>"$tmp/late-drop-err" &
+dropper=$!
+sleep 0.5
+migrate --set-store sqlite >/dev/null
+touch "$shims/go"
+wait "$reader" "$dropper"
+[[ "$(cmd receipt "$to_read" | cut -f1)" == read ]] || { cat "$tmp/late-read-err"; fail "a read that straddled the flip lost its acknowledgement"; }
+[[ "$(cmd receipt "$to_drop" | cut -f1)" == discarded ]] || { cat "$tmp/late-drop-err"; fail "a discard that straddled the flip was lost"; }
+cmd scan --to $bob | grep -Fq "$to_read" && fail "the late-read message is still listed unread"
+
+# A late acknowledgement whose mirror fails is logged with its operation, --finish refuses
+# until it is applied, and --replay-failures applies it.
+realm late-ack-fail
+migrate --set-store both >/dev/null
+stuck="$(as $alice cmd send --to $bob --subject Stuck -m stuck | tail -1)"
+mkdir -p "$shims-2"
+real="$(command -v cat)"
+printf '#!/bin/sh\ncase "$*" in *inbox/new/*) while [ ! -e "%s/go" ]; do sleep 0.05; done ;; esac\nexec %s "$@"\n' "$shims-2" "$real" >"$shims-2/cat"
+chmod +x "$shims-2/cat"
+as $bob env PATH="$shims-2:$PATH" AGENT_MAIL2_DB="$tmp" "$bin/agent-mail" read --to $bob --id "$stuck" >/dev/null 2>"$tmp/stuck-err" &
+reader=$!
+sleep 0.5
+migrate --set-store sqlite >/dev/null
+touch "$shims-2/go"
+wait "$reader"
+grep -Fq "mirroring $stuck into the SQLite store failed" "$tmp/stuck-err" || fail "a failed late acknowledgement was silent"
+grep -Fq $'\t'"$stuck"$'\tread\t'"$bob"$'\t' "$dir/state/mirror-failures" || fail "the failure log lost the operation"
+set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq "read by $bob" "$tmp/err" || fail "--finish ran with an unapplied acknowledgement"
+migrate --replay-failures >/dev/null || fail "--replay-failures failed"
+[[ "$(cmd receipt "$stuck" | cut -f1)" == read ]] || fail "--replay-failures did not apply the acknowledgement"
+[[ -f "$dir/state/mirror-failures.repaired" ]] || fail "--replay-failures did not retire the log"
+
 # A migration that passed its first check just before the flip refuses once it holds the lock.
 realm flip-race
 migrate --set-store both >/dev/null
