@@ -81,6 +81,7 @@ Run any script with `--help` or read the source — they're short.
 
 - **Symlinks, not copies.** `dfm install` symlinks files into `$HOME`. Editing a dotfile here edits the live config.
 - **Shell scripts stay simple.** Scripts in `bin/` are short, single-purpose, and use `#!/bin/sh` or `#!/usr/bin/env bash` (or ruby, etc.). Prefer `set -euo pipefail` in bash scripts.
+- **Shared commands run on macOS and Linux.** Treat `bin/` commands and `test/` checks as cross-platform by default. Do not assume `/proc`, GNU or BSD utility flags, Homebrew paths, or Bash newer than macOS's 3.2. Guard platform branches and keep a working path for each host. To designate a command for one platform, put `# Platform: macOS` or `# Platform: Linux` immediately below its shebang, or name it with a `-macos` or `-linux` suffix. An incidental platform check does not designate the whole command. State each tested host; a passing check on one host does not prove the other. Follow [cross-platform commands](.agents/skills/cross-platform-commands/SKILL.md) when writing shell or Python.
 - **Brewfile tracks dependencies.** If a script or config relies on a Homebrew formula, add it to `Brewfile`.
 - **No secrets in version control.** Credentials, tokens, and API keys live in the encrypted store managed by [`s`](https://github.com/tobi/s) (`s set NAME`, injected per-invocation with `s NAME -- cmd`), never in committed files or globally sourced env files.
 - **Conventional Commits.** Commit messages follow the `type(scope): description` format (e.g. `feat(zshrc):`, `fix(nvim):`).
