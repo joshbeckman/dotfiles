@@ -108,8 +108,9 @@ resolve Print the mailbox each ID reaches.
 Stores: STORE_MARKER (beside AGENT_HUMAN_MAIL_ROOT, default
 ~/.local/state/agent-mail/store) holds maildir, both or sqlite; absent or
 unreadable means maildir. In both, every change is written here first and then
-mirrored into the SQLite store, and a failed mirror is reported on stderr and in
-mirror-failures without failing the command, because the message was delivered.
+mirrored into the SQLite store, and a failed mirror is reported on stderr and as a
+record in mirror-failures.d/ without failing the command, because the message was
+delivered. agent-mail-migrate --replay-failures repairs and retires the records.
 head, thread, search and publish read the SQLite store and need both or sqlite.
 In sqlite, send, scan, read, receipt, discard and sweep are bin/agent-mail2's,
 addr and web stay here, and the Maildir-only commands refuse. Change it only with
@@ -180,8 +181,13 @@ mirror() {
       --agent-root "$MAIL_ROOT" --human-root "$HUMAN_MAIL_ROOT" 2>&1)"; then
     echo "agent-mail: delivered, but mirroring $id into the SQLite store failed: $error" >&2
     echo "agent-mail: repair with agent-mail-migrate, then agent-mail-migrate --verify" >&2
-    printf '%s\t%s\t%s\t%s\t%s\n' "$(now_iso)" "$id" "$op" "$mailbox" "${error//[$'\n\t']/ }" \
-      >>"$MAIL_STATE_ROOT/mirror-failures" || true
+    # One file per failure, made whole by rename, never a shared log: a repair retires the
+    # records it read and cannot sweep up one that a writer adds while it runs.
+    local records="$MAIL_STATE_ROOT/mirror-failures.d" name
+    name="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM-$id"
+    mkdir -p -m 700 "$records" 2>/dev/null &&
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(now_iso)" "$id" "$op" "$mailbox" "${error//[$'\n\t']/ }" >"$records/.$name" &&
+      mv -f "$records/.$name" "$records/$name" || true
   fi
 }
 

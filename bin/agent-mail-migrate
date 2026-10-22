@@ -593,27 +593,53 @@ def unrepaired(db: sqlite3.Connection, entries: list[tuple[str, str, str]]) -> l
     return missing
 
 
+def failure_records(state: Path) -> list[Path]:
+    """Every unretired failure record: one file each in mirror-failures.d/, plus the single
+    mirror-failures log that agent-mail wrote before records existed."""
+    directory = state / "mirror-failures.d"
+    records = sorted(p for p in directory.iterdir() if p.is_file() and not p.name.startswith(".")) \
+        if directory.is_dir() else []
+    legacy = state / "mirror-failures"
+    return records + ([legacy] if legacy.is_file() else [])
+
+
+def retire(record: Path) -> None:
+    # A record is immutable once renamed into place, so retiring the one that was checked
+    # cannot take a failure added since with it.
+    if record.name == "mirror-failures":
+        record.rename(record.with_name("mirror-failures.repaired"))
+        return
+    done = record.parent / "repaired"
+    done.mkdir(mode=0o700, exist_ok=True)
+    record.rename(done / record.name)
+
+
 def replay_failures(marker: Path, db_path: Path, roots: tuple[Path, Path], visibility: str) -> int:
-    """Repair every logged mirror failure: each message is synced (both) or imported (sqlite),
-    and a read or discard is applied to its delivery. The log is retired once all are in."""
-    failures = marker.parent / "mirror-failures"
-    if not failures.exists():
+    """Repair every recorded mirror failure: each message is synced (both) or imported (sqlite),
+    and a read or discard is applied to its delivery. Each record is retired once it is in."""
+    records = failure_records(marker.parent)
+    if not records:
         print("no mirror failures")
         return 0
-    entries = failure_entries(failures)
     sqlite_mode = store_mode(marker) == "sqlite"
-    for message_id, operation, mailbox in entries:
-        run_migration(db_path, roots, visibility, message_id, import_only=sqlite_mode,
-                      apply=(operation, mailbox) if operation != "send" and sqlite_mode else None)
-    db = open_db(db_path)
-    try:
-        missing = unrepaired(db, entries)
-    finally:
-        db.close()
-    if missing:
-        raise MigrationError(f"{len(missing)} failures are still not repaired: {', '.join(missing[:5])}")
-    failures.rename(failures.with_name("mirror-failures.repaired"))
-    print(f"repaired {len(entries)} mirror failure{'s' if len(entries) != 1 else ''}")
+    still: list[str] = []
+    for record in records:
+        entries = failure_entries(record)
+        for message_id, operation, mailbox in entries:
+            run_migration(db_path, roots, visibility, message_id, import_only=sqlite_mode,
+                          apply=(operation, mailbox) if operation != "send" and sqlite_mode else None)
+        db = open_db(db_path)
+        try:
+            missing = unrepaired(db, entries)
+        finally:
+            db.close()
+        if missing:
+            still += missing
+        else:
+            retire(record)
+    if still:
+        raise MigrationError(f"{len(still)} failures are still not repaired: {', '.join(still[:5])}")
+    print(f"repaired {len(records)} mirror failure record{'s' if len(records) != 1 else ''}")
     return 0
 
 
@@ -770,17 +796,18 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
             raise MigrationError(f"{len(problems)} problems; the archives were kept")
     # An import that failed is only in the Maildir until someone repairs it, and the archive
     # and the failure log are how anyone would know: both stay until every one is in SQLite.
-    failures = marker.parent / "mirror-failures"
-    if failures.exists():
+    records = failure_records(marker.parent)
+    if records:
         db = open_db(db_path)
         try:
-            missing = unrepaired(db, failure_entries(failures))
+            missing = [m for record in records for m in unrepaired(db, failure_entries(record))]
         finally:
             db.close()
         if missing:
             raise MigrationError(f"{len(missing)} failed mirrors are not repaired ({', '.join(missing[:5])}); "
                                  "run agent-mail-migrate --replay-failures first")
-        failures.rename(failures.with_name("mirror-failures.repaired"))
+        for record in records:
+            retire(record)
     directory = marker.parent / "archives"
     removed = sorted(directory.glob("*.tar.gz")) if directory.is_dir() else []
     for path in removed:

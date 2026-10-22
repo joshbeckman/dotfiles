@@ -106,7 +106,7 @@ converge on it. Under `maildir` nothing changes.
 same sender, thread and body, and every delivery in the state its file says (`new/` unread,
 `cur/` read, gone from a live inbox discarded). It exits non-zero on any mismatch. Run it
 whenever you want to know the mirror is exact. A mirror that fails is reported to the
-sender, logged in `mirror-failures` beside the marker, and repaired by a plain
+sender, recorded as one file in `mirror-failures.d/` beside the marker, and repaired by a plain
 `agent-mail-migrate`, which brings the database back in line with the Maildir for as long
 as the Maildir is authoritative.
 
@@ -156,8 +156,8 @@ marker, and then runs an import-only pass. After the flip the Maildir can only a
 SQLite, never subtract. A writer that read the marker before the flip and delivers after it
 has its message imported by its own mirror. A read or discard it made is applied to that one
 delivery, and only ever sets a timestamp that was still empty, so nothing can be undone. A
-mirror that fails is logged with its operation, and `agent-mail-migrate --replay-failures`
-repairs every logged failure.
+mirror that fails is recorded, one file per failure, with its operation, and
+`agent-mail-migrate --replay-failures` repairs and retires each record.
 
 Announce the new semantics:
 
