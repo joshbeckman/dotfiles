@@ -184,7 +184,8 @@ mirror() {
     # One file per failure, made whole by rename, never a shared log: a repair retires the
     # records it read and cannot sweep up one that a writer adds while it runs.
     local records="$MAIL_STATE_ROOT/mirror-failures.d" name
-    name="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM-$id"
+    # Not the id: a legal id can be longer than a filename may be. The body carries it.
+    name="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM$RANDOM"
     mkdir -p -m 700 "$records" 2>/dev/null &&
       printf '%s\t%s\t%s\t%s\t%s\n' "$(now_iso)" "$id" "$op" "$mailbox" "${error//[$'\n\t']/ }" >"$records/.$name" &&
       mv -f "$records/.$name" "$records/$name" || true

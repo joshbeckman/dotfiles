@@ -567,11 +567,28 @@ def apply_acknowledgement(db: sqlite3.Connection, message_id: str, operation: st
     )
 
 
+def failure_text(failures: Path) -> str:
+    """A record's text. For the legacy log, only what follows the prefix already retired: an
+    old agent-mail still running may append to it at any time, so it is never renamed or
+    truncated, and retiring it records how many bytes were checked."""
+    raw = failures.read_bytes()
+    if failures.name == "mirror-failures":
+        raw = raw[legacy_retired(failures):]
+    return raw.decode("utf-8", "replace")
+
+
+def legacy_retired(failures: Path) -> int:
+    try:
+        return int((failures.parent / "mirror-failures.retired-bytes").read_text().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
 def failure_entries(failures: Path) -> list[tuple[str, str, str]]:
     """(message id, operation, mailbox) for each logged mirror failure. Lines from before the
     operation was recorded carry only the id, and were sends."""
     entries = []
-    for line in failures.read_text(encoding="utf-8").splitlines():
+    for line in failure_text(failures).splitlines():
         fields = line.split("\t")
         if len(fields) < 3:
             continue
@@ -600,18 +617,32 @@ def failure_records(state: Path) -> list[Path]:
     records = sorted(p for p in directory.iterdir() if p.is_file() and not p.name.startswith(".")) \
         if directory.is_dir() else []
     legacy = state / "mirror-failures"
-    return records + ([legacy] if legacy.is_file() else [])
+    pending = legacy.is_file() and legacy.stat().st_size > legacy_retired(legacy)
+    return records + ([legacy] if pending else [])
 
 
 def retire(record: Path) -> None:
     # A record is immutable once renamed into place, so retiring the one that was checked
     # cannot take a failure added since with it.
     if record.name == "mirror-failures":
-        record.rename(record.with_name("mirror-failures.repaired"))
-        return
+        raise AssertionError("retire the legacy log with retire_legacy and the size it checked")
     done = record.parent / "repaired"
     done.mkdir(mode=0o700, exist_ok=True)
     record.rename(done / record.name)
+
+
+def retire_legacy(failures: Path, checked: int) -> None:
+    marker = failures.parent / "mirror-failures.retired-bytes"
+    temporary = marker.with_name(f".{marker.name}.{os.getpid()}")
+    temporary.write_text(f"{checked}\n")
+    os.replace(temporary, marker)
+
+
+def retire_checked(record: Path, size: int) -> None:
+    if record.name == "mirror-failures":
+        retire_legacy(record, size)
+    else:
+        retire(record)
 
 
 def replay_failures(marker: Path, db_path: Path, roots: tuple[Path, Path], visibility: str) -> int:
@@ -624,6 +655,8 @@ def replay_failures(marker: Path, db_path: Path, roots: tuple[Path, Path], visib
     sqlite_mode = store_mode(marker) == "sqlite"
     still: list[str] = []
     for record in records:
+        # The legacy log's size before reading: only that prefix is retired if it is repaired.
+        size = record.stat().st_size
         entries = failure_entries(record)
         for message_id, operation, mailbox in entries:
             run_migration(db_path, roots, visibility, message_id, import_only=sqlite_mode,
@@ -636,7 +669,7 @@ def replay_failures(marker: Path, db_path: Path, roots: tuple[Path, Path], visib
         if missing:
             still += missing
         else:
-            retire(record)
+            retire_checked(record, size)
     if still:
         raise MigrationError(f"{len(still)} failures are still not repaired: {', '.join(still[:5])}")
     print(f"repaired {len(records)} mirror failure record{'s' if len(records) != 1 else ''}")
@@ -704,15 +737,22 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
         # Under the write lock, so a mirror committing mid-check cannot read as drift.
         db.execute("BEGIN IMMEDIATE")
         try:
+            # A recorded mirror failure is drift until it is replayed, whichever store holds
+            # the record, so the alarm needs only this command and not the record layout.
+            pending = [m for record in failure_records(roots[1].resolve().parent)
+                       for m in unrepaired(db, failure_entries(record))]
+            problems = [f"{len(pending)} recorded mirror failures are unrepaired ({', '.join(pending[:5])}); "
+                        "run agent-mail-migrate --replay-failures"] if pending else []
             if store_mode(roots[1].resolve().parent / "store") == "sqlite":
                 # The Maildir is no longer the record, so there is nothing to compare it with;
                 # only the database's own soundness is left to check.
-                problems = [] if db.execute("PRAGMA integrity_check").fetchone()[0] == "ok" else ["integrity check failed"]
+                if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    problems.append("integrity check failed")
                 if backfill_pending(db):
                     problems.append("the v4 routing-header backfill never ran, and the store is already sqlite")
                 return problems
             boxes = mailboxes(*roots)
-            return verify(db, collect(boxes), boxes)
+            return problems + verify(db, collect(boxes), boxes)
         finally:
             db.execute("ROLLBACK")
     finally:
@@ -798,6 +838,7 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
     # and the failure log are how anyone would know: both stay until every one is in SQLite.
     records = failure_records(marker.parent)
     if records:
+        sizes = {record: record.stat().st_size for record in records}
         db = open_db(db_path)
         try:
             missing = [m for record in records for m in unrepaired(db, failure_entries(record))]
@@ -807,7 +848,7 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
             raise MigrationError(f"{len(missing)} failed mirrors are not repaired ({', '.join(missing[:5])}); "
                                  "run agent-mail-migrate --replay-failures first")
         for record in records:
-            retire(record)
+            retire_checked(record, sizes[record])
     directory = marker.parent / "archives"
     removed = sorted(directory.glob("*.tar.gz")) if directory.is_dir() else []
     for path in removed:
