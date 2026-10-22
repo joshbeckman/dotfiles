@@ -1,11 +1,43 @@
 #!/bin/sh
-# Hourly drift alarm for the mirrored store. The Maildir is authoritative under `both`, so the
-# failure this catches is the mirror falling behind rather than the mail going missing, and the
-# only signal that matters is a verify that fails or a mirror failure that has not been repaired.
+# Alarm when the mirrored store has drifted. The Maildir is authoritative under `both`, so the
+# failure this catches is the mirror falling behind rather than mail going missing.
+#
+# Failures are one file per failure in mirror-failures.d/, retired by moving into repaired/. A file
+# being written starts with a dot and is ignored until it is renamed into place. The legacy
+# mirror-failures file is still read, because realms that ran the older code wrote one.
 set -eu
+state="$(dirname -- "${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}")"
+failures="$state/mirror-failures.d"
+repaired="$failures/repaired"
+legacy="$state/mirror-failures"
 err=$(mktemp)
 trap 'rm -f "$err"' EXIT
-if ! agent-mail-migrate --verify >/dev/null 2>"$err" || [ -s "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent-mail}/mirror-failures" ]; then
-  cat "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent-mail}/mirror-failures" >>"$err" 2>/dev/null || true
+
+# -print -quit stops at the first match, so this stays cheap on a directory with many entries.
+first_file() { find "$1" -maxdepth 1 -type f -name '[!.]*' -print -quit 2>/dev/null; }
+
+drift=0
+agent-mail-migrate --verify >/dev/null 2>"$err" || drift=1
+[ -s "$legacy" ] && drift=1
+[ -n "$(first_file "$failures")" ] && drift=1
+
+# Repaired records with no finish stamp mean the migration is waiting to be retired, which is a
+# reminder rather than new drift.
+remind=0
+if [ ! -e "$state/migration-finished" ] && [ -n "$(first_file "$repaired")" ]; then
+  remind=1
+fi
+
+if [ "$drift" = 1 ]; then
+  for file in "$failures"/*; do
+    [ -f "$file" ] || continue
+    cat "$file" >>"$err" 2>/dev/null || true
+  done
+  cat "$legacy" >>"$err" 2>/dev/null || true
+elif [ "$remind" = 1 ]; then
+  printf '\nThese ids are already present in SQLite. This is a reminder to run --finish, not new drift.\n' >>"$err"
+fi
+
+if [ "$drift" = 1 ] || [ "$remind" = 1 ]; then
   agent-mail send --from agent-mail-verify --to josh --subject "Agent mail mirror drifted" --body-file "$err"
 fi

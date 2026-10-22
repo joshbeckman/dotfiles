@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# The alarm watches mirror-failures.d/ beside the store marker, which is the parent of the human mail
+# root. AGENT_MAIL_ROOT names the scratchpads root, so anything there is a decoy.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+state="$tmp/state"
+mkdir -p "$state/humans" "$state/mirror-failures.d/repaired" "$tmp/bin" "$tmp/scratchpads"
+sent="$tmp/sent"
+cat > "$tmp/bin/agent-mail" <<'FAKE'
+#!/bin/sh
+[ "${1:-}" = "send" ] || exit 0
+printf 'SEND\n' >> "$AGENT_MAIL_TEST_SENT"
+while [ $# -gt 0 ]; do
+  case "$1" in --body-file) cat "$2" >> "$AGENT_MAIL_TEST_SENT" ;; esac
+  shift
+done
+FAKE
+cat > "$tmp/bin/agent-mail-migrate" <<'FAKE'
+#!/bin/sh
+exit "${AGENT_MAIL_TEST_VERIFY_EXIT:-0}"
+FAKE
+chmod +x "$tmp/bin/agent-mail" "$tmp/bin/agent-mail-migrate"
+run() {
+  AGENT_HUMAN_MAIL_ROOT="$state/humans" AGENT_MAIL_ROOT="$tmp/scratchpads" \
+    AGENT_MAIL_TEST_SENT="$sent" PATH="$tmp/bin:$PATH" "$ROOT/bin/agent-mail-verify"
+}
+reset_state() {
+  rm -rf "$state/mirror-failures.d" "$state/mirror-failures" "$state/migration-finished"
+  mkdir -p "$state/mirror-failures.d/repaired"
+  : > "$sent"
+}
+fail=0
+check() { if [ "$1" = "$2" ]; then echo "  ok: $3"; else echo "  FAIL: $3 (wanted $2, got $1)"; fail=1; fi; }
+count() { grep -c '^SEND' "$sent" || true; }
+
+reset_state; run
+check "$(count)" "0" "a clean mirror stays silent"
+
+# The live box has no mirror-failures.d until the new writer lands, so the alarm has to survive its
+# absence rather than aborting on a missing directory.
+: > "$sent"; rm -rf "$state/mirror-failures.d"; run
+check "$(count)" "0" "a missing failure directory is not an error"
+
+reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/one"; run
+check "$(count)" "1" "a failure file raises the alarm"
+
+reset_state; printf 'partial\n' > "$state/mirror-failures.d/.one.tmp"; run
+check "$(count)" "0" "a file still being written is ignored"
+
+reset_state; printf 'when\tid\tread\tjosh\terror\n' > "$state/mirror-failures"; run
+check "$(count)" "1" "the legacy single file still raises the alarm"
+
+reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
+check "$(count)" "1" "repaired records remind"
+if grep -q 'reminder to run --finish' "$sent"; then echo "  ok: the reminder says what it is"; else echo "  FAIL: reminder wording missing"; fail=1; fi
+
+reset_state; : > "$state/migration-finished"; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
+check "$(count)" "0" "a finished migration stops reminding"
+
+reset_state; printf 'decoy\n' > "$tmp/scratchpads/mirror-failures"; mkdir -p "$tmp/scratchpads/mirror-failures.d"; printf 'decoy\n' > "$tmp/scratchpads/mirror-failures.d/one"; run
+check "$(count)" "0" "a failure log in the scratchpads root is ignored"
+
+reset_state; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
+check "$(count)" "1" "a failed verify raises the alarm"
+
+[ "$fail" = 0 ] && echo "agent-mail-verify tests passed" || { echo "agent-mail-verify tests failed"; exit 1; }
