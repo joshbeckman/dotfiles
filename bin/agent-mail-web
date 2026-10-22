@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -218,6 +219,9 @@ MAX_MESSAGE = 2 * 1024 * 1024
 MAX_IMAGE = 5 * 1024 * 1024
 MAX_AVATAR = 100 * 1024
 FOLDERS = {'inbox': 'inbox/new', 'archive': 'inbox/cur', 'sent': 'sent', 'drafts': 'drafts'}
+# Byte for byte the marker grammar bin/agent-mail checks.
+STORE_MARKER = re.compile(rb'(maildir|both|sqlite)\n*')
+MESSAGE_KEY = re.compile(r'(inbox|archive|sent|drafts):([A-Za-z0-9_.@+\-]+\.md)')
 
 
 class MailError(Exception):
@@ -335,6 +339,12 @@ def parse_mail(path):
             'revision': hashlib.sha256(raw).hexdigest()}
 
 
+def stored_time(value):
+    seconds, micros = divmod(value, 1_000_000)
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(seconds))
+    return f'{stamp}.{micros:06d}Z' if micros else f'{stamp}Z'
+
+
 def address_key(address):
     value = address.strip().casefold()
     if value == 'josh':
@@ -427,6 +437,8 @@ class Mailbox:
         human_root = Path(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans')).expanduser()
         (human_root / 'josh').mkdir(parents=True, mode=0o700, exist_ok=True)
         self.home = Path(cli('addr', '@josh')).parent.resolve()
+        # The marker and the database sit beside the human mailboxes, as agent-mail places them.
+        self.state = self.home.parent.parent
         self.cache = {}
         for folder in FOLDERS:
             self.directory(folder)
@@ -456,7 +468,49 @@ class Mailbox:
             raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
         return path
 
+    def sqlite(self):
+        """Read on every request, so the bridge follows a flip without a restart."""
+        try:
+            match = STORE_MARKER.fullmatch((self.state / 'store').read_bytes())
+        except OSError:
+            return False
+        return bool(match) and match.group(1) == b'sqlite'
+
+    def stored(self):
+        """Josh's delivered and sent mail from the SQLite store, keyed as the Maildir keys it,
+        so the app cannot tell which store answered. Drafts stay files: they are documents
+        Josh is still editing, not mail."""
+        db = sqlite3.connect(f'file:{self.state / "mail2.sqlite3"}?mode=ro', uri=True, timeout=5)
+        db.row_factory = sqlite3.Row
+        try:
+            recipients = dict(db.execute(
+                """SELECT message_id, group_concat(recipient_mailbox_id, ', ') FROM
+                     (SELECT * FROM message_recipients ORDER BY recipient_mailbox_id) GROUP BY message_id"""))
+            rows = [(('inbox' if row['read_at'] is None else 'archive'), row) for row in db.execute(
+                """SELECT m.*, d.read_at FROM deliveries d JOIN messages m USING(message_id)
+                   WHERE d.recipient_mailbox_id = 'josh' AND d.discarded_at IS NULL""")]
+            rows += [('sent', row) for row in db.execute("SELECT * FROM messages WHERE sender_mailbox_id = 'josh'")]
+        finally:
+            db.close()
+        found = {}
+        for folder, row in rows:
+            key = f'{folder}:{row["message_id"]}.md'
+            found[key] = {'id': row['message_id'], 'thread': row['thread_id'],
+                          'parent': row['reply_to_message_id'] or '', 'from': row['sender_mailbox_id'],
+                          'to': recipients.get(row['message_id'], ''), 'reply_to': row['reply_to_address'] or '',
+                          'subject': row['subject'] or '', 'date': stored_time(row['sent_at']),
+                          'body': row['body'], 'key': key, 'folder': folder,
+                          'revision': hashlib.sha256(key.encode()).hexdigest()}
+        return found
+
     def message(self, key):
+        if self.sqlite() and not str(key).startswith('drafts:'):
+            if not isinstance(key, str) or not MESSAGE_KEY.fullmatch(key):
+                raise MailError('Invalid message key')
+            found = self.stored().get(key)
+            if found is None:
+                raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
+            return dict(found)
         path = self.path(key)
         stat = path.stat()
         stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
@@ -467,7 +521,10 @@ class Mailbox:
 
     def messages(self, thread=None):
         messages, warnings, present = [], [], set()
-        for folder in FOLDERS:
+        sqlite = self.sqlite()
+        if sqlite:
+            messages = [m for m in self.stored().values() if thread is None or m['thread'] == thread]
+        for folder in (('drafts',) if sqlite else FOLDERS):
             for path in self.directory(folder).glob('*.md'):
                 key = folder + ':' + path.name
                 present.add(key)
@@ -531,6 +588,8 @@ class Mailbox:
     def draft(self, mode, key=None):
         if mode not in ('compose', 'reply', 'reply-all'):
             raise MailError('Unknown draft mode')
+        if self.sqlite():
+            return self.message('drafts:' + self.write_draft(mode, key).name)
         if mode == 'compose':
             path = Path(cli('compose'))
         else:
@@ -540,6 +599,51 @@ class Mailbox:
                 mode = 'reply-all'
             path = Path(cli(mode, self.path(key)))
         return self.message('drafts:' + path.name)
+
+    def write_draft(self, mode, key):
+        """The drafts agent-mail compose, reply and reply-all made, which only work on the
+        Maildir, written here with the same headers and the same audience rules."""
+        lines = ['From: josh']
+        if mode == 'compose':
+            lines += ['To: ', 'Subject: ']
+        else:
+            source = self.message(key)
+            if mode == 'reply' and source['folder'] == 'sent':
+                mode = 'reply-all'
+            sender = source['reply_to'] or source['from']
+            audience = [sender] if mode == 'reply' else [sender, *source['to'].split(', ')]
+            audience = [a for a in dict.fromkeys(a.strip() for a in audience)
+                        if a and address_key(a) != ('human', 'josh')]
+            if not audience:
+                raise MailError('This message has no recipients other than Josh')
+            subject = source['subject'] or '(no subject)'
+            lines += ['To: ' + ', '.join(audience), 'Thread-ID: ' + source['thread'],
+                      'In-Reply-To: ' + source['id'],
+                      'Subject: ' + (subject if subject.startswith('Re: ') else 'Re: ' + subject)]
+        path = self.directory('drafts') / f'draft-{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())}-{secrets.token_hex(4)}.md'
+        atomic_write(path, ('\n'.join(lines) + '\n\n').encode())
+        return path
+
+    def send_draft(self, path):
+        """Deliver a draft through agent-mail send, which under sqlite is agent-mail2, then
+        remove it. Returns the delivered message's id."""
+        draft = parse_mail(path)
+        if not draft['to'].strip():
+            raise MailError('Add a recipient before sending')
+        fd, body = tempfile.mkstemp(prefix='.send-', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(draft['body'])
+            command = ['send', '--from', 'josh', '--to', draft['to'], '--body-file', body]
+            if draft['subject']:
+                command += ['--subject', draft['subject']]
+            if draft['parent']:
+                command += ['--in-reply-to', draft['parent']]
+            delivered = cli(*command).splitlines()[-1]
+        finally:
+            os.unlink(body)
+        path.unlink()
+        return delivered
 
     def save(self, data):
         path = self.path(data.get('key'), 'drafts')
@@ -1111,8 +1215,13 @@ class Handler(BaseHTTPRequestHandler):
     def post(self, route, data):
         box = self.server.box
         if route == '/api/archive':
-            path = box.path(data.get('key'), 'inbox')
-            cli('archive', path)
+            if box.sqlite():
+                key = data.get('key')
+                if not isinstance(key, str) or not key.startswith('inbox:'):
+                    raise MailError('Invalid message key')
+                cli('read', '--to', 'josh', '--id', box.message(key)['id'])
+            else:
+                cli('archive', box.path(data.get('key'), 'inbox'))
             result = {'ok': True}
         elif route == '/api/draft':
             result = box.draft(data.get('mode'), data.get('key'))
@@ -1128,8 +1237,11 @@ class Handler(BaseHTTPRequestHandler):
             path = box.path(data.get('key'), 'drafts')
             if box.message(data['key'])['revision'] != data.get('revision'):
                 raise MailError('Draft changed; reopen it before sending.', 409)
-            delivered = Path(cli('deliver', path))
-            result = {'ok': True, 'key': 'sent:' + delivered.name}
+            if box.sqlite():
+                result = {'ok': True, 'key': 'sent:' + box.send_draft(path) + '.md'}
+            else:
+                delivered = Path(cli('deliver', path))
+                result = {'ok': True, 'key': 'sent:' + delivered.name}
         elif route == '/api/attachment':
             result = box.attachment(data)
         elif route == '/api/spawn':

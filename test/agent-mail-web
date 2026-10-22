@@ -1111,5 +1111,82 @@ class WebTest(unittest.TestCase):
         self.assertEqual([item['entry']['message']['content'][0]['text'] for item in data['entries']], ['kept'])
 
 
+class SqliteWebTest(WebTest):
+    """The same mailbox once the store marker says sqlite: no Maildir is read or written,
+    and the app sees the same keys, folders and fields."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / 'store').write_text('sqlite\n')
+        self.id = web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--to', '@+birch-weaver',
+                          '--subject', 'A stored thread', '--body', '**Hello**\n\nA stored needle.\n')
+        self.key = 'inbox:' + self.id + '.md'
+        self.maildir_before = sorted(str(p) for p in (self.root / 'humans').rglob('*.md'))
+
+    def tearDown(self):
+        drafts = (self.root / 'humans/josh/drafts').resolve()
+        delivered = [p for p in (self.root / 'humans').rglob('*.md') if not p.resolve().is_relative_to(drafts)]
+        self.assertEqual(sorted(str(p) for p in delivered), [p for p in self.maildir_before if 'drafts' not in p])
+        super().tearDown()
+
+    def test_open_search_archive_and_thread(self):
+        status, body = self.request('/api/thread?key=' + quote(self.key))
+        self.assertEqual((status, [m['id'] for m in json.loads(body)]), (200, [self.id]))
+        listing = self.box.listing('all', 'stored needle')
+        self.assertEqual([m['key'] for m in listing['messages']], [self.key])
+        self.assertEqual(listing['counts']['inbox'], 1)
+        self.assertEqual(self.request('/api/archive', {'key': self.key})[0], 200)
+        self.assertEqual(self.box.listing('inbox', 'stored')['messages'], [])
+        archived = self.box.listing('archive', 'stored')['messages']
+        self.assertEqual([m['key'] for m in archived], ['archive:' + self.id + '.md'])
+        self.assertEqual(self.request('/api/archive', {'key': self.key})[0], 404)
+
+    def test_compose_save_send_and_reply_all(self):
+        draft = self.box.draft('reply-all', self.key)
+        self.assertIn('birch-weaver', draft['to'])
+        self.assertIn('alder-turner', draft['to'])
+        self.assertNotIn('josh', draft['to'])
+        draft = self.box.save(dict(draft, body='My stored reply.'))
+        status, body = self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})
+        self.assertEqual(status, 200, body)
+        sent_key = json.loads(body)['key']
+        sent = self.box.message(sent_key)
+        self.assertEqual((sent['folder'], sent['thread'], sent['parent'], sent['body']),
+                         ('sent', self.id, self.id, 'My stored reply.'))
+        self.assertEqual([m['id'] for m in self.box.thread(self.key)], [self.id, sent['id']])
+        # A double click or lost response must not deliver a second message.
+        self.assertEqual(self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})[0], 404)
+        self.assertEqual(len(self.box.listing('sent', '')['messages']), 1)
+        reply = self.box.draft('reply', sent_key)
+        self.assertNotIn('josh', reply['to'])
+        compose = self.box.save(dict(self.box.draft('compose'), to='@+birch-weaver', subject='Fresh', body='New.'))
+        status, body = self.request('/api/send', {'key': compose['key'], 'revision': compose['revision']})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.box.message(json.loads(body)['key'])['to'], 'birch-weaver-87654321')
+
+    def test_an_undeliverable_draft_is_kept(self):
+        draft = self.box.save(dict(self.box.draft('compose'), to='missing-agent', body='No partial delivery'))
+        self.assertEqual(self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})[0], 400)
+        self.assertTrue(self.box.path(draft['key']).exists())
+        self.assertEqual(self.box.listing('sent', '')['messages'], [])
+
+    def test_grouped_listing_counts_a_stored_conversation_once(self):
+        reply = web.cli('send', '--from', 'birch-weaver', '--to', '@josh', '--in-reply-to', self.id,
+                        '--subject', 'Re: A stored thread', '--body', 'Second.')
+        rows = json.loads(self.request('/api/messages?folder=inbox&q=&group=1')[1])['messages']
+        self.assertEqual([(r['key'], r['count']) for r in rows], [('inbox:' + reply + '.md', 2)])
+
+    def test_the_bridge_follows_a_flip_without_restarting(self):
+        (self.root / 'store').write_text('both\n')
+        self.assertNotIn(self.key, [m['key'] for m in self.box.listing('all', '')['messages']])
+        (self.root / 'store').write_text('sqlite\n')
+        self.assertIn(self.key, [m['key'] for m in self.box.listing('all', '')['messages']])
+
+
+# Inherited tests that drive the Maildir directly do not apply once the store is SQLite.
+for _name in [n for n in dir(WebTest) if n.startswith('test_') and n not in SqliteWebTest.__dict__]:
+    setattr(SqliteWebTest, _name, None)
+
+
 if __name__ == '__main__':
     unittest.main()
