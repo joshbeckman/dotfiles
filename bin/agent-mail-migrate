@@ -154,13 +154,17 @@ def mailboxes(agent_root: Path, human_root: Path) -> dict[str, dict[str, Path]]:
     the message reached an inbox, since the From header names the sender, so it is only
     read as a fallback for a message with no inbox copy at all."""
     found: dict[str, dict[str, Path]] = {}
+    pads = {pad.name for pad in agent_root.glob("*") if pad.is_dir()}
     for inbox in sorted(agent_root.glob("*/inbox")):
+        # agent-mail2 refuses a symlinked pad too: through a link one inbox has two names.
+        if inbox.is_symlink() or inbox.parent.is_symlink():
+            raise MigrationError(f"{inbox.parent} is a symlink; a mailbox must be a real scratchpad")
         found[inbox.parent.name] = {"inbox": inbox}
     for box in sorted(human_root.glob("*")):
         if box.is_dir():
             # One namespace in the database, so silently letting one shadow the other would
             # drop an inbox from the migration and from verify.
-            if box.name in found:
+            if box.name in pads:
                 raise MigrationError(f"{box.name} is both an agent scratchpad and a human mailbox")
             found[box.name] = {"inbox": box / "inbox", "sent": box / "sent"}
     return found
@@ -395,6 +399,15 @@ def verify(db: sqlite3.Connection, messages: dict[str, Message],
     return problems
 
 
+def runtime_agent_root() -> Path:
+    # agent-mail's precedence, or the two would read different trees.
+    return Path(
+        os.environ.get("AGENT_MAIL_ROOT")
+        or os.environ.get("AGENT_SCRATCH_ROOT")
+        or Path.home() / ".local" / "state" / "agent" / "scratchpads"
+    ).expanduser()
+
+
 def runtime_database(human_root: Path) -> Path:
     """The database agent-mail mirrors into and agent-mail2 reads."""
     raw = os.environ.get("AGENT_MAIL2_DB")
@@ -413,12 +426,14 @@ STORES = ("maildir", "both", "sqlite")
 
 def store_mode(marker: Path) -> str:
     """Must read the marker exactly as bin/agent-mail does."""
-    # The whole file less trailing newlines, which is what $(cat) yields in bin/agent-mail.
+    # A store name and trailing newlines, nothing else, byte for byte as bin/agent-mail checks:
+    # a NUL that $(cat) would drop must not read as a store here or there.
     try:
-        value = marker.read_bytes().decode("utf-8").rstrip("\n")
-    except (OSError, UnicodeDecodeError):
+        raw = marker.read_bytes()
+    except OSError:
         return "maildir"
-    return value if value in STORES else "maildir"
+    match = re.fullmatch(rb"(maildir|both|sqlite)\n*", raw)
+    return match.group(1).decode() if match else "maildir"
 
 
 def write_store(marker: Path, mode: str) -> None:
@@ -463,7 +478,7 @@ def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
     return messages
 
 
-def run_migration(db_path: Path, boxes: dict[str, dict[str, Path]], visibility: str,
+def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                   only: str | None) -> dict[str, int]:
     db = open_db(db_path)
     try:
@@ -471,7 +486,11 @@ def run_migration(db_path: Path, boxes: dict[str, dict[str, Path]], visibility: 
         # apply a view older than a mirror that committed meanwhile: discarding mail that
         # arrived, or undoing a read.
         db.execute("BEGIN IMMEDIATE")
+        # Checked at commit, so a parent filed under another thread can follow its reply.
+        db.execute("PRAGMA defer_foreign_keys = ON")
         try:
+            # Discovered under the lock too: an inbox created since an earlier pass is mail.
+            boxes = mailboxes(*roots)
             messages = collect(boxes, only)
             if only is not None:
                 # Not the file's mtime: that is the arrival time, and this runs right after the read.
@@ -490,12 +509,13 @@ def run_migration(db_path: Path, boxes: dict[str, dict[str, Path]], visibility: 
     return counts
 
 
-def run_verify(db_path: Path, boxes: dict[str, dict[str, Path]]) -> list[str]:
+def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
     db = open_db(db_path)
     try:
         # Under the write lock, so a mirror committing mid-check cannot read as drift.
         db.execute("BEGIN IMMEDIATE")
         try:
+            boxes = mailboxes(*roots)
             return verify(db, collect(boxes), boxes)
         finally:
             db.execute("ROLLBACK")
@@ -573,8 +593,7 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
     if store_mode(marker) == "maildir":
         raise MigrationError("the store is maildir, so there is no migration to finish")
     if store_mode(marker) == "both":
-        boxes = mailboxes(agent_root, human_root)
-        problems = run_verify(db_path, boxes)
+        problems = run_verify(db_path, (agent_root, human_root))
         if problems:
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
@@ -612,19 +631,20 @@ def set_store(target: str, marker: Path, db_path: Path, agent_root: Path, human_
     runtime = runtime_database(human_root)
     if db_path != runtime:
         raise MigrationError(f"agent-mail mirrors into {runtime}, so the store cannot be switched over {db_path}")
+    if agent_root.resolve() != runtime_agent_root().resolve():
+        raise MigrationError(f"agent-mail delivers under {runtime_agent_root()}, so the store cannot be switched from {agent_root}")
     saved = archive(marker, db_path, agent_root, human_root, registry, target)
     print(f"archived and restored the mail to {saved}")
-    boxes = mailboxes(agent_root, human_root)
-    run_migration(db_path, boxes, visibility, None)
-    problems = run_verify(db_path, boxes)
+    run_migration(db_path, (agent_root, human_root), visibility, None)
+    problems = run_verify(db_path, (agent_root, human_root))
     if problems:
         for problem in problems:
             print(f"agent-mail-migrate: {problem}", file=sys.stderr)
         raise MigrationError(f"{len(problems)} problems; the store marker was not changed")
     write_store(marker, "both")
     # A send between the verify and the marker write was mirrored by nobody.
-    run_migration(db_path, boxes, visibility, None)
-    problems = run_verify(db_path, boxes)
+    run_migration(db_path, (agent_root, human_root), visibility, None)
+    problems = run_verify(db_path, (agent_root, human_root))
     for problem in problems:
         print(f"agent-mail-migrate: {problem}", file=sys.stderr)
     print(f"store is both: the Maildir stays authoritative and every change is mirrored into {db_path}")
@@ -646,13 +666,7 @@ def main() -> int:
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
-    # agent-mail's precedence, or the two would read different trees.
-    agent_root = Path(
-        args.agent_root
-        or os.environ.get("AGENT_MAIL_ROOT")
-        or os.environ.get("AGENT_SCRATCH_ROOT")
-        or Path.home() / ".local" / "state" / "agent" / "scratchpads"
-    ).expanduser()
+    agent_root = Path(args.agent_root).expanduser() if args.agent_root else runtime_agent_root()
     # Resolved as agent-mail resolves it (pwd -P), or a symlinked root would put the marker
     # and the database somewhere agent-mail never looks.
     human_root = Path(
@@ -671,19 +685,18 @@ def main() -> int:
             return set_store(args.set_store, marker, db_path, agent_root, human_root, args.visibility, registry)
         if args.finish:
             return finish(marker, db_path, agent_root, human_root)
-        boxes = mailboxes(agent_root, human_root)
         if args.dry_run:
-            print(plan(collect(boxes)))
+            print(plan(collect(mailboxes(agent_root, human_root))))
             return 0
         if args.verify:
-            problems = run_verify(db_path, boxes)
+            problems = run_verify(db_path, (agent_root, human_root))
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
             print("verified" if not problems else f"{len(problems)} problems")
             return 1 if problems else 0
         if store_mode(marker) == "sqlite":
             raise MigrationError("the store is sqlite, so the Maildir is no longer the record; refusing to sync from it")
-        counts = run_migration(db_path, boxes, args.visibility, args.message)
+        counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"agent-mail-migrate: {error}", file=sys.stderr)
         return 1

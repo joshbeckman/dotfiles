@@ -33,11 +33,15 @@ SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 MAIL_STATE_ROOT="$(dirname -- "$HUMAN_MAIL_ROOT")"
 STORE_MARKER="$MAIL_STATE_ROOT/store"
 MAIL2_DB="${AGENT_MAIL2_DB:-$MAIL_STATE_ROOT/mail2.sqlite3}"
-# The whole file less trailing newlines must name a store, exactly as agent-mail-migrate
-# reads it: a first-line read let "sqlite\njunk" mean sqlite here and maildir there.
+# A store name and trailing newlines, nothing else, exactly as agent-mail-migrate checks it:
+# a first-line read let "sqlite\njunk" mean sqlite here and maildir there, and $(cat) alone
+# drops a NUL, so any byte outside a-z and newline makes the marker garbled.
 store_mode() {
-  local mode
-  mode="$(cat -- "$STORE_MARKER" 2>/dev/null)" || mode=""
+  local mode="" stray
+  if [ -f "$STORE_MARKER" ]; then
+    stray="$(LC_ALL=C tr -d 'a-z\n' 2>/dev/null <"$STORE_MARKER" | wc -c)"
+    [ "${stray// /}" = 0 ] && mode="$(cat -- "$STORE_MARKER" 2>/dev/null)"
+  fi
   case "$mode" in both|sqlite) printf '%s' "$mode" ;; *) printf maildir ;; esac
 }
 STORE_MODE="$(store_mode)"
@@ -384,6 +388,15 @@ resolve_inbox() {
     0) echo "$MAIL_ROOT/$id/inbox"; return 0 ;;
     *) die "ambiguous recipient '$id'; matches: ${hits[*]}" ;;
   esac
+}
+
+# The SQLite store holds text, so once it mirrors, undecodable mail would be delivered here
+# and fail every repair there; refuse it before delivery instead.
+require_utf8() {
+  [ "$(store_mode)" = maildir ] && return 0
+  iconv -f UTF-8 -t UTF-8 <"$1" >/dev/null 2>&1 && return 0
+  echo "agent-mail: message is not valid UTF-8; the SQLite store cannot hold it" >&2
+  return 1
 }
 
 ensure_maildir() {
@@ -733,6 +746,7 @@ cmd_send() {
       cat
     fi
   } > "$source_tmp"
+  require_utf8 "$source_tmp" || { rm -f "$source_tmp"; exit 1; }
 
   local tmp dst
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
@@ -1061,6 +1075,7 @@ cmd_deliver() {
     expanded_to+=", ${recipients[$i]}"
   done
 
+  require_utf8 "$draft" || exit 1
   local had_msgid="$msgid"
   [ -n "$msgid" ] || msgid="$(gen_msgid "${subject:-(no subject)}")"
   for inbox in "${inboxes[@]}"; do

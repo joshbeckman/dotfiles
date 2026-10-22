@@ -269,6 +269,69 @@ mkdir -p "$AGENT_HUMAN_MAIL_ROOT/$bob"
 set +e; migrate >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 1 ]] && grep -Fq "$bob is both an agent scratchpad and a human mailbox" "$tmp/err" || fail "a name collision was not refused"
 
+# --- findings from the second review pass ----------------------------------------------
+# The first mail to a fresh inbox, arriving while --set-store waits for the lock, is migrated.
+realm fresh
+rmdir "$AGENT_MAIL_ROOT/$carol" && mkdir "$AGENT_MAIL_ROOT/$carol"
+AGENT_MAIL2_DB="$db" "$bin/agent-mail2" init >/dev/null
+python3 - "$db" <<'PY' &
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute("begin immediate")
+time.sleep(3)
+db.execute("rollback")
+PY
+locker=$!
+sleep 0.3
+migrate --set-store both >/dev/null 2>&1 &
+switcher=$!
+sleep 1.5
+first="$(as $alice "$bin/agent-mail" send --to $carol --subject First -m 'first ever' 2>/dev/null | tail -1)"
+wait "$locker" "$switcher"
+[[ -f "$AGENT_MAIL_ROOT/$carol/inbox/new/$first.md" ]] || fail "the fresh-inbox delivery did not happen"
+verified || fail "mail to an inbox created during --set-store was left out"
+
+# A NUL in the marker is garbled to both tools, not a store to one of them.
+realm nul
+printf 'sqlite\0\n' >"$dir/state/store"
+[[ "$(cmd store | cut -f1)" == maildir ]] || fail "agent-mail read a marker with a NUL as a store"
+migrate >/dev/null || fail "the migrator refused under a marker it should read as maildir"
+
+# A parent filed under another thread still lands before its reply.
+realm crossthread
+mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
+printf 'From: %s\nMessage-ID: z-parent\nDate: 2026-10-01T10:00:00Z\nSubject: p\n\nparent\n' "$alice" >"$AGENT_MAIL_ROOT/$bob/inbox/new/z-parent.md"
+printf 'From: %s\nMessage-ID: a-child\nIn-Reply-To: z-parent\nDate: 2026-10-01T10:00:00Z\nSubject: c\n\nchild\n' "$alice" >"$AGENT_MAIL_ROOT/$bob/inbox/new/a-child.md"
+migrate >/dev/null || fail "a reply whose parent sits in another thread aborted the migration"
+verified || fail "the cross-thread parent link was not kept"
+
+# Names that would give one inbox two identities, or two inboxes one, are refused.
+realm names
+ln -s "$AGENT_MAIL_ROOT/$bob" "$AGENT_MAIL_ROOT/link-agent-44444444"
+set +e; "$bin/agent-mail2" resolve link-agent-44444444 >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'is a symlink' "$tmp/err" || fail "agent-mail2 resolved a symlinked pad"
+mkdir -p "$AGENT_MAIL_ROOT/link-agent-44444444/inbox/new"
+set +e; migrate >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'is a symlink' "$tmp/err" || fail "the migrator read a symlinked pad"
+rm "$AGENT_MAIL_ROOT/link-agent-44444444"
+mkdir -p "$AGENT_HUMAN_MAIL_ROOT/$bob"
+for address in $bob "humans/$bob"; do
+  set +e; "$bin/agent-mail2" resolve "$address" >/dev/null 2>"$tmp/err"; status=$?; set -e
+  [[ "$status" == 1 ]] && grep -Fq 'both an agent scratchpad and a human mailbox' "$tmp/err" || fail "agent-mail2 resolved a colliding name: $address"
+done
+
+# Under both, undecodable mail is refused before delivery rather than failing every repair.
+realm utf8
+migrate --set-store both >/dev/null
+set +e; as $alice cmd send --to $bob --subject Bytes --body $'\xff\xfe' >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'not valid UTF-8' "$tmp/err" || fail "undecodable mail was delivered under both"
+[[ -z "$(find "$AGENT_MAIL_ROOT/$bob" -type f -name '*' ! -name '.*' -print -quit 2>/dev/null)" ]] || fail "a refused send left files behind"
+
+# Switching the store from any tree but the one agent-mail delivers into is refused.
+realm otherroot
+set +e; "$bin/agent-mail-migrate" --agent-root "$tmp/empty-pads" --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 && ! -e "$dir/state/store" ]] && grep -Fq 'cannot be switched from' "$tmp/err" || fail "set-store accepted a tree agent-mail does not deliver into"
+
 # --- a long random run of every mutating command keeps the mirror exact ------------------
 realm fuzz
 migrate --set-store both >/dev/null

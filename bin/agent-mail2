@@ -169,42 +169,14 @@ def connect() -> sqlite3.Connection:
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version == SCHEMA_VERSION:
         return db
-    if version not in (0, 1, 2):
+    if version != 0:
         db.close()
         raise MailError(f"unsupported schema version {version}; expected {SCHEMA_VERSION}")
+    # The v1 and v2 upgrade paths are gone: no database of either version was ever created,
+    # and they ran outside a transaction, so a crash mid-upgrade could strand deliveries.
+    # Creating a fresh schema is idempotent, so a crash here is repaired by the next connect.
     db.execute("PRAGMA journal_mode = WAL")
-    # v1 had no thread visibility; every thread was visible to every mailbox.
-    if version == 1:
-        db.execute("ALTER TABLE threads ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
-    had_deliveries = bool(
-        db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'"
-        ).fetchone()
-    )
     db.executescript(SCHEMA)
-    # v3 lifts the recipient list out of deliveries, where it shared a row with the mutable
-    # read/discard state, into an append-only table, and points deliveries at it with a
-    # foreign key. SQLite cannot add a constraint in place, so rebuild the table.
-    if version in (1, 2) and had_deliveries:
-        db.execute(
-            """INSERT OR IGNORE INTO message_recipients(message_id, recipient_mailbox_id)
-               SELECT message_id, recipient_mailbox_id FROM deliveries"""
-        )
-        db.executescript(
-            """CREATE TABLE deliveries_v3 (
-                 message_id TEXT NOT NULL REFERENCES messages(message_id),
-                 recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
-                 read_at INTEGER,
-                 discarded_at INTEGER,
-                 PRIMARY KEY (message_id, recipient_mailbox_id),
-                 FOREIGN KEY (message_id, recipient_mailbox_id)
-                   REFERENCES message_recipients(message_id, recipient_mailbox_id)
-               );
-               INSERT INTO deliveries_v3(message_id, recipient_mailbox_id, read_at, discarded_at)
-                 SELECT message_id, recipient_mailbox_id, read_at, discarded_at FROM deliveries;
-               DROP TABLE deliveries;
-               ALTER TABLE deliveries_v3 RENAME TO deliveries;"""
-        )
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     os.chmod(path, 0o600)
     return db
@@ -275,6 +247,17 @@ def matching_pads(root: str, prefix: str) -> list[str]:
     return sorted(p for p in glob.glob(glob.escape(os.path.join(root, prefix)) + "-*") if os.path.isdir(p))
 
 
+def agent_box(pad: str) -> Mailbox:
+    # A symlinked pad gives one inbox two names, and a human mailbox of the same name would
+    # share its row: refuse both rather than deliver to whichever spelling resolved first.
+    name = os.path.basename(pad)
+    if os.path.islink(pad):
+        raise MailError(f"scratchpad {pad} is a symlink; a mailbox must be a real directory")
+    if os.path.isdir(os.path.join(human_root(), name)):
+        raise MailError(f"{name} is both an agent scratchpad and a human mailbox")
+    return Mailbox(name, "agent", pad)
+
+
 def resolve(raw: str) -> Mailbox:
     """An agent address with no scratchpad still resolves, to the pad it would have, so
     send can name the missing pad."""
@@ -290,6 +273,8 @@ def resolve(raw: str) -> Mailbox:
         raise MailError(f"invalid mailbox address: {identifier!r}")
     handle = human_handle(identifier)
     if handle:
+        if os.path.isdir(os.path.join(agent_root(), handle)):
+            raise MailError(f"{handle} is both an agent scratchpad and a human mailbox")
         return Mailbox(handle, "human")
 
     registry = registry_root()
@@ -323,34 +308,31 @@ def resolve(raw: str) -> Mailbox:
         for base in dict.fromkeys((name, without_realm(name))):
             for suffix in dict.fromkeys((sid[:8], sid)):
                 candidate = os.path.join(root, f"{base}-{suffix}")
-                if os.path.isdir(candidate):
-                    physical = os.path.realpath(candidate)
-                    if physical not in pads:
-                        pads.append(physical)
+                if os.path.isdir(candidate) and candidate not in pads:
+                    pads.append(candidate)
         if len(pads) == 1:
-            return Mailbox(os.path.basename(pads[0]), "agent", pads[0])
+            return agent_box(pads[0])
         if not pads:
             raise MailError(f"registered recipient '{identifier}' has no session-qualified scratchpad")
         raise MailError(f"ambiguous scratchpads for registered recipient '{identifier}': {' '.join(pads)}")
 
     pad = os.path.join(root, identifier)
     if os.path.isdir(pad):
-        physical = os.path.realpath(pad)
-        return Mailbox(os.path.basename(physical), "agent", physical)
+        return agent_box(pad)
     if SESSION_SUFFIX.search(identifier):
-        return Mailbox(identifier, "agent", pad)
+        return agent_box(pad)
     hits = matching_pads(root, identifier)
     # Pads made before the realm-suffix convention are <base>-<session>, so retry the
     # canonical <base>-of-<realm> handle without its realm.
     if not hits and "-of-" in identifier:
         bare = without_realm(identifier)
         if os.path.isdir(os.path.join(root, bare)):
-            return Mailbox(bare, "agent", os.path.join(root, bare))
+            return agent_box(os.path.join(root, bare))
         hits = matching_pads(root, bare)
     if len(hits) == 1:
-        return Mailbox(os.path.basename(hits[0]), "agent", hits[0])
+        return agent_box(hits[0])
     if not hits:
-        return Mailbox(identifier, "agent", pad)
+        return agent_box(pad)
     raise MailError(f"ambiguous recipient '{identifier}'; matches: {' '.join(hits)}")
 
 
