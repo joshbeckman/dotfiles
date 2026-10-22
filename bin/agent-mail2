@@ -7,7 +7,8 @@ the scratchpad an agent address resolves to, or the human handle, so every spell
 recipient reaches one mailbox, and a recipient with no scratchpad is refused.
 
 Exit status: 0 on success, 1 on any error, 2 on a usage error, 3 when --if-head names a
-head that is no longer current (re-read the thread and resend).
+head that is no longer current (re-read the thread and resend), 4 when a message exceeds
+--max-bytes, 5 when the runtime store is not SQLite yet (use agent-mail).
 """
 
 from __future__ import annotations
@@ -25,7 +26,10 @@ import time
 # this tool's latency.
 
 STALE_THREAD = 3
-SCHEMA_VERSION = 3
+OVERSIZED = 4
+WRONG_STORE = 5
+SCHEMA_VERSION = 4
+STORE_MARKER = re.compile(rb"(maildir|both|sqlite)\n*")
 ADDRESS = re.compile(r"^[A-Za-z0-9._+@-]+$")
 AGENT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
 TEAM_MEMBER = re.compile(r"^@\+[a-z0-9]+(?:-[a-z0-9]+)+$")
@@ -57,6 +61,8 @@ CREATE TABLE IF NOT EXISTS messages (
   sent_at INTEGER NOT NULL,
   subject TEXT,
   body TEXT NOT NULL,
+  reply_to_address TEXT,
+  team_to TEXT,
   UNIQUE (thread_id, sequence)
 );
 CREATE TABLE IF NOT EXISTS message_recipients (
@@ -69,9 +75,16 @@ CREATE TABLE IF NOT EXISTS deliveries (
   recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
   read_at INTEGER,
   discarded_at INTEGER,
+  delivery_seq INTEGER,
+  escalated_at INTEGER,
   PRIMARY KEY (message_id, recipient_mailbox_id),
   FOREIGN KEY (message_id, recipient_mailbox_id)
     REFERENCES message_recipients(message_id, recipient_mailbox_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS deliveries_by_seq ON deliveries(delivery_seq);
+CREATE TABLE IF NOT EXISTS send_keys (
+  idempotency_key TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES messages(message_id)
 );
 CREATE INDEX IF NOT EXISTS messages_thread_sequence
   ON messages(thread_id, sequence DESC);
@@ -80,7 +93,8 @@ CREATE INDEX IF NOT EXISTS message_recipients_by_recipient
 CREATE INDEX IF NOT EXISTS deliveries_recipient_state
   ON deliveries(recipient_mailbox_id, discarded_at, read_at, message_id);
 CREATE TRIGGER IF NOT EXISTS messages_no_update
-  BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
+  BEFORE UPDATE ON messages WHEN NOT (APPEND_ONLY)
+  BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS messages_no_delete
   BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS message_recipients_no_update
@@ -90,8 +104,31 @@ CREATE TRIGGER IF NOT EXISTS message_recipients_no_delete
 """
 
 
+# Everything about a message is fixed, except that a routing header the v3 schema could not
+# store may be filled in once, from the Maildir copy, and never changed after.
+APPEND_ONLY = """NEW.message_id IS OLD.message_id AND NEW.thread_id IS OLD.thread_id
+  AND NEW.sequence IS OLD.sequence AND NEW.sender_mailbox_id IS OLD.sender_mailbox_id
+  AND NEW.reply_to_message_id IS OLD.reply_to_message_id AND NEW.sent_at IS OLD.sent_at
+  AND NEW.subject IS OLD.subject AND NEW.body IS OLD.body
+  AND (OLD.reply_to_address IS NULL OR NEW.reply_to_address IS OLD.reply_to_address)
+  AND (OLD.team_to IS NULL OR NEW.team_to IS OLD.team_to)"""
+SCHEMA = SCHEMA.replace("APPEND_ONLY", APPEND_ONLY)
+
+
 class MailError(Exception):
     pass
+
+
+class WrongStore(MailError):
+    def __init__(self, mode: str):
+        self.mode = mode
+        super().__init__(f"the store marker says {mode}, so the Maildir holds the mail; use agent-mail")
+
+
+class Oversized(MailError):
+    def __init__(self, message_id: str, size: int, limit: int):
+        self.message_id, self.size, self.limit = message_id, size, limit
+        super().__init__(f"oversized: {size} bytes")
 
 
 class StaleThread(MailError):
@@ -152,25 +189,38 @@ def database_path() -> str:
     return os.path.join(os.path.dirname(os.path.realpath(human_root())), "mail2.sqlite3")
 
 
-def require_writable() -> None:
-    """Refuse to change the runtime database unless the store marker says sqlite.
+def state_root() -> str:
+    return os.path.dirname(os.path.realpath(human_root()))
 
-    Under maildir or both the Maildir is the record, and the next reconciliation would mark
-    a SQLite-only delivery discarded and revert a SQLite-only read: the send would succeed
-    and its recipient would never see it. A database named by AGENT_MAIL2_DB elsewhere is
-    not the runtime store and stays writable.
-    """
-    root = os.path.dirname(os.path.realpath(human_root()))
-    if os.path.realpath(database_path()) != os.path.realpath(os.path.join(root, "mail2.sqlite3")):
-        return
+
+def store_mode() -> str:
+    # Byte for byte as bin/agent-mail and agent-mail-migrate read it.
     try:
-        with open(os.path.join(root, "store"), "rb") as source:
-            marker = re.fullmatch(rb"(maildir|both|sqlite)\n*", source.read())
+        with open(os.path.join(state_root(), "store"), "rb") as source:
+            marker = STORE_MARKER.fullmatch(source.read())
     except OSError:
         marker = None
-    mode = marker.group(1).decode() if marker else "maildir"
-    if mode != "sqlite":
-        raise MailError(f"the store marker says {mode}, so the Maildir holds the mail; use agent-mail")
+    return marker.group(1).decode() if marker else "maildir"
+
+
+def is_runtime_database() -> bool:
+    return os.path.realpath(database_path()) == os.path.realpath(os.path.join(state_root(), "mail2.sqlite3"))
+
+
+def require_authoritative() -> None:
+    """Refuse the runtime database as a source of record unless the marker says sqlite.
+
+    Under maildir or both the Maildir is the record. A SQLite-only delivery would be marked
+    discarded and a SQLite-only read reverted by the next reconciliation, and a receiver
+    reading the mirror could miss mail whose mirror failed. A database named by
+    AGENT_MAIL2_DB elsewhere is not the runtime store and is unaffected.
+    """
+    if is_runtime_database() and store_mode() != "sqlite":
+        raise WrongStore(store_mode())
+
+
+def require_writable() -> None:
+    require_authoritative()
 
 
 def connect() -> sqlite3.Connection:
@@ -190,6 +240,9 @@ def connect() -> sqlite3.Connection:
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version == SCHEMA_VERSION:
         return db
+    if version == 3:
+        upgrade_v3(db)
+        return db
     if version != 0:
         db.close()
         raise MailError(f"unsupported schema version {version}; expected {SCHEMA_VERSION}")
@@ -201,6 +254,51 @@ def connect() -> sqlite3.Connection:
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     os.chmod(path, 0o600)
     return db
+
+
+def upgrade_v3(db: sqlite3.Connection) -> None:
+    """v4 adds delivery order, escalation state and the routing headers the Maildir carried.
+
+    One transaction, statement by statement: executescript would commit midway, and a crash
+    between ALTERs would leave a v3 database that the next upgrade could not finish. The
+    version is read again under the lock, so two processes upgrading at once do it once.
+    """
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        if db.execute("PRAGMA user_version").fetchone()[0] == 3:
+            for statement in (
+                "ALTER TABLE messages ADD COLUMN reply_to_address TEXT",
+                "ALTER TABLE messages ADD COLUMN team_to TEXT",
+                "ALTER TABLE deliveries ADD COLUMN delivery_seq INTEGER",
+                "ALTER TABLE deliveries ADD COLUMN escalated_at INTEGER",
+                """CREATE TEMP TABLE delivery_order AS
+                     SELECT d.rowid AS row, ROW_NUMBER() OVER (
+                       ORDER BY m.sent_at, d.message_id, d.recipient_mailbox_id) AS seq
+                     FROM deliveries d JOIN messages m USING(message_id)""",
+                "UPDATE deliveries SET delivery_seq = (SELECT seq FROM delivery_order WHERE row = deliveries.rowid)",
+                "DROP TABLE delivery_order",
+                "CREATE UNIQUE INDEX deliveries_by_seq ON deliveries(delivery_seq)",
+                """CREATE TABLE send_keys (idempotency_key TEXT PRIMARY KEY,
+                     message_id TEXT NOT NULL REFERENCES messages(message_id))""",
+                # Whoever upgrades, the headers v3 dropped are owed a full pass from the Maildir.
+                # A row, not a flag in this process: the next migrator run sees it whichever
+                # command upgraded, and it survives a crash before the pass.
+                "CREATE TABLE backfill_pending (since INTEGER NOT NULL)",
+                f"INSERT INTO backfill_pending VALUES ({now_us()})",
+                "DROP TRIGGER messages_no_update",
+                f"""CREATE TRIGGER messages_no_update BEFORE UPDATE ON messages WHEN NOT ({APPEND_ONLY})
+                    BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END""",
+                f"PRAGMA user_version = {SCHEMA_VERSION}",
+            ):
+                db.execute(statement)
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+
+
+def next_delivery_seq(db: sqlite3.Connection) -> int:
+    return db.execute("SELECT COALESCE(MAX(delivery_seq), 0) + 1 FROM deliveries").fetchone()[0]
 
 
 # A rule-for-rule port of resolve_inbox in bin/agent-mail; test/agent-mail2 compares the two.
@@ -398,7 +496,7 @@ def idle_hours(pad: str) -> int:
     return int((time.time() - mtime) // 3600)
 
 
-def expand_recipients(raw_values: list[str]) -> list[Mailbox]:
+def expand_recipients(raw_values: list[str], teams: list[str] | None = None) -> list[Mailbox]:
     addresses: list[str] = []
     for raw in raw_values:
         for value in raw.split(","):
@@ -406,6 +504,8 @@ def expand_recipients(raw_values: list[str]) -> list[Mailbox]:
             if not value:
                 raise MailError("empty recipient")
             if is_team(value):
+                if teams is not None:
+                    teams.append(value if value.startswith("@") else f"@{value}")
                 for member in team_members(value):
                     if resolve(member).kind != "agent":
                         raise MailError(f"team member conflicts with a human address: {member}")
@@ -440,6 +540,52 @@ def ring(recipients: list[Mailbox]) -> None:
             os.replace(temporary, os.path.join(doorbells, mailbox.id))
     except OSError:
         pass
+
+
+def notify_josh(title: str, message: str, away_only: bool) -> bool:
+    import shlex
+    import shutil
+    import subprocess
+
+    command = shutil.which("notify-josh")
+    if not command:
+        return False
+    # agent-mail web, not agent-mail inbox (Neovim, which Josh no longer uses) and not a bare
+    # URL: the launcher starts or reuses the bridge and opens it with the tab's token.
+    click = f"{shlex.quote(os.path.join(HERE, 'agent-mail'))} web"
+    argv = [command, *(["--away-only"] if away_only else []), "--from", "agent-mail",
+            "--execute", click, title, message]
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def web_inbox_open() -> bool:
+    # An open web app polls and shows its own notification, so the banner would be a duplicate.
+    try:
+        return time.time() - os.stat(os.path.join(human_root(), "josh", ".web-notifier")).st_mtime < 150
+    except OSError:
+        return False
+
+
+def notify_delivery(db: sqlite3.Connection, mid: str, author: str, subject: str | None,
+                    recipients: list[Mailbox]) -> None:
+    """Tell Josh at once when mail reaches him, as agent-mail does. Only for the runtime store:
+    a private database is a test or an experiment, and must not reach Josh."""
+    if not is_runtime_database() or not any(r.id == "josh" for r in recipients):
+        return
+    # After the commit, so nothing here may fail the send: a non-zero exit for delivered mail
+    # invites a duplicate. A notification that did not happen is left for the sweep.
+    try:
+        if notify_josh(f"Agent mail: {subject or '(no subject)'}",
+                       f"From {author}. Read with: agent-mail read --to @josh", web_inbox_open()):
+            db.execute("UPDATE deliveries SET escalated_at = ? WHERE message_id = ? "
+                       "AND recipient_mailbox_id = 'josh' AND escalated_at IS NULL", (now_us(), mid))
+            return
+    except (sqlite3.Error, OSError):
+        pass
+    print(f"{PROG}: immediate Josh notification failed; unread sweep will retry", file=sys.stderr)
 
 
 def warn_idle(recipients: list[Mailbox]) -> None:
@@ -629,6 +775,11 @@ def append_message(args: argparse.Namespace) -> str:
         direct = list(args.to or [])
         private = bool(args.private)
 
+        reply_address = None
+        if args.reply_to:
+            if is_team(args.reply_to):
+                raise MailError("a team cannot be Reply-To")
+            reply_address = claimed_sender(args.reply_to).id
         if args.reply_all:
             if direct:
                 raise MailError("--reply-all and --to are mutually exclusive")
@@ -637,10 +788,9 @@ def append_message(args: argparse.Namespace) -> str:
             if thread_id is not None and thread_id != source["thread_id"]:
                 raise MailError("--reply-all message belongs to another --thread")
             thread_id = source["thread_id"]
-            direct = [value for value in (source["sender_mailbox_id"], *recipients_for(db, reply_to))
-                      if value != author.id]
-            if not direct:
-                raise MailError("--reply-all source has no other recipients")
+            # Reply-To stands in for the sender, as it does in agent-mail.
+            answer = source["reply_to_address"] or source["sender_mailbox_id"]
+            direct = [answer, *recipients_for(db, reply_to)]
             if subject is None:
                 source_subject = source["subject"] or "(no subject)"
                 subject = source_subject if source_subject.startswith("Re: ") else f"Re: {source_subject}"
@@ -654,7 +804,13 @@ def append_message(args: argparse.Namespace) -> str:
         elif thread_id is not None:
             thread_id = resolve_thread(db, thread_id)
 
-        recipients = expand_recipients(direct)
+        teams: list[str] = []
+        recipients = expand_recipients(direct, teams)
+        if args.reply_all:
+            # After resolution: a Reply-To alias of the author must not deliver to the author.
+            recipients = [r for r in recipients if r.id != author.id]
+            if not recipients:
+                raise MailError("--reply-all source has no other recipients")
         new_thread = thread_id is None
         if new_thread:
             if expected not in (None, "none"):
@@ -664,6 +820,14 @@ def append_message(args: argparse.Namespace) -> str:
 
         db.execute("BEGIN IMMEDIATE")
         try:
+            # A retry of a send whose outcome was lost (a killed caller, a timeout) returns the
+            # message already delivered rather than delivering it twice.
+            if args.idempotency_key:
+                done = db.execute("SELECT message_id FROM send_keys WHERE idempotency_key = ?",
+                                  (args.idempotency_key,)).fetchone()
+                if done:
+                    db.execute("ROLLBACK")
+                    return done[0]
             mid = message_id(subject)
             timestamp = now_us()
             if new_thread:
@@ -699,13 +863,20 @@ def append_message(args: argparse.Namespace) -> str:
             db.execute(
                 """INSERT INTO messages(
                      message_id, thread_id, sequence, sender_mailbox_id,
-                     reply_to_message_id, sent_at, subject, body
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (mid, thread_id, sequence, author.id, reply_to, timestamp, subject, body),
+                     reply_to_message_id, sent_at, subject, body, reply_to_address, team_to
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mid, thread_id, sequence, author.id, reply_to, timestamp, subject, body,
+                 reply_address, ", ".join(teams) or None),
             )
             pairs = [(mid, recipient.id) for recipient in recipients]
             db.executemany("INSERT INTO message_recipients(message_id, recipient_mailbox_id) VALUES (?, ?)", pairs)
-            db.executemany("INSERT INTO deliveries(message_id, recipient_mailbox_id) VALUES (?, ?)", pairs)
+            if args.idempotency_key:
+                db.execute("INSERT INTO send_keys VALUES (?, ?)", (args.idempotency_key, mid))
+            first = next_delivery_seq(db)
+            db.executemany(
+                "INSERT INTO deliveries(message_id, recipient_mailbox_id, delivery_seq) VALUES (?, ?, ?)",
+                [(mid, recipient, first + offset) for offset, (_, recipient) in enumerate(pairs)],
+            )
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
@@ -717,6 +888,7 @@ def append_message(args: argparse.Namespace) -> str:
                 file=sys.stderr,
             )
         ring(recipients)
+        notify_delivery(db, mid, author.id, subject, recipients)
         warn_idle(recipients)
         return mid
     finally:
@@ -732,6 +904,8 @@ def message_record(db: sqlite3.Connection, row: sqlite3.Row, body: bool = False)
         "to": recipients_for(db, row["message_id"]),
         "date": format_time(row["sent_at"]),
         "in_reply_to": row["reply_to_message_id"],
+        "reply_to": row["reply_to_address"],
+        "team_to": row["team_to"],
         "subject": row["subject"],
     }
     if body:
@@ -746,9 +920,12 @@ def print_json(value: object) -> None:
 
 def render_message(db: sqlite3.Connection, row: sqlite3.Row) -> str:
     recipients = ", ".join(recipients_for(db, row["message_id"]))
-    lines = [
-        f"From: {row['sender_mailbox_id']}",
-        f"To: {recipients}",
+    lines = [f"From: {row['sender_mailbox_id']}", f"To: {recipients}"]
+    if row["team_to"]:
+        lines.append(f"Team-To: {row['team_to']}")
+    if row["reply_to_address"]:
+        lines.append(f"Reply-To: {row['reply_to_address']}")
+    lines += [
         f"Date: {format_time(row['sent_at'])}",
         f"Message-ID: {row['message_id']}",
         f"Thread-ID: {row['thread_id']}",
@@ -770,7 +947,33 @@ def cmd_send(args: argparse.Namespace) -> None:
     print(append_message(args))
 
 
+def service_mailbox(raw: str) -> Mailbox:
+    """A service such as agent-run owns exactly the pad of its own name. Anything that could
+    retarget it, an alias, a registered agent's claim, a symlink or a human, is refused."""
+    name = strip_sigils(raw)
+    if os.path.lexists(os.path.join(registry_root(), name)):
+        raise MailError(f"{name} is a registered agent, not a service mailbox")
+    mailbox = resolve(name)
+    pad = os.path.join(agent_root(), name)
+    if mailbox.kind != "agent" or mailbox.id != name or not os.path.isdir(pad) or os.path.islink(pad):
+        raise MailError(f"{name} is not exactly an existing service scratchpad")
+    if os.path.dirname(os.path.realpath(pad)) != agent_root():
+        raise MailError(f"{name} resolves outside the scratch root")
+    return mailbox
+
+
 def cmd_resolve(args: argparse.Namespace) -> None:
+    if args.json or args.service:
+        records = []
+        for raw in args.address:
+            mailbox = service_mailbox(raw) if args.service else resolve(raw)
+            pad = mailbox.pad if mailbox.kind == "agent" and os.path.isdir(mailbox.pad or "") else None
+            records.append({"version": 1, "mailbox": mailbox.id, "kind": mailbox.kind,
+                            "pad": os.path.realpath(pad) if pad else None,
+                            "doorbell": os.path.join(state_root(), "doorbells", mailbox.id),
+                            "store": store_mode()})
+        print_json(records[0] if len(records) == 1 else records)
+        return
     missing = False
     for raw in args.address:
         mailbox = resolve(raw)
@@ -795,16 +998,26 @@ def cmd_head(args: argparse.Namespace) -> None:
         db.close()
 
 
+def cursor_value(cursor: str) -> int:
+    if not re.fullmatch(r"d[0-9]{1,18}", cursor or ""):
+        raise MailError(f"invalid cursor: {cursor!r}")
+    return int(cursor[1:])
+
+
 def cmd_scan(args: argparse.Namespace) -> None:
+    require_authoritative()
     db = connect()
     try:
         if args.limit < 1:
             raise MailError("--limit must be positive")
         mailbox = None if args.all else mailbox_id(args.to) if args.to else sender_id()
-        sql = """SELECT d.recipient_mailbox_id, d.read_at, m.*
+        sql = """SELECT d.recipient_mailbox_id, d.read_at, d.delivery_seq, m.*
                  FROM deliveries d JOIN messages m USING(message_id)
                  WHERE d.discarded_at IS NULL"""
         params: list[object] = []
+        if args.after:
+            sql += " AND d.delivery_seq > ?"
+            params.append(cursor_value(args.after))
         if args.state == "unread":
             sql += " AND d.read_at IS NULL"
         elif args.state == "read":
@@ -821,16 +1034,26 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if args.contains:
             sql += " AND (instr(COALESCE(m.subject, ''), ?) > 0 OR instr(m.body, ?) > 0)"
             params.extend([args.contains, args.contains])
-        sql += " ORDER BY m.sent_at, m.thread_id, m.sequence LIMIT ?"
-        params.append(args.limit)
+        # Delivery order, not sent_at: a sender's clock can run backwards, and a page boundary
+        # drawn on dates could skip mail delivered later with an earlier date.
+        sql += " ORDER BY d.delivery_seq LIMIT ?"
+        params.append(args.limit + 1)
         rows = db.execute(sql, params).fetchall()
+        more = len(rows) > args.limit
+        rows = rows[:args.limit]
         if args.json:
-            print_json([
-                dict(message_record(db, row), mailbox=row["recipient_mailbox_id"],
-                     state="read" if row["read_at"] is not None else "unread",
-                     read_at=format_time(row["read_at"]))
-                for row in rows
-            ])
+            print_json({
+                "version": 1,
+                "store": store_mode(),
+                "messages": [
+                    dict(message_record(db, row), mailbox=row["recipient_mailbox_id"],
+                         state="read" if row["read_at"] is not None else "unread",
+                         read_at=format_time(row["read_at"]), delivery_seq=row["delivery_seq"],
+                         bytes=len(render_message(db, row).encode("utf-8")))
+                    for row in rows
+                ],
+                "next": f"d{rows[-1]['delivery_seq']}" if more else None,
+            })
             return
         if not rows:
             print("(no matching messages)")
@@ -907,8 +1130,7 @@ def cmd_search(args: argparse.Namespace) -> None:
 
 
 def cmd_read(args: argparse.Namespace) -> None:
-    if not args.peek:
-        require_writable()
+    require_authoritative()
     db = connect()
     try:
         mailbox = mailbox_id(args.to) if args.to else sender_id()
@@ -919,18 +1141,27 @@ def cmd_read(args: argparse.Namespace) -> None:
             return db.execute(
                 """SELECT m.* FROM deliveries d JOIN messages m USING(message_id)
                    WHERE d.recipient_mailbox_id = ? AND d.read_at IS NULL AND d.discarded_at IS NULL
-                   ORDER BY m.sent_at, m.message_id LIMIT 1""",
+                   ORDER BY d.delivery_seq LIMIT 1""",
                 (mailbox,),
             ).fetchone()
 
+        def bounded(row: sqlite3.Row | None) -> bytes:
+            if row is None:
+                raise MailError("no matching message")
+            raw = render_message(db, row).encode("utf-8")
+            # Checked before anything is marked, so an oversized message stays unread.
+            if args.max_bytes is not None and len(raw) > args.max_bytes:
+                raise Oversized(row["message_id"], len(raw), args.max_bytes)
+            return raw
+
         if args.peek:
             row = pick()
+            raw = bounded(row)
         else:
             db.execute("BEGIN IMMEDIATE")
             try:
                 row = pick()
-                if row is None:
-                    raise MailError("no matching message")
+                raw = bounded(row)
                 db.execute(
                     """UPDATE deliveries SET read_at = COALESCE(read_at, ?)
                        WHERE message_id = ? AND recipient_mailbox_id = ? AND discarded_at IS NULL""",
@@ -940,11 +1171,14 @@ def cmd_read(args: argparse.Namespace) -> None:
             except Exception:
                 db.execute("ROLLBACK")
                 raise
-        if row is None:
-            raise MailError("no matching message")
         current = head(db, row["thread_id"])
         if args.json:
-            print_json(dict(message_record(db, row, body=True), head=current["message_id"]))
+            print_json(dict(version=1, store=store_mode(), **message_record(db, row, body=True),
+                            head=current["message_id"], raw=raw.decode("utf-8"), bytes=len(raw)))
+        elif args.raw:
+            sys.stdout.flush()
+            sys.stdout.buffer.write(raw)
+            sys.stdout.buffer.flush()
         else:
             print(render_message(db, row), end="")
         print(
@@ -1004,6 +1238,53 @@ def cmd_discard(args: argparse.Namespace) -> None:
         db.close()
 
 
+def cmd_sweep(args: argparse.Namespace) -> None:
+    """Escalate mail nobody has read for --hours, as agent-mail sweep does. Any live session
+    can run it, because the recipient of ignored mail is by definition not running."""
+    require_authoritative()
+    # An experiment's database never notifies Josh; it only reports what it would escalate.
+    dry_run = args.dry_run or not is_runtime_database()
+    db = connect()
+    try:
+        now = now_us()
+        # escalated_at is positive once Josh was told, negative while a sweep is telling him.
+        # A negative claim older than ten minutes belonged to a sweep that died, so it is open.
+        open_claim = "(d.escalated_at IS NULL OR (d.escalated_at < 0 AND -d.escalated_at < :stale))"
+        rows = db.execute(
+            f"""SELECT d.message_id, d.recipient_mailbox_id, d.escalated_at, m.sender_mailbox_id,
+                       m.subject, m.sent_at
+                FROM deliveries d JOIN messages m USING(message_id)
+                WHERE d.read_at IS NULL AND d.discarded_at IS NULL AND {open_claim}
+                  AND m.sent_at <= :cutoff ORDER BY d.delivery_seq""",
+            {"stale": now - 600_000_000, "cutoff": now - int(args.hours * 3600 * 1_000_000)},
+        ).fetchall()
+        for row in rows:
+            age = (now - row["sent_at"]) // 3_600_000_000
+            line = (f"{row['recipient_mailbox_id']}\t{row['message_id']}\tfrom:{row['sender_mailbox_id']}\t"
+                    f"{row['subject'] or '(no subject)'}\t{age}h")
+            if dry_run:
+                print(f"would escalate\t{line}")
+                continue
+            key = (row["message_id"], row["recipient_mailbox_id"])
+            # The claim is the update, re-checking that the mail is still unread: concurrent
+            # sweeps race, and only the one that changes the row notifies.
+            claimed = db.execute(
+                "UPDATE deliveries SET escalated_at = ? WHERE message_id = ? AND recipient_mailbox_id = ? "
+                "AND read_at IS NULL AND discarded_at IS NULL AND escalated_at IS ?",
+                (-now, *key, row["escalated_at"]),
+            ).rowcount
+            if not claimed:
+                continue
+            told = notify_josh(f"Unread agent mail ({age}h)",
+                               f"{row['recipient_mailbox_id']} has not read \"{row['subject'] or '(no subject)'}\" "
+                               f"from {row['sender_mailbox_id']}", False)
+            db.execute("UPDATE deliveries SET escalated_at = ? WHERE message_id = ? AND recipient_mailbox_id = ? "
+                       "AND escalated_at = ?", (now if told else None, *key, -now))
+            print(f"{'escalated' if told else 'notification failed'}\t{line}")
+    finally:
+        db.close()
+
+
 def cmd_thread(args: argparse.Namespace) -> None:
     db = connect()
     try:
@@ -1048,7 +1329,8 @@ def cmd_publish(args: argparse.Namespace) -> None:
         db.close()
 
 
-COMMANDS = ("init", "send", "scan", "read", "receipt", "discard", "head", "thread", "search", "publish", "resolve")
+COMMANDS = ("init", "send", "scan", "read", "receipt", "discard", "head", "thread", "search", "publish", "resolve",
+            "sweep")
 
 
 def parser(only: str | None = None) -> argparse.ArgumentParser:
@@ -1078,6 +1360,9 @@ def parser(only: str | None = None) -> argparse.ArgumentParser:
         send.add_argument("--if-head", metavar="MESSAGE_ID",
                           help="refuse with exit 3 unless this is still the thread's head (strict compare-and-swap)")
         send.add_argument("--in-reply-to", metavar="MESSAGE_ID")
+        send.add_argument("--reply-to", metavar="ID", help="where replies to this message go instead of the sender")
+        send.add_argument("--idempotency-key", metavar="KEY",
+                          help="a retry with the same key returns the first delivery's id instead of sending again")
         send.add_argument("--subject")
         send.add_argument("--body", "-m")
         send.add_argument("--body-file")
@@ -1093,6 +1378,7 @@ def parser(only: str | None = None) -> argparse.ArgumentParser:
         scan.add_argument("--from", dest="sender")
         scan.add_argument("--contains", help="match literal text in subject or body")
         scan.add_argument("--limit", type=int, default=100)
+        scan.add_argument("--after", metavar="CURSOR", help="continue a drain from the previous page's next")
         scan.add_argument("--json", action="store_true")
 
     read = add("read", cmd_read, "read one inbox message")
@@ -1101,6 +1387,9 @@ def parser(only: str | None = None) -> argparse.ArgumentParser:
         read.add_argument("--id")
         read.add_argument("--peek", action="store_true")
         read.add_argument("--json", action="store_true")
+        read.add_argument("--raw", action="store_true", help="the rendered message as UTF-8 bytes, nothing else")
+        read.add_argument("--max-bytes", type=int, metavar="N",
+                          help="refuse with exit 4 rather than print more than N bytes")
 
     receipt = add("receipt", cmd_receipt, "show recipient delivery state, with read times")
     if receipt:
@@ -1139,6 +1428,14 @@ def parser(only: str | None = None) -> argparse.ArgumentParser:
     resolve_parser = add("resolve", cmd_resolve, "print the mailbox each address reaches")
     if resolve_parser:
         resolve_parser.add_argument("address", nargs="+")
+        resolve_parser.add_argument("--json", action="store_true")
+        resolve_parser.add_argument("--service", action="store_true",
+                                    help="fail unless each address is exactly its own service scratchpad")
+
+    sweep = add("sweep", cmd_sweep, "escalate mail unread for --hours")
+    if sweep:
+        sweep.add_argument("--hours", type=float, default=4)
+        sweep.add_argument("--dry-run", action="store_true")
 
     return result
 
@@ -1153,6 +1450,17 @@ def main() -> int:
     except StaleThread as error:
         print(f"{PROG}: {error}", file=sys.stderr)
         return STALE_THREAD
+    except WrongStore as error:
+        if getattr(args, "json", False):
+            print_json({"version": 1, "error": "store", "store": error.mode})
+        print(f"{PROG}: {error}", file=sys.stderr)
+        return WRONG_STORE
+    except Oversized as error:
+        if getattr(args, "json", False):
+            print_json({"version": 1, "error": "oversized", "message_id": error.message_id,
+                        "bytes": error.size, "max_bytes": error.limit})
+        print(f"{PROG}: {error}", file=sys.stderr)
+        return OVERSIZED
     except (MailError, OSError, sqlite3.Error) as error:
         print(f"{PROG}: {error}", file=sys.stderr)
         return 1

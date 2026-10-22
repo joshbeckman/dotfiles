@@ -207,7 +207,7 @@ except sqlite3.IntegrityError as error:
 else:
     raise AssertionError("recipient list accepted an update")
 assert con.execute("pragma journal_mode").fetchone()[0] == "wal"
-assert con.execute("pragma user_version").fetchone()[0] == 3
+assert con.execute("pragma user_version").fetchone()[0] == 4
 PY
 
 grep -Eq '^Date: [0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$' "$thread"
@@ -355,7 +355,8 @@ thread = run("thread", message, "--json")
 assert [m["sequence"] for m in thread] == list(range(1, len(thread) + 1)), thread
 assert thread[0]["body"] == "sent to the documented handle" and thread[0]["to"] == ["dana-miller-of-testrealm-01a1aaaa"]
 scan = run("scan", "--state", "all", "--json", AGENT_SCRATCHPAD=dana)
-assert any(m["message_id"] == message and m["state"] == "read" for m in scan), scan
+assert scan["version"] == 1 and scan["next"] is None, scan
+assert any(m["message_id"] == message and m["state"] == "read" for m in scan["messages"]), scan
 assert run("search", "documented handle", "--json")[0]["visibility"] == "public"
 read = run("read", "--peek", "--id", message, "--json", AGENT_SCRATCHPAD=dana)
 assert read["head"] == thread[-1]["message_id"] and read["body"] == thread[0]["body"]

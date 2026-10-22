@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# The receive contract agent-run consumes, and the delivery side effects that move into the
+# SQLite store: resolve --service, paged unread scans in delivery order, byte-bounded peeks,
+# idempotent acknowledgement, Reply-To and Team-To, Josh's notification and the sweep.
+#
+#   test/agent-mail-receive                 run the conformance suite
+#   test/agent-mail-receive --setup DIR     build a private realm in DIR for an adapter to
+#                                           drain, print its environment, and exit
+#
+# Every realm is private: the script refuses a directory under the live state paths.
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cmd="$root/bin/agent-mail"
+
+realm() {  # DIR: agent-run, alice and bob pads, Josh's mailbox, a SQLite store
+  local dir="$1"
+  case "$(cd "$(dirname "$dir")" && pwd -P)/$(basename "$dir")" in
+    "$HOME/.local/state"*|"$HOME/.pi"*) echo "refusing a realm under the live state: $dir" >&2; exit 2 ;;
+  esac
+  mkdir -p "$dir/pads/agent-run" "$dir/pads/alice-agent-11111111" "$dir/pads/bob-agent-22222222" \
+    "$dir/state/humans/josh" "$dir/state/doorbells" "$dir/identities" "$dir/bin"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/notified"\n' "$dir" >"$dir/bin/notify-josh"
+  chmod +x "$dir/bin/notify-josh"
+  export AGENT_MAIL_ROOT="$dir/pads" AGENT_HUMAN_MAIL_ROOT="$dir/state/humans" \
+    AGENT_IDENTITIES_DIR="$dir/identities" PATH="$dir/bin:$PATH" AGENT_MAIL_STALE_HOURS=100000
+  unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL_FROM AGENT_MAIL2_DB AGENT_SCRATCH_ROOT
+  printf 'sqlite\n' >"$dir/state/store"
+}
+as() { local who="$1"; shift; AGENT_SCRATCHPAD="$AGENT_MAIL_ROOT/$who" "$@"; }
+
+if [[ "${1:-}" == --setup ]]; then
+  dir="${2:?--setup needs a directory}"
+  realm "$dir"
+  for i in $(seq 1 7); do as alice-agent-11111111 "$cmd" send --to agent-run --subject "job $i" -m "job $i" >/dev/null; done
+  as alice-agent-11111111 "$cmd" send --to agent-run --subject big --body "$(head -c 20000 /dev/zero | tr '\0' x)" >/dev/null
+  cat <<EOF
+export AGENT_MAIL_ROOT="$AGENT_MAIL_ROOT" AGENT_HUMAN_MAIL_ROOT="$AGENT_HUMAN_MAIL_ROOT" AGENT_IDENTITIES_DIR="$AGENT_IDENTITIES_DIR"
+# 8 unread deliveries for agent-run: jobs 1-7 and one 20 kB message for --max-bytes.
+EOF
+  exit 0
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+fail() { echo "agent-mail-receive: $*" >&2; exit 1; }
+json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+
+realm "$tmp/r"
+service="$("$cmd" resolve --json --service agent-run)"
+[[ "$(json '(d["mailbox"], d["kind"], d["store"])' <<<"$service")" == "('agent-run', 'agent', 'sqlite')" ]] || fail "resolve --service: $service"
+[[ "$(json 'd["pad"]' <<<"$service")" == "$(cd "$AGENT_MAIL_ROOT/agent-run" && pwd -P)" ]] || fail "resolve gave a non-canonical pad"
+[[ "$(json 'd["doorbell"]' <<<"$service")" == "$(cd "$tmp/r/state" && pwd -P)/doorbells/agent-run" ]] || fail "resolve gave the wrong doorbell"
+for bad in alice-agent agent-ru josh; do
+  "$cmd" resolve --json --service "$bad" >/dev/null 2>&1 && fail "resolve --service accepted $bad"
+done
+printf '01a1aaaa-0000-7000-8000-000000000001\n' >"$AGENT_IDENTITIES_DIR/agent-run"
+"$cmd" resolve --json --service agent-run >/dev/null 2>&1 && fail "resolve --service accepted a registered agent's name"
+rm "$AGENT_IDENTITIES_DIR/agent-run"
+
+# Paged drains in delivery order, with a cursor valid within the drain.
+ids=()
+for i in 1 2 3 4 5; do ids+=("$(as alice-agent-11111111 "$cmd" send --to agent-run --subject "job $i" -m "body $i" | tail -1)"); done
+page1="$("$cmd" scan --to agent-run --json --limit 2)"
+python3 - "$page1" "${ids[@]}" <<'PY' || fail "first page wrong"
+import json, sys
+page = json.loads(sys.argv[1])
+assert [m["message_id"] for m in page["messages"]] == sys.argv[2:4], page
+assert page["next"] and page["version"] == 1 and page["store"] == "sqlite"
+assert all(m["bytes"] > 0 and m["state"] == "unread" for m in page["messages"])
+PY
+next="$(json 'd["next"]' <<<"$page1")"
+# A delivery that arrives mid-drain dated before everything already paged (a sender with a
+# slow clock, or a late mirror) still comes after the cursor: order is delivery, not date.
+late=backdated-late
+python3 - "$tmp/r/state/mail2.sqlite3" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("insert into threads values ('backdated-late', 1, 'public')")
+db.execute("insert into messages(message_id, thread_id, sequence, sender_mailbox_id, sent_at, subject, body) "
+           "values ('backdated-late', 'backdated-late', 1, 'bob-agent-22222222', 1, 'late', 'late')")
+db.execute("insert into message_recipients values ('backdated-late', 'agent-run')")
+db.execute("insert into deliveries(message_id, recipient_mailbox_id, delivery_seq) "
+           "values ('backdated-late', 'agent-run', (select max(delivery_seq) + 1 from deliveries))")
+db.commit()
+PY
+rest="$("$cmd" scan --to agent-run --json --limit 10 --after "$next")"
+python3 - "$rest" "$late" "${ids[@]}" <<'PY' || fail "continuation skipped or repeated mail"
+import json, sys
+page, late, *ids = json.loads(sys.argv[1]), sys.argv[2], *sys.argv[3:]
+got = [m["message_id"] for m in page["messages"]]
+assert got == ids[2:] + [late], got
+assert page["next"] is None
+PY
+"$cmd" scan --to agent-run --json --after bogus >/dev/null 2>&1 && fail "a malformed cursor was accepted"
+
+# Peek is bounded, exact and never marks anything read; read --id is the idempotent ack.
+raw="$tmp/raw"
+"$cmd" read --to agent-run --id "${ids[0]}" --peek --raw >"$raw" 2>/dev/null
+grep -Fxq "Message-ID: ${ids[0]}" "$raw" || fail "the raw peek lost its headers"
+[[ "$(tail -c 6 "$raw")" == "body 1" ]] || fail "the raw peek added or dropped bytes after the body"
+size="$(wc -c <"$raw" | tr -d ' ')"
+[[ "$(json 'd["messages"][0]["bytes"]' <<<"$page1")" == "$size" ]] || fail "scan's bytes is not the exact export size"
+set +e; "$cmd" read --to agent-run --id "${ids[0]}" --peek --raw --max-bytes $((size - 1)) >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 4 && ! -s "$tmp/out" ]] && grep -Fq "oversized: $size bytes" "$tmp/err" || fail "oversized raw peek: exit $status"
+set +e; "$cmd" read --to agent-run --id "${ids[0]}" --json --max-bytes 10 >"$tmp/out" 2>/dev/null; status=$?; set -e
+[[ "$status" == 4 ]] && [[ "$(json '(d["error"], d["bytes"], d["max_bytes"])' <"$tmp/out")" == "('oversized', $size, 10)" ]] || fail "oversized JSON read"
+receipt() { "$cmd" receipt "$1" | awk -F '\t' '$3 == "to:agent-run" { print $1 }'; }
+[[ "$(receipt "${ids[0]}")" == unread ]] || fail "a peek or a refused read marked the message read"
+"$cmd" read --to agent-run --id "${ids[0]}" >/dev/null 2>&1
+first="$("$cmd" receipt "${ids[0]}" | cut -f5)"
+"$cmd" read --to agent-run --id "${ids[0]}" >/dev/null 2>&1
+[[ "$(receipt "${ids[0]}")" == read && "$("$cmd" receipt "${ids[0]}" | cut -f5)" == "$first" ]] || fail "acknowledgement is not idempotent"
+
+# A v1 path in a stored receipt resolves by exact id only.
+"$cmd" read --to agent-run --id "/old/agent-run/inbox/cur/${ids[1]}.md" --peek >/dev/null 2>&1 || fail "a legacy path did not resolve"
+"$cmd" read --to agent-run --id "/old/agent-run/inbox/cur/${ids[1]:0:20}.md" --peek >/dev/null 2>&1 && fail "a legacy path matched by prefix"
+
+# Under maildir or both, every receive command refuses the runtime database rather than serve the mirror.
+for mode in both maildir; do
+  printf '%s\n' "$mode" >"$tmp/r/state/store"
+  [[ "$("$cmd" resolve --json agent-run | json 'd["store"]')" == "$mode" ]] || fail "resolve did not report $mode"
+  for args in "scan --to agent-run --json" "read --to agent-run --id ${ids[1]} --peek --json" "read --to agent-run --id ${ids[1]} --json"; do
+    set +e; "$root/bin/agent-mail2" $args >"$tmp/out" 2>/dev/null; status=$?; set -e
+    [[ "$status" == 5 && "$(json '(d["error"], d["store"])' <"$tmp/out")" == "('store', '$mode')" ]] || fail "agent-mail2 $args served the mirror under $mode"
+  done
+done
+printf 'sqlite\n' >"$tmp/r/state/store"
+
+# Reply-To steers reply-all, and Team-To survives into the rendered header block.
+routed="$(as alice-agent-11111111 "$cmd" send --to agent-run --reply-to bob-agent-22222222 --subject routed -m routed | tail -1)"
+"$cmd" read --to agent-run --id "$routed" --peek 2>/dev/null | grep -Fxq 'Reply-To: bob-agent-22222222' || fail "Reply-To was not rendered"
+answer="$(as agent-run "$cmd" send --reply-all "$routed" -m answer 2>/dev/null | tail -1)"
+"$cmd" receipt "$answer" | grep -Fq 'to:bob-agent-22222222' || fail "reply-all ignored Reply-To"
+"$cmd" receipt "$answer" | grep -Fq 'to:alice-agent-11111111' && fail "reply-all went to the sender despite Reply-To"
+
+# A retried send with the same idempotency key returns the first delivery instead of a second.
+first_try="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --idempotency-key draft-123 -m once | tail -1)"
+second_try="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --idempotency-key draft-123 -m once | tail -1)"
+[[ "$first_try" == "$second_try" ]] || fail "a retried send delivered twice"
+[[ "$("$cmd" scan --to bob-agent-22222222 --json --limit 1000 | json 'sum(1 for m in d["messages"] if m["subject"] is None and m["from"] == "alice-agent-11111111")')" == 1 ]] \
+  || fail "the retried send left two deliveries"
+
+# Josh is notified at once on delivery, and the sweep escalates what nobody read, once.
+: >"$tmp/r/notified"
+as alice-agent-11111111 "$cmd" send --to josh --subject 'For Josh' -m hi >/dev/null
+grep -Fq 'Agent mail: For Josh' "$tmp/r/notified" || fail "Josh was not notified on delivery"
+: >"$tmp/r/notified"
+"$cmd" sweep --hours 0 >"$tmp/sweep1" &
+"$cmd" sweep --hours 0 >"$tmp/sweep2" &
+wait
+escalated="$(cat "$tmp/sweep1" "$tmp/sweep2" | grep -c '^escalated' || true)"
+pending="$("$cmd" scan --all --json --limit 1000 | json 'sum(1 for m in d["messages"] if m["state"] == "unread" and m["mailbox"] != "josh")')"
+[[ "$escalated" == "$pending" ]] || fail "concurrent sweeps escalated $escalated of $pending unread deliveries"
+[[ "$(grep -c 'Unread agent mail' "$tmp/r/notified")" == "$pending" ]] || fail "the sweep notified more than once per delivery"
+"$cmd" sweep --hours 0 | grep -q . && fail "a second sweep escalated again"
+
+# A failed notification releases its claim, so the next sweep tries again; a claim left by a
+# sweep that died is reclaimed after ten minutes; a private database never notifies.
+stuck="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --subject stuck -m stuck | tail -1)"
+mv "$tmp/r/bin/notify-josh" "$tmp/r/notify-ok"
+printf '#!/bin/sh\nexit 1\n' >"$tmp/r/bin/notify-josh"; chmod +x "$tmp/r/bin/notify-josh"
+"$cmd" sweep --hours 0 | grep -Fq "notification failed	bob-agent-22222222	$stuck" || fail "a failed notification was reported as escalated"
+mv "$tmp/r/notify-ok" "$tmp/r/bin/notify-josh"
+"$cmd" sweep --hours 0 | grep -Fq "escalated	bob-agent-22222222	$stuck" || fail "a released claim was not retried"
+python3 - "$tmp/r/state/mail2.sqlite3" "$stuck" <<'PY'
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+db.execute("update deliveries set escalated_at = ? where message_id = ?", (-(time.time_ns() // 1000 - 900_000_000), sys.argv[2]))
+db.commit()
+PY
+"$cmd" sweep --hours 0 | grep -Fq "escalated	bob-agent-22222222	$stuck" || fail "a dead sweep's claim was never reclaimed"
+: >"$tmp/r/notified"
+AGENT_MAIL2_DB="$tmp/private.sqlite3" as alice-agent-11111111 "$root/bin/agent-mail2" send --to josh -m private >/dev/null
+AGENT_MAIL2_DB="$tmp/private.sqlite3" "$root/bin/agent-mail2" sweep --hours 0 | grep -q '^would escalate' || fail "a private sweep did not report"
+[[ ! -s "$tmp/r/notified" ]] || fail "a private database notified Josh"
+
+# A v3 database is upgraded in one transaction and its routing headers filled in from the Maildir.
+realm "$tmp/v3"
+printf 'both\n' >"$tmp/v3/state/store"
+mkdir -p "$AGENT_MAIL_ROOT/bob-agent-22222222/inbox/new"
+printf 'From: alice-agent-11111111\nTo: bob-agent-22222222\nTeam-To: @team/crew\nDate: 2026-10-01T10:00:00Z\nMessage-ID: m-team\nThread-ID: m-team\nSubject: t\n\nteam\n' \
+  >"$AGENT_MAIL_ROOT/bob-agent-22222222/inbox/new/m-team.md"
+python3 - "$tmp/v3/state/mail2.sqlite3" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.executescript("""
+CREATE TABLE mailboxes (mailbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE threads (thread_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, visibility TEXT NOT NULL DEFAULT 'public');
+CREATE TABLE messages (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(thread_id),
+  sequence INTEGER NOT NULL, sender_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id),
+  reply_to_message_id TEXT REFERENCES messages(message_id), sent_at INTEGER NOT NULL, subject TEXT,
+  body TEXT NOT NULL, UNIQUE (thread_id, sequence));
+CREATE TABLE message_recipients (message_id TEXT NOT NULL REFERENCES messages(message_id),
+  recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id), PRIMARY KEY (message_id, recipient_mailbox_id));
+CREATE TABLE deliveries (message_id TEXT NOT NULL REFERENCES messages(message_id),
+  recipient_mailbox_id TEXT NOT NULL REFERENCES mailboxes(mailbox_id), read_at INTEGER, discarded_at INTEGER,
+  PRIMARY KEY (message_id, recipient_mailbox_id),
+  FOREIGN KEY (message_id, recipient_mailbox_id) REFERENCES message_recipients(message_id, recipient_mailbox_id));
+CREATE TRIGGER messages_no_update BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'messages are append-only'); END;
+INSERT INTO mailboxes VALUES ('alice-agent-11111111', 'agent', 1), ('bob-agent-22222222', 'agent', 1);
+INSERT INTO threads VALUES ('m-team', 1, 'public');
+INSERT INTO messages VALUES ('m-team', 'm-team', 1, 'alice-agent-11111111', NULL, 1759312800000000, 't', 'team
+');
+INSERT INTO message_recipients VALUES ('m-team', 'bob-agent-22222222');
+INSERT INTO deliveries VALUES ('m-team', 'bob-agent-22222222', NULL, NULL);
+PRAGMA user_version = 3;
+""")
+db.commit()
+PY
+# Whatever touches the v3 database first, here a read-only head, the headers are still owed.
+"$root/bin/agent-mail2" head m-team >/dev/null
+"$root/bin/agent-mail-migrate" --verify >/dev/null || fail "verify after the v4 upgrade found drift"
+python3 - "$tmp/v3/state/mail2.sqlite3" <<'PY' || fail "the v4 upgrade is wrong"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("pragma user_version").fetchone()[0] == 4
+assert db.execute("select team_to from messages where message_id = 'm-team'").fetchone()[0] == "@team/crew"
+assert db.execute("select delivery_seq from deliveries").fetchall() == [(1,)]
+assert db.execute("select count(*) from backfill_pending").fetchone()[0] == 0, "the backfill was not recorded as done"
+for change in ("update messages set team_to = 'other'", "update messages set body = 'x'"):
+    try:
+        db.execute(change)
+    except sqlite3.IntegrityError:
+        continue
+    raise AssertionError(f"accepted: {change}")
+PY
+
+# Once the store is sqlite, nothing syncs from the Maildir, the owed backfill included:
+# verify reports it and changes no delivery.
+realm "$tmp/late-backfill"
+mkdir -p "$AGENT_MAIL_ROOT/bob-agent-22222222/inbox/cur"
+printf 'From: alice-agent-11111111\nTo: bob-agent-22222222\nMessage-ID: m-old\nSubject: old\n\nold\n' \
+  >"$AGENT_MAIL_ROOT/bob-agent-22222222/inbox/cur/m-old.md"
+printf 'both\n' >"$tmp/late-backfill/state/store"
+"$root/bin/agent-mail-migrate" >/dev/null
+python3 - "$tmp/late-backfill/state/mail2.sqlite3" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("create table if not exists backfill_pending (since integer not null)")
+db.execute("insert into backfill_pending values (1)")
+db.commit()
+PY
+printf 'sqlite\n' >"$tmp/late-backfill/state/store"
+fresh="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --subject fresh -m fresh | tail -1)"
+set +e; "$root/bin/agent-mail-migrate" --verify >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'backfill never ran' "$tmp/err" || fail "verify did not report the owed backfill under sqlite"
+[[ "$("$cmd" receipt "$fresh" | cut -f1)" == unread ]] || fail "verify reconciled a SQLite-only delivery from the Maildir"
+
+echo 'agent-mail-receive tests passed'

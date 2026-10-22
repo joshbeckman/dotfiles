@@ -219,6 +219,31 @@ realm otherdb
 set +e; "$bin/agent-mail-migrate" --db "$tmp/elsewhere.sqlite3" --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 1 && ! -e "$dir/state/store" ]] && grep -Fq 'cannot be switched over' "$tmp/err" || fail "set-store accepted a database agent-mail does not use"
 
+# A custom AGENT_MAIL2_DB cannot become the runtime store: its mail would never notify Josh.
+realm customdb
+set +e; AGENT_MAIL2_DB="$tmp/custom.sqlite3" "$bin/agent-mail-migrate" --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 && ! -e "$dir/state/store" ]] && grep -Fq 'unset AGENT_MAIL2_DB' "$tmp/err" || fail "set-store accepted a custom runtime database"
+
+# Store transitions are serialized and re-read the store under their lock: a switch to maildir
+# that waited behind a flip refuses rather than hiding SQLite-only mail.
+realm serialized
+migrate --set-store both >/dev/null
+python3 - "$dir/state/.store.lock" <<'PY' &
+import fcntl, sys, time
+with open(sys.argv[1], "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    time.sleep(1.5)
+PY
+holder=$!
+sleep 0.3
+migrate --set-store maildir >/dev/null 2>"$tmp/err" &
+switch=$!
+sleep 0.3
+printf 'sqlite\n' >"$dir/state/store"
+set +e; wait "$switch"; status=$?; set -e
+wait "$holder"
+[[ "$status" == 1 && "$(cat "$dir/state/store")" == sqlite ]] && grep -Fq 'strand' "$tmp/err" || fail "a stale switch overwrote a newer store"
+
 # A reply mirrored before its parent brings the parent with it, link and order intact.
 realm ancestors
 parent="$(as $alice cmd send --to $bob --subject Parent -m parent | tail -1)"
@@ -337,7 +362,7 @@ realm direct
 migrate --set-store both >/dev/null
 for args in "send --to $bob -m direct" "read --to $bob" "discard --to $bob --id x"; do
   set +e; as $alice "$bin/agent-mail2" $args >/dev/null 2>"$tmp/err"; status=$?; set -e
-  [[ "$status" == 1 ]] && grep -Fq 'the store marker says both' "$tmp/err" || fail "agent-mail2 $args wrote around the Maildir"
+  [[ "$status" == 5 ]] && grep -Fq 'the store marker says both' "$tmp/err" || fail "agent-mail2 $args wrote around the Maildir"
 done
 as $alice "$bin/agent-mail2" read --to $bob --peek >/dev/null 2>&1 || true
 AGENT_MAIL2_DB="$tmp/elsewhere.sqlite3" as $alice "$bin/agent-mail2" send --to $bob -m 'a private database' >/dev/null \
