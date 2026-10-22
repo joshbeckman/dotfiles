@@ -111,8 +111,8 @@ unreadable means maildir. In both, every change is written here first and then
 mirrored into the SQLite store, and a failed mirror is reported on stderr and in
 mirror-failures without failing the command, because the message was delivered.
 head, thread, search and publish read the SQLite store and need both or sqlite.
-In sqlite, send, scan, read, receipt and discard are bin/agent-mail2's, addr and
-web stay here, and the Maildir-only commands refuse. Change it only with
+In sqlite, send, scan, read, receipt, discard and sweep are bin/agent-mail2's,
+addr and web stay here, and the Maildir-only commands refuse. Change it only with
 agent-mail-migrate --set-store.
 
 Doorbells: every delivery, in every store, touches doorbells/<mailbox> beside
@@ -1189,7 +1189,7 @@ sub="$1"; shift
 case "$STORE_MODE:$sub" in
   *:resolve|*:store|*:addr|*:web|*:-h|*:--help) ;;
   sqlite:send|sqlite:scan|sqlite:read|sqlite:receipt|sqlite:discard) delegate "$sub" "$@" ;;
-  sqlite:head|sqlite:thread|sqlite:search|sqlite:publish) delegate "$sub" "$@" ;;
+  sqlite:head|sqlite:thread|sqlite:search|sqlite:publish|sqlite:sweep) delegate "$sub" "$@" ;;
   both:head|both:thread|both:search|both:publish) delegate "$sub" "$@" ;;
   maildir:head|maildir:thread|maildir:search|maildir:publish)
     die "$sub reads the SQLite store, and the store marker says maildir ($STORE_MARKER)" ;;

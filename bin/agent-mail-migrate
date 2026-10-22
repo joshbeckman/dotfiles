@@ -130,6 +130,9 @@ class Message:
         self.subject: str | None = None
         self.body = ""
         self.recipients: dict[str, int | None] = {}
+        self.reply_address: str | None = None
+        self.team_to: str | None = None
+        self.escalated: dict[str, int] = {}
 
     def absorb(self, path: Path, headers: dict[str, str], body: str) -> None:
         if not self.body and body:
@@ -142,6 +145,10 @@ class Message:
             self.subject = headers["subject"]
         if headers.get("from"):
             self.sender = self.sender or normalize(headers["from"])
+        if headers.get("reply-to") and self.reply_address is None:
+            self.reply_address = normalize(headers["reply-to"])
+        if headers.get("team-to") and self.team_to is None:
+            self.team_to = headers["team-to"]
         self.sent_at = self.sent_at or parse_time(headers.get("date"), mtime_us(path))
 
     def offer_sender(self, mailbox: str) -> None:
@@ -195,6 +202,11 @@ def collect(boxes: dict[str, dict[str, Path]], only: str | None = None) -> dict[
                     message = messages.setdefault(message_id, Message(message_id))
                     message.absorb(path, headers, body)
                     message.recipients[mailbox] = mtime_us(path) if state else None
+                    # v1 marks an escalated delivery with a directory; carried over so the
+                    # SQLite sweep does not notify Josh about it a second time.
+                    marker = inbox / f".escalated-{message_id}"
+                    if marker.is_dir():
+                        message.escalated[mailbox] = mtime_us(marker)
         sent = folders.get("sent")
         if sent is not None and sent.is_dir():
             for path in files(sent, only):
@@ -275,8 +287,8 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                 db.execute(
                     """INSERT INTO messages(
                          message_id, thread_id, sequence, sender_mailbox_id,
-                         reply_to_message_id, sent_at, subject, body
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                         reply_to_message_id, sent_at, subject, body, reply_to_address, team_to
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         message.message_id,
                         thread_id,
@@ -286,10 +298,23 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                         message.sent_at,
                         message.subject,
                         message.body,
+                        message.reply_address,
+                        message.team_to,
                     ),
                 )
                 sequence += 1
                 counts["messages"] += 1
+            elif message.reply_address or message.team_to:
+                # Mail migrated before v4 lost these headers; the schema lets them be filled
+                # once, from NULL.
+                db.execute(
+                    """UPDATE messages SET reply_to_address = COALESCE(reply_to_address, ?),
+                                          team_to = COALESCE(team_to, ?)
+                       WHERE message_id = ? AND ((reply_to_address IS NULL AND ? IS NOT NULL)
+                                                 OR (team_to IS NULL AND ? IS NOT NULL))""",
+                    (message.reply_address, message.team_to, message.message_id,
+                     message.reply_address, message.team_to),
+                )
             for recipient, read_at in sorted(message.recipients.items()):
                 ensure(db, recipient, message.sent_at, humans)
                 db.execute(
@@ -297,12 +322,18 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                     (message.message_id, recipient),
                 )
                 db.execute(
-                    "INSERT OR IGNORE INTO deliveries(message_id, recipient_mailbox_id, read_at) VALUES (?, ?, ?)",
-                    (message.message_id, recipient, read_at),
+                    """INSERT OR IGNORE INTO deliveries(
+                         message_id, recipient_mailbox_id, read_at, escalated_at, delivery_seq)
+                       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(delivery_seq), 0) + 1 FROM deliveries))""",
+                    (message.message_id, recipient, read_at, message.escalated.get(recipient)),
                 )
                 if db.execute("SELECT changes()").fetchone()[0]:
                     counts["deliveries"] += 1
                     continue
+                if recipient in message.escalated:
+                    db.execute("UPDATE deliveries SET escalated_at = ? WHERE message_id = ? "
+                               "AND recipient_mailbox_id = ? AND escalated_at IS NULL",
+                               (message.escalated[recipient], message.message_id, recipient))
                 # The Maildir is authoritative: a file in new/ is unread and one in cur/ is
                 # read, whatever the database said, and a file that is present is not discarded.
                 db.execute(
@@ -360,7 +391,8 @@ def verify(db: sqlite3.Connection, messages: dict[str, Message],
     problems: list[str] = []
     stored = {
         row[0]: tuple(row[1:])
-        for row in db.execute("SELECT message_id, sender_mailbox_id, thread_id, body FROM messages")
+        for row in db.execute("SELECT message_id, sender_mailbox_id, thread_id, body, "
+                              "reply_to_address, team_to FROM messages")
     }
     missing = sorted(set(messages) - set(stored))
     if missing:
@@ -368,7 +400,8 @@ def verify(db: sqlite3.Connection, messages: dict[str, Message],
     parents = dict(db.execute("SELECT message_id, reply_to_message_id FROM messages"))
     for message in messages.values():
         row = stored.get(message.message_id)
-        if row is not None and row != (message.sender, message.thread_id or message.message_id, message.body):
+        if row is not None and row != (message.sender, message.thread_id or message.message_id, message.body,
+                                       message.reply_address, message.team_to):
             problems.append(f"{message.message_id} differs from its Maildir copy")
         if (row is not None and message.reply_to in messages
                 and parents.get(message.message_id) != message.reply_to):
@@ -445,8 +478,19 @@ def write_store(marker: Path, mode: str) -> None:
     os.replace(temporary, marker)
 
 
-def open_db(db_path: Path) -> sqlite3.Connection:
-    if not db_path.exists():
+def schema_version(db_path: Path) -> int:
+    db = sqlite3.connect(db_path, timeout=5)
+    try:
+        return db.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        db.close()
+
+
+def open_db(db_path: Path) -> tuple[sqlite3.Connection, bool]:
+    """The connection, and whether this call upgraded the schema. agent-mail2 owns the
+    schema, so it creates the database and upgrades an older one."""
+    upgraded = db_path.exists() and schema_version(db_path) < 4
+    if not db_path.exists() or upgraded:
         # --db wins over the ambient default, so init must be told the same path. The
         # sibling, not PATH, so a launchd or systemd caller gets the same tool.
         environment = dict(os.environ, AGENT_MAIL2_DB=str(db_path))
@@ -457,7 +501,7 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(db_path, timeout=5, isolation_level=None)
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA busy_timeout = 5000")
-    return db
+    return db, upgraded
 
 
 def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
@@ -480,7 +524,11 @@ def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
 
 def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                   only: str | None) -> dict[str, int]:
-    db = open_db(db_path)
+    db, upgraded = open_db(db_path)
+    if upgraded:
+        # v3 could not store Reply-To or Team-To, so the upgrade is followed by one full pass
+        # that fills them in from the Maildir before anything verifies against them.
+        only = None
     try:
         # The snapshot is taken under the write lock. Collected before it, a migration could
         # apply a view older than a mirror that committed meanwhile: discarding mail that
@@ -510,7 +558,11 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
 
 
 def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
-    db = open_db(db_path)
+    db, upgraded = open_db(db_path)
+    if upgraded:
+        db.close()
+        run_migration(db_path, roots, "public", None)
+        db, _ = open_db(db_path)
     try:
         # Under the write lock, so a mirror committing mid-check cannot read as drift.
         db.execute("BEGIN IMMEDIATE")

@@ -337,7 +337,7 @@ realm direct
 migrate --set-store both >/dev/null
 for args in "send --to $bob -m direct" "read --to $bob" "discard --to $bob --id x"; do
   set +e; as $alice "$bin/agent-mail2" $args >/dev/null 2>"$tmp/err"; status=$?; set -e
-  [[ "$status" == 1 ]] && grep -Fq 'the store marker says both' "$tmp/err" || fail "agent-mail2 $args wrote around the Maildir"
+  [[ "$status" == 5 ]] && grep -Fq 'the store marker says both' "$tmp/err" || fail "agent-mail2 $args wrote around the Maildir"
 done
 as $alice "$bin/agent-mail2" read --to $bob --peek >/dev/null 2>&1 || true
 AGENT_MAIL2_DB="$tmp/elsewhere.sqlite3" as $alice "$bin/agent-mail2" send --to $bob -m 'a private database' >/dev/null \

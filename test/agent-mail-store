@@ -141,7 +141,8 @@ conversation sqlite
 [[ -z "$(find "$AGENT_MAIL_ROOT" "$AGENT_HUMAN_MAIL_ROOT" -name '*.md' -print -quit)" ]] || fail "the sqlite store wrote Maildir files"
 [[ "$("$cmd" addr $bob)" == "$AGENT_MAIL_ROOT/$bob/inbox" ]] || fail "addr stopped resolving"
 "$cmd" search Plan | grep -Fq "$m1" || fail "search did not see the conversation"
-for command in sweep inbox compose; do
+"$cmd" sweep --dry-run >/dev/null || fail "sweep did not run against the SQLite store"
+for command in inbox compose; do
   set +e; "$cmd" "$command" >/dev/null 2>"$tmp/err"; status=$?; set -e
   [[ "$status" == 1 ]] && grep -Fq 'store marker says sqlite' "$tmp/err" || fail "$command ran against the Maildir"
 done
