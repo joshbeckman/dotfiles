@@ -1119,8 +1119,10 @@ class WebTest(unittest.TestCase):
         result = next(entry for entry in entries if entry['type'] == 'nested_tool_result')
         self.assertEqual(result['output'], private + '/result.json')
         self.assertEqual(result['images'][0]['path'], private + '/shot.png')
-        # The bridge does not start serving the private paths a record names.
-        self.assertEqual(self.request('/api/attachment?name=args.json')[0], 404)
+        # The bridge does not start serving the private paths a record names. The attachment route
+        # refuses a name that is not a 32-hex image, so it answers 400 rather than 404; either way
+        # it refuses, which is the property under test.
+        self.assertIn(self.request('/api/attachment?name=args.json')[0], (400, 404))
         self.assertEqual(self.request('/private/args.json')[0], 404)
 
     def test_agent_run_projects_records_for_the_existing_viewer(self):
