@@ -38,6 +38,11 @@ count() { grep -c '^SEND' "$sent" || true; }
 reset_state; run
 check "$(count)" "0" "a clean mirror stays silent"
 
+# The live box has no mirror-failures.d until the new writer lands, so the alarm has to survive its
+# absence rather than aborting on a missing directory.
+: > "$sent"; rm -rf "$state/mirror-failures.d"; run
+check "$(count)" "0" "a missing failure directory is not an error"
+
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/one"; run
 check "$(count)" "1" "a failure file raises the alarm"
 
