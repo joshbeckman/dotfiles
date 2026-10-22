@@ -1,0 +1,11 @@
+#!/bin/sh
+# Hourly drift alarm for the mirrored store. The Maildir is authoritative under `both`, so the
+# failure this catches is the mirror falling behind rather than the mail going missing, and the
+# only signal that matters is a verify that fails or a mirror failure that has not been repaired.
+set -eu
+err=$(mktemp)
+trap 'rm -f "$err"' EXIT
+if ! agent-mail-migrate --verify >/dev/null 2>"$err" || [ -s "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent-mail}/mirror-failures" ]; then
+  cat "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent-mail}/mirror-failures" >>"$err" 2>/dev/null || true
+  agent-mail send --from agent-mail-verify --to josh --subject "Agent mail mirror drifted" --body-file "$err"
+fi

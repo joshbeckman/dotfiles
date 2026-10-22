@@ -215,16 +215,18 @@ __setup_linux(){
         # is no user bus to enable it on: a container, or WSL without systemd, still
         # has every other part of setup to do.
         echo '  ======  installing the dotfiles refresh schedule'
-        for unit in dotfiles-refresh.service dotfiles-refresh.timer; do
+        for unit in dotfiles-refresh.service dotfiles-refresh.timer agent-mail-verify.service agent-mail-verify.timer; do
                 unit_source="$DOTFILES_DIR/.config/systemd/user/$unit"
                 [ -f "$unit_source" ] || continue
                 symlink_agent_config "$unit_source" "$HOME/.config/systemd/user/$unit"
         done
         if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
                 systemctl --user daemon-reload
-                systemctl --user enable --now dotfiles-refresh.timer || echo 'could not enable dotfiles-refresh.timer; continuing'
+                for timer in dotfiles-refresh.timer agent-mail-verify.timer; do
+                        systemctl --user enable --now "$timer" || echo "could not enable $timer; continuing"
+                done
         else
-                echo '  ======  no user systemd bus here; enable dotfiles-refresh.timer by hand'
+                echo '  ======  no user systemd bus here; enable dotfiles-refresh.timer and agent-mail-verify.timer by hand'
         fi
         echo '  ======  installed the dotfiles refresh schedule'
 }
