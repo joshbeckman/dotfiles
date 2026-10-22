@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS deliveries (
     REFERENCES message_recipients(message_id, recipient_mailbox_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS deliveries_by_seq ON deliveries(delivery_seq);
+CREATE TABLE IF NOT EXISTS send_keys (
+  idempotency_key TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES messages(message_id)
+);
 CREATE INDEX IF NOT EXISTS messages_thread_sequence
   ON messages(thread_id, sequence DESC);
 CREATE INDEX IF NOT EXISTS message_recipients_by_recipient
@@ -274,6 +278,8 @@ def upgrade_v3(db: sqlite3.Connection) -> None:
                 "UPDATE deliveries SET delivery_seq = (SELECT seq FROM delivery_order WHERE row = deliveries.rowid)",
                 "DROP TABLE delivery_order",
                 "CREATE UNIQUE INDEX deliveries_by_seq ON deliveries(delivery_seq)",
+                """CREATE TABLE send_keys (idempotency_key TEXT PRIMARY KEY,
+                     message_id TEXT NOT NULL REFERENCES messages(message_id))""",
                 # Whoever upgrades, the headers v3 dropped are owed a full pass from the Maildir.
                 # A row, not a flag in this process: the next migrator run sees it whichever
                 # command upgraded, and it survives a crash before the pass.
@@ -814,6 +820,14 @@ def append_message(args: argparse.Namespace) -> str:
 
         db.execute("BEGIN IMMEDIATE")
         try:
+            # A retry of a send whose outcome was lost (a killed caller, a timeout) returns the
+            # message already delivered rather than delivering it twice.
+            if args.idempotency_key:
+                done = db.execute("SELECT message_id FROM send_keys WHERE idempotency_key = ?",
+                                  (args.idempotency_key,)).fetchone()
+                if done:
+                    db.execute("ROLLBACK")
+                    return done[0]
             mid = message_id(subject)
             timestamp = now_us()
             if new_thread:
@@ -856,6 +870,8 @@ def append_message(args: argparse.Namespace) -> str:
             )
             pairs = [(mid, recipient.id) for recipient in recipients]
             db.executemany("INSERT INTO message_recipients(message_id, recipient_mailbox_id) VALUES (?, ?)", pairs)
+            if args.idempotency_key:
+                db.execute("INSERT INTO send_keys VALUES (?, ?)", (args.idempotency_key, mid))
             first = next_delivery_seq(db)
             db.executemany(
                 "INSERT INTO deliveries(message_id, recipient_mailbox_id, delivery_seq) VALUES (?, ?, ?)",
@@ -1345,6 +1361,8 @@ def parser(only: str | None = None) -> argparse.ArgumentParser:
                           help="refuse with exit 3 unless this is still the thread's head (strict compare-and-swap)")
         send.add_argument("--in-reply-to", metavar="MESSAGE_ID")
         send.add_argument("--reply-to", metavar="ID", help="where replies to this message go instead of the sender")
+        send.add_argument("--idempotency-key", metavar="KEY",
+                          help="a retry with the same key returns the first delivery's id instead of sending again")
         send.add_argument("--subject")
         send.add_argument("--body", "-m")
         send.add_argument("--body-file")

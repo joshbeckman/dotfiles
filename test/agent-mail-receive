@@ -134,6 +134,13 @@ answer="$(as agent-run "$cmd" send --reply-all "$routed" -m answer 2>/dev/null |
 "$cmd" receipt "$answer" | grep -Fq 'to:bob-agent-22222222' || fail "reply-all ignored Reply-To"
 "$cmd" receipt "$answer" | grep -Fq 'to:alice-agent-11111111' && fail "reply-all went to the sender despite Reply-To"
 
+# A retried send with the same idempotency key returns the first delivery instead of a second.
+first_try="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --idempotency-key draft-123 -m once | tail -1)"
+second_try="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --idempotency-key draft-123 -m once | tail -1)"
+[[ "$first_try" == "$second_try" ]] || fail "a retried send delivered twice"
+[[ "$("$cmd" scan --to bob-agent-22222222 --json --limit 1000 | json 'sum(1 for m in d["messages"] if m["subject"] is None and m["from"] == "alice-agent-11111111")')" == 1 ]] \
+  || fail "the retried send left two deliveries"
+
 # Josh is notified at once on delivery, and the sweep escalates what nobody read, once.
 : >"$tmp/r/notified"
 as alice-agent-11111111 "$cmd" send --to josh --subject 'For Josh' -m hi >/dev/null

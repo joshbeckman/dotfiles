@@ -140,4 +140,16 @@ grep -Fq "$a is read for $agent2 in the Maildir, unread in the database" "$tmp/v
 migrate >/dev/null
 migrate --verify | grep -qx verified
 
+# Sent mail whose every recipient copy is gone keeps its audience, without a delivery.
+f="20261004T090000Z--from-josh--to-gone--orphan--6-6"
+write_message "$tmp/humans/josh/sent/$f.md" "josh" "gone-agent-99999999, $agent2" "2026-10-04T09:00:00Z" "$f" "$f" "" "Orphan" "nobody kept it"
+migrate >/dev/null
+python3 - "$AGENT_MAIL2_DB" "$f" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert sorted(r[0] for r in db.execute("select recipient_mailbox_id from message_recipients where message_id = ?", (sys.argv[2],))) == ["birch-agent-22222222", "gone-agent-99999999"]
+assert db.execute("select count(*) from deliveries where message_id = ?", (sys.argv[2],)).fetchone()[0] == 0
+PY
+migrate --verify | grep -qx verified
+
 echo "agent-mail-migrate tests passed"

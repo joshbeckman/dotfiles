@@ -133,6 +133,9 @@ class Message:
         self.reply_address: str | None = None
         self.team_to: str | None = None
         self.escalated: dict[str, int] = {}
+        # The To header of a sent copy: the only record of the audience once every
+        # recipient's copy is gone. Used for the audience only, never for deliveries.
+        self.addressed: list[str] = []
 
     def absorb(self, path: Path, headers: dict[str, str], body: str) -> None:
         if not self.body and body:
@@ -217,6 +220,8 @@ def collect(boxes: dict[str, dict[str, Path]], only: str | None = None) -> dict[
                 message = messages.setdefault(message_id, Message(message_id))
                 message.absorb(path, headers, body)
                 message.offer_sender(mailbox)
+                message.addressed = message.addressed or [
+                    normalize(a) for a in headers.get("to", "").split(",") if a.strip()]
     return messages
 
 
@@ -315,6 +320,13 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                     (message.reply_address, message.team_to, message.message_id,
                      message.reply_address, message.team_to),
                 )
+            if not message.recipients:
+                # Sent mail whose every copy is gone keeps its audience, so a reply still
+                # reaches it; no delivery is invented for it.
+                for address in message.addressed:
+                    ensure(db, address, message.sent_at, humans)
+                    db.execute("INSERT OR IGNORE INTO message_recipients VALUES (?, ?)",
+                               (message.message_id, address))
             for recipient, read_at in sorted(message.recipients.items()):
                 ensure(db, recipient, message.sent_at, humans)
                 db.execute(
