@@ -1,8 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { memoryPressureLevel, shouldSuppressMailWake } from "./resource-pressure.js";
 
@@ -274,9 +274,71 @@ function resetPaneTitle() {
 	} catch {} // never let a cosmetic reset break shutdown
 }
 
-type Unread = { file: string; from: string; subject: string; at: number };
+export type Unread = { file: string; from: string; subject: string; at: number };
+
+// The store marker sits beside the human mailboxes, resolved as bin/agent-mail resolves them.
+export function mailStateRoot(humanRoot = process.env.AGENT_HUMAN_MAIL_ROOT || join(homedir(), ".local", "state", "agent-mail", "humans")): string {
+	try {
+		return dirname(realpathSync(humanRoot));
+	} catch {
+		return dirname(humanRoot);
+	}
+}
+
+// Byte for byte the grammar bin/agent-mail checks: a store name and trailing newlines, or maildir.
+export function storeMode(stateRoot = mailStateRoot()): "maildir" | "both" | "sqlite" {
+	try {
+		const match = /^(maildir|both|sqlite)\n*$/.exec(readFileSync(join(stateRoot, "store")).toString("latin1"));
+		return (match?.[1] as "maildir" | "both" | "sqlite") ?? "maildir";
+	} catch {
+		return "maildir";
+	}
+}
+
+const sqliteUnreadCache = new Map<string, { bell: number; at: number; unread: Unread[] }>();
+
+// Under the SQLite store there is no inbox to list, and running the CLI on every 15s tick
+// in every session is the cost the doorbell exists to avoid: it is re-run only when this
+// mailbox's doorbell changes, or after a minute, since a read rings nothing.
+export function sqliteUnread(mailbox: string, stateRoot = mailStateRoot(), now = Date.now()): Unread[] {
+	let bell = 0;
+	try {
+		bell = statSync(join(stateRoot, "doorbells", mailbox)).mtimeMs;
+	} catch {}
+	const cached = sqliteUnreadCache.get(mailbox);
+	if (cached && cached.bell === bell && now - cached.at < 60_000) return cached.unread;
+	try {
+		// Every page, not the first: unread mail left alone must not hide what arrives after it.
+		const messages: { message_id: string; from?: string; subject?: string; date?: string }[] = [];
+		let cursor: string | null = null;
+		for (let page = 0; page < 50; page++) {
+			const out = execFileSync("agent-mail", ["scan", "--to", mailbox, "--json", "--limit", "200", ...(cursor ? ["--after", cursor] : [])], {
+				encoding: "utf8",
+				timeout: 10_000,
+				maxBuffer: 16 * 1024 * 1024,
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			const parsed = JSON.parse(out);
+			messages.push(...(parsed.messages ?? []));
+			cursor = parsed.next ?? null;
+			if (!cursor) break;
+		}
+		const unread: Unread[] = messages.map((m) => ({
+			// The Maildir filename, so a notice announced before the flip is not announced again after it.
+			file: `${m.message_id}.md`,
+			from: m.from || "unknown",
+			subject: (m.subject || "").replace(/^\(no subject\)$/, ""),
+			at: Date.parse(m.date ?? "") || 0,
+		}));
+		sqliteUnreadCache.set(mailbox, { bell, at: now, unread });
+		return unread;
+	} catch {
+		return cached?.unread ?? [];
+	}
+}
 
 function unreadSummary(scratchpad: string): Unread[] {
+	if (storeMode() === "sqlite") return sqliteUnread(scratchpad.split("/").pop() || "");
 	try {
 		return readdirSync(join(scratchpad, "inbox", "new"))
 			.filter((f) => f.endsWith(".md"))
