@@ -38,5 +38,8 @@ check "$(wc -c < "$sent" | tr -d ' ')" "0" "a failure log in the scratchpads roo
 : > "$sent"; rm -f "$state/mirror-failures"; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
 check "$(wc -l < "$sent" | tr -d ' ')" "1" "a failed verify raises the alarm"
 
-rm -f "$state/mirror-failures" "$tmp/scratchpads/mirror-failures"
+: > "$sent"; printf 'mailbox:josh\tmirror write failed\n' > "$state/mirror-failures"; : > "$state/mirror-failures.repaired"; run
+if grep -q 'reminder to run --finish' "$sent"; then echo "  ok: a repaired log says so rather than reading as new drift"; else echo "  FAIL: repaired log not distinguished"; fail=1; fi
+
+rm -f "$state/mirror-failures" "$state/mirror-failures.repaired" "$tmp/scratchpads/mirror-failures"
 [ "$fail" = 0 ] && echo "agent-mail-verify tests passed" || { echo "agent-mail-verify tests failed"; exit 1; }

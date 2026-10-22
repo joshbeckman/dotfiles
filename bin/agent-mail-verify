@@ -12,5 +12,9 @@ err=$(mktemp)
 trap 'rm -f "$err"' EXIT
 if ! agent-mail-migrate --verify >/dev/null 2>"$err" || [ -s "$state/mirror-failures" ]; then
   cat "$state/mirror-failures" >>"$err" 2>/dev/null || true
+  # After a repair the log stays non-empty until --finish retires it, so the alarm keeps firing
+  # hourly. Saying which of the two it is keeps a reminder from reading as fresh drift, because an
+  # alarm people learn to ignore is worse than none.
+  [ -f "$state/mirror-failures.repaired" ] && printf '\nThese ids are already present in SQLite. This is a reminder to run --finish, not new drift.\n' >>"$err"
   agent-mail send --from agent-mail-verify --to josh --subject "Agent mail mirror drifted" --body-file "$err"
 fi
