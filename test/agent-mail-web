@@ -1056,27 +1056,33 @@ class WebTest(unittest.TestCase):
         self.assertNotIn('CONTROL_ID', [entry.get('modelId') for entry in entries])
 
     def test_agent_run_shows_a_different_request_after_an_applied_change(self):
-        # The applied change sets the state a request is compared against, so a request that
-        # differs from it still draws a card. A boolean that skipped the next request regardless
-        # would swallow this one.
-        records = [
-            {'type': 'model_changed', 'at_ms': 1000,
-             'change': {'id': 'CONTROL_ID', 'selection': {'provider': 'openai', 'id': 'gpt-4.1-nano',
-                                                          'api': 'openai-responses', 'thinking': 'high'}}},
-            {'type': 'model_request', 'at_ms': 1100, 'turn': 1,
-             'model': {'provider': 'openai', 'model': 'gpt-4.1-nano', 'api': 'openai-responses', 'thinking': 'high'}},
-            {'type': 'model_request', 'at_ms': 1200, 'turn': 1,
-             'model': {'provider': 'openai', 'model': 'gpt-4.1-nano', 'api': 'openai-responses', 'thinking': 'off'}},
-        ]
-        thread, _ = self.agent_run(records=records)
-        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
-        entries = [item['entry'] for item in data['entries']]
-        # The change, then the thinking-only change. The identical request between them is silent.
-        self.assertEqual([entry['type'] for entry in entries], ['model_change', 'model_change'])
-        self.assertEqual(entries[0]['thinkingLevel'], 'high')
-        self.assertEqual(entries[1]['thinkingLevel'], 'off')
-        keys = [item['key'] for item in data['entries']]
-        self.assertEqual(len(keys), len(set(keys)), keys)
+        # The applied change sets the state a request is compared against, so a request that differs
+        # from it still draws a card. A boolean that skipped the next request regardless would
+        # swallow the immediate one. Both sequences matter: a mismatch straight after the change,
+        # and a mismatch only after an identical request that must stay silent.
+        selection = {'provider': 'openai', 'id': 'gpt-4.1-nano', 'api': 'openai-responses',
+                     'thinking': 'high'}
+        matching = {'provider': 'openai', 'model': 'gpt-4.1-nano', 'api': 'openai-responses',
+                    'thinking': 'high'}
+        differing = dict(matching, thinking='off')
+        for label, requests in (('immediate mismatch', [differing]),
+                                ('mismatch after an identical request', [matching, differing])):
+            with self.subTest(sequence=label):
+                records = [{'type': 'model_changed', 'at_ms': 1000,
+                            'change': {'id': 'CONTROL_ID', 'selection': dict(selection)}}]
+                records += [{'type': 'model_request', 'at_ms': 1100 + i, 'turn': 1,
+                             'model': dict(model)} for i, model in enumerate(requests)]
+                thread, _ = self.agent_run(records=records)
+                data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+                entries = [item['entry'] for item in data['entries']]
+                # The change, then the differing request. An identical request between them is
+                # silent, so the differing one is the last entry either way.
+                self.assertEqual([entry['type'] for entry in entries], ['model_change', 'model_change'])
+                self.assertEqual(entries[0]['thinkingLevel'], 'high')
+                self.assertEqual(entries[1]['thinkingLevel'], 'off')
+                keys = [item['key'] for item in data['entries']]
+                self.assertEqual(len(keys), len(set(keys)), keys)
+                self.assertNotIn('CONTROL_ID', [entry.get('modelId') for entry in entries])
 
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
