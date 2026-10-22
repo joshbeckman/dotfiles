@@ -13,6 +13,12 @@ cat > "$tmp/bin/agent-mail" <<'FAKE'
 #!/bin/sh
 [ "${1:-}" = "send" ] || exit 0
 printf '%s\n' "$*" >> "$AGENT_MAIL_TEST_SENT"
+# The subject and body arrive as files, so recording the arguments alone would never see the text
+# this test is about.
+while [ $# -gt 0 ]; do
+  case "$1" in --body-file) cat "$2" >> "$AGENT_MAIL_TEST_SENT" ;; esac
+  shift
+done
 FAKE
 cat > "$tmp/bin/agent-mail-migrate" <<'FAKE'
 #!/bin/sh
