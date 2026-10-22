@@ -712,8 +712,36 @@ def resume(handle, tmux_session, dry_run, extensions=()):
 WAKES_PER_HOUR = 4
 
 
+def store_mode(human_root):
+    # Byte for byte the grammar bin/agent-mail checks, beside the resolved human root.
+    try:
+        raw = (human_root.resolve().parent / 'store').read_bytes()
+    except OSError:
+        return 'maildir'
+    match = re.fullmatch(rb'(maildir|both|sqlite)\n*', raw)
+    return match.group(1).decode() if match else 'maildir'
+
+
+def unread_sqlite(pad, human_root):
+    """Under the SQLite store there is no inbox/new to list, so agent-mail answers. Names keep
+    the Maildir's <id>.md shape, so wokeFor recorded before the flip still matches after it."""
+    import subprocess
+    env = dict(os.environ, AGENT_MAIL_ROOT=str(pad.parent), AGENT_HUMAN_MAIL_ROOT=str(human_root))
+    env.pop('AGENT_SCRATCHPAD', None)
+    result = subprocess.run([str(Path(__file__).resolve().with_name('agent-mail')), 'scan', '--to', pad.name,
+                             '--json', '--limit', '1000'], capture_output=True, text=True, env=env, timeout=30)
+    if result.returncode:
+        raise ValueError(f'agent-mail scan failed for {pad.name}: {result.stderr.strip()}')
+    messages = json.loads(result.stdout)['messages']
+    humans = {n for n in os.listdir(human_root) if not n.startswith('.')} if human_root.is_dir() else set()
+    names = sorted(m['message_id'] + '.md' for m in messages)
+    return names, {m['message_id'] + '.md' for m in messages if m['from'].removeprefix('@') in humans}
+
+
 def unread(pad, human_root):
     """Unread message names and whether any came from a human."""
+    if store_mode(human_root) == 'sqlite':
+        return unread_sqlite(pad, human_root)
     try:
         names = sorted(n for n in os.listdir(pad / 'inbox/new') if not n.startswith('.'))
     except FileNotFoundError:
@@ -743,7 +771,12 @@ def wake_mail(tmux_session, dry_run):
                 or not record.get('wake'):
             continue
         sid, handle = record['sessionId'], record['handle'][2:]
-        names, from_human = unread(scratch / f'{handle}-{sid[:8]}', human_root)
+        try:
+            names, from_human = unread(scratch / f'{handle}-{sid[:8]}', human_root)
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            # One mailbox that cannot be read must not hide the others' mail.
+            print(f'agent-session: {error}', file=sys.stderr)
+            continue
         fresh = [n for n in names if n not in record.get('wokeFor', [])]
         if not fresh:
             continue

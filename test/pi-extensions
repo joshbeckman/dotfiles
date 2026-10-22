@@ -29,6 +29,10 @@ registerHooks({
     if (specifier === "typebox") {
       return { url: "data:text/javascript," + encodeURIComponent(STUB), shortCircuit: true };
     }
+    // Extensions import siblings by their emitted .js name; here the source is the .ts.
+    if (specifier.startsWith("./") && specifier.endsWith(".js") && context.parentURL?.includes("/.agents/pi/extensions/")) {
+      return nextResolve(specifier.replace(/\.js$/, ".ts"), context);
+    }
     return nextResolve(specifier, context);
   },
 });
@@ -429,6 +433,43 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
       && /pi\.on\("agent_end"[\s\S]*?turnInFlight = false/.test(source)
       && /if \(turnInFlight\) return/.test(source),
   );
+}
+
+// --- mail notice under the SQLite store --------------------------------------
+
+// With no inbox directory to list, the notice asks agent-mail, and only when the mailbox's
+// doorbell has changed or a minute has passed: every 15s tick in every session must not
+// start a process. The marker is read with the same grammar as bin/agent-mail.
+{
+  const mail = await import(pathToFileURL(join(EXTENSIONS, "agent-name.ts")).href);
+  const state = mkdtempSync(join(tmpdir(), "mail-state-"));
+  const bin = join(state, "bin");
+  mkdirSync(join(state, "doorbells"), { recursive: true });
+  mkdirSync(bin);
+  const calls = join(state, "calls");
+  writeFileSync(join(bin, "agent-mail"),
+    `#!/bin/sh\necho "$*" >> ${calls}\nprintf '%s' '{"version":1,"messages":[{"message_id":"01ABC-hello","from":"josh","subject":"Hello","date":"2026-10-22T12:00:00Z"},{"message_id":"01ABD","from":"pr-monitor","subject":"(no subject)","date":"2026-10-22T12:01:00Z"}],"next":null}'\n`,
+    { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  const count = () => { try { return readFileSync(calls, "utf8").trim().split("\n").length; } catch { return 0; } };
+
+  for (const [content, expected] of [["sqlite\n", "sqlite"], ["both\n\n", "both"], ["sqlite\njunk", "maildir"], ["sqlite\0\n", "maildir"], [" both", "maildir"]]) {
+    writeFileSync(join(state, "store"), content);
+    eq(`the marker ${JSON.stringify(content)} reads as ${expected}`, mail.storeMode(state), expected);
+  }
+  const first = mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_000_000);
+  eq("unread mail comes from agent-mail scan", JSON.stringify(first.map((m) => m.file)), JSON.stringify(["01ABC-hello.md", "01ABD.md"]));
+  eq("the placeholder subject is dropped", first[1].subject, "");
+  check("scan is asked for this mailbox as JSON", readFileSync(calls, "utf8").includes("scan --to pine-miller-of-beacon-01a1039e --json"));
+  mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_010_000);
+  eq("an unchanged doorbell within a minute starts no process", count(), 1);
+  writeFileSync(join(state, "doorbells", "pine-miller-of-beacon-01a1039e"), "");
+  mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_020_000);
+  eq("a ring re-reads at once", count(), 2);
+  mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_090_000);
+  eq("a minute later it re-reads without a ring, since a read rings nothing", count(), 3);
+  process.env.PATH = path;
 }
 
 // --- thinking loop breaker ---------------------------------------------------

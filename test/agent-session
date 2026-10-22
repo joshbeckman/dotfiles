@@ -762,6 +762,19 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(self.wake()['status'], 'waking')
         self.assertEqual(self.launches(), 2)
 
+    def test_watcher_reads_the_sqlite_store(self):
+        # Under the SQLite store there is no inbox/new; the watcher asks agent-mail instead.
+        self.parked()
+        (self.root / 'humans/josh').mkdir()
+        (self.root / 'store').write_text('sqlite\n')
+        self.assertEqual(self.wake()['status'], 'idle')
+        sent = subprocess.run([str(CLI.with_name('agent-mail')), 'send', '--to', self.pad.name, '-m', 'hello'],
+                              env=dict(self.env, AGENT_MAIL_FROM='josh'), capture_output=True, text=True, check=True)
+        message = sent.stdout.strip().splitlines()[-1]
+        woken = self.wake()
+        self.assertEqual((woken['status'], woken['messages']), ('waking', [message + '.md']))
+        self.assertFalse((self.pad / 'inbox/new').exists() and any((self.pad / 'inbox/new').iterdir()))
+
     def test_watcher_budget_exempts_human_mail(self):
         (self.root / 'humans/josh').mkdir()
         self.parked()
