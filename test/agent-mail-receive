@@ -219,4 +219,25 @@ for change in ("update messages set team_to = 'other'", "update messages set bod
     raise AssertionError(f"accepted: {change}")
 PY
 
+# Once the store is sqlite, nothing syncs from the Maildir, the owed backfill included:
+# verify reports it and changes no delivery.
+realm "$tmp/late-backfill"
+mkdir -p "$AGENT_MAIL_ROOT/bob-agent-22222222/inbox/cur"
+printf 'From: alice-agent-11111111\nTo: bob-agent-22222222\nMessage-ID: m-old\nSubject: old\n\nold\n' \
+  >"$AGENT_MAIL_ROOT/bob-agent-22222222/inbox/cur/m-old.md"
+printf 'both\n' >"$tmp/late-backfill/state/store"
+"$root/bin/agent-mail-migrate" >/dev/null
+python3 - "$tmp/late-backfill/state/mail2.sqlite3" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("create table if not exists backfill_pending (since integer not null)")
+db.execute("insert into backfill_pending values (1)")
+db.commit()
+PY
+printf 'sqlite\n' >"$tmp/late-backfill/state/store"
+fresh="$(as alice-agent-11111111 "$cmd" send --to bob-agent-22222222 --subject fresh -m fresh | tail -1)"
+set +e; "$root/bin/agent-mail-migrate" --verify >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'backfill never ran' "$tmp/err" || fail "verify did not report the owed backfill under sqlite"
+[[ "$("$cmd" receipt "$fresh" | cut -f1)" == unread ]] || fail "verify reconciled a SQLite-only delivery from the Maildir"
+
 echo 'agent-mail-receive tests passed'

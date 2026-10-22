@@ -533,6 +533,11 @@ def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
 
 def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                   only: str | None) -> dict[str, int]:
+    # Checked here, not only in main: every path that syncs from the Maildir, the automatic
+    # backfill included, must refuse once SQLite is the record, or it would discard mail
+    # the Maildir never had and revert reads.
+    if store_mode(roots[1].resolve().parent / "store") == "sqlite":
+        raise MigrationError("the store is sqlite, so the Maildir is no longer the record; refusing to sync from it")
     db = open_db(db_path)
     if backfill_pending(db):
         # The v4 upgrade owes the headers v3 dropped a full pass from the Maildir.
@@ -569,7 +574,7 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
 
 def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
     db = open_db(db_path)
-    if backfill_pending(db):
+    if backfill_pending(db) and store_mode(roots[1].resolve().parent / "store") != "sqlite":
         db.close()
         run_migration(db_path, roots, "public", None)
         db = open_db(db_path)
@@ -577,6 +582,13 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
         # Under the write lock, so a mirror committing mid-check cannot read as drift.
         db.execute("BEGIN IMMEDIATE")
         try:
+            if store_mode(roots[1].resolve().parent / "store") == "sqlite":
+                # The Maildir is no longer the record, so there is nothing to compare it with;
+                # only the database's own soundness is left to check.
+                problems = [] if db.execute("PRAGMA integrity_check").fetchone()[0] == "ok" else ["integrity check failed"]
+                if backfill_pending(db):
+                    problems.append("the v4 routing-header backfill never ran, and the store is already sqlite")
+                return problems
             boxes = mailboxes(*roots)
             return verify(db, collect(boxes), boxes)
         finally:
