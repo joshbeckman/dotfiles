@@ -27,6 +27,12 @@ Usage:
   agent-mail-migrate --set-store both     migrate, verify, then start dual-writing
   agent-mail-migrate --set-store maildir  stop dual-writing (the Maildir never stopped
                                           being authoritative, so nothing is lost)
+  agent-mail-migrate --finish        stamp the migration done and delete its archives
+
+Before --set-store both changes anything, it archives the inboxes, the human mailboxes,
+the identity registry and the database to archives/ beside the marker, then restores that
+archive into a temporary directory and checks it holds the same mail. --finish refuses
+unless --verify is clean.
 
   --db PATH          target database (default: AGENT_MAIL2_DB, then mail2.sqlite3 beside
                      the human root, where agent-mail2 keeps it)
@@ -51,6 +57,8 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tarfile
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -430,8 +438,78 @@ def report(counts: dict[str, int], db_path: Path) -> None:
         )
 
 
+def mail_digest(boxes: dict[str, dict[str, Path]]) -> dict[str, tuple]:
+    """Each message's sender, thread, body and per-mailbox state, for comparing two trees."""
+    return {
+        m.message_id: (m.sender, m.thread_id, m.body,
+                       tuple(sorted((box, state is None) for box, state in m.recipients.items())))
+        for m in collect(boxes).values()
+    }
+
+
+def archive(marker: Path, db_path: Path, agent_root: Path, human_root: Path,
+            registry: Path, label: str) -> Path:
+    directory = marker.parent / "archives"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = directory / f"pre-{label}-{stamp}.tar.gz"
+    boxes = mailboxes(agent_root, human_root)
+    for attempt in range(3):
+        before = mail_digest(boxes)
+        with tempfile.TemporaryDirectory(prefix="agent-mail-archive-") as scratch:
+            snapshot = Path(scratch) / "mail2.sqlite3"
+            if db_path.exists():
+                # The backup API, not a file copy: a copy can catch the WAL mid-checkpoint.
+                source = sqlite3.connect(db_path)
+                target = sqlite3.connect(snapshot)
+                source.backup(target)
+                target.close()
+                source.close()
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "wb") as raw, tarfile.open(fileobj=raw, mode="w:gz") as tar:
+                for inbox in sorted(agent_root.glob("*/inbox")):
+                    tar.add(inbox, arcname=f"agents/{inbox.parent.name}/inbox")
+                if human_root.is_dir():
+                    tar.add(human_root, arcname="humans")
+                if registry.is_dir():
+                    tar.add(registry, arcname="identities")
+                if snapshot.exists():
+                    tar.add(snapshot, arcname="mail2.sqlite3")
+            restored = Path(scratch) / "restored"
+            with tarfile.open(path) as tar:
+                # Python before 3.12 has no filter argument; the archive is the one just written.
+                tar.extractall(restored, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+            after = mail_digest(mailboxes(restored / "agents", restored / "humans"))
+        # Mail that arrives while the archive is written makes the comparison differ, so retry
+        # rather than accept an archive that was never shown to restore.
+        if after == before == mail_digest(boxes):
+            return path
+    path.unlink()
+    raise MigrationError("the archive did not restore to the same mail after three attempts; nothing was changed")
+
+
+def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> int:
+    if store_mode(marker) == "maildir":
+        raise MigrationError("the store is maildir, so there is no migration to finish")
+    if store_mode(marker) == "both":
+        boxes = mailboxes(agent_root, human_root)
+        problems = run_verify(db_path, boxes, collect(boxes))
+        if problems:
+            for problem in problems:
+                print(f"agent-mail-migrate: {problem}", file=sys.stderr)
+            raise MigrationError(f"{len(problems)} problems; the archives were kept")
+    directory = marker.parent / "archives"
+    removed = sorted(directory.glob("*.tar.gz")) if directory.is_dir() else []
+    for path in removed:
+        path.unlink()
+    (marker.parent / "migration-finished").write_text(
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n", encoding="utf-8")
+    print(f"migration finished; removed {len(removed)} archive{'s' if len(removed) != 1 else ''}")
+    return 0
+
+
 def set_store(target: str, marker: Path, db_path: Path, agent_root: Path, human_root: Path,
-              visibility: str) -> int:
+              visibility: str, registry: Path) -> int:
     current = store_mode(marker)
     if target == current:
         print(f"store is already {current}")
@@ -450,6 +528,8 @@ def set_store(target: str, marker: Path, db_path: Path, agent_root: Path, human_
         write_store(marker, "maildir")
         print("store is maildir; the database is no longer written")
         return 0
+    saved = archive(marker, db_path, agent_root, human_root, registry, target)
+    print(f"archived and restored the mail to {saved}")
     boxes = mailboxes(agent_root, human_root)
     run_migration(db_path, boxes, collect(boxes), visibility, None)
     problems = run_verify(db_path, boxes, collect(boxes))
@@ -479,6 +559,7 @@ def main() -> int:
     mode.add_argument("--verify", action="store_true")
     mode.add_argument("--message", metavar="ID")
     mode.add_argument("--set-store", choices=STORES)
+    mode.add_argument("--finish", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -501,7 +582,10 @@ def main() -> int:
 
     try:
         if args.set_store:
-            return set_store(args.set_store, marker, db_path, agent_root, human_root, args.visibility)
+            registry = Path(os.environ.get("AGENT_IDENTITIES_DIR") or "~/.pi/agent/identities/by-name").expanduser()
+            return set_store(args.set_store, marker, db_path, agent_root, human_root, args.visibility, registry)
+        if args.finish:
+            return finish(marker, db_path, agent_root, human_root)
         boxes = mailboxes(agent_root, human_root)
         messages = collect(boxes, args.message)
         if args.dry_run:
@@ -522,7 +606,7 @@ def main() -> int:
                 message.recipients = {box: None if state is None else now
                                       for box, state in message.recipients.items()}
         counts = run_migration(db_path, boxes, messages, args.visibility, args.message)
-    except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError) as error:
+    except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"agent-mail-migrate: {error}", file=sys.stderr)
         return 1
 

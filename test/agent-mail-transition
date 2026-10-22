@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# The transition to the SQLite store has to fail safe, not only succeed: the archive restores,
+# --verify catches every kind of drift, a crash at any seam of a dual-write leaves the Maildir
+# correct and is repaired by one migrate, rollback loses nothing, and a long random run of
+# every mutating command keeps the mirror exact. AGENT_MAIL_FUZZ_SEED replays a random run;
+# AGENT_MAIL_FUZZ_OPS lengthens it.
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL_FROM AGENT_MAIL2_DB AGENT_MAIL2_HUMAN AGENT_SCRATCH_ROOT
+mkdir -p "$tmp/no-notify"
+printf '#!/bin/sh\nexit 0\n' >"$tmp/no-notify/notify-josh"
+chmod +x "$tmp/no-notify/notify-josh"
+export AGENT_MAIL_STALE_HOURS=100000 PATH="$tmp/no-notify:$PATH"
+
+alice=alice-agent-11111111
+bob=bob-agent-22222222
+carol=carol-agent-33333333
+
+realm() {
+  dir="$tmp/$1"
+  rm -rf "$dir"
+  mkdir -p "$dir/pads/$alice" "$dir/pads/$bob" "$dir/pads/$carol" "$dir/state/humans/josh" "$dir/identities"
+  export AGENT_MAIL_ROOT="$dir/pads" AGENT_HUMAN_MAIL_ROOT="$dir/state/humans" AGENT_IDENTITIES_DIR="$dir/identities"
+  bin="$root/bin"
+  db="$dir/state/mail2.sqlite3"
+}
+cmd() { "$bin/agent-mail" "$@"; }
+as() { local who="$1"; shift; AGENT_SCRATCHPAD="$AGENT_MAIL_ROOT/$who" "$@"; }
+migrate() { "$bin/agent-mail-migrate" --db "$db" "$@"; }
+verified() { migrate --verify >/dev/null 2>&1; }
+fail() { echo "agent-mail-transition: $*" >&2; exit 1; }
+sql() { python3 - "$db" "$@" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute(sys.argv[2], sys.argv[3:])
+db.commit()
+PY
+}
+
+# --- the archive restores, and --finish removes it only when the mirror is exact --------
+realm archive
+m1="$(as $alice cmd send --to "$bob,josh" --subject Before -m 'history' | tail -1)"
+migrate --set-store both >"$tmp/out"
+archive="$(ls "$dir/state/archives/"*.tar.gz)"
+grep -Fq "archived and restored the mail to $archive" "$tmp/out" || fail "set-store did not report the archive"
+[[ "$(stat -c %a "$archive" 2>/dev/null || stat -f %Lp "$archive")" == 600 ]] || fail "the archive is not private"
+tar -tzf "$archive" | grep -Fq "agents/$bob/inbox/new/$m1.md" || fail "the archive is missing an inbox"
+tar -tzf "$archive" | grep -Fq "humans/josh/inbox/new/$m1.md" || fail "the archive is missing Josh's mailbox"
+sql "update deliveries set read_at = 1 where recipient_mailbox_id = ?" "$bob"
+set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 && -f "$archive" ]] || fail "--finish removed the archive while the mirror had drifted"
+migrate >/dev/null
+migrate --finish | grep -Fq 'removed 1 archive' || fail "--finish did not remove the archive"
+[[ ! -e "$archive" && -s "$dir/state/migration-finished" ]] || fail "--finish did not stamp the migration"
+
+# --- --verify names each kind of drift --------------------------------------------------
+realm drift
+migrate --set-store both >/dev/null
+m1="$(as $alice cmd send --to "$bob,$carol" --subject Drift -m 'the whole body' | tail -1)"
+verified || fail "the mirror was not exact to begin with"
+expect_drift() {  # $1 the expected complaint, then a SQL statement that breaks the mirror
+  local expected="$1"; shift
+  python3 -c 'import sqlite3, sys; sqlite3.connect(sys.argv[1]).execute("pragma wal_checkpoint(truncate)")' "$db"
+  cp "$db" "$tmp/pristine.sqlite3"
+  python3 - "$db" "$@" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+for trigger in ("messages_no_update", "message_recipients_no_delete"):
+    db.execute(f"drop trigger if exists {trigger}")
+db.execute(sys.argv[2], sys.argv[3:])
+db.commit()
+PY
+  set +e; migrate --verify >/dev/null 2>"$tmp/err"; local status=$?; set -e
+  [[ "$status" == 1 ]] && grep -Fq "$expected" "$tmp/err" || { cat "$tmp/err" >&2; fail "verify missed: $expected"; }
+  cp "$tmp/pristine.sqlite3" "$db"
+  rm -f "$db-wal" "$db-shm"
+}
+expect_drift "$m1 differs from its Maildir copy" "update messages set body = substr(body, 1, 4) where message_id = ?" "$m1"
+expect_drift "$m1 is unread for $carol in the Maildir, not delivered in the database" \
+  "delete from deliveries where message_id = ? and recipient_mailbox_id = ?" "$m1" "$carol"
+expect_drift "$m1 is unread for $bob in the Maildir, read in the database" \
+  "update deliveries set read_at = 1 where message_id = ? and recipient_mailbox_id = ?" "$m1" "$bob"
+verified || fail "restoring the pristine database did not restore a clean verify"
+
+# --- a crash or fault at each seam of a dual-write --------------------------------------
+# A copy of bin/ whose agent-mail-migrate can be replaced, since agent-mail runs its sibling.
+faulty() {
+  rm -rf "$tmp/bin"
+  cp -R "$root/bin" "$tmp/bin"
+  bin="$tmp/bin"
+}
+after_fault() {  # $1 the message delivered during the fault
+  [[ -f "$AGENT_MAIL_ROOT/$bob/inbox/new/$1.md" ]] || fail "the Maildir delivery was lost: $2"
+  bin="$root/bin"
+  migrate >/dev/null
+  verified || fail "one migrate did not repair: $2"
+  python3 - "$db" <<'PY' || fail "the database is corrupt after: $2"
+import sqlite3, sys
+assert sqlite3.connect(sys.argv[1]).execute("pragma integrity_check").fetchone()[0] == "ok"
+PY
+}
+realm faults
+migrate --set-store both >/dev/null
+
+faulty
+printf '#!/bin/sh\nkill -9 $$\n' >"$bin/agent-mail-migrate"
+lost="$(as $alice cmd send --to $bob --subject Killed -m 'killed mirror' 2>"$tmp/err" | tail -1)"
+grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/err" || fail "a killed mirror was silent"
+grep -Fq "$lost" "$dir/state/mirror-failures" || fail "a killed mirror was not logged"
+after_fault "$lost" "a mirror killed before it started"
+
+for i in 1 2 3 4 5 6 7 8; do
+  faulty
+  mv "$bin/agent-mail-migrate" "$bin/agent-mail-migrate.real"
+  # Killed at a random point, often inside its transaction: either it committed or it did not.
+  printf '#!/bin/sh\n"$(dirname "$0")/agent-mail-migrate.real" "$@" & child=$!\nsleep 0.0%s\nkill -9 $child 2>/dev/null\nwait $child\n' \
+    "$(( RANDOM % 9 ))" >"$bin/agent-mail-migrate"
+  chmod +x "$bin/agent-mail-migrate"
+  mid="$(as $alice cmd send --to $bob --subject "Mid $i" -m "mid-transaction $i" 2>/dev/null | tail -1)"
+  after_fault "$mid" "a mirror killed mid-flight ($i)"
+done
+
+python3 - "$db" <<'PY' &
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute("begin exclusive")
+time.sleep(7)
+db.execute("rollback")
+PY
+locker=$!
+sleep 0.5
+locked="$(as $alice cmd send --to $bob --subject Locked -m 'locked database' 2>"$tmp/err" | tail -1)"
+wait "$locker"
+grep -Fq "mirroring $locked into the SQLite store failed" "$tmp/err" || fail "a mirror past the busy timeout was silent"
+after_fault "$locked" "a database locked past the busy timeout"
+
+chmod 400 "$db"
+readonly_id="$(as $alice cmd send --to $bob --subject Readonly -m 'read-only database' 2>"$tmp/err" | tail -1)"
+# SQLite creates its -wal and -shm with the database's mode, so repairing means all three.
+chmod 600 "$db"*
+grep -Fq "mirroring $readonly_id into the SQLite store failed" "$tmp/err" || fail "a read-only database was silent"
+after_fault "$readonly_id" "a read-only database"
+
+# --- rollback loses nothing, with mail arriving between every step -----------------------
+realm rollback
+for step in both maildir both maildir both; do
+  migrate --set-store "$step" >/dev/null
+  as $alice cmd send --to $bob --subject "During $step" -m "sent under $step" >/dev/null
+  as $bob cmd read --to $bob >/dev/null 2>&1
+done
+migrate >/dev/null
+verified || fail "mail sent across rollbacks did not reconcile"
+[[ "$(find "$AGENT_MAIL_ROOT/$bob/inbox" -name '*.md' | wc -l | tr -d ' ')" == 5 ]] || fail "rollback lost Maildir mail"
+python3 - "$db" <<'PY' || fail "rollback lost or duplicated mirrored mail"
+import sqlite3, sys
+assert sqlite3.connect(sys.argv[1]).execute("select count(*) from messages").fetchone()[0] == 5
+PY
+
+# --- a long random run of every mutating command keeps the mirror exact ------------------
+realm fuzz
+migrate --set-store both >/dev/null
+seed="${AGENT_MAIL_FUZZ_SEED:-$RANDOM$RANDOM}"
+ops="${AGENT_MAIL_FUZZ_OPS:-120}"
+python3 - "$bin" "$db" "$seed" "$ops" "$alice" "$bob" "$carol" <<'PY' || fail "random run failed (replay with AGENT_MAIL_FUZZ_SEED=$seed)"
+import os, random, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+bin_dir, db, seed, ops, *agents = sys.argv[1:]
+rng = random.Random(int(seed))
+pads = Path(os.environ["AGENT_MAIL_ROOT"])
+humans = Path(os.environ["AGENT_HUMAN_MAIL_ROOT"])
+cli = str(Path(bin_dir) / "agent-mail")
+everyone = [*agents, "josh"]
+
+
+def run(who, *args, check=True):
+    env = dict(os.environ)
+    if who == "josh":
+        env.pop("AGENT_SCRATCHPAD", None)
+        env["AGENT_MAIL_FROM"] = "josh"
+    else:
+        env["AGENT_SCRATCHPAD"] = str(pads / who)
+    result = subprocess.run([cli, *args], env=env, capture_output=True, text=True)
+    if check and result.returncode:
+        raise SystemExit(f"{who} {args}: exit {result.returncode}: {result.stderr}")
+    if "mirroring" in result.stderr:
+        raise SystemExit(f"{who} {args}: mirror failed: {result.stderr}")
+    return result
+
+
+def inbox(who, state):
+    base = humans / "josh" / "inbox" if who == "josh" else pads / who / "inbox"
+    return sorted((base / state).glob("*.md")) if (base / state).is_dir() else []
+
+
+def body(rng):
+    return rng.choice(["short", "two\nlines", "trailing newline\n", "unicode ✓ café", "x" * rng.randint(1, 3000)])
+
+
+def op(rng, who):
+    kind = rng.choice(["send", "send", "reply", "read", "read-id", "discard", "archive", "deliver"])
+    held = inbox(who, "new") + inbox(who, "cur")
+    if kind == "send" or not held:
+        audience = rng.sample([a for a in everyone if a != who], rng.randint(1, 3))
+        run(who, "send", "--to", ",".join(audience), "--subject", f"s{rng.randint(0, 99)}", "--body", body(rng))
+    elif kind == "reply":
+        # A message whose only other party is the replier has nobody to reply to; that refusal is fine.
+        run(who, "send", "--reply-all", str(rng.choice(held)), "--body", body(rng), check=False)
+    elif kind == "read":
+        run(who, "read", "--to", who, check=False)
+    elif kind == "read-id":
+        run(who, "read", "--to", who, "--id", rng.choice(held).stem)
+    elif kind == "discard":
+        run(who, "discard", "--to", who, "--id", rng.choice(held).stem)
+    elif kind == "archive" and who == "josh" and inbox("josh", "new"):
+        run("josh", "archive", str(rng.choice(inbox("josh", "new"))))
+    elif kind == "deliver":
+        draft = Path(run("josh", "compose").stdout.strip())
+        audience = rng.sample(agents, rng.randint(1, 3))
+        draft.write_text(f"From: josh\nTo: {', '.join(audience)}\nSubject: web {rng.randint(0, 99)}\n\n{body(rng)}")
+        run("josh", "deliver", str(draft))
+
+
+def verify(step):
+    result = subprocess.run([str(Path(bin_dir) / "agent-mail-migrate"), "--db", db, "--verify"],
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit(f"step {step}: mirror drifted:\n{result.stderr}")
+
+
+for step in range(int(ops)):
+    if rng.random() < 0.15:
+        # Concurrent writers, one per mailbox, each with its own generator so a seed replays.
+        batch = [(random.Random(rng.random()), who) for who in rng.sample(everyone, 4)]
+        with ThreadPoolExecutor(4) as pool:
+            list(pool.map(lambda job: op(*job), batch))
+    else:
+        op(rng, rng.choice(everyone))
+    verify(step)
+print(f"{ops} random steps verified (seed {seed})")
+PY
+
+echo 'agent-mail-transition tests passed'
