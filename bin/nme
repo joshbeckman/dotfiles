@@ -1,4 +1,5 @@
 #!/bin/bash
+# Platform: macOS
 #
 # Alert me with a system notification
 #

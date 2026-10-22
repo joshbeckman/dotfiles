@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/home/src/trials"
+export HOME="$tmp/home" PATH="$tmp/bin:$PATH" TEST_ROOT="$tmp"
+
+# Fix the clock and editor so no test opens a real journal or Neovim.
+cat > "$tmp/bin/date" <<'SH'
+#!/bin/sh
+case "$1" in
+  +%Y) printf '%s\n' "$TEST_YEAR" ;;
+  +%B-%d) printf 'January-01\n' ;;
+  +%Y-%m-%d) printf '2024-01-01\n' ;;
+  *) exit 2 ;;
+esac
+SH
+cat > "$tmp/bin/nvim" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" > "$TEST_ROOT/editor-args"
+SH
+cat > "$tmp/bin/fzf" <<'SH'
+#!/bin/sh
+tee "$TEST_ROOT/fzf-input" >/dev/null
+printf '%s\n' "$FZF_SELECTION"
+SH
+chmod +x "$tmp/bin/"*
+
+for year in 2024 2025; do
+  export TEST_YEAR="$year"
+  mkdir "$tmp/$year"
+  (cd "$tmp/$year" && /bin/bash "$repo/bin/journal")
+  count="$(grep -c '^## ' "$tmp/$year/JOURNAL.md")"
+  if [[ "$year" == 2024 ]]; then
+    [[ "$count" == 366 ]]
+    grep -qx '## February-29' "$tmp/$year/JOURNAL.md"
+  else
+    [[ "$count" == 365 ]]
+    ! grep -qx '## February-29' "$tmp/$year/JOURNAL.md"
+  fi
+  grep -qx '## January-01' "$tmp/$year/JOURNAL.md"
+  grep -qx "### $year" "$tmp/$year/JOURNAL.md"
+  [[ "$(< "$tmp/editor-args")" == '+5 JOURNAL.md' ]]
+done
+
+# The first trial creates a name without requiring shuf; the second selects a
+# pre-existing directory whose name has spaces rather than splitting its path.
+created="$(/bin/bash "$repo/bin/trial" 'new project' 2>"$tmp/trial-log")"
+[[ "$created" == "$HOME/src/trials/2024-01-01-new project" ]]
+[[ -d "$created" ]]
+existing="$HOME/src/trials/existing project"
+mkdir "$existing"
+export FZF_SELECTION='existing project'
+selected="$(/bin/bash "$repo/bin/trial" 'another project' 2>"$tmp/trial-log")"
+[[ "$selected" == "$existing" ]]
+grep -qx 'existing project' "$tmp/fzf-input"
+grep -qx '2024-01-01-another project (new)' "$tmp/fzf-input"
+
+# Run the dictionary path when this host has a readable dictionary. On hosts
+# without it the command uses its existing fallback word list instead.
+rm -rf "$HOME/src/trials"/*
+random="$(/bin/bash "$repo/bin/trial" 2>"$tmp/trial-log")"
+[[ "$random" == "$HOME/src/trials/2024-01-01-"* && "$random" != "$HOME/src/trials/2024-01-01-" ]]
+[[ -d "$random" ]]
+
+for command in nme nvim-quick-note snapme auto-review-prs; do
+  [[ "$(head -n 2 "$repo/bin/$command" | tail -n 1)" == '# Platform: macOS' ]]
+done
+
+printf 'cross-platform command tests passed on %s\n' "$(uname -s)"
