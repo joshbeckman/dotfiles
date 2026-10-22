@@ -1471,6 +1471,104 @@ try {
   assert.equal(await page.locator(".rail").isVisible(), true);
   await page.setViewportSize({ width: 1200, height: 850 });
 
+  // A wide window keeps the list beside the conversation, as a desktop mail client does. The
+  // list arrives grouped and stamped by the bridge, folders draw from memory, conversations are
+  // fetched on hover, Back stays in the app, and archive answers before the bridge confirms.
+  const listQueries = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/messages") listQueries.push(u.search);
+  });
+  const splitOne = cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Split one", "--body", "First split message.");
+  cli("send", "--from", "birch-weaver", "--to", "@josh", "--in-reply-to", splitOne, "--subject", "Re: Split one", "--body", "A reply in the split thread.");
+  cli("send", "--from", "birch-weaver", "--to", "@josh", "--subject", "Split two", "--body", "Second split message.");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.reload();
+  await page.locator('[data-folder="sent"]').click();
+  await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
+  await page.locator(".row").first().waitFor();
+  // Mail Josh wrote is listed by recipient; the spoken name still leads with the sender.
+  assert.match(await page.locator(".row .sender-name").first().textContent(), /^To /);
+  assert.match(await page.locator(".row").first().getAttribute("aria-label"), /^josh /);
+  await page.locator('[data-folder="inbox"]').click();
+  await page.locator(".row").nth(1).waitFor();
+  // A folder seen before draws at once, while its request is still outstanding.
+  let releaseList;
+  const listGate = new Promise((resolve) => (releaseList = resolve));
+  await page.route("**/api/messages?*", async (route) => {
+    await listGate;
+    await route.continue();
+  });
+  await page.locator('[data-folder="sent"]').click();
+  await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
+  assert.match(await page.locator(".row .sender-name").first().textContent(), /^To /);
+  releaseList();
+  await page.unroute("**/api/messages?*");
+  await page.locator('[data-folder="inbox"]').click();
+  await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll("#rows .row").length === 2);
+  assert.equal(await page.locator("#reader-empty").isVisible(), true);
+  assert(listQueries.every((q) => q.includes("group=1") || !q.includes("group")), listQueries.join(" "));
+  assert(listQueries.some((q) => q.includes("group=1") && q.includes("version=")), listQueries.join(" "));
+  // The conversation with a reply is one counted row, led by its newest message.
+  const threadRow = page.locator(".row").filter({ hasText: "(2)" });
+  assert.match(await threadRow.getAttribute("aria-label"), /^birch-weaver Re: Split one\./);
+  const prefetched = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/thread");
+  await threadRow.hover();
+  await prefetched;
+  await threadRow.click();
+  await page.frameLocator("#thread iframe").last().getByText("A reply in the split thread.").waitFor();
+  assert.equal(await page.locator("#mail-list").isVisible(), true, "the list stays beside the reader");
+  assert.equal(await page.locator("#back").isVisible(), false);
+  const panes = await page.evaluate(() => ({
+    list: document.getElementById("mail-list").getBoundingClientRect().right,
+    reader: document.getElementById("reader").getBoundingClientRect().left,
+  }));
+  assert(panes.reader >= panes.list - 1, JSON.stringify(panes));
+  // k steps to the previous conversation in the reading pane, and the list follows it.
+  await page.keyboard.press("k");
+  await page.getByRole("heading", { name: "Split two", exact: true }).waitFor();
+  assert.match(await page.locator(".row.selected").getAttribute("aria-label"), /^birch-weaver Split two\./);
+  await page.keyboard.press("Escape");
+  await page.locator("#reader-empty").waitFor();
+  assert.equal(await page.locator("#reader").isVisible(), false);
+  // Back closes the conversation rather than leaving the app.
+  await threadRow.click();
+  await page.locator("#reader").waitFor();
+  await page.goBack();
+  await page.locator("#reader-empty").waitFor();
+  assert.equal(new URL(page.url()).origin, new URL(url).origin);
+  // An unchanged poll is the bridge's stamp alone.
+  const unchangedPoll = await page.evaluate(async () => {
+    const first = await api("messages?group=1&folder=inbox&q=");
+    return api("messages?group=1&folder=inbox&q=&version=" + first.version);
+  });
+  assert.equal(unchangedPoll.unchanged, true);
+  // Archive takes the row at once and moves the reading pane on, before the files have moved.
+  let releaseArchive;
+  const archiveGate = new Promise((resolve) => (releaseArchive = resolve));
+  await page.route("**/api/archive", async (route) => {
+    await archiveGate;
+    await route.continue();
+  });
+  await page.locator(".row").first().click();
+  await page.getByRole("heading", { name: "Split two", exact: true }).waitFor();
+  await page.keyboard.press("e");
+  await page.waitForFunction(() => document.querySelectorAll("#rows .row").length === 1);
+  await page.getByRole("heading", { name: "Re: Split one", exact: true }).waitFor();
+  releaseArchive();
+  await page.getByText("Conversation archived.", { exact: true }).waitFor();
+  await page.unroute("**/api/archive");
+  await page.keyboard.press("e");
+  await page.getByText("No messages here.", { exact: true }).waitFor();
+  await page.locator("#reader-empty").waitFor();
+  // The empty list is drawn before the files move; wait for the archive itself to finish.
+  await page.waitForFunction(() => !busy);
+  assert.equal((await readdir(join(humans, "josh/inbox/new"))).length, 0);
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-split-empty.png" });
+  await page.setViewportSize({ width: 1200, height: 850 });
+
   // Installed app: the token must survive a launch at "/" without the fragment,
   // and new inbox mail must notify only while the window lacks focus.
   const app = await browser.newContext({ viewport: { width: 1000, height: 800 } });
@@ -1559,6 +1657,8 @@ try {
   assert.match(Buffer.from(customSrc.split(",")[1], "base64").toString(), /#002FA7/);
   assert.equal(await customAvatar.getAttribute("width"), "28");
   assert.equal(await customAvatar.getAttribute("aria-hidden"), "true");
+  // Team badges are decoration and load after the list has drawn, so wait for them.
+  await customAvatar.locator("..").locator(".team-badge").first().waitFor();
   assert.equal(await customAvatar.locator("..").locator(".team-badge").count(), 1);
   await page.evaluate(() => {
     const alias = avatar("alder-turner-12345678");
@@ -1604,7 +1704,7 @@ try {
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, local keyword completion, installable app token/worker/notifications, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, local keyword completion, installable app token/worker/notifications, split list and reader, Back staying in the app, grouped and stamped list polls, folders drawn from memory, hover prefetch, archive before confirmation, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

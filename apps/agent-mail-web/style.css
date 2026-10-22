@@ -46,6 +46,7 @@
     --c-focus: #6ca0f2;
     --c-selected: #1b2c4d;
     --c-accent-soft: #152a4d;
+    --c-red: #ff8a8f;
   }
 }
 * {
@@ -78,8 +79,6 @@ h4 {
 h2 {
   font-size: 0.95rem;
   font-weight: 700;
-  border-top: 1px solid var(--c-josh);
-  padding-top: 0.5rem;
 }
 h3 {
   font-size: 0.85rem;
@@ -304,17 +303,30 @@ kbd {
 }
 
 /* ----------------------------------------------------------------- status */
+/* A transient notice rather than a bar: it floats over the foot of the page and lets clicks
+   through, so a message never moves the layout or sits on top of a control. */
 #status {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(36rem, calc(100vw - 2rem));
   margin: 0;
-  padding: 0.35rem 1rem;
-  min-height: 1.75rem;
-  font-size: 0.85rem;
-  color: var(--c-muted);
-  background: var(--c-bg-alt);
-  border-bottom: 1px solid var(--c-border);
+  padding: 0.55rem 0.95rem;
+  border-radius: 4px;
+  background: var(--c-text);
+  color: var(--c-bg);
+  font-size: 0.9rem;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
+  pointer-events: none;
+}
+#status:empty {
+  display: none;
 }
 #status.error {
-  color: var(--c-red);
+  background: var(--c-red);
+  color: #fff;
 }
 
 /* ------------------------------------------------------------------ shell */
@@ -466,12 +478,20 @@ main > section {
 .list-header {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
   margin-bottom: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--c-josh);
+}
+.list-count {
+  font-size: 0.85rem;
+  color: var(--c-text-alt);
 }
 .list-header .hint {
+  margin: 0 0 0 auto;
+}
+.hint {
   margin: 0;
 }
 .hint {
@@ -534,20 +554,24 @@ button[aria-current="page"] {
   overflow: hidden;
   background: var(--c-bg);
 }
-#rows > :empty {
-  display: none;
-}
+/* Two lines per conversation: who and when, then subject and preview. The sender wrapper is
+   display: contents so its avatar and label place straight into the row's grid. */
 .row {
   display: grid;
-  grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: 0.35rem 1rem;
+  grid-template-columns: 2rem minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "face name chip time"
+    "face line line line";
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.1rem;
   width: 100%;
-  padding: 0.6rem 0.8rem;
+  padding: 0.6rem 0.9rem;
   border: 0;
-  border-bottom: 1px solid var(--c-border);
+  border-bottom: 1px solid var(--c-bg-alt);
   border-radius: 0;
   background: var(--c-bg);
+  color: var(--c-text);
   text-align: left;
   box-shadow: inset 3px 0 transparent;
 }
@@ -559,59 +583,113 @@ button[aria-current="page"] {
 }
 .row.selected {
   background: var(--c-selected);
-  box-shadow: inset 3px 0 var(--c-accent);
+  box-shadow: inset 3px 0 var(--c-link);
 }
 .row .sender {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-  color: var(--c-text);
-  font-weight: 500;
-  overflow-wrap: anywhere;
+  display: contents;
 }
 .row .avatar-wrap {
-  flex: none;
+  grid-area: face;
+  align-self: start;
+  margin: 0.1rem 0 0;
 }
 .row .avatar {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2rem;
+  height: 2rem;
   border-radius: 4px;
   display: block;
 }
-.row strong {
+.row .sender-label {
+  grid-area: name;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.row .sender-name {
   font-weight: 600;
-}
-.row .subject-line {
-  display: block;
-  color: var(--c-text);
-}
-.row .count {
-  font-weight: 500;
-  color: var(--c-muted);
-}
-.row .excerpt {
-  display: block;
-  color: var(--c-muted);
-  font-size: 0.85rem;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  max-width: 72ch;
+}
+.row .row-count {
+  flex: none;
+  font-size: 0.85rem;
+  color: var(--c-text-alt);
+}
+.row .chip {
+  grid-area: chip;
 }
 .row time {
-  font-size: 0.78rem;
-  color: var(--c-muted);
+  grid-area: time;
+  font-size: 0.8rem;
+  color: var(--c-text-alt);
   white-space: nowrap;
-  padding-top: 0.15rem;
 }
-#rows:has(.row:only-child) .row {
-  border-bottom: 0;
+.row .subject-line {
+  grid-area: line;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+  color: var(--c-text-alt);
 }
-#rows > p {
-  padding: 1.25rem 1rem;
+.row .subject-line strong {
+  font-weight: 500;
+  color: var(--c-text);
+}
+.row .excerpt {
+  margin-left: 0.75ch;
+}
+/* A narrow list (a phone, or beside the reading pane) gives the preview its own line. */
+.split .row .subject-line strong,
+.split .row .excerpt {
+  display: block;
   margin: 0;
-  color: var(--c-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chip {
+  display: inline-block;
+  padding: 0 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font:
+    600 0.68rem/1.45 "IBM Plex Sans Condensed",
+    "IBM Plex Sans",
+    system-ui,
+    sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  color: var(--c-text-alt);
+}
+.chip-draft {
+  color: var(--c-red);
+}
+.chip-inbox {
+  color: var(--c-link);
+}
+.rows-empty {
+  margin: 0;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--c-text-alt);
+}
+.rows-loading span {
+  display: block;
+  height: 3.65rem;
+  border-bottom: 1px solid var(--c-bg-alt);
+  background: linear-gradient(90deg, var(--c-bg) 0, var(--c-bg-alt) 40%, var(--c-bg) 80%);
+  background-size: 200% 100%;
+  animation: rows-loading 1.2s linear infinite;
+}
+@keyframes rows-loading {
+  to {
+    background-position: -200% 0;
+  }
 }
 
 /* ----------------------------------------------------------------- reader */
@@ -688,47 +766,97 @@ button[aria-current="page"] {
 details.message {
   border: 1px solid var(--c-border);
   border-radius: 4px;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.6rem;
   overflow: clip;
   background: var(--c-bg);
 }
+/* One line per message header, collapsed or open: who, to whom or the first words, and when. */
 details.message > summary {
   cursor: pointer;
-  padding: 0.65rem 0.85rem;
-  background: var(--c-bg-alt);
+  list-style: none;
+  padding: 0.6rem 0.85rem;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  overflow-wrap: anywhere;
-  font-weight: 500;
+  gap: 0.6rem;
+  min-width: 0;
+}
+details.message > summary::-webkit-details-marker {
+  display: none;
+}
+details.message > summary:hover {
+  background: var(--c-bg-alt);
+}
+details.message[open] > summary {
+  border-bottom: 1px solid var(--c-bg-alt);
+}
+details.message > summary .avatar-wrap {
+  flex: none;
+  margin: 0;
 }
 details.message > summary .avatar {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 2rem;
+  height: 2rem;
   border-radius: 4px;
 }
+.msg-from {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+details.message > summary .chip {
+  flex: none;
+}
+.msg-to,
+.msg-snippet {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.88rem;
+  color: var(--c-text-alt);
+}
+details.message[open] .msg-snippet,
+details.message:not([open]) .msg-to {
+  display: none;
+}
 details.message > summary time {
+  flex: none;
   margin-left: auto;
   font-size: 0.8rem;
-  color: var(--c-muted);
+  color: var(--c-text-alt);
   white-space: nowrap;
 }
 details.message > .metadata {
-  padding: 0.5rem 0.85rem 0;
+  padding: 0.45rem 0.85rem 0;
 }
 .metadata {
-  font-size: 0.82rem;
-  color: var(--c-muted);
+  font-size: 0.8rem;
+  color: var(--c-text-alt);
   overflow-wrap: anywhere;
   margin: 0;
 }
+details.message > .metadata {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The frame starts short and invisible and appears once it has measured its content, rather
+   than flashing a tall empty box and then snapping to size. */
 .rendered {
   width: 100%;
   border: 0;
-  min-height: 12rem;
-  height: 28rem;
+  height: 3rem;
   display: block;
   background: var(--c-bg);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.rendered.sized {
+  opacity: 1;
 }
 .source {
   white-space: pre-wrap;
@@ -753,6 +881,21 @@ details.message > .metadata {
 }
 .render-tools .permalink {
   margin-left: auto;
+}
+.frame-tools {
+  justify-content: flex-end;
+  margin: 0.15rem 0.85rem 0;
+}
+.frame-tools button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-text-alt);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.45rem;
+}
+.frame-tools button:hover {
+  background: var(--c-bg-alt);
+  color: var(--c-text);
 }
 #thread-contacts,
 #compose-contacts {
@@ -793,6 +936,50 @@ details.message > .metadata {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--c-muted);
+}
+/* To and Subject read as the lines of a message header, label beside value, rather than as a
+   form of boxed inputs. The rule under the line marks focus. */
+.field {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  align-items: center;
+  border-bottom: 1px solid var(--c-bg-alt);
+}
+.field:focus-within {
+  border-bottom-color: var(--c-link);
+  box-shadow: 0 1px 0 var(--c-link);
+}
+#editor .field label {
+  margin: 0;
+}
+.field input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.7rem 0.25rem;
+}
+.field input:focus,
+.field input:focus-visible {
+  outline: none;
+}
+#send {
+  background: var(--c-klein-blue);
+  border-color: var(--c-klein-blue);
+  color: #fff;
+  font-weight: 600;
+}
+#send:hover {
+  background: var(--c-klein-blue);
+  filter: brightness(1.12);
+}
+button.danger {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-red);
+}
+button.danger:hover {
+  background: var(--c-bg-alt);
 }
 .attach-label {
   display: flex !important;
@@ -919,17 +1106,6 @@ details.message > .metadata {
   overflow-wrap: anywhere;
   padding: 0.6rem 0.85rem;
   font-weight: 700;
-}
-/* The site treats details summaries as compact uppercase labels. Message summaries
-   carry a sender and date, so they keep their own case. */
-.contact > summary,
-.team-card > summary,
-.session-details summary,
-.team-memberships summary {
-  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.85rem;
 }
 .team-card > summary {
   background: var(--c-bg-alt);
@@ -1125,7 +1301,124 @@ dd {
   }
 }
 
+/* ------------------------------------------------------------- split view */
+/* Wide windows keep the list beside the conversation. Each pane scrolls on its own, so moving
+   through the list never loses the reading position and the reverse. */
+body.split #main {
+  display: grid;
+  grid-template-columns: minmax(22rem, 30rem) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: calc(100dvh - var(--topbar-h));
+  max-width: none;
+  padding: 0;
+}
+body.split #authorize {
+  grid-column: 1 / -1;
+  margin: 1rem 1.25rem 0;
+}
+body.split #mail-list,
+body.split #reader,
+body.split #reader-empty {
+  grid-row: 2;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.25rem 3rem;
+}
+body.split #mail-list {
+  grid-column: 1;
+  border-right: 1px solid var(--c-text-alt);
+}
+body.split #reader,
+body.split #reader-empty {
+  grid-column: 2;
+}
+body.split #back,
+body.split .list-header .hint {
+  display: none;
+}
+body.split #thread-layout {
+  display: block;
+}
+body.split #thread-contacts {
+  border-left: 0;
+  border-top: 1px solid var(--c-border);
+  padding-left: 0;
+  margin-top: 1rem;
+}
+.reader-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  text-align: center;
+  color: var(--c-text-alt);
+}
+.reader-empty .icon {
+  width: 3rem;
+  height: 3rem;
+  stroke-width: 1.1;
+  margin-bottom: 0.5rem;
+}
+.reader-empty p {
+  margin: 0;
+}
+.mobile-title {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rows-loading span {
+    animation: none;
+  }
+  .rendered {
+    transition: none;
+  }
+}
+
 @media (max-width: 860px) {
+  /* A phone's top bar names where you are, as a mail app's does; the brand and account move
+     out of the way, and the realm stays because it says which machine's inbox this is. */
+  .mobile-title {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font:
+      700 1rem/1.2 "IBM Plex Sans Condensed",
+      "IBM Plex Sans",
+      system-ui,
+      sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .brand {
+    flex: 1;
+  }
+  .brand .brand-mark,
+  #current-user {
+    display: none;
+  }
+  #realm {
+    flex: none;
+  }
+  .list-header .hint {
+    display: none;
+  }
+  #status {
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
+  }
+  body.keyboard-open #status {
+    bottom: 1rem;
+  }
+  .row .subject-line strong,
+  .row .excerpt {
+    display: block;
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   :root {
     --topbar-h: 3.25rem;
   }
@@ -1142,11 +1435,6 @@ dd {
   }
   .brand-name {
     display: none;
-  }
-  .brand-mark {
-    width: 44px;
-    height: 44px;
-    padding: 0.5625rem;
   }
   #search-form {
     display: none;
@@ -1288,18 +1576,8 @@ dd {
     padding: 1rem 1rem 2rem;
   }
   .row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.15rem 0.5rem;
-    padding: 0.6rem 0.7rem;
-  }
-  .row .sender {
-    grid-column: 1 / -1;
-  }
-  .row .excerpt {
-    max-width: 72vw;
-  }
-  .rendered {
-    height: 32rem;
+    column-gap: 0.65rem;
+    padding: 0.65rem 0.8rem;
   }
   .session-details {
     grid-template-columns: 1fr;

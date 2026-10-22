@@ -29,9 +29,17 @@ let prefix = "",
   busy = false,
   uploading = false,
   renderCounter = 0;
+// A transient notice rather than a permanent bar: routine messages fade after a few seconds,
+// errors stay until something replaces them. It keeps role=status, so it is still announced.
+let statusTimer;
 const status = (text, error = false) => {
+  clearTimeout(statusTimer);
   $("status").textContent = text;
   $("status").classList.toggle("error", error);
+  if (text && !error)
+    statusTimer = setTimeout(() => {
+      $("status").textContent = "";
+    }, 5000);
 };
 const error = (e) => {
   status(e.message || String(e), true);
@@ -90,17 +98,19 @@ const escape = (value) =>
         c
       ],
   );
+// Formatters are built once: toLocaleString with options builds a new one on every call, and
+// the list formats each row's date two or three times.
+const absoluteFormat = new Intl.DateTimeFormat([], {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "medium" });
 const absoluteDate = (value) => {
   if (value == null || value === "") return "";
   const d = new Date(value);
-  return Number.isNaN(+d)
-    ? ""
-    : d.toLocaleString([], {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      });
+  return Number.isNaN(+d) ? "" : absoluteFormat.format(d);
 };
 const relativeDate = new Intl.RelativeTimeFormat(undefined, {
   numeric: "always",
@@ -128,7 +138,7 @@ const describeTime = (element, value) => {
   const d = new Date(value);
   if (Number.isNaN(+d)) return;
   element.dateTime = d.toISOString();
-  element.title = d.toLocaleString();
+  element.title = fullFormat.format(d);
 };
 // The editor and the diagram renderer are the two heaviest bundles in the app, and
 // neither is needed to read mail. Each is fetched the first time it is used, so the
@@ -246,18 +256,67 @@ function scrollToLatestMessage() {
   const last = $("thread").lastElementChild;
   if (last) last.scrollIntoView({ block: "end" });
 }
+// A wide window shows the list beside the conversation, as a desktop mail client does. Below
+// this the reader replaces the list: at 1,200px the list and a readable message do not both fit
+// beside the rail and the folder sidebar.
+const splitQuery = matchMedia("(min-width: 1360px)");
+const isSplit = () => splitQuery.matches;
+splitQuery.addEventListener("change", () => show(view));
 function show(name) {
   view = name;
   const replying = name === "editor" && Boolean(draft?.parent);
+  const split = isSplit() && (name === "mail-list" || name === "reader");
   document.querySelector("main").classList.toggle("replying", replying);
+  document.body.classList.toggle("split", split);
   for (const id of ["mail-list", "reader", "editor", "contacts", "teams"])
-    $(id).hidden = id !== name && !(replying && id === "reader");
+    $(id).hidden =
+      id !== name &&
+      !(replying && id === "reader") &&
+      !(split && id === "mail-list");
+  $("reader-empty").hidden = !(split && name === "mail-list");
   // The phone reading view swaps the section rail for the message action bar, so the
   // layout needs to know the reader, not just the current view name.
   document.body.classList.toggle("reader-open", !$("reader").hidden);
+  $("editor-title").textContent = draft?.parent ? "Reply" : "New message";
   setFolderButtons();
   setNavOpen(false);
+  setMobileTitle();
+  markSelected();
+  syncHistory(name);
   if (name === "editor") renderRecipientCards();
+}
+// Back, whether the browser button or a phone's edge swipe, has to stay in the app. The app keeps
+// one entry above its base and rewrites that entry's state rather than popping it: history.back()
+// is asynchronous, and a traversal still pending when the next click or reload lands lands on
+// top of it. The cost is at most one Back that does nothing after returning to the list in-app.
+// Entries carry state only, never a URL, because the fragment is the launch token.
+function syncHistory(name) {
+  const state = history.state?.agentMail;
+  if (name !== "mail-list") {
+    if (state === "list") history.replaceState({ agentMail: "away" }, "");
+    else if (state !== "away") history.pushState({ agentMail: "away" }, "");
+  } else if (state === "away") history.replaceState({ agentMail: "list" }, "");
+}
+window.addEventListener("popstate", (event) => {
+  if (event.state?.agentMail !== "away" && view !== "mail-list") navigate(folder, false).catch(error);
+});
+function setMobileTitle() {
+  $("mobile-title").textContent =
+    view === "contacts"
+      ? "Contacts"
+      : view === "teams"
+        ? "Teams"
+        : view === "editor"
+          ? draft?.parent
+            ? "Reply"
+            : "New message"
+          : folderTitle();
+}
+function markSelected() {
+  const rows = $("rows").querySelectorAll(".row");
+  rows.forEach((row, i) => row.classList.toggle("selected", i === selected));
+  // In the split view the open conversation is the highlighted one, and it should stay on screen.
+  if (isSplit() && view === "reader") rows[selected]?.scrollIntoView({ block: "nearest" });
 }
 function button(text, action) {
   const b = document.createElement("button");
@@ -286,20 +345,33 @@ function setNavOpen(open) {
   document.body.classList.toggle("nav-open", open);
   $("nav-toggle").setAttribute("aria-expanded", open ? "true" : "false");
 }
+// The last stamped list for each folder and search, so switching folders draws at once and the
+// request only confirms it. The bridge answers an unchanged poll with the stamp alone.
+const listCache = new Map();
+const listCacheKey = () => folder + "\n" + $("search").value;
+const FOLDER_NAMES = { inbox: "Inbox", archive: "Archive", sent: "Sent", drafts: "Drafts", all: "All mail" };
+const folderTitle = () => ($("search").value ? "Search results" : FOLDER_NAMES[folder] || folder);
 async function refresh(quiet = false) {
   const generation = ++listGeneration;
+  const cacheKey = listCacheKey();
+  const cached = listCache.get(cacheKey);
   const result = await api(
-    "messages?folder=" + folder + "&q=" + encodeURIComponent($("search").value),
+    "messages?group=1&folder=" +
+      folder +
+      "&q=" +
+      encodeURIComponent($("search").value) +
+      (cached ? "&version=" + cached.version : ""),
   );
   if (generation !== listGeneration) return;
+  const fresh = result.unchanged && cached ? cached : result;
+  listCache.set(cacheKey, fresh);
+  applyList(fresh);
+  if (fresh.warnings.length) status(fresh.warnings.join("; "), true);
+  else if (!quiet && $("status").classList.contains("error")) status("");
+}
+function applyList(result) {
   const selectedKey = items[selected]?.key;
-  const grouped = new Map();
-  for (const m of result.messages) {
-    const group = m.folder === "drafts" ? m.key : m.thread;
-    if (!grouped.has(group)) grouped.set(group, { ...m, count: 0 });
-    grouped.get(group).count++;
-  }
-  const nextItems = [...grouped.values()];
+  const nextItems = result.messages;
   const listChanged = JSON.stringify(items) !== JSON.stringify(nextItems);
   items = nextItems;
   selected = Math.max(
@@ -308,17 +380,12 @@ async function refresh(quiet = false) {
   );
   for (const f of ["inbox", "archive", "sent", "drafts"])
     $("count-" + f).textContent = result.counts[f] || "";
-  $("folder-title").textContent = $("search").value
-    ? "Search results"
-    : { inbox: "Inbox", archive: "Archive", sent: "Sent", drafts: "Drafts", all: "All mail" }[folder] || folder;
-  if (listChanged || !$("rows").children.length) renderList();
-  if (result.warnings.length) status(result.warnings.join("; "), true);
-  else if (!quiet)
-    status(
-      items.length +
-        (items.length === 1 ? " conversation" : " conversations") +
-        " · synced with local files",
-    );
+  $("folder-title").textContent = folderTitle();
+  $("list-count").textContent =
+    items.length + (items.length === 1 ? " conversation" : " conversations");
+  setMobileTitle();
+  // The loading placeholder is not a list, so an empty folder still has to draw its message.
+  if (listChanged || !$("rows").querySelector(".row, .rows-empty")) renderList();
 }
 function avatarKey(address) {
   const value = String(address || "unknown")
@@ -400,7 +467,11 @@ function scratchpadAvatar(handle) {
         const response = await fetch("/api/avatar?handle=" + encodeURIComponent("@+" + handle), {
           headers: { "X-Agent-Mail-Token": token },
         });
-        if (!response.ok) return "";
+        if (!response.ok) {
+          // Most agents have no avatar; release the 404 rather than leave its body pending.
+          response.body?.cancel().catch(() => {});
+          return "";
+        }
         const blob = await response.blob();
         return await new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -414,6 +485,23 @@ function scratchpadAvatar(handle) {
     })());
   return avatarSources.get(handle);
 }
+// Each sender's generated mark is built once; every list redraw asks for the same few again.
+const identicons = new Map();
+function identicon(key) {
+  if (identicons.has(key)) return identicons.get(key);
+  const hash = hashOf(key);
+  const hue = (hash >>> 16) % 360;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="hsl(${hue} 30% 93%)"/>`;
+  for (let y = 0; y < 5; y++) {
+    for (let x = 0; x < 5; x++) {
+      if ((hash >>> (y * 3 + Math.min(x, 4 - x))) & 1 || (x === 2 && y === 2))
+        svg += `<rect x="${6 + x * 4}" y="${6 + y * 4}" width="3.5" height="3.5" rx="0.5" fill="hsl(${hue} 65% 35%)"/>`;
+    }
+  }
+  const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg + "</svg>");
+  identicons.set(key, url);
+  return url;
+}
 function avatarImage(address) {
   const image = document.createElement("img");
   image.className = "avatar";
@@ -425,16 +513,7 @@ function avatarImage(address) {
     image.src = "/josh-avatar.png";
     return image;
   }
-  const hash = hashOf(key);
-  const hue = (hash >>> 16) % 360;
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="hsl(${hue} 30% 93%)"/>`;
-  for (let y = 0; y < 5; y++) {
-    for (let x = 0; x < 5; x++) {
-      if ((hash >>> (y * 3 + Math.min(x, 4 - x))) & 1 || (x === 2 && y === 2))
-        svg += `<rect x="${6 + x * 4}" y="${6 + y * 4}" width="3.5" height="3.5" rx="0.5" fill="hsl(${hue} 65% 35%)"/>`;
-    }
-  }
-  const fallback = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg + "</svg>");
+  const fallback = identicon(key);
   image.src = fallback;
   if (key.startsWith("agent:"))
     scratchpadAvatar(address).then((src) => {
@@ -447,44 +526,120 @@ function avatarImage(address) {
     });
   return image;
 }
+const isJosh = (address) => avatarKey(address) === "human:josh";
+const recipientsOf = (m) =>
+  String(m.to || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+// Mail Josh wrote is listed by who it went to, as a Sent folder conventionally is; a row that
+// says "josh" forty times tells him nothing.
+function listName(m) {
+  if (!isJosh(m.from)) return m.from || "Unknown sender";
+  const to = recipientsOf(m);
+  return to.length ? "To " + to.join(", ") : "No recipients yet";
+}
+let hoverTimer;
 function renderList() {
   const rows = $("rows");
   rows.replaceChildren();
   if (!items.length) {
     const empty = document.createElement("p");
+    empty.className = "rows-empty";
     empty.textContent = "No messages here.";
     rows.append(empty);
     return;
   }
+  const showInbox = folder === "all" || Boolean($("search").value);
   items.forEach((m, i) => {
     const row = button("", () => openItem(i));
-    row.className = "row" + (i === selected ? " selected" : "");
+    row.className =
+      "row" + (i === selected ? " selected" : "") + (m.folder === "drafts" ? " is-draft" : "");
+    const subject = m.subject || "(no subject)";
+    const chip =
+      m.folder === "drafts"
+        ? '<span class="chip chip-draft">Draft</span>'
+        : showInbox && m.folder === "inbox"
+          ? '<span class="chip chip-inbox">Inbox</span>'
+          : "";
     row.innerHTML =
-      '<span class="sender">' +
-      escape(m.from || "Draft") +
-      '</span><span class="subject-line"><strong>' +
-      escape(m.subject || "(no subject)") +
-      "</strong>" +
-      (m.count > 1 ? " (" + m.count + ")" : "") +
-      '<span class="excerpt">' +
-      escape(m.excerpt) +
-      "</span></span><time>" +
+      '<span class="sender"><span class="sender-label"><span class="sender-name">' +
+      escape(listName(m)) +
+      "</span>" +
+      (m.count > 1 ? '<span class="row-count">(' + m.count + ")</span>" : "") +
+      "</span></span>" +
+      chip +
+      "<time>" +
       escape(date(m.date)) +
-      "</time>";
-    row.querySelector(".sender").prepend(avatar(m.from || "josh"));
+      '</time><span class="subject-line"><strong>' +
+      escape(subject) +
+      '</strong><span class="excerpt">' +
+      escape(m.excerpt) +
+      "</span></span>";
+    const face = isJosh(m.from) ? recipientsOf(m)[0] || "josh" : m.from || "josh";
+    row.querySelector(".sender").prepend(avatar(face));
     describeTime(row.querySelector("time"), m.date);
+    // The visual order puts the date beside the sender; the spoken name keeps sender then
+    // subject, which is also how the row is found by name.
+    row.setAttribute(
+      "aria-label",
+      `${m.from || "Draft"} ${subject}. ${m.count > 1 ? m.count + " messages. " : ""}${date(m.date)}`,
+    );
+    row.addEventListener("pointerenter", () => {
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(() => prefetch(i), 80);
+    });
+    row.addEventListener("pointerleave", () => clearTimeout(hoverTimer));
+    row.addEventListener("focus", () => prefetch(i));
+    row.addEventListener("touchstart", () => prefetch(i), { passive: true });
     rows.append(row);
   });
+}
+// Conversations fetched ahead of the click: on hover, focus, touch, or a keyboard move. Opening one
+// is then drawing rather than waiting, and the reader revalidates afterwards anyway.
+const threadCache = new Map();
+function fetchThread(key) {
+  const entry = threadCache.get(key);
+  if (entry && Date.now() - entry.at < 30000) return entry.promise;
+  const promise = api("thread?key=" + encodeURIComponent(key));
+  threadCache.set(key, { at: Date.now(), promise });
+  promise.catch(() => threadCache.delete(key));
+  return promise;
+}
+function prefetch(index) {
+  const m = items[index];
+  if (m && m.folder !== "drafts") fetchThread(m.key).catch(() => {});
 }
 async function navigate(target, clearSearch = true, query = "") {
   if (view === "editor") await saveDraft();
   ++threadGeneration;
+  const changed = folder !== target || (clearSearch && $("search").value !== query);
   folder = target;
   if (clearSearch) $("search").value = query;
   document.body.classList.remove("search-open");
   setFolderButtons();
+  if (changed) {
+    selected = 0;
+    const cached = listCache.get(listCacheKey());
+    // Draw the folder from memory now; the request below only confirms or corrects it.
+    if (cached) applyList(cached);
+    else {
+      items = [];
+      $("folder-title").textContent = folderTitle();
+      $("list-count").textContent = "";
+      setMobileTitle();
+      $("rows").replaceChildren(loadingRows());
+    }
+  }
   show("mail-list");
   await refresh();
+}
+function loadingRows() {
+  const holder = document.createElement("div");
+  holder.className = "rows-loading";
+  holder.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 6; i++) holder.append(document.createElement("span"));
+  return holder;
 }
 async function openItem(index = selected) {
   if (!items[index]) return;
@@ -496,7 +651,10 @@ async function openItem(index = selected) {
 }
 async function openThread(m) {
   const generation = ++threadGeneration;
-  const messages = await api("thread?key=" + encodeURIComponent(m.key));
+  const entry = threadCache.get(m.key);
+  // Anything fetched more than a moment ago is drawn now and checked again just after.
+  const reused = Boolean(entry) && Date.now() - entry.at > 1500;
+  const messages = await fetchThread(m.key);
   if (generation !== threadGeneration) return false;
   const key =
     m.folder === "drafts"
@@ -523,6 +681,7 @@ async function openThread(m) {
       "Earlier messages are not available for this draft.";
   scrollToLatestMessage();
   offerThreadTranscript();
+  if (reused) refreshThread().catch(() => {});
   return true;
 }
 function threadSummary(messages) {
@@ -547,13 +706,19 @@ async function refreshThread() {
   const generation = threadGeneration;
   const messages = await api("thread?key=" + encodeURIComponent(open.key));
   if (open !== current || generation !== threadGeneration) return;
-  const known = new Set(open.messages.map((v) => v.key));
-  const fresh = messages.filter((v) => !known.has(v.key));
-  if (!fresh.length) return;
-  if (!open.messages.length) $("thread").replaceChildren();
+  threadCache.set(open.key, { at: Date.now(), promise: Promise.resolve(messages) });
+  // By id, not key: archiving moves a message to another folder and changes its key, and that
+  // is the same message, not a new one to append.
+  const known = new Set(open.messages.map((v) => v.id));
+  const fresh = messages.filter((v) => !known.has(v.id));
+  const keys = (list) => list.map((v) => v.key).join("\n");
+  const moved = keys(open.messages) !== keys(messages.filter((v) => known.has(v.id)));
+  if (!fresh.length && !moved) return;
+  if (fresh.length && !open.messages.length) $("thread").replaceChildren();
   for (const message of fresh) appendThreadMessage(message, true);
   current = { ...open, messages };
   threadSummary(messages);
+  if (!fresh.length) return;
   const senders = [...new Set(fresh.map((v) => v.from))].join(", ");
   status(`New ${fresh.length === 1 ? "message" : "messages"} from ${senders}.`);
 }
@@ -579,21 +744,40 @@ async function offerThreadTranscript() {
     // An unavailable probe is not something the reader needs to be told about.
   }
 }
+// The first words of a message for its collapsed header, with the Markdown punctuation that
+// would read as noise there taken out.
+function snippetOf(body) {
+  return String(body || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[#>*_`~|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
 function appendThreadMessage(message, open) {
   const detail = document.createElement("details");
   detail.className = "message";
   detail.open = open;
   const summary = document.createElement("summary");
+  const to = recipientsOf(message);
   summary.innerHTML =
-    "<time>" +
-    escape(date(message.date)) +
-    "</time>" +
+    '<span class="msg-from">' +
     escape(message.from) +
-    " · " +
-    escape(message.folder);
-  const timestamp = summary.querySelector("time");
-  describeTime(timestamp, message.date);
-  timestamp.after(avatar(message.from));
+    "</span>" +
+    (message.folder !== "inbox"
+      ? '<span class="chip">' + escape(FOLDER_NAMES[message.folder] || message.folder) + "</span>"
+      : "") +
+    '<span class="msg-to">to ' +
+    escape(to.join(", ") || "nobody") +
+    '</span><span class="msg-snippet">' +
+    escape(snippetOf(message.body)) +
+    "</span><time>" +
+    escape(date(message.date)) +
+    "</time>";
+  describeTime(summary.querySelector("time"), message.date);
+  summary.prepend(avatar(message.from));
   detail.append(summary);
   const metadata = document.createElement("p");
   metadata.className = "metadata";
@@ -601,6 +785,8 @@ function appendThreadMessage(message, open) {
     "To: " +
     message.to +
     (message.parent ? " · In reply to " + message.parent : "");
+  // One line, with the whole of it on hover: the parent id is for passing around, not reading.
+  metadata.title = metadata.textContent;
   detail.append(metadata);
   const content = document.createElement("div");
   detail.append(content);
@@ -635,16 +821,33 @@ async function archiveThread() {
   if (busy) return;
   busy = true;
   try {
-    const messages =
-      view === "reader" && current
-        ? current.messages
-        : items[selected]
-          ? await api("thread?key=" + encodeURIComponent(items[selected].key))
-          : [];
-    for (const m of messages.filter((m) => m.folder === "inbox"))
-      await api("archive", { key: m.key });
-    show("mail-list");
-    await refresh();
+    const fromReader = view === "reader" && Boolean(current);
+    const messages = fromReader
+      ? current.messages
+      : items[selected]
+        ? await fetchThread(items[selected].key)
+        : [];
+    const thread = messages[0]?.thread;
+    const index = items.findIndex((m) => m.folder !== "drafts" && m.thread === thread);
+    // The row goes before the bridge confirms, so the list answers the keypress at once. The
+    // confirmation below waits for the files to move, and a failure redraws the real list.
+    if (folder === "inbox" && index >= 0) {
+      items.splice(index, 1);
+      selected = Math.min(index, Math.max(0, items.length - 1));
+      renderList();
+    }
+    // Beside the list, the next conversation takes the reading pane, as a mail client does.
+    const next = isSplit() && fromReader && folder === "inbox" ? items[selected] : null;
+    if (next && next.folder !== "drafts") openThread(next).catch(error);
+    else show("mail-list");
+    status("Archiving…");
+    try {
+      for (const m of messages.filter((m) => m.folder === "inbox"))
+        await api("archive", { key: m.key });
+    } finally {
+      threadCache.clear();
+      await refresh(true).catch(() => {});
+    }
     status("Conversation archived.");
   } finally {
     busy = false;
@@ -726,6 +929,7 @@ async function sendDraft() {
       key: draft.key,
       revision: draft.revision,
     });
+    threadCache.clear();
     const reply = Boolean(draft.parent);
     const message = { key: sent.key, subject: draft.subject };
     draft = null;
@@ -1122,7 +1326,15 @@ function contactCard(contact, { allowCompose = true, compact = false } = {}) {
   });
   return row;
 }
+// The directory is built when it is on screen. It loads with the inbox for compose suggestions,
+// but drawing every card into a hidden section cost the first screen for nothing.
+let contactsDrawn = false;
 function renderContacts() {
+  if ($("contacts").hidden) {
+    contactsDrawn = false;
+    return;
+  }
+  contactsDrawn = true;
   $("contact-list").replaceChildren();
   for (const contact of contacts) {
     const card = contactCard(contact);
@@ -1319,6 +1531,16 @@ function renderParticipantCards(messages) {
 async function renderMarkdown(source, target, remote = false) {
   const ticket = String(++renderCounter);
   target.dataset.renderTicket = ticket;
+  // The reader frame starts loading now, so its document and the Markdown work below overlap
+  // rather than taking turns on every message opened.
+  const frame = document.createElement("iframe");
+  frame.title = "Rendered Markdown message";
+  frame.className = "rendered";
+  frame.sandbox = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
+  // The reader has its own restrictive CSP and opaque origin, with no API token.
+  frame.src = "/reader.html" + (remote ? "?remote=1" : "");
+  const loaded = new Promise((resolve) => (frame.onload = resolve));
+  target.append(frame);
   const renderer = new marked.Renderer();
   renderer.html = ({ text }) => escape(text);
   // Remove image sources before constructing any DOM, so blocked images cannot leak a request.
@@ -1436,8 +1658,12 @@ async function renderMarkdown(source, target, remote = false) {
     a.target = "_blank";
     a.rel = "noopener noreferrer";
   }
-  if (target.dataset.renderTicket !== ticket) return;
-  target.replaceChildren();
+  if (target.dataset.renderTicket !== ticket) {
+    frame.remove();
+    return;
+  }
+  // Everything but the new frame goes; moving the frame itself would make it load again.
+  for (const child of [...target.children]) if (child !== frame) child.remove();
   const tools = document.createElement("div");
   tools.className = "render-tools";
   if (images.some((i) => /^https:\/\//i.test(i.href)))
@@ -1458,24 +1684,20 @@ async function renderMarkdown(source, target, remote = false) {
       sourceView.hidden = !sourceView.hidden;
     }),
   );
-  const frame = document.createElement("iframe");
-  frame.title = "Rendered Markdown message";
-  frame.className = "rendered";
-  frame.sandbox = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
-  // The reader has its own restrictive CSP and opaque origin, with no API token.
-  frame.src = "/reader.html" + (remote ? "?remote=1" : "");
-  frame.onload = () =>
-    frame.contentWindow.postMessage(
-      { type: "render", html: doc.body.innerHTML, dark },
-      "*",
-    );
+  // The frame sizes itself to its content, so this pins it to a viewport-tall scroller and back.
   tools.append(
-    button(
-      "Expand / shrink",
-      () => (frame.style.height = frame.style.height ? "" : "80vh"),
-    ),
+    button("Expand / shrink", () => {
+      frame.dataset.fixed = frame.dataset.fixed ? "" : "1";
+      frame.style.height = frame.dataset.fixed ? "80vh" : frame.dataset.auto || "";
+    }),
   );
-  target.append(tools, frame, sourceView);
+  tools.classList.add("frame-tools");
+  // The message comes first and its tools after it: they are for the occasional look at the
+  // source, not the first thing to read.
+  frame.after(tools, sourceView);
+  await loaded;
+  if (target.dataset.renderTicket !== ticket) return;
+  frame.contentWindow.postMessage({ type: "render", html: doc.body.innerHTML, dark }, "*");
 }
 
 $("compose").onclick = () => newDraft().catch(error);
@@ -1508,7 +1730,6 @@ document
 $("back").onclick = () => {
   ++threadGeneration;
   show("mail-list");
-  renderList();
 };
 $("archive").onclick = () => archiveThread().catch(error);
 $("reply").onclick = () => newDraft("reply").catch(error);
@@ -1530,6 +1751,7 @@ $("contacts-button").onclick = async () => {
   try {
     if (view === "editor") await saveDraft();
     show("contacts");
+    if (!contactsDrawn && contacts.length) renderContacts();
     await getContacts($("contact-search").value);
   } catch (e) {
     error(e);
@@ -1583,7 +1805,20 @@ document.addEventListener("keydown", (e) => {
       e.target.closest("input,textarea,select,[contenteditable]"))
   )
     return;
-  const key = e.key;
+  if (e.key === "Escape" && document.body.classList.contains("nav-open")) {
+    setNavOpen(false);
+    return;
+  }
+  // Arrows move through the list as j and k do. In a conversation they keep scrolling it, which
+  // is what a reader expects from them; j and k still step between conversations there.
+  const key =
+    view === "mail-list" && e.key === "ArrowDown"
+      ? "j"
+      : view === "mail-list" && e.key === "ArrowUp"
+        ? "k"
+        : e.key === "Escape"
+          ? "u"
+          : e.key;
   if (prefix === "g" && Date.now() - prefixAt < 1500) {
     prefix = "";
     const f = {
@@ -1636,8 +1871,9 @@ document.addEventListener("keydown", (e) => {
         0,
         Math.min(items.length - 1, selected + (key === "j" ? 1 : -1)),
       );
-      renderList();
-      $("rows").children[selected]?.focus();
+      markSelected();
+      $("rows").querySelectorAll(".row")[selected]?.focus();
+      prefetch(selected);
     } else if (key === "o" || (key === "Enter" && e.target === document.body)) {
       e.preventDefault();
       openItem().catch(error);
@@ -1645,30 +1881,43 @@ document.addEventListener("keydown", (e) => {
   }
 });
 $("current-user").prepend(avatar("@josh"));
-// The realm distinguishes one machine's inbox from another; the bridge reads it locally.
-api("config")
-  .then((config) => {
-    if (!config.realm) return;
-    const realm = $("realm");
-    realm.textContent = config.realm;
-    realm.hidden = false;
-  })
-  .catch(() => {});
+// This document's own base entry. History state survives a reload, so whatever the entry held
+// before belongs to the old document.
+history.replaceState({ agentMail: "base" }, "");
+show("mail-list");
 if (!token) showAuthorize();
 $("authorize-form").onsubmit = (event) => {
   event.preventDefault();
   authorize($("authorize-input").value).catch(error);
 };
-refresh().catch(error);
-getContacts().catch(error);
-// Badges are decoration: a failed team lookup leaves plain avatars.
-loadTeamBadges().catch(() => {});
+// The bridge answers one request at a time, so the list goes first and everything the first
+// screen does not need waits until it has drawn. Asked for together, the inbox queued behind the
+// contact directory, the team roster, and the notifier's own copy of the inbox.
+refresh()
+  .catch(error)
+  .finally(() => {
+    // The realm distinguishes one machine's inbox from another; the bridge reads it locally.
+    api("config")
+      .then((config) => {
+        if (!config.realm) return;
+        const realm = $("realm");
+        realm.textContent = config.realm;
+        realm.hidden = false;
+      })
+      .catch(() => {});
+    getContacts().catch(error);
+    // Badges are decoration: a failed team lookup leaves plain avatars.
+    loadTeamBadges().catch(() => {});
+    checkNewMail().catch(() => {});
+  });
 setInterval(() => loadTeamBadges().catch(() => {}), 300000);
 function refreshVisible() {
-  if (document.hidden) return;
-  if (view === "mail-list") refresh(true).catch(error);
-  // The thread stays visible beside an inline reply draft.
-  else if (current && !$("reader").hidden) refreshThread().catch(error);
+  // Not while an archive or send is in flight: a poll landing between its requests would draw
+  // the half-moved conversation back into the list for a moment.
+  if (document.hidden || busy) return;
+  if (!$("mail-list").hidden) refresh(true).catch(error);
+  // The thread stays visible beside an inline reply draft, and beside the list when split.
+  if (current && !$("reader").hidden) refreshThread().catch(error);
 }
 setInterval(refreshVisible, 10000);
 // A hidden page is the normal state on a phone, and the interval above does nothing
@@ -1704,6 +1953,7 @@ const worker =
     ? navigator.serviceWorker.register("/sw.js").catch(() => null)
     : Promise.resolve(null);
 let seenInbox = null;
+let inboxVersion = "";
 function notifyState() {
   const b = $("notify-button");
   b.hidden = !("Notification" in window) || Notification.permission !== "default";
@@ -1711,12 +1961,16 @@ function notifyState() {
 async function checkNewMail() {
   const allowed =
     typeof Notification !== "undefined" && Notification.permission === "granted";
-  // Tells the bridge this window will notify, so terminal banners stand down.
-  const { messages } = await api(
-    "messages?folder=inbox&q=",
+  // Tells the bridge this window will notify, so terminal banners stand down. The heartbeat is
+  // recorded even when the inbox is unchanged and the reply is only its stamp.
+  const result = await api(
+    "messages?folder=inbox&q=" + (inboxVersion ? "&version=" + inboxVersion : ""),
     undefined,
     allowed ? { "X-Agent-Mail-Notifier": "1" } : {},
   );
+  if (result.unchanged) return;
+  inboxVersion = result.version;
+  const { messages } = result;
   const keys = new Set(messages.map((m) => m.key));
   const fresh = seenInbox ? messages.filter((m) => !seenInbox.has(m.key)) : [];
   seenInbox = keys;
@@ -1749,12 +2003,11 @@ $("copy-thread-id").onclick = () => copyId($("thread-id").textContent);
 $("notify-button").onclick = () =>
   Notification.requestPermission().then(notifyState).catch(error);
 notifyState();
-checkNewMail().catch(() => {});
 // Background windows are throttled to about once a minute, which is enough here.
 setInterval(() => checkNewMail().catch(() => {}), 30000);
 const opening = new URLSearchParams(location.search).get("open");
 if (opening) {
-  history.replaceState(null, "", "/");
+  history.replaceState({ agentMail: "base" }, "", "/");
   openMail({ key: opening }).catch(error);
 }
 
@@ -1763,9 +2016,13 @@ window.addEventListener("message", (event) => {
     (f) => f.contentWindow === event.source,
   );
   if (!frame || event.origin !== "null") return;
-  if (event.data?.type === "height" && Number.isFinite(event.data.height))
-    frame.style.height =
-      Math.min(12000, Math.max(150, event.data.height + 16)) + "px";
+  if (event.data?.type === "height" && Number.isFinite(event.data.height)) {
+    // A short message gets a short frame; the old 150px floor left most replies in a tall box.
+    const height = Math.min(12000, Math.max(48, event.data.height + 16)) + "px";
+    frame.dataset.auto = height;
+    if (!frame.dataset.fixed) frame.style.height = height;
+    frame.classList.add("sized");
+  }
   if (
     event.data?.type === "key" &&
     ["j", "k", "o", "u", "e", "r", "a", "?", "/", "g", "i", "s", "d"].includes(
