@@ -161,6 +161,10 @@ function ensureComposer() {
       };
       script.onerror = () => reject(new Error("The editor bundle failed to load."));
       document.head.append(script);
+    }).catch((failure) => {
+      document.querySelector('script[src="/composer-vendor.js"]')?.remove();
+      composerLoading = null;
+      throw failure;
     });
   }
   return composerLoading;
@@ -182,6 +186,10 @@ function ensureMermaid() {
       };
       script.onerror = () => reject(new Error("The diagram bundle failed to load."));
       document.head.append(script);
+    }).catch((failure) => {
+      document.querySelector('script[src="/mermaid-vendor.js"]')?.remove();
+      mermaidLoading = null;
+      throw failure;
     });
   }
   return mermaidLoading;
@@ -368,10 +376,14 @@ async function refresh(quiet = false) {
       (cached ? "&version=" + cached.version : ""),
   );
   if (generation !== listGeneration) return;
-  const fresh = result.unchanged && cached ? cached : result;
-  listCache.set(cacheKey, fresh);
-  applyList(fresh);
-  if (fresh.warnings.length) status(fresh.warnings.join("; "), true);
+  if (result.unchanged && cached) {
+    if (cached.warnings.length) status(cached.warnings.join("; "), true);
+    else if (!quiet && $("status").classList.contains("error")) status("");
+    return;
+  }
+  listCache.set(cacheKey, result);
+  applyList(result);
+  if (result.warnings.length) status(result.warnings.join("; "), true);
   else if (!quiet && $("status").classList.contains("error")) status("");
 }
 function applyList(result) {
@@ -390,7 +402,7 @@ function applyList(result) {
     items.length + (items.length === 1 ? " conversation" : " conversations");
   setMobileTitle();
   // The loading placeholder is not a list, so an empty folder still has to draw its message.
-  if (listChanged || !$("rows").querySelector(".row, .rows-empty")) renderList();
+  if (listChanged || !items.length || !$("rows").querySelector(".row, .rows-empty")) renderList();
 }
 function avatarKey(address) {
   const value = String(address || "unknown")
@@ -551,7 +563,11 @@ function renderList() {
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "rows-empty";
-    empty.textContent = "No messages here.";
+    empty.textContent = $("search").value
+      ? "No mail matches this search."
+      : "No messages here.";
+    if ($("search").value)
+      empty.append(button("Clear search", () => navigate(folder)));
     rows.append(empty);
     return;
   }

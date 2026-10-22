@@ -269,6 +269,15 @@ try {
   assert.equal(assets.has("/composer-vendor.js"), false, "the editor bundle must not load with the inbox");
   assert.equal(assets.has("/mermaid-vendor.js"), false, "the diagram bundle must not load with the inbox");
   assert.equal(assets.has("/vendor.js"), true);
+  let diagramAttempts = 0;
+  await page.route("**/mermaid-vendor.js", async (route) => {
+    diagramAttempts++;
+    await route.abort();
+  });
+  assert.match(await page.evaluate(() => ensureMermaid().catch((e) => e.message)), /failed to load/);
+  await page.unroute("**/mermaid-vendor.js");
+  assert.equal(await page.evaluate(async () => Boolean((await ensureMermaid()).render)), true);
+  assert.equal(diagramAttempts, 1);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-list.png", fullPage: true });
   // The same desktop list in dark, so the theme can be reviewed without a phone.
@@ -446,6 +455,12 @@ try {
       (image) => image.complete && image.naturalWidth > 0,
     ),
   );
+  await page.locator("#search").fill("no-such-fixture-message");
+  await page.locator("#search-form").evaluate((form) => form.requestSubmit());
+  await page.getByText("No mail matches this search.").waitFor();
+  await page.getByRole("button", { name: "Clear search" }).click();
+  await page.getByRole("button", { name: /alder-turner Markdown conversation/ }).waitFor();
+  assert.equal(await page.locator("#search").inputValue(), "");
   // Session inspection must be on demand, not ahead of reader assets.
   let inspectionCalls = 0;
   page.on("request", (request) => {
@@ -457,6 +472,15 @@ try {
   await page.frameLocator("#thread iframe").getByRole("heading", { name: "Fixture heading" }).waitFor();
   assert.equal(assets.has("/mermaid-vendor.js"), true, "a diagram should fetch the deferred renderer");
   assert.equal(assets.has("/composer-vendor.js"), false, "opening a thread must not fetch the editor");
+  let editorAttempts = 0;
+  await page.route("**/composer-vendor.js", async (route) => {
+    editorAttempts++;
+    await route.abort();
+  });
+  assert.match(await page.evaluate(() => ensureComposer().catch((e) => e.message)), /failed to load/);
+  await page.unroute("**/composer-vendor.js");
+  assert.equal(await page.evaluate(async () => Boolean(await ensureComposer())), true);
+  assert.equal(editorAttempts, 1);
   // Every message and the thread carry their id, with a button that copies it, which is how
   // a message gets passed around: an agent reads one with `agent-mail read --id <id>`, and
   // an id survives archiving where a folder-qualified key does not.
@@ -1554,6 +1578,19 @@ try {
     return api("messages?group=1&folder=inbox&q=&version=" + first.version);
   });
   assert.equal(unchangedPoll.unchanged, true);
+  const unchangedDraw = await page.evaluate(async () => {
+    const row = document.querySelector(".row");
+    const original = applyList;
+    let applied = false;
+    applyList = (...args) => { applied = true; return original(...args); };
+    try {
+      await refresh(true);
+      return { applied, sameRow: row === document.querySelector(".row") };
+    } finally {
+      applyList = original;
+    }
+  });
+  assert.deepEqual(unchangedDraw, { applied: false, sameRow: true });
   // Archive takes the row at once and moves the reading pane on, before the files have moved.
   let releaseArchive;
   const archiveGate = new Promise((resolve) => (releaseArchive = resolve));

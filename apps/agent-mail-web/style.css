@@ -673,6 +673,10 @@ button[aria-current="page"] {
   text-align: center;
   color: var(--c-text-alt);
 }
+.rows-empty button {
+  display: block;
+  margin: 1rem auto 0;
+}
 .rows-loading span {
   display: block;
   height: 3.65rem;
