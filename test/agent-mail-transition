@@ -111,7 +111,7 @@ faulty
 printf '#!/bin/sh\nkill -9 $$\n' >"$bin/agent-mail-migrate"
 lost="$(as $alice cmd send --to $bob --subject Killed -m 'killed mirror' 2>"$tmp/err" | tail -1)"
 grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/err" || fail "a killed mirror was silent"
-grep -Fq "$lost" "$dir/state/mirror-failures" || fail "a killed mirror was not logged"
+grep -rFq "$lost" "$dir/state/mirror-failures.d" || fail "a killed mirror was not logged"
 after_fault "$lost" "a mirror killed before it started"
 
 for i in 1 2 3 4 5 6 7 8; do
@@ -410,14 +410,91 @@ printf 'imported later\n' >"$tmp/fail-body"
 wait "$sender"
 lost="$(tail -1 "$tmp/fail-out")"
 grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/fail-err" || fail "a failed straddling import was silent"
-grep -Fq "$lost" "$dir/state/mirror-failures" || fail "a failed straddling import was not logged"
+grep -rFq "$lost" "$dir/state/mirror-failures.d" || fail "a failed straddling import was not logged"
 cmd receipt "$lost" >/dev/null 2>&1 && fail "the failed import somehow reached SQLite"
 set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 1 ]] && grep -Fq 'not repaired' "$tmp/err" || fail "--finish ran with an unrepaired import"
 migrate --import-only >/dev/null
 cmd read --to $bob --id "$lost" --peek 2>/dev/null | grep -Fxq 'imported later' || fail "an import-only pass did not repair the straddler"
 migrate --finish >/dev/null || fail "--finish refused after the repair"
-[[ -f "$dir/state/mirror-failures.repaired" && ! -e "$dir/state/mirror-failures" ]] || fail "--finish did not retire the repaired failure log"
+[[ -z "$(find "$dir/state/mirror-failures.d" -maxdepth 1 -type f ! -name '.*')" && -n "$(ls "$dir/state/mirror-failures.d/repaired")" ]] || fail "--finish did not retire the repaired failure record"
+
+# A read or discard begun under both that changes the Maildir after the flip still reaches
+# SQLite. The probe parks agent-mail at the Maildir change itself: a cat and an rm that wait
+# on a gate for message files, after the command has chosen the Maildir path.
+realm late-ack
+migrate --set-store both >/dev/null
+to_read="$(as $alice cmd send --to $bob --subject 'Read late' -m 'read me' | tail -1)"
+to_drop="$(as $alice cmd send --to $bob --subject 'Drop late' -m 'drop me' | tail -1)"
+shims="$tmp/late-shims"
+mkdir -p "$shims"
+for tool in cat rm; do
+  real="$(command -v $tool)"
+  printf '#!/bin/sh\ncase "$*" in *inbox/new/*) while [ ! -e "%s/go" ]; do sleep 0.05; done ;; esac\nexec %s "$@"\n' "$shims" "$real" >"$shims/$tool"
+  chmod +x "$shims/$tool"
+done
+as $bob env PATH="$shims:$PATH" "$bin/agent-mail" read --to $bob --id "$to_read" >/dev/null 2>"$tmp/late-read-err" &
+reader=$!
+as $bob env PATH="$shims:$PATH" "$bin/agent-mail" discard --to $bob --id "$to_drop" 2>"$tmp/late-drop-err" &
+dropper=$!
+sleep 0.5
+migrate --set-store sqlite >/dev/null
+touch "$shims/go"
+wait "$reader" "$dropper"
+[[ "$(cmd receipt "$to_read" | cut -f1)" == read ]] || { cat "$tmp/late-read-err"; fail "a read that straddled the flip lost its acknowledgement"; }
+[[ "$(cmd receipt "$to_drop" | cut -f1)" == discarded ]] || { cat "$tmp/late-drop-err"; fail "a discard that straddled the flip was lost"; }
+cmd scan --to $bob | grep -Fq "$to_read" && fail "the late-read message is still listed unread"
+
+# A late acknowledgement whose mirror fails is logged with its operation, --finish refuses
+# until it is applied, and --replay-failures applies it.
+realm late-ack-fail
+migrate --set-store both >/dev/null
+stuck="$(as $alice cmd send --to $bob --subject Stuck -m stuck | tail -1)"
+mkdir -p "$shims-2"
+real="$(command -v cat)"
+printf '#!/bin/sh\ncase "$*" in *inbox/new/*) while [ ! -e "%s/go" ]; do sleep 0.05; done ;; esac\nexec %s "$@"\n' "$shims-2" "$real" >"$shims-2/cat"
+chmod +x "$shims-2/cat"
+as $bob env PATH="$shims-2:$PATH" AGENT_MAIL2_DB="$tmp" "$bin/agent-mail" read --to $bob --id "$stuck" >/dev/null 2>"$tmp/stuck-err" &
+reader=$!
+sleep 0.5
+migrate --set-store sqlite >/dev/null
+touch "$shims-2/go"
+wait "$reader"
+grep -Fq "mirroring $stuck into the SQLite store failed" "$tmp/stuck-err" || fail "a failed late acknowledgement was silent"
+grep -rFq $'\t'"$stuck"$'\tread\t'"$bob"$'\t' "$dir/state/mirror-failures.d" || fail "the failure record lost the operation"
+set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq "read by $bob" "$tmp/err" || fail "--finish ran with an unapplied acknowledgement"
+migrate --replay-failures >/dev/null || fail "--replay-failures failed"
+[[ "$(cmd receipt "$stuck" | cut -f1)" == read ]] || fail "--replay-failures did not apply the acknowledgement"
+[[ -z "$(find "$dir/state/mirror-failures.d" -maxdepth 1 -type f ! -name '.*')" ]] || fail "--replay-failures did not retire the record"
+
+# A failure recorded while a repair runs is not swept up with the records it checked.
+python3 - "$bin/agent-mail-migrate" "$dir/state" "$db" "$AGENT_MAIL_ROOT" "$AGENT_HUMAN_MAIL_ROOT" "$stuck" "$bob" <<'PY' || fail "a failure recorded during a repair was retired unrepaired"
+import importlib.machinery, importlib.util, sys
+from pathlib import Path
+script, state, db, pads, humans, stuck, bob = sys.argv[1:]
+loader = importlib.machinery.SourceFileLoader("migrate", script)
+sys.dont_write_bytecode = True
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("migrate", loader))
+loader.exec_module(m)
+state = Path(state)
+first = state / "mirror-failures.d" / "20261022T000000Z-1-1-first"
+first.write_text(f"t\t{stuck}\tread\t{bob}\terror\n")
+checked = m.unrepaired
+def unrepaired_then_a_writer_records(db, entries):
+    result = checked(db, entries)
+    late = state / "mirror-failures.d" / "20261022T000001Z-2-2-late"
+    if not late.exists():
+        late.write_text(f"t\tnever-delivered\tread\t{bob}\terror\n")
+    return result
+m.unrepaired = unrepaired_then_a_writer_records
+try:
+    m.replay_failures(state / "store", Path(db), (Path(pads), Path(humans)), "public")
+except m.MigrationError:
+    pass
+assert not first.exists(), "the checked record was not retired"
+assert (state / "mirror-failures.d" / "20261022T000001Z-2-2-late").exists(), "the late record was swept up"
+PY
 
 # A migration that passed its first check just before the flip refuses once it holds the lock.
 realm flip-race

@@ -122,7 +122,7 @@ verified || fail "concurrent sends left the mirror behind"
 lost="$(as $alice env AGENT_MAIL2_DB="$tmp" "$cmd" send --to $bob --subject Lost --body 'mirror me' 2>"$tmp/err" | tail -1)"
 [[ -f "$AGENT_MAIL_ROOT/$bob/inbox/new/$lost.md" ]] || fail "the Maildir delivery did not happen"
 grep -Fq "mirroring $lost into the SQLite store failed" "$tmp/err" || fail "the failed mirror was silent"
-grep -Fq "$lost" "$(dirname "$marker")/mirror-failures" || fail "the failed mirror was not logged"
+grep -rFq "$lost" "$(dirname "$marker")/mirror-failures.d" || fail "the failed mirror was not logged"
 if verified 2>/dev/null; then fail "verify passed with a message missing from the mirror"; fi
 "$migrate" --db "$db" >/dev/null
 verified || fail "a full migrate did not repair the mirror"

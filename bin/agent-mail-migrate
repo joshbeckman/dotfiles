@@ -29,9 +29,12 @@ Usage:
                                           being authoritative, so nothing is lost)
   agent-mail-migrate --set-store sqlite   from both: sync, verify, archive, then make the
                                           SQLite store the record (there is no way back)
-  agent-mail-migrate --message ID --import-only
+  agent-mail-migrate --message ID --import-only [--apply read|discard --mailbox M]
                                      add one message the database lacks, changing nothing
+                                     else, and apply a read or discard agent-mail made to it
                                      (what agent-mail runs for a writer that straddled the flip)
+  agent-mail-migrate --replay-failures
+                                     repair every logged mirror failure, then retire the log
   agent-mail-migrate --finish        stamp the migration done and delete its archives
 
 Before --set-store both changes anything, it archives the inboxes, the human mailboxes,
@@ -554,8 +557,95 @@ def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
     return messages
 
 
+def apply_acknowledgement(db: sqlite3.Connection, message_id: str, operation: str, mailbox: str) -> None:
+    """A read or discard that agent-mail made on the Maildir after the flip. Only ever sets a
+    timestamp that is still NULL, so it cannot unread, undiscard or overwrite anything."""
+    column = {"read": "read_at", "discard": "discarded_at"}[operation]
+    db.execute(
+        f"UPDATE deliveries SET {column} = COALESCE({column}, ?) WHERE message_id = ? AND recipient_mailbox_id = ?",
+        (int(datetime.now(timezone.utc).timestamp() * 1_000_000), message_id, mailbox),
+    )
+
+
+def failure_entries(failures: Path) -> list[tuple[str, str, str]]:
+    """(message id, operation, mailbox) for each logged mirror failure. Lines from before the
+    operation was recorded carry only the id, and were sends."""
+    entries = []
+    for line in failures.read_text(encoding="utf-8").splitlines():
+        fields = line.split("\t")
+        if len(fields) < 3:
+            continue
+        operation = fields[2] if len(fields) >= 5 and fields[2] in ("send", "read", "discard") else "send"
+        entries.append((fields[1], operation, fields[3] if operation != "send" else ""))
+    return entries
+
+
+def unrepaired(db: sqlite3.Connection, entries: list[tuple[str, str, str]]) -> list[str]:
+    missing = []
+    for message_id, operation, mailbox in entries:
+        if not db.execute("SELECT 1 FROM messages WHERE message_id = ?", (message_id,)).fetchone():
+            missing.append(message_id)
+        elif operation != "send":
+            column = {"read": "read_at", "discard": "discarded_at"}[operation]
+            if not db.execute(f"SELECT 1 FROM deliveries WHERE message_id = ? AND recipient_mailbox_id = ? "
+                              f"AND {column} IS NOT NULL", (message_id, mailbox)).fetchone():
+                missing.append(f"{message_id} ({operation} by {mailbox})")
+    return missing
+
+
+def failure_records(state: Path) -> list[Path]:
+    """Every unretired failure record: one file each in mirror-failures.d/, plus the single
+    mirror-failures log that agent-mail wrote before records existed."""
+    directory = state / "mirror-failures.d"
+    records = sorted(p for p in directory.iterdir() if p.is_file() and not p.name.startswith(".")) \
+        if directory.is_dir() else []
+    legacy = state / "mirror-failures"
+    return records + ([legacy] if legacy.is_file() else [])
+
+
+def retire(record: Path) -> None:
+    # A record is immutable once renamed into place, so retiring the one that was checked
+    # cannot take a failure added since with it.
+    if record.name == "mirror-failures":
+        record.rename(record.with_name("mirror-failures.repaired"))
+        return
+    done = record.parent / "repaired"
+    done.mkdir(mode=0o700, exist_ok=True)
+    record.rename(done / record.name)
+
+
+def replay_failures(marker: Path, db_path: Path, roots: tuple[Path, Path], visibility: str) -> int:
+    """Repair every recorded mirror failure: each message is synced (both) or imported (sqlite),
+    and a read or discard is applied to its delivery. Each record is retired once it is in."""
+    records = failure_records(marker.parent)
+    if not records:
+        print("no mirror failures")
+        return 0
+    sqlite_mode = store_mode(marker) == "sqlite"
+    still: list[str] = []
+    for record in records:
+        entries = failure_entries(record)
+        for message_id, operation, mailbox in entries:
+            run_migration(db_path, roots, visibility, message_id, import_only=sqlite_mode,
+                          apply=(operation, mailbox) if operation != "send" and sqlite_mode else None)
+        db = open_db(db_path)
+        try:
+            missing = unrepaired(db, entries)
+        finally:
+            db.close()
+        if missing:
+            still += missing
+        else:
+            retire(record)
+    if still:
+        raise MigrationError(f"{len(still)} failures are still not repaired: {', '.join(still[:5])}")
+    print(f"repaired {len(records)} mirror failure record{'s' if len(records) != 1 else ''}")
+    return 0
+
+
 def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
-                  only: str | None, import_only: bool = False) -> dict[str, int]:
+                  only: str | None, import_only: bool = False,
+                  apply: tuple[str, str] | None = None) -> dict[str, int]:
     """With import_only, mail the database lacks is added and nothing it has is changed:
     after the flip the Maildir may still add mail, from a writer that straddled it, but it is
     no longer the record of state, so it can never discard, unread or rewrite anything."""
@@ -591,6 +681,8 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
                                           for box, state in message.recipients.items()}
                 messages = with_ancestors(boxes, db, messages)
             counts = migrate(db, messages, visibility, boxes, only, import_only)
+            if apply is not None and only is not None:
+                apply_acknowledgement(db, only, *apply)
             if only is None and not import_only and backfill_pending(db):
                 db.execute("DELETE FROM backfill_pending")
             db.execute("COMMIT")
@@ -704,18 +796,18 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
             raise MigrationError(f"{len(problems)} problems; the archives were kept")
     # An import that failed is only in the Maildir until someone repairs it, and the archive
     # and the failure log are how anyone would know: both stay until every one is in SQLite.
-    failures = marker.parent / "mirror-failures"
-    if failures.exists():
-        ids = {line.split("\t")[1] for line in failures.read_text(encoding="utf-8").splitlines() if line.count("\t") >= 2}
+    records = failure_records(marker.parent)
+    if records:
         db = open_db(db_path)
         try:
-            missing = sorted(i for i in ids if not db.execute("SELECT 1 FROM messages WHERE message_id = ?", (i,)).fetchone())
+            missing = [m for record in records for m in unrepaired(db, failure_entries(record))]
         finally:
             db.close()
         if missing:
             raise MigrationError(f"{len(missing)} failed mirrors are not repaired ({', '.join(missing[:5])}); "
-                                 "run agent-mail-migrate (or --import-only under sqlite) first")
-        failures.rename(failures.with_name("mirror-failures.repaired"))
+                                 "run agent-mail-migrate --replay-failures first")
+        for record in records:
+            retire(record)
     directory = marker.parent / "archives"
     removed = sorted(directory.glob("*.tar.gz")) if directory.is_dir() else []
     for path in removed:
@@ -822,8 +914,12 @@ def main() -> int:
     mode.add_argument("--message", metavar="ID")
     mode.add_argument("--set-store", choices=STORES)
     mode.add_argument("--finish", action="store_true")
+    mode.add_argument("--replay-failures", action="store_true")
     parser.add_argument("--import-only", action="store_true",
                         help="add mail the database lacks and change nothing it has (the mirror after the flip)")
+    parser.add_argument("--apply", choices=("read", "discard"),
+                        help="with --message: apply this acknowledgement to --mailbox's delivery")
+    parser.add_argument("--mailbox")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -839,6 +935,8 @@ def main() -> int:
     marker = human_root.parent / "store"
     if args.message is not None and (not args.message or "/" in args.message or args.message.startswith(".")):
         parser.error("--message takes a message id")
+    if args.apply and not (args.message and args.mailbox):
+        parser.error("--apply needs --message and --mailbox")
 
     try:
         if args.set_store:
@@ -846,6 +944,8 @@ def main() -> int:
             return set_store(args.set_store, marker, db_path, agent_root, human_root, args.visibility, registry)
         if args.finish:
             return finish(marker, db_path, agent_root, human_root)
+        if args.replay_failures:
+            return replay_failures(marker, db_path, (agent_root, human_root), args.visibility)
         if args.dry_run:
             print(plan(collect(mailboxes(agent_root, human_root))))
             return 0
@@ -855,7 +955,8 @@ def main() -> int:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
             print("verified" if not problems else f"{len(problems)} problems")
             return 1 if problems else 0
-        counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message, args.import_only)
+        counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message, args.import_only,
+                               (args.apply, args.mailbox) if args.apply else None)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"agent-mail-migrate: {error}", file=sys.stderr)
         return 1
