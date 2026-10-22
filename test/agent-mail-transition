@@ -47,8 +47,10 @@ migrate --set-store both >"$tmp/out"
 archive="$(ls "$dir/state/archives/"*.tar.gz)"
 grep -Fq "archived and restored the mail to $archive" "$tmp/out" || fail "set-store did not report the archive"
 [[ "$(stat -c %a "$archive" 2>/dev/null || stat -f %Lp "$archive")" == 600 ]] || fail "the archive is not private"
-tar -tzf "$archive" | grep -Fq "agents/$bob/inbox/new/$m1.md" || fail "the archive is missing an inbox"
-tar -tzf "$archive" | grep -Fq "humans/josh/inbox/new/$m1.md" || fail "the archive is missing Josh's mailbox"
+# Listed to a file first: grep -q closing the pipe early fails tar under pipefail.
+tar -tzf "$archive" >"$tmp/listing"
+grep -Fq "agents/$bob/inbox/new/$m1.md" "$tmp/listing" || fail "the archive is missing an inbox"
+grep -Fq "humans/josh/inbox/new/$m1.md" "$tmp/listing" || fail "the archive is missing Josh's mailbox"
 sql "update deliveries set read_at = 1 where recipient_mailbox_id = ?" "$bob"
 set +e; migrate --finish >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 1 && -f "$archive" ]] || fail "--finish removed the archive while the mirror had drifted"
@@ -158,6 +160,114 @@ python3 - "$db" <<'PY' || fail "rollback lost or duplicated mirrored mail"
 import sqlite3, sys
 assert sqlite3.connect(sys.argv[1]).execute("select count(*) from messages").fetchone()[0] == 5
 PY
+
+# --- findings from an independent review, each pinned ------------------------------------
+realm review
+migrate --set-store both >/dev/null
+
+# A full migrate and a mirror racing for the lock never leave a stale view behind.
+for i in 1 2 3 4 5 6; do
+  python3 - "$db" <<'PY' &
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute("begin immediate")
+time.sleep(1)
+db.execute("rollback")
+PY
+  locker=$!
+  sleep 0.2
+  migrate >/dev/null 2>&1 &
+  full=$!
+  as $alice cmd send --to $bob --subject "Race $i" -m "race $i" >/dev/null 2>&1
+  wait "$locker" "$full"
+  verified || fail "a migrate racing a mirror left drift (round $i)"
+done
+
+# A command that began before the switch and delivers after it is still mirrored.
+realm late
+mkfifo "$tmp/late-body"
+as $alice cmd send --to $bob --subject Late --body-file "$tmp/late-body" >"$tmp/late-out" 2>&1 &
+sender=$!
+sleep 0.5
+migrate --set-store both >/dev/null
+printf 'arrived after the switch\n' >"$tmp/late-body"
+wait "$sender"
+verified || fail "a send that straddled --set-store both was not mirrored"
+rm -f "$tmp/late-body"
+
+# Both tools read one marker grammar: the whole file less trailing newlines.
+for content in $'sqlite\njunk' ' both' $'both\r'; do
+  printf '%s' "$content" >"$dir/state/store"
+  [[ "$(cmd store | cut -f1)" == maildir ]] || fail "agent-mail read a garbled marker as a store: $content"
+  migrate >/dev/null || fail "the migrator refused under a garbled marker it should read as maildir"
+done
+printf 'both\n\n' >"$dir/state/store"
+[[ "$(cmd store | cut -f1)" == both ]] || fail "trailing newlines broke the marker"
+
+# A symlinked human root puts the marker and the database where agent-mail looks.
+realm symlinked
+mv "$dir/state" "$dir/real-state"
+mkdir "$dir/state"
+ln -s "$dir/real-state/humans" "$dir/state/humans"
+db="$dir/real-state/mail2.sqlite3"
+"$bin/agent-mail-migrate" --set-store both >/dev/null
+[[ "$(cmd store | cut -f1)" == both ]] || fail "a symlinked human root split the marker"
+[[ -f "$dir/real-state/store" && ! -e "$dir/state/store" ]] || fail "the marker landed beside the symlink"
+
+# Switching the store over any database but the one agent-mail mirrors into is refused.
+realm otherdb
+set +e; "$bin/agent-mail-migrate" --db "$tmp/elsewhere.sqlite3" --set-store both >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 && ! -e "$dir/state/store" ]] && grep -Fq 'cannot be switched over' "$tmp/err" || fail "set-store accepted a database agent-mail does not use"
+
+# A reply mirrored before its parent brings the parent with it, link and order intact.
+realm ancestors
+parent="$(as $alice cmd send --to $bob --subject Parent -m parent | tail -1)"
+printf 'both\n' >"$dir/state/store"
+reply="$(as $bob cmd send --to $alice --in-reply-to "$parent" --subject 'Re: Parent' -m reply | tail -1)"
+python3 - "$db" "$parent" "$reply" <<'PY' || fail "the reply's parent was not brought in ahead of it"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+parent, reply = sys.argv[2:]
+rows = dict(db.execute("select message_id, sequence from messages").fetchall())
+assert rows[parent] == 1 and rows[reply] == 2, rows
+assert db.execute("select reply_to_message_id from messages where message_id = ?", (reply,)).fetchone()[0] == parent
+PY
+
+# Hand-made legacy mail: the migrator's parsing, ordering and refusals.
+realm legacy
+mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new" "$AGENT_MAIL_ROOT/$bob/inbox/cur"
+legacy() {  # file id from date parent body
+  { printf 'From: %s\nTo: %s\nDate: %s\nMessage-ID: %s\nThread-ID: root-z\n' "$3" "$bob" "$4" "$2"
+    [[ -z "$5" ]] || printf 'In-Reply-To: %s\n' "$5"
+    printf 'Subject: legacy\n\n'; printf "$6"; } >"$AGENT_MAIL_ROOT/$bob/inbox/new/$1.md"
+}
+# Same second, and the reply's id sorts before its parent's: parents still go first.
+legacy root-z root-z "humans/josh" 2026-10-01T10:00:00Z "" 'root\n'
+legacy a-reply a-reply Service-A 2026-10-01T10:00:00Z root-z 'crlf\r\nbody\r\n'
+migrate >/dev/null || fail "a reply dated with its parent aborted the migration"
+python3 - "$db" <<'PY' || fail "legacy parsing changed the mail"
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+row = dict(db.execute("select message_id, sender_mailbox_id from messages").fetchall())
+assert row == {"root-z": "josh", "a-reply": "Service-A"}, row
+assert db.execute("select reply_to_message_id, body from messages where message_id = 'a-reply'").fetchone() == ("root-z", "crlf\r\nbody\r\n")
+PY
+verified || fail "verify disagreed with a byte-exact migration"
+# --message is a literal id, never a glob.
+migrate --message '*' >/dev/null
+python3 - "$db" <<'PY' || fail "--message '*' touched mail"
+import sqlite3, sys
+assert sqlite3.connect(sys.argv[1]).execute("select count(*) from deliveries where discarded_at is not null").fetchone()[0] == 0
+PY
+# Undecodable bytes are refused by name rather than replaced.
+printf 'From: josh\nMessage-ID: bad-bytes\n\n\xff\xfe\n' >"$AGENT_MAIL_ROOT/$bob/inbox/new/bad-bytes.md"
+set +e; migrate >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'bad-bytes.md is not UTF-8' "$tmp/err" || fail "undecodable mail was not refused by name"
+rm "$AGENT_MAIL_ROOT/$bob/inbox/new/bad-bytes.md"
+# A human mailbox and an agent scratchpad with one name are refused, not merged.
+mkdir -p "$AGENT_HUMAN_MAIL_ROOT/$bob"
+set +e; migrate >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq "$bob is both an agent scratchpad and a human mailbox" "$tmp/err" || fail "a name collision was not refused"
 
 # --- a long random run of every mutating command keeps the mirror exact ------------------
 realm fuzz

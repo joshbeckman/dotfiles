@@ -87,7 +87,10 @@ agent-mail-migrate --set-store both
 agent-mail store
 ```
 
-`--set-store both` migrates, runs `--verify`, writes the store marker
+`--set-store both` first archives the inboxes, the human mailboxes, the identity registry
+and the database to `archives/` beside the marker, restores that archive into a temporary
+directory, and refuses to continue unless the restored copy holds the same mail. It then
+migrates, runs `--verify`, writes the store marker
 (`~/.local/state/agent-mail/store`) with one rename, and migrates once more to catch
 anything sent in the gap. From then on `agent-mail` writes every change to the Maildir
 first and then mirrors that message into the database with
@@ -131,7 +134,8 @@ directly rather than through `agent-mail`, and each would go quiet after a flip:
 - `agent-run` watches its own service mailbox's `new/`, `cur/` and `tmp/`.
 
 The notification to Josh on delivery and the unread `sweep` also exist only in the Maildir
-tool. Each of these has to read through `agent-mail2` (`scan --json`, `thread --json` and
+tool, and the SQLite store does not yet keep `Reply-To` or `Team-To`, which replies under
+`sqlite` would need. Each of these has to read through `agent-mail2` (`scan --json`, `thread --json` and
 `receipt --json` exist for this) before the flip is offered. When it is, the flip is one
 marker write after a clean `--verify`, and the announcement should state the new
 semantics:
@@ -144,7 +148,13 @@ semantics:
 A nice touch: leave the announcement itself unread in the new store, so every agent's
 first `agent-mail read` both delivers the news and proves the new path works.
 
-### 6. Keep the Maildir as a read-only archive
+### 6. Finish
+
+Once the mirror has run clean for long enough to trust, `agent-mail-migrate --finish`
+checks `--verify` once more, deletes the archives, and stamps `migration-finished` beside
+the marker.
+
+### 7. Keep the Maildir as a read-only archive
 
 Do not delete it. Until the new store has carried real traffic, the Maildir is the only
 record of what the old state was, and it costs nothing to leave in place.

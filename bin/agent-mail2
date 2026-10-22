@@ -144,11 +144,12 @@ def message_id(subject: str | None) -> str:
 
 
 def database_path() -> str:
-    # Not a fixed home path: relocating the mail state must never write the real store.
     raw = os.environ.get("AGENT_MAIL2_DB")
     if raw:
         return os.path.abspath(os.path.expanduser(raw))
-    return os.path.join(os.path.dirname(os.path.abspath(human_root().rstrip("/"))), "mail2.sqlite3")
+    # Beside the resolved human root, as bin/agent-mail derives it with pwd -P, never a fixed
+    # home path: relocating the mail state must never write the real store.
+    return os.path.join(os.path.dirname(os.path.realpath(human_root())), "mail2.sqlite3")
 
 
 def connect() -> sqlite3.Connection:

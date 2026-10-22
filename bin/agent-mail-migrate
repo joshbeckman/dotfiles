@@ -72,7 +72,12 @@ class MigrationError(Exception):
 
 
 def parse(path: Path) -> tuple[dict[str, str], str]:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    # Not read_text: universal newlines would rewrite a CR in the body, and a replacement
+    # character would hide undecodable bytes behind a verify that compares the same lossy text.
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise MigrationError(f"{path} is not UTF-8 ({error.reason} at byte {error.start})") from None
     head, _, body = text.partition("\n\n")
     headers: dict[str, str] = {}
     for line in head.splitlines():
@@ -83,10 +88,18 @@ def parse(path: Path) -> tuple[dict[str, str], str]:
 
 
 def normalize(value: str) -> str:
-    address = value.strip().lower()
-    if address.startswith("@+"):
-        address = address[2:]
-    if not ADDRESS.fullmatch(address):
+    """A From header as the mailbox agent-mail would deliver to: sigils dropped, humans/<h> and
+    an email address reduced to the human handle. Case is kept, as agent-mail keeps it."""
+    address = value.strip()
+    if address.startswith("@"):
+        address = address[1:]
+    if address.startswith("+"):
+        address = address[1:]
+    if address.startswith("humans/"):
+        address = address[len("humans/"):]
+    elif "@" in address:
+        address = address.split("@", 1)[0]
+    if not address or not ADDRESS.fullmatch(address):
         raise MigrationError(f"unusable address: {value!r}")
     return address
 
@@ -145,12 +158,23 @@ def mailboxes(agent_root: Path, human_root: Path) -> dict[str, dict[str, Path]]:
         found[inbox.parent.name] = {"inbox": inbox}
     for box in sorted(human_root.glob("*")):
         if box.is_dir():
+            # One namespace in the database, so silently letting one shadow the other would
+            # drop an inbox from the migration and from verify.
+            if box.name in found:
+                raise MigrationError(f"{box.name} is both an agent scratchpad and a human mailbox")
             found[box.name] = {"inbox": box / "inbox", "sent": box / "sent"}
     return found
 
 
+def files(directory: Path, only: str | None) -> list[Path]:
+    if only is None:
+        return sorted(directory.glob("*.md"))
+    # A literal name, not a glob pattern: --message '*' must not reach every message.
+    path = directory / f"{only}.md"
+    return [path] if path.is_file() else []
+
+
 def collect(boxes: dict[str, dict[str, Path]], only: str | None = None) -> dict[str, Message]:
-    pattern = f"{only}.md" if only else "*.md"
     messages: dict[str, Message] = {}
     for mailbox, folders in boxes.items():
         inbox = folders.get("inbox")
@@ -159,21 +183,38 @@ def collect(boxes: dict[str, dict[str, Path]], only: str | None = None) -> dict[
                 directory = inbox / folder
                 if not directory.is_dir():
                     continue
-                for path in sorted(directory.glob(pattern)):
+                for path in files(directory, only):
                     headers, body = parse(path)
-                    message_id = headers.get("message-id") or path.name
+                    message_id = headers.get("message-id") or path.stem
+                    if only is not None and message_id != only:
+                        raise MigrationError(f"{path} carries Message-ID {message_id}, not {only}")
                     message = messages.setdefault(message_id, Message(message_id))
                     message.absorb(path, headers, body)
                     message.recipients[mailbox] = mtime_us(path) if state else None
         sent = folders.get("sent")
         if sent is not None and sent.is_dir():
-            for path in sorted(sent.glob(pattern)):
+            for path in files(sent, only):
                 headers, body = parse(path)
-                message_id = headers.get("message-id") or path.name
+                message_id = headers.get("message-id") or path.stem
+                if only is not None and message_id != only:
+                    raise MigrationError(f"{path} carries Message-ID {message_id}, not {only}")
                 message = messages.setdefault(message_id, Message(message_id))
                 message.absorb(path, headers, body)
                 message.offer_sender(mailbox)
     return messages
+
+
+def causal(group: list[Message]) -> list[Message]:
+    """Date order, except that a parent always precedes its replies. Dates have one-second
+    resolution and come from the sender's clock, and the parent key is checked on insert."""
+    pending = {message.message_id: message for message in group}
+    ordered: list[Message] = []
+    while pending:
+        ready = [m for m in pending.values() if m.reply_to not in pending]
+        # A cycle cannot come from agent-mail; break it in date order rather than loop.
+        earliest = min(ready or pending.values(), key=lambda m: (m.sent_at, m.message_id))
+        ordered.append(pending.pop(earliest.message_id))
+    return ordered
 
 
 def threads(messages: dict[str, Message]) -> dict[str, list[Message]]:
@@ -185,14 +226,10 @@ def threads(messages: dict[str, Message]) -> dict[str, list[Message]]:
     return grouped
 
 
-def kind(address: str) -> str:
-    return "human" if address == "josh" or "@" in address else "agent"
-
-
-def ensure(db: sqlite3.Connection, address: str, timestamp: int) -> None:
+def ensure(db: sqlite3.Connection, address: str, timestamp: int, humans: set[str]) -> None:
     db.execute(
         "INSERT OR IGNORE INTO mailboxes(mailbox_id, kind, created_at) VALUES (?, ?, ?)",
-        (address, kind(address), timestamp),
+        (address, "human" if address == "josh" or address in humans else "agent", timestamp),
     )
 
 
@@ -201,7 +238,9 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
     counts = {"messages": 0, "deliveries": 0, "threads": 0, "dangling_replies": 0,
               "state_changes": 0, "discarded": 0}
     now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+    humans = {name for name, folders in boxes.items() if "sent" in folders}
     for thread_id, group in sorted(threads(messages).items()):
+        group = causal(group)
         db.execute(
             "INSERT OR IGNORE INTO threads(thread_id, created_at, visibility) VALUES (?, ?, ?)",
             (thread_id, group[0].sent_at, visibility),
@@ -228,7 +267,7 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                 ).fetchone():
                     reply_to = None
                     counts["dangling_replies"] += 1
-                ensure(db, sender, message.sent_at)
+                ensure(db, sender, message.sent_at, humans)
                 db.execute(
                     """INSERT INTO messages(
                          message_id, thread_id, sequence, sender_mailbox_id,
@@ -248,7 +287,7 @@ def migrate(db: sqlite3.Connection, messages: dict[str, Message], visibility: st
                 sequence += 1
                 counts["messages"] += 1
             for recipient, read_at in sorted(message.recipients.items()):
-                ensure(db, recipient, message.sent_at)
+                ensure(db, recipient, message.sent_at, humans)
                 db.execute(
                     "INSERT OR IGNORE INTO message_recipients(message_id, recipient_mailbox_id) VALUES (?, ?)",
                     (message.message_id, recipient),
@@ -322,10 +361,14 @@ def verify(db: sqlite3.Connection, messages: dict[str, Message],
     missing = sorted(set(messages) - set(stored))
     if missing:
         problems.append(f"{len(missing)} maildir messages are not in the database")
+    parents = dict(db.execute("SELECT message_id, reply_to_message_id FROM messages"))
     for message in messages.values():
         row = stored.get(message.message_id)
         if row is not None and row != (message.sender, message.thread_id or message.message_id, message.body):
             problems.append(f"{message.message_id} differs from its Maildir copy")
+        if (row is not None and message.reply_to in messages
+                and parents.get(message.message_id) != message.reply_to):
+            problems.append(f"{message.message_id} lost its parent {message.reply_to}")
     for mailbox, folders in boxes.items():
         inbox = folders.get("inbox")
         if inbox is None or not inbox.is_dir():
@@ -352,14 +395,17 @@ def verify(db: sqlite3.Connection, messages: dict[str, Message],
     return problems
 
 
-def database_path(explicit: str | None, human_root: Path) -> Path:
-    if explicit:
-        return Path(explicit).expanduser().absolute()
+def runtime_database(human_root: Path) -> Path:
+    """The database agent-mail mirrors into and agent-mail2 reads."""
     raw = os.environ.get("AGENT_MAIL2_DB")
     if raw:
         return Path(raw).expanduser().absolute()
     # Not a fixed home path: relocating the mail state must never write the real store.
-    return human_root.absolute().parent / "mail2.sqlite3"
+    return human_root.parent / "mail2.sqlite3"
+
+
+def database_path(explicit: str | None, human_root: Path) -> Path:
+    return Path(explicit).expanduser().absolute() if explicit else runtime_database(human_root)
 
 
 STORES = ("maildir", "both", "sqlite")
@@ -367,9 +413,10 @@ STORES = ("maildir", "both", "sqlite")
 
 def store_mode(marker: Path) -> str:
     """Must read the marker exactly as bin/agent-mail does."""
+    # The whole file less trailing newlines, which is what $(cat) yields in bin/agent-mail.
     try:
-        value = marker.read_text(encoding="utf-8").strip()
-    except OSError:
+        value = marker.read_bytes().decode("utf-8").rstrip("\n")
+    except (OSError, UnicodeDecodeError):
         return "maildir"
     return value if value in STORES else "maildir"
 
@@ -398,15 +445,44 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     return db
 
 
-def run_migration(db_path: Path, boxes: dict[str, dict[str, Path]], messages: dict[str, Message],
-                  visibility: str, only: str | None) -> dict[str, int]:
+def with_ancestors(boxes: dict[str, dict[str, Path]], db: sqlite3.Connection,
+                   messages: dict[str, Message]) -> dict[str, Message]:
+    """A reply mirrored before its parent would lose the link for good and land ahead of it,
+    so a parent still only in the Maildir is brought in with it."""
+    for _ in range(1000):
+        missing = {m.reply_to for m in messages.values()
+                   if m.reply_to and m.reply_to not in messages
+                   and not db.execute("SELECT 1 FROM messages WHERE message_id = ?", (m.reply_to,)).fetchone()}
+        found = {}
+        for parent in missing:
+            if parent and "/" not in parent and not parent.startswith("."):
+                found.update(collect(boxes, parent))
+        if not found:
+            return messages
+        messages = {**messages, **found}
+    return messages
+
+
+def run_migration(db_path: Path, boxes: dict[str, dict[str, Path]], visibility: str,
+                  only: str | None) -> dict[str, int]:
     db = open_db(db_path)
     try:
+        # The snapshot is taken under the write lock. Collected before it, a migration could
+        # apply a view older than a mirror that committed meanwhile: discarding mail that
+        # arrived, or undoing a read.
         db.execute("BEGIN IMMEDIATE")
         try:
+            messages = collect(boxes, only)
+            if only is not None:
+                # Not the file's mtime: that is the arrival time, and this runs right after the read.
+                now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+                for message in messages.values():
+                    message.recipients = {box: None if state is None else now
+                                          for box, state in message.recipients.items()}
+                messages = with_ancestors(boxes, db, messages)
             counts = migrate(db, messages, visibility, boxes, only)
             db.execute("COMMIT")
-        except Exception:
+        except BaseException:
             db.execute("ROLLBACK")
             raise
     finally:
@@ -414,10 +490,15 @@ def run_migration(db_path: Path, boxes: dict[str, dict[str, Path]], messages: di
     return counts
 
 
-def run_verify(db_path: Path, boxes: dict[str, dict[str, Path]], messages: dict[str, Message]) -> list[str]:
+def run_verify(db_path: Path, boxes: dict[str, dict[str, Path]]) -> list[str]:
     db = open_db(db_path)
     try:
-        return verify(db, messages, boxes)
+        # Under the write lock, so a mirror committing mid-check cannot read as drift.
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            return verify(db, collect(boxes), boxes)
+        finally:
+            db.execute("ROLLBACK")
     finally:
         db.close()
 
@@ -493,7 +574,7 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
         raise MigrationError("the store is maildir, so there is no migration to finish")
     if store_mode(marker) == "both":
         boxes = mailboxes(agent_root, human_root)
-        problems = run_verify(db_path, boxes, collect(boxes))
+        problems = run_verify(db_path, boxes)
         if problems:
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
@@ -528,20 +609,22 @@ def set_store(target: str, marker: Path, db_path: Path, agent_root: Path, human_
         write_store(marker, "maildir")
         print("store is maildir; the database is no longer written")
         return 0
+    runtime = runtime_database(human_root)
+    if db_path != runtime:
+        raise MigrationError(f"agent-mail mirrors into {runtime}, so the store cannot be switched over {db_path}")
     saved = archive(marker, db_path, agent_root, human_root, registry, target)
     print(f"archived and restored the mail to {saved}")
     boxes = mailboxes(agent_root, human_root)
-    run_migration(db_path, boxes, collect(boxes), visibility, None)
-    problems = run_verify(db_path, boxes, collect(boxes))
+    run_migration(db_path, boxes, visibility, None)
+    problems = run_verify(db_path, boxes)
     if problems:
         for problem in problems:
             print(f"agent-mail-migrate: {problem}", file=sys.stderr)
         raise MigrationError(f"{len(problems)} problems; the store marker was not changed")
     write_store(marker, "both")
     # A send between the verify and the marker write was mirrored by nobody.
-    messages = collect(boxes)
-    run_migration(db_path, boxes, messages, visibility, None)
-    problems = run_verify(db_path, boxes, collect(boxes))
+    run_migration(db_path, boxes, visibility, None)
+    problems = run_verify(db_path, boxes)
     for problem in problems:
         print(f"agent-mail-migrate: {problem}", file=sys.stderr)
     print(f"store is both: the Maildir stays authoritative and every change is mirrored into {db_path}")
@@ -570,13 +653,15 @@ def main() -> int:
         or os.environ.get("AGENT_SCRATCH_ROOT")
         or Path.home() / ".local" / "state" / "agent" / "scratchpads"
     ).expanduser()
+    # Resolved as agent-mail resolves it (pwd -P), or a symlinked root would put the marker
+    # and the database somewhere agent-mail never looks.
     human_root = Path(
         args.human_root
         or os.environ.get("AGENT_HUMAN_MAIL_ROOT")
         or Path.home() / ".local" / "state" / "agent-mail" / "humans"
-    ).expanduser()
+    ).expanduser().resolve()
     db_path = database_path(args.db, human_root)
-    marker = human_root.absolute().parent / "store"
+    marker = human_root.parent / "store"
     if args.message is not None and (not args.message or "/" in args.message or args.message.startswith(".")):
         parser.error("--message takes a message id")
 
@@ -587,25 +672,18 @@ def main() -> int:
         if args.finish:
             return finish(marker, db_path, agent_root, human_root)
         boxes = mailboxes(agent_root, human_root)
-        messages = collect(boxes, args.message)
         if args.dry_run:
-            print(plan(messages))
+            print(plan(collect(boxes)))
             return 0
         if args.verify:
-            problems = run_verify(db_path, boxes, messages)
+            problems = run_verify(db_path, boxes)
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
             print("verified" if not problems else f"{len(problems)} problems")
             return 1 if problems else 0
         if store_mode(marker) == "sqlite":
             raise MigrationError("the store is sqlite, so the Maildir is no longer the record; refusing to sync from it")
-        if args.message is not None:
-            # Not the file's mtime: that is the arrival time, and this runs right after the read.
-            now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
-            for message in messages.values():
-                message.recipients = {box: None if state is None else now
-                                      for box, state in message.recipients.items()}
-        counts = run_migration(db_path, boxes, messages, args.visibility, args.message)
+        counts = run_migration(db_path, boxes, args.visibility, args.message)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"agent-mail-migrate: {error}", file=sys.stderr)
         return 1

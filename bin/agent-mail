@@ -33,11 +33,14 @@ SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 MAIL_STATE_ROOT="$(dirname -- "$HUMAN_MAIL_ROOT")"
 STORE_MARKER="$MAIL_STATE_ROOT/store"
 MAIL2_DB="${AGENT_MAIL2_DB:-$MAIL_STATE_ROOT/mail2.sqlite3}"
-STORE_MODE=maildir
-if [ -f "$STORE_MARKER" ]; then
-  IFS= read -r STORE_MODE < "$STORE_MARKER" || true
-  case "$STORE_MODE" in both|sqlite) ;; *) STORE_MODE=maildir ;; esac
-fi
+# The whole file less trailing newlines must name a store, exactly as agent-mail-migrate
+# reads it: a first-line read let "sqlite\njunk" mean sqlite here and maildir there.
+store_mode() {
+  local mode
+  mode="$(cat -- "$STORE_MARKER" 2>/dev/null)" || mode=""
+  case "$mode" in both|sqlite) printf '%s' "$mode" ;; *) printf maildir ;; esac
+}
+STORE_MODE="$(store_mode)"
 
 usage() {
   cat <<'USAGE'
@@ -153,7 +156,9 @@ ring() {
 # happened, and a non-zero exit after a delivery invites a duplicate resend. --verify keeps
 # failing until a full migrate repairs it.
 mirror() {
-  [ "$STORE_MODE" = both ] || return 0
+  # Read again, not the startup value: a command that began before --set-store both and
+  # delivers after its final migrate pass would otherwise go unmirrored.
+  [ "$(store_mode)" = both ] || return 0
   local id="$1" error
   if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" \
       --agent-root "$MAIL_ROOT" --human-root "$HUMAN_MAIL_ROOT" 2>&1)"; then
