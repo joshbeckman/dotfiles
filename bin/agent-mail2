@@ -1157,8 +1157,8 @@ def cmd_read(args: argparse.Namespace) -> None:
                 raise
         current = head(db, row["thread_id"])
         if args.json:
-            print_json(dict(message_record(db, row, body=True), head=current["message_id"],
-                            raw=raw.decode("utf-8"), bytes=len(raw)))
+            print_json(dict(version=1, store=store_mode(), **message_record(db, row, body=True),
+                            head=current["message_id"], raw=raw.decode("utf-8"), bytes=len(raw)))
         elif args.raw:
             sys.stdout.flush()
             sys.stdout.buffer.write(raw)

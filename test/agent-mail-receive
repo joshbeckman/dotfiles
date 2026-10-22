@@ -19,7 +19,7 @@ realm() {  # DIR: agent-run, alice and bob pads, Josh's mailbox, a SQLite store
     "$HOME/.local/state"*|"$HOME/.pi"*) echo "refusing a realm under the live state: $dir" >&2; exit 2 ;;
   esac
   mkdir -p "$dir/pads/agent-run" "$dir/pads/alice-agent-11111111" "$dir/pads/bob-agent-22222222" \
-    "$dir/state/humans/josh" "$dir/identities" "$dir/bin"
+    "$dir/state/humans/josh" "$dir/state/doorbells" "$dir/identities" "$dir/bin"
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/notified"\n' "$dir" >"$dir/bin/notify-josh"
   chmod +x "$dir/bin/notify-josh"
   export AGENT_MAIL_ROOT="$dir/pads" AGENT_HUMAN_MAIL_ROOT="$dir/state/humans" \
