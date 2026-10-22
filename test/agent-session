@@ -609,7 +609,7 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(plan['command'][:9], ['tmux', 'new-window', '-d', '-t', 'agents:', '-n', HANDLE, '-c', str(self.cwd)])
         # The command runs through the login shell, where the key source lives.
         self.assertIn('-lic', plan['command'][9])
-        self.assertIn(f"{self.bin / 's'} FIREWORKS_API_KEY -- pi --session {self.transcript} ",
+        self.assertIn(f"{self.bin / 's'} FIREWORKS_API_KEY -- pi --approve --session {self.transcript} ",
                       plan['command'][9])
         self.assertIn('parked.md', plan['command'][9])
         # A wake is otherwise one-way: the session stays awake holding its memory,
@@ -621,13 +621,24 @@ class LifecycleTest(unittest.TestCase):
         self.assertIn(str(extension), plan['command'][9])
         self.assertEqual(before, snapshot(self.root))
 
+    def test_resume_checks_transcript_holders_without_proc(self):
+        self.parked()
+        self.use_darwin()
+        self.stub('ps', f'#!/bin/sh\nprintf "%s\\n" "12345 pi --session={self.transcript}"\n')
+        error = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents',
+                             '--dry-run', expected=2)
+        self.assertIn('session file is already held by pid 12345', error)
+        self.stub('ps', '#!/bin/sh\nprintf "%s\\n" "12345 pi --session=unrelated"\n')
+        self.assertEqual(self.run_cli('resume', '@+' + HANDLE, '--tmux-session',
+                                      'agents', '--dry-run')['status'], 'would-wake')
+
     def test_resume_can_start_pi_without_a_secret(self):
         # An explicit empty override disables inference, so a machine that
         # authenticates Pi another way still gets a bare command.
         self.parked()
         self.env['AGENT_PI_SECRETS'] = ''
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
-        self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
+        self.assertTrue(plan['command'][9].startswith(f"pi --approve --session {self.transcript} "))
 
     def test_resume_infers_the_provider_key_from_the_store(self):
         self.parked()
@@ -635,13 +646,13 @@ class LifecycleTest(unittest.TestCase):
         self.env.pop('AGENT_PI_SECRETS', None)
         self.env.pop('SPAWN_PI_SECRETS', None)
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
-        self.assertIn(f"{self.bin / 's'} FIREWORKS_API_KEY -- pi --session {self.transcript} ",
+        self.assertIn(f"{self.bin / 's'} FIREWORKS_API_KEY -- pi --approve --session {self.transcript} ",
                       plan['command'][9])
         # A provider whose key is not in the store must not wrap: Pi may
         # authenticate natively, and `s` would refuse to start a child.
         (self.root / 'pi-settings.json').write_text('{"defaultProvider": "openai"}\n')
         plan = self.run_cli('resume', '@+' + HANDLE, '--tmux-session', 'agents', '--dry-run')
-        self.assertTrue(plan['command'][9].startswith(f"pi --session {self.transcript} "))
+        self.assertTrue(plan['command'][9].startswith(f"pi --approve --session {self.transcript} "))
 
     def test_resume_runs_s_in_the_login_shell(self):
         # The key source lives in the login environment, so the availability check

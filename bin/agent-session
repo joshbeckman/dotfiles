@@ -618,22 +618,38 @@ def transcript_holders(session_file):
     session_id = str(session_file).rsplit('_', 1)[-1].split('.')[0].encode()
     reference = str(session_file).encode()
     holders = []
-    for entry in Path('/proc').iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            arguments = (entry / 'cmdline').read_bytes().split(b'\0')
-        except OSError:
-            continue
-        references = []
-        for index, argument in enumerate(arguments):
-            if argument == b'--session' and index + 1 < len(arguments):
-                references.append(arguments[index + 1])
-            elif argument.startswith(b'--session='):
-                references.append(argument.split(b'=', 1)[1])
-        if any(reference in value or (len(value) >= 8 and session_id.startswith(value))
-               for value in references):
-            holders.append(int(entry.name))
+    if not Path('/proc').is_dir():
+        import subprocess
+        # macOS has no /proc; refuse the wake if ps cannot establish that the
+        # transcript is free, rather than risk starting a second Pi on it.
+        listing = subprocess.run(['ps', '-ww', '-axo', 'pid=,args='], capture_output=True,
+                                 text=True, check=True)
+        for line in listing.stdout.splitlines():
+            match = re.match(r'\s*(\d+)\s+(.*)', line)
+            if not match:
+                continue
+            references = re.findall(r'(?:^|\s)--session(?:=|\s+)(\S+)', match[2])
+            if any(reference.decode() in value or
+                   (len(value) >= 8 and session_id.decode().startswith(value))
+                   for value in references):
+                holders.append(int(match[1]))
+    else:
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                arguments = (entry / 'cmdline').read_bytes().split(b'\0')
+            except OSError:
+                continue
+            references = []
+            for index, argument in enumerate(arguments):
+                if argument == b'--session' and index + 1 < len(arguments):
+                    references.append(arguments[index + 1])
+                elif argument.startswith(b'--session='):
+                    references.append(argument.split(b'=', 1)[1])
+            if any(reference in value or (len(value) >= 8 and session_id.startswith(value))
+                   for value in references):
+                holders.append(int(entry.name))
     return holders
 
 
