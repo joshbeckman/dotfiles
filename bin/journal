@@ -11,18 +11,17 @@ if [[ ! -f "$JOURNAL_FILE" ]]; then
         echo "# Journal"
         echo ""
 
-        for month in {1..12}; do
-            days_in_month=$(cal $month $CURRENT_YEAR | awk 'NF {DAYS = $NF} END {print DAYS}')
+        python3 - "$CURRENT_YEAR" <<'PY'
+import datetime
+import locale
+import sys
 
-            for day in $(seq 1 $days_in_month); do
-                month_padded=$(printf "%02d" $month)
-                day_padded=$(printf "%02d" $day)
-                day_date=$(date -j -f "%Y-%m-%d" "${CURRENT_YEAR}-${month_padded}-${day_padded}" "+%B-%d" 2>/dev/null)
-
-                echo "## $day_date"
-                echo ""
-            done
-        done
+locale.setlocale(locale.LC_TIME, '')
+day = datetime.date(int(sys.argv[1]), 1, 1)
+while day.year == int(sys.argv[1]):
+    print(f"## {day.strftime('%B-%d')}\n")
+    day += datetime.timedelta(days=1)
+PY
     } > "$JOURNAL_FILE"
 fi
 

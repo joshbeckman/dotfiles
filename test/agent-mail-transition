@@ -496,6 +496,33 @@ assert not first.exists(), "the checked record was not retired"
 assert (state / "mirror-failures.d" / "20261022T000001Z-2-2-late").exists(), "the late record was swept up"
 PY
 
+# A failure for a message id longer than a filename may be is still recorded.
+realm long-id
+migrate --set-store both >/dev/null
+long_id="$(printf 'L%.0s' $(seq 1 240))"
+mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
+printf 'From: %s\nTo: %s\nMessage-ID: %s\nSubject: long\n\nlong\n' "$alice" "$bob" "$long_id" >"$AGENT_MAIL_ROOT/$bob/inbox/new/$long_id.md"
+as $bob env AGENT_MAIL2_DB="$tmp" "$bin/agent-mail" read --to $bob --id "$long_id" >/dev/null 2>"$tmp/long-err"
+grep -rFq "$long_id" "$dir/state/mirror-failures.d" || { cat "$tmp/long-err"; fail "a long id's failure was not recorded"; }
+set +e; migrate --verify >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'recorded mirror failures are unrepaired' "$tmp/err" || fail "verify did not report a recorded failure"
+migrate --replay-failures >/dev/null || fail "replay of a long id failed"
+migrate --verify >/dev/null || fail "verify still failed after the replay"
+
+# The legacy log is never renamed or truncated, since an old agent-mail may still append to it:
+# retiring records the bytes checked, and a line appended later is still pending.
+realm legacy-log
+migrate --set-store both >/dev/null
+old="$(as $alice cmd send --to $bob --subject Old -m old | tail -1)"
+printf 't\t%s\terror\n' "$old" >"$dir/state/mirror-failures"
+migrate --replay-failures >/dev/null
+[[ -s "$dir/state/mirror-failures" && "$(cat "$dir/state/mirror-failures.retired-bytes")" == "$(wc -c <"$dir/state/mirror-failures" | tr -d ' ')" ]] \
+  || fail "retiring the legacy log did not record its checked size"
+migrate --verify >/dev/null || fail "a retired legacy log still counted as drift"
+printf 't\tnever-delivered-legacy\terror\n' >>"$dir/state/mirror-failures"
+set +e; migrate --verify >/dev/null 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'never-delivered-legacy' "$tmp/err" || fail "a line appended to the legacy log after retiring was ignored"
+
 # A migration that passed its first check just before the flip refuses once it holds the lock.
 realm flip-race
 migrate --set-store both >/dev/null

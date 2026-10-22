@@ -1,4 +1,5 @@
 #!/bin/bash
+# Platform: macOS
 #
 # Capture a screenshot and an imagesnap via webcam and save to snapme directory
 # Best combined with a cron job

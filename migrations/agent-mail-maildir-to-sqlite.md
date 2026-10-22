@@ -129,6 +129,15 @@ check turns that into a visible discrepancy.
 
 ### 5. Flip to sqlite
 
+**Version boundary.** Every agent-mail that can still change the Maildir must be the version
+that records each failure in `mirror-failures.d/` and tells its mirror about reads and
+discards (#52, `a87d9bd` or later). An older one still running, such as a long-lived shell
+or a session started before the deploy, appends to the legacy `mirror-failures` log and
+mirrors a read after the flip as an import only, which loses that acknowledgement. Deploy,
+then wait until every session started before the deploy has exited or been restarted.
+The migrator only ever records how much of the legacy log it has retired. It never
+truncates or renames that log, so an old writer can't lose a line.
+
 ```sh
 agent-mail-migrate --set-store sqlite
 agent-mail store

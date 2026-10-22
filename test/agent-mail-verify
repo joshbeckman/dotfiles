@@ -27,7 +27,7 @@ run() {
     AGENT_MAIL_TEST_SENT="$sent" PATH="$tmp/bin:$PATH" "$ROOT/bin/agent-mail-verify"
 }
 reset_state() {
-  rm -rf "$state/mirror-failures.d" "$state/mirror-failures" "$state/migration-finished"
+  rm -rf "$state/mirror-failures.d" "$state/mirror-failures" "$state/mirror-failures.retired-bytes" "$state/migration-finished"
   mkdir -p "$state/mirror-failures.d/repaired"
   : > "$sent"
 }
@@ -49,8 +49,12 @@ check "$(count)" "1" "a failure file raises the alarm"
 reset_state; printf 'partial\n' > "$state/mirror-failures.d/.one.tmp"; run
 check "$(count)" "0" "a file still being written is ignored"
 
-reset_state; printf 'when\tid\tread\tjosh\terror\n' > "$state/mirror-failures"; run
-check "$(count)" "1" "the legacy single file still raises the alarm"
+# A legacy mirror-failures is not renamed when retired, so its checked length lives in
+# mirror-failures.retired-bytes and only the tail past it is pending. Reading the file directly would
+# fire forever on retired lines, so the alarm leaves the legacy file to --verify and stays silent
+# when verify is clean.
+reset_state; printf 'when\tid\tread\tjosh\terror\n' > "$state/mirror-failures"; printf '120\n' > "$state/mirror-failures.retired-bytes"; run
+check "$(count)" "0" "a retired legacy log does not raise on its own"
 
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
 check "$(count)" "1" "repaired records remind"

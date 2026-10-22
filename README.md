@@ -81,6 +81,7 @@ Run any script with `--help` or read the source — they're short.
 
 - **Symlinks, not copies.** `dfm install` symlinks files into `$HOME`. Editing a dotfile here edits the live config.
 - **Shell scripts stay simple.** Scripts in `bin/` are short, single-purpose, and use `#!/bin/sh` or `#!/usr/bin/env bash` (or ruby, etc.). Prefer `set -euo pipefail` in bash scripts.
+- **Dotfiles are shared across macOS and Linux.** Treat commands, setup, configs, apps, services, and tests as cross-platform by default. Guard OS-specific behavior and select only resources for the current host. A platform-only command needs a `-macos` or `-linux` suffix, or `# Platform: macOS` or `# Platform: Linux` immediately below its shebang. Designate platform-only resources by path, filename, or a documented marker. A platform check inside a shared file does not designate the whole file. State the host for every test run; one host does not prove the other. Follow [cross-platform dotfiles](.agents/skills/cross-platform-dotfiles/SKILL.md) for changes anywhere in this repo.
 - **Brewfile tracks dependencies.** If a script or config relies on a Homebrew formula, add it to `Brewfile`.
 - **No secrets in version control.** Credentials, tokens, and API keys live in the encrypted store managed by [`s`](https://github.com/tobi/s) (`s set NAME`, injected per-invocation with `s NAME -- cmd`), never in committed files or globally sourced env files.
 - **Conventional Commits.** Commit messages follow the `type(scope): description` format (e.g. `feat(zshrc):`, `fix(nvim):`).

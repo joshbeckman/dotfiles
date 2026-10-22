@@ -1,4 +1,5 @@
 #!/bin/bash
+# Platform: macOS
 # Opens neovim then copies content to clipboard on exit
 
 set -e

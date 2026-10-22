@@ -42,7 +42,18 @@ words() {
     done
     printf "%s" "$(IFS=-; echo "${selected_words[*]}")"
   else
-    words=$(cat "$dict_file" | shuf -n "$num" | tr '\n' '-' | tr '[:upper:]' '[:lower:]')
+    words=$(awk -v n="$num" '
+      BEGIN { srand() }
+      NF {
+        count++
+        if (count <= n) picked[count] = $0
+        else {
+          slot = int(rand() * count) + 1
+          if (slot <= n) picked[slot] = $0
+        }
+      }
+      END { for (i = 1; i <= n && i <= count; i++) print picked[i] }
+    ' "$dict_file" | tr '\n' '-' | tr '[:upper:]' '[:lower:]')
     echo "${words%-}" # Remove trailing hyphen
   fi
 }
@@ -65,8 +76,10 @@ main() {
   # Use fzf to select or create new trial
   if [[ -n "$existing_trials" ]]; then
     # Show existing trials and allow creating new one
-    selected_trial=$(printf "%s (new)\n%s" "$DEFAULT_NAME" "$(basename -a $existing_trials)" |
-      fzf --prompt="Select existing trial or create new: " \
+    selected_trial=$({
+      printf '%s (new)\n' "$DEFAULT_NAME"
+      while IFS= read -r dir; do basename "$dir"; done <<< "$existing_trials"
+    } | fzf --prompt="Select existing trial or create new: " \
         --header="↑↓ to navigate, Enter to select, Ctrl-C to cancel" \
         --no-preview \
         --reverse \
