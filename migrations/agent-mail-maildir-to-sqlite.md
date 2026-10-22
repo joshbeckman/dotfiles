@@ -87,8 +87,11 @@ agent-mail-migrate
 agent-mail-migrate --verify
 ```
 
-`--verify` reconciles the Maildir against the database: every message present, every
-delivery present. It exits non-zero on any mismatch. The Maildir is untouched, so the
+`--verify` reconciles the Maildir against the database: every message present with the
+same sender, thread and body, and every delivery in the state its file says (`new/` unread,
+`cur/` read, gone from a live inbox discarded). It exits non-zero on any mismatch. A
+re-run brings the database back in line with the Maildir, so migrate-then-verify can be
+repeated for as long as the Maildir is authoritative. The Maildir is untouched, so the
 old store stays authoritative and this step is repeatable.
 
 ### 4. Announce, with each mailbox's own numbers
@@ -129,8 +132,10 @@ record of what the old state was, and it costs nothing to leave in place.
 
 - **Read times.** v1 never recorded when a message was read, so `read_at` is the file's
   mtime, which is when it arrived. Treat migrated read times as "arrived by then".
-- **Discard state.** v1 has no discard, so every migrated delivery is either read or
-  unread. Nothing is marked discarded.
+- **Discard times.** v1's discard deletes the file, so a delivery whose file has gone from
+  an inbox that still exists is marked discarded at the time of the run, not the time of
+  the discard. A mailbox whose whole inbox is gone, such as a pruned scratchpad, is left
+  as it was rather than read as having discarded everything.
 - **Replies to missing parents.** One message in this store is named by an `In-Reply-To`
   but was never delivered to any mailbox, so the reply keeps its message and thread and
   loses the link. The migrator counts these on stderr.

@@ -89,4 +89,55 @@ PY
 AGENT_MAIL2_DB="$AGENT_MAIL2_DB" agent-mail-migrate --verify --agent-root "$AGENT_SCRATCH_ROOT" \
   --human-root "$tmp/humans" | grep -qx verified
 
+migrate() {
+  agent-mail-migrate --agent-root "$AGENT_SCRATCH_ROOT" --human-root "$tmp/humans" "$@"
+}
+
+# Reading in v1 moves a file to cur/; a re-run carries that into the database.
+mv "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$a.md" "$AGENT_SCRATCH_ROOT/$agent2/inbox/cur/$a.md"
+# v1's discard deletes the file. A re-run after that, with a new reply in the same thread,
+# must not reuse the sequence the shorter Maildir group would suggest.
+rm "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$c.md"
+e="20261003T090000Z--from-$agent1--to-$agent2--fifth--5-5"
+write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$e.md" "$agent1" "$agent2" "2026-10-03T09:00:00Z" "$e" "$a" "$c" "Fifth" "five"
+migrate >/dev/null
+python3 - "$AGENT_MAIL2_DB" "$a" "$c" "$e" "$agent1" "$agent2" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+a, c, e, agent1, agent2 = sys.argv[2:]
+state = lambda m, r: db.execute("select read_at, discarded_at from deliveries where message_id = ? and recipient_mailbox_id = ?", (m, r)).fetchone()
+assert state(a, agent2)[0] is not None, "a read in v1 stayed unread in the database"
+assert state(c, agent2)[1] is not None, "a discard in v1 was not carried over"
+assert state(c, agent1) == (None, None), "the other recipient's copy must be untouched"
+assert db.execute("select sequence from messages where message_id = ?", (e,)).fetchone()[0] == 4
+assert db.execute("select reply_to_message_id from messages where message_id = ?", (e,)).fetchone()[0] == c
+PY
+migrate --verify | grep -qx verified
+
+# A mailbox whose inbox has gone is not read as having discarded everything.
+mv "$AGENT_SCRATCH_ROOT/$agent1" "$tmp/pruned"
+migrate >/dev/null
+python3 - "$AGENT_MAIL2_DB" "$agent1" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("select count(*) from deliveries where recipient_mailbox_id = ? and discarded_at is not null", (sys.argv[2],)).fetchone()[0] == 0
+PY
+mv "$tmp/pruned" "$AGENT_SCRATCH_ROOT/$agent1"
+
+# --verify compares state and content, not just presence.
+python3 - "$AGENT_MAIL2_DB" "$a" "$agent2" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("update deliveries set read_at = null where message_id = ? and recipient_mailbox_id = ?", sys.argv[2:])
+db.commit()
+PY
+set +e
+migrate --verify >"$tmp/verify-out" 2>"$tmp/verify-err"
+status=$?
+set -e
+[[ "$status" == 1 ]]
+grep -Fq "$a is read for $agent2 in the Maildir, unread in the database" "$tmp/verify-err"
+migrate >/dev/null
+migrate --verify | grep -qx verified
+
 echo "agent-mail-migrate tests passed"
