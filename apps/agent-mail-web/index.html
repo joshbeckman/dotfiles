@@ -59,6 +59,7 @@
           </svg>
         </a>
         <span class="brand-name">Agent Mail</span>
+        <span id="mobile-title" class="mobile-title">Inbox</span>
         <small id="current-user">@josh</small>
         <small id="realm" hidden></small>
       </h1>
@@ -87,9 +88,7 @@
       </div>
     </header>
 
-    <p id="status" role="status" aria-live="polite">
-      Connecting to the local inbox…
-    </p>
+    <p id="status" role="status" aria-live="polite"></p>
 
     <div class="shell">
       <nav class="rail" aria-label="Sections">
@@ -147,7 +146,6 @@
             <svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg>
             <span>Refresh</span>
           </button>
-          <p class="sidebar-note">Local files · explicit archive · no cloud service</p>
         </div>
       </aside>
       <button id="nav-backdrop" class="nav-backdrop" type="button" tabindex="-1" aria-hidden="true"></button>
@@ -176,12 +174,23 @@
         <section id="mail-list" aria-label="Messages">
           <header class="list-header">
             <h2 id="folder-title" tabindex="-1">Inbox</h2>
+            <span id="list-count" class="list-count"></span>
             <p class="hint">
               Opening mail leaves it here. Archive with <kbd>e</kbd>.
             </p>
           </header>
-          <div id="rows"></div>
+          <div id="rows">
+            <div class="rows-loading" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
         </section>
+
+        <div id="reader-empty" class="reader-empty" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-mail" /></svg>
+          <p>Choose a conversation to read</p>
+          <p class="hint"><kbd>j</kbd> and <kbd>k</kbd> move through the list</p>
+        </div>
 
         <section id="reader" aria-label="Conversation" hidden>
           <div class="pane-bar">
@@ -228,26 +237,34 @@
 
         <section id="editor" aria-label="Compose message" hidden>
           <div class="pane-bar">
-            <h2 class="pane-title">New message</h2>
+            <h2 id="editor-title" class="pane-title">New message</h2>
             <div class="actions">
+              <button id="send" type="button" title="Send (Ctrl+Enter)">
+                <svg class="icon" aria-hidden="true"><use href="#i-sent" /></svg>
+                <span>Send</span>
+              </button>
               <button id="close-draft" type="button">Save &amp; close</button>
               <button id="save-draft" type="button">Save draft</button>
-              <button id="send" type="button">Send</button>
-              <button id="spawn" type="button">Start agent</button>
               <button id="preview-button" type="button">Preview</button>
-              <button id="delete-draft" type="button">Delete draft</button>
+              <button id="spawn" type="button">Start agent</button>
+              <button id="delete-draft" type="button" class="danger">Delete draft</button>
             </div>
           </div>
           <div id="compose-layout">
             <div id="compose-fields">
-              <label for="to">To (comma-separated handles)</label
-              ><input
-                id="to"
-                list="contact-options"
-                autocomplete="off"
-                spellcheck="false"
-              /><datalist id="contact-options"></datalist
-              ><label for="subject">Subject</label><input id="subject" />
+              <div class="field">
+                <label for="to">To</label
+                ><input
+                  id="to"
+                  list="contact-options"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="@+agent, @josh, or @team/name, comma-separated"
+                /><datalist id="contact-options"></datalist>
+              </div>
+              <div class="field">
+                <label for="subject">Subject</label><input id="subject" />
+              </div>
               <div id="body-label">Message</div>
               <div id="body-editor"></div>
               <p id="keyword-status" class="hint" role="status"></p>
@@ -321,12 +338,12 @@
         <form method="dialog"><button class="icon-button" aria-label="Close">✕</button></form>
       </div>
       <dl>
-        <dt>j / k</dt>
-        <dd>Next / previous conversation</dd>
+        <dt>j / k, ↓ / ↑</dt>
+        <dd>Next / previous conversation (arrows in the list)</dd>
         <dt>o / Enter</dt>
         <dd>Open conversation</dd>
-        <dt>u</dt>
-        <dd>Return to list</dd>
+        <dt>u / Escape</dt>
+        <dd>Return to list, or close the reading pane</dd>
         <dt>/</dt>
         <dd>Search all mail</dd>
         <dt>e</dt>

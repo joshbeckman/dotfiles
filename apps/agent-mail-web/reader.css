@@ -21,7 +21,7 @@ body {
   margin: 0;
   /* Symmetric, and the same on both panes: the old right-only padding left every
      message flush against the left edge of its card. */
-  padding: 0.5rem 1rem 1rem;
+  padding: 0.5rem 1rem 0.25rem;
   color: var(--text);
   background: var(--bg);
   font:
@@ -29,6 +29,12 @@ body {
     system-ui,
     sans-serif;
   overflow-wrap: anywhere;
+}
+body > :first-child {
+  margin-top: 0;
+}
+body > :last-child {
+  margin-bottom: 0;
 }
 p,
 ul,

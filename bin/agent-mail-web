@@ -404,6 +404,24 @@ def read_realm():
     return raw[:1].upper() + raw[1:].lower()
 
 
+LIST_FIELDS = ('key', 'folder', 'thread', 'from', 'to', 'subject', 'excerpt', 'date')
+
+def conversations(messages):
+    """One row per conversation, newest message first, as the inbox list shows it.
+
+    Grouped here rather than in the browser, so a list of conversations does not carry every
+    message in them: All mail is a few hundred rows, not the whole mailbox. Drafts stay separate
+    rows, keyed by file, because each is its own editable document rather than delivered mail.
+    """
+    rows = {}
+    for m in messages:
+        group = m['key'] if m['folder'] == 'drafts' else m['thread']
+        if group in rows:
+            rows[group]['count'] += 1
+        else:
+            rows[group] = {k: m[k] for k in LIST_FIELDS} | {'count': 1}
+    return list(rows.values())
+
 class Mailbox:
     def __init__(self):
         human_root = Path(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans')).expanduser()
@@ -879,6 +897,14 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(10)
 
+    def handle(self):
+        # A reset while the request line is still being read never reaches handle_request, and
+        # socketserver would print it as a traceback. A client going away is not a bridge error.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def log_message(self, *_):
         pass  # Request paths can contain private search terms.
 
@@ -1005,6 +1031,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(e.status, {'error': str(e)})
         except (ValueError, KeyError, TypeError):
             self.reply(400, {'error': 'Invalid request'})
+        except (BrokenPipeError, ConnectionResetError):
+            # The client left mid-response: a reload, a closed tab, a phone losing signal. Both are
+            # OSErrors, and the clause below would try to send a 503 down the same dead socket.
+            return
         except (OSError, subprocess.TimeoutExpired) as e:
             self.reply(503, {'error': 'Local mail operation failed. Refresh before retrying: ' + str(e)})
 
@@ -1018,6 +1048,15 @@ class Handler(BaseHTTPRequestHandler):
                 os.utime(fd)
                 os.close(fd)
             result = box.listing(args.get('folder', ['inbox'])[0], args.get('q', [''])[0])
+            if args.get('group', [''])[0]:
+                result = dict(result, messages=conversations(result['messages']))
+            # The list polls every ten seconds. A stamp of the payload lets an unchanged poll
+            # answer in a few bytes, while mail responses still stay out of the browser cache.
+            stamp = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:16]
+            if args.get('version', [''])[0] == stamp:
+                result = {'unchanged': True, 'version': stamp}
+            else:
+                result = dict(result, version=stamp)
         elif route == '/api/thread':
             result = box.thread(key)
         elif route == '/api/draft':
