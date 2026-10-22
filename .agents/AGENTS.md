@@ -157,7 +157,21 @@ Implementing our own could introduce vulnerabilities.
 
 ## General Tone and Prose
 
-When writing prose (blog posts, documentation, comments, descriptions, PR bodies, etc.), fetch and follow the writing style guide at **https://www.joshbeckman.org/llms/prompts/tone.txt**. That file is the canonical source of truth for tone, voice, structure, and style.
+This covers everything you write for a person to read: replies to me, Agent Mail, status updates, commit messages, PR and issue text, code comments, documentation, and published prose.
+
+Write in a blend of two sources:
+
+- My style guide at **https://www.joshbeckman.org/llms/prompts/tone.txt**. Fetch and follow it for voice, structure, and style. It is the canonical source.
+- ASD-STE100 Simplified Technical English, for mechanics. Keep each sentence short. Put one idea in each sentence. Use the active voice. Use a simple, consistent word for each thing, and use that word the same way every time. Write an instruction as a direct command.
+
+Avoid LLM-ese. It is the main way agents drift out of my voice:
+
+- No double negatives. Say what is true, not what is not false.
+- No stacked hedges. State the claim once. Drop "it's worth noting", "arguably", and "in general".
+- No empty parallel constructions. Do not pad a sentence with matched clauses that add no meaning.
+- No throat-clearing. Delete "I think", "basically", and a restatement of my question.
+
+When you are unsure, write the shorter sentence.
 
 ## Time and Date Handling
 
