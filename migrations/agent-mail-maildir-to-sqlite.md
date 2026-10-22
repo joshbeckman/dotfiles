@@ -1,6 +1,6 @@
 # Migrating Agent Mail from the Maildir to SQLite
 
-**Status:** plan, unrun. Written against the Beacon store on blueberry, 2026-10-10.
+**Status:** plan; steps 1 to 3 are built and tested, step 5 is blocked. Written against the Beacon store on blueberry, 2026-10-10.
 
 The Maildir store (`agent-mail`) and the SQLite store (`agent-mail2`) record different
 things, so moving between them is a translation, not a copy. This is the plan I would
@@ -80,19 +80,35 @@ leaves one file per recipient, and every file is a delivery), 201 threads, 403 d
 across 14 mailboxes, and 6 unread matching 6 files in `new/`. These numbers drift as mail
 arrives, so read them as a shape rather than a fixture.
 
-### 3. Migrate the real store
+### 3. Start dual-writing
 
 ```sh
-agent-mail-migrate
-agent-mail-migrate --verify
+agent-mail-migrate --set-store both
+agent-mail store
 ```
+
+`--set-store both` first archives the inboxes, the human mailboxes, the identity registry
+and the database to `archives/` beside the marker, restores that archive into a temporary
+directory, and refuses to continue unless the restored copy holds the same mail. It then
+migrates, runs `--verify`, writes the store marker
+(`~/.local/state/agent-mail/store`) with one rename, and migrates once more to catch
+anything sent in the gap. From then on `agent-mail` writes every change to the Maildir
+first and then mirrors that message into the database with
+`agent-mail-migrate --message ID`, so the mirror and the migration share one mapping. The
+Maildir stays authoritative: `send`, `scan`, `read`, `receipt` and `discard` still use
+it, and only `head`, `thread`, `search` and `publish` read the mirror.
+
+Under `both`, `agent-mail` refuses a message that is not valid UTF-8 before delivering it
+(exit 1, nothing written), because the SQLite store holds text and the mirror could never
+converge on it. Under `maildir` nothing changes.
 
 `--verify` reconciles the Maildir against the database: every message present with the
 same sender, thread and body, and every delivery in the state its file says (`new/` unread,
-`cur/` read, gone from a live inbox discarded). It exits non-zero on any mismatch. A
-re-run brings the database back in line with the Maildir, so migrate-then-verify can be
-repeated for as long as the Maildir is authoritative. The Maildir is untouched, so the
-old store stays authoritative and this step is repeatable.
+`cur/` read, gone from a live inbox discarded). It exits non-zero on any mismatch. Run it
+whenever you want to know the mirror is exact. A mirror that fails is reported to the
+sender, logged in `mirror-failures` beside the marker, and repaired by a plain
+`agent-mail-migrate`, which brings the database back in line with the Maildir for as long
+as the Maildir is authoritative.
 
 ### 4. Announce, with each mailbox's own numbers
 
@@ -102,28 +118,52 @@ Tell every mailbox what it had and what it now has, and ask each agent to reconc
 agent-mail2 scan --to <mailbox> --state all --limit 1000
 ```
 
-Send the announcement through **both** stores. The channel being migrated is the channel
-you would announce through, and an agent still reading the Maildir has to receive it.
+Send the announcement with `agent-mail`, which under `both` writes the Maildir and mirrors
+it. Never write to the runtime database with `agent-mail2` directly before the flip: it
+refuses, because the next reconciliation would discard mail the Maildir does not have.
 
 The reason to announce rather than swap quietly is that the failure mode of a silent
 migration is silence. If a mailbox is mis-mapped or a message is dropped, the symptom is
 "nobody wrote to me", which is indistinguishable from the truth. A count each agent can
 check turns that into a visible discrepancy.
 
-### 5. Flip the command, in one announced step
+### 5. Flip to sqlite, once nothing reads the Maildir directly
 
-Keep the old tool reachable as `agent-mail-v1` and the Maildir read-only. State the new
-semantics in the announcement:
+Before this step, have an off-box backup that has been restored from once. The archive
+`--set-store both` writes sits on the same disk as the mail: enough while the Maildir stays
+authoritative, not once SQLite is the only record.
 
-- `read` marks a message rather than moving a file;
+`agent-mail-migrate --set-store sqlite` refuses today. Four readers go to the Maildir
+directly rather than through `agent-mail`, and each would go quiet after a flip:
+
+- `agent-mail-web` lists Josh's `inbox/new`, `inbox/cur`, `sent` and `drafts`, and sends
+  through `compose`, `reply`, `reply-all`, `deliver` and `archive`;
+- the Pi extension's unread notice and status count list `inbox/new`;
+- `agent-session wake-mail` lists `inbox/new` to wake parked sessions;
+- `agent-run` watches its own service mailbox's `new/`, `cur/` and `tmp/`.
+
+The notification to Josh on delivery and the unread `sweep` also exist only in the Maildir
+tool, and the SQLite store does not yet keep `Reply-To` or `Team-To`, which replies under
+`sqlite` would need. Each of these has to read through `agent-mail2` (`scan --json`, `thread --json` and
+`receipt --json` exist for this) before the flip is offered. When it is, the flip is one
+marker write after a clean `--verify`, and the announcement should state the new
+semantics:
+
+- `read` marks a message rather than moving a file, so `cat` no longer matters;
 - `scan` is the inbox, `search` also sees public threads;
-- a reply addresses the thread head with `--if-head`, and a stale head is refused rather
-  than silently forking the conversation.
+- `--if-head` makes a reply refuse a stale head; without it a reply still lands and says
+  what it followed.
 
 A nice touch: leave the announcement itself unread in the new store, so every agent's
-first `agent-mail2 read` both delivers the news and proves the new path works.
+first `agent-mail read` both delivers the news and proves the new path works.
 
-### 6. Keep the Maildir as a read-only archive
+### 6. Finish
+
+Once the mirror has run clean for long enough to trust, `agent-mail-migrate --finish`
+checks `--verify` once more, deletes the archives, and stamps `migration-finished` beside
+the marker.
+
+### 7. Keep the Maildir as a read-only archive
 
 Do not delete it. Until the new store has carried real traffic, the Maildir is the only
 record of what the old state was, and it costs nothing to leave in place.
@@ -144,9 +184,11 @@ record of what the old state was, and it costs nothing to leave in place.
 
 ## Rolling back
 
-The migration writes only to the database. To roll back, delete the database file and
-keep using `agent-mail`; the Maildir was never modified. Rolling back after the command
-flip is the same thing plus restoring `agent-mail` in place of `agent-mail-v1`.
+While the marker says `both`, `agent-mail-migrate --set-store maildir` stops the mirror and
+loses nothing, because every change was written to the Maildir first. The database can
+then be deleted. After a flip to `sqlite` there is no rollback by marker: mail sent since
+exists only in the database, so the migrator refuses to leave `sqlite`, and refuses to sync
+from the Maildir over it.
 
 ## Decisions the operator has to make
 

@@ -25,6 +25,26 @@ mkdir -p -m 700 "$MAIL_ROOT" "$HUMAN_MAIL_ROOT"
 chmod 700 "$MAIL_ROOT" "$HUMAN_MAIL_ROOT"
 MAIL_ROOT="$(CDPATH= cd -- "$MAIL_ROOT" && pwd -P)"
 HUMAN_MAIL_ROOT="$(CDPATH= cd -- "$HUMAN_MAIL_ROOT" && pwd -P)"
+SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+# The marker names a store rather than merely existing, so a missing or garbled one falls
+# back to the Maildir instead of flipping. It lives beside the human mailboxes so a test
+# that relocates them can never read or mirror into the real store.
+MAIL_STATE_ROOT="$(dirname -- "$HUMAN_MAIL_ROOT")"
+STORE_MARKER="$MAIL_STATE_ROOT/store"
+MAIL2_DB="${AGENT_MAIL2_DB:-$MAIL_STATE_ROOT/mail2.sqlite3}"
+# A store name and trailing newlines, nothing else, exactly as agent-mail-migrate checks it:
+# a first-line read let "sqlite\njunk" mean sqlite here and maildir there, and $(cat) alone
+# drops a NUL, so any byte outside a-z and newline makes the marker garbled.
+store_mode() {
+  local mode="" stray
+  if [ -f "$STORE_MARKER" ]; then
+    stray="$(LC_ALL=C tr -d 'a-z\n' 2>/dev/null <"$STORE_MARKER" | wc -c)"
+    [ "${stray// /}" = 0 ] && mode="$(cat -- "$STORE_MARKER" 2>/dev/null)"
+  fi
+  case "$mode" in both|sqlite) printf '%s' "$mode" ;; *) printf maildir ;; esac
+}
+STORE_MODE="$(store_mode)"
 
 usage() {
   cat <<'USAGE'
@@ -43,6 +63,12 @@ Usage:
   agent-mail reply-all FILE
   agent-mail deliver FILE
   agent-mail sweep  [--hours N] [--dry-run]
+  agent-mail store
+  agent-mail head   THREAD                 (SQLite store: marker both or sqlite)
+  agent-mail thread THREAD [--json]        (SQLite store)
+  agent-mail search [QUERY] [--json]       (SQLite store)
+  agent-mail publish THREAD                (SQLite store)
+  agent-mail resolve ID...
 
 An ID is an agent as <name>-<sessionID>, or a human as `@josh`,
 `humans/<handle>`, or an email address. The @+name agent form and @name human
@@ -76,6 +102,23 @@ reply-all Create a draft to the sender and other original recipients.
 deliver Atomically copy a draft to recipients and retain a human Sent copy.
 sweep  Notify Josh about messages unread for --hours (default 4). Any live
        session can run it; a dead recipient cannot escalate for itself.
+store  Print which store holds the mail, the marker path, and the database path.
+resolve Print the mailbox each ID reaches.
+
+Stores: STORE_MARKER (beside AGENT_HUMAN_MAIL_ROOT, default
+~/.local/state/agent-mail/store) holds maildir, both or sqlite; absent or
+unreadable means maildir. In both, every change is written here first and then
+mirrored into the SQLite store, and a failed mirror is reported on stderr and in
+mirror-failures without failing the command, because the message was delivered.
+head, thread, search and publish read the SQLite store and need both or sqlite.
+In sqlite, send, scan, read, receipt and discard are bin/agent-mail2's, addr and
+web stay here, and the Maildir-only commands refuse. Change it only with
+agent-mail-migrate --set-store.
+
+Doorbells: every delivery, in every store, touches doorbells/<mailbox> beside
+the marker (mailbox: the recipient's scratchpad name, or the human handle).
+Watch the directory or stat one file to learn that mail arrived without
+listing an inbox or running this command.
 
 Env:
   AGENT_TEAM_ROOT Override team registry root (see agent-team).
@@ -88,10 +131,46 @@ Env:
   AGENT_MAIL_STALE_HOURS  Report the recipient's idle time on send once it
                    reaches this many hours (default 12).
   AGENT_MAIL_EDITOR Editor used by inbox (default nvim).
+  AGENT_MAIL2_DB   SQLite store (default mail2.sqlite3 beside the marker).
 USAGE
+  printf '\nStore: %s (marker %s)\n' "$STORE_MODE" "$STORE_MARKER"
 }
 
 die() { echo "agent-mail: $*" >&2; exit 1; }
+
+delegate() {
+  AGENT_MAIL_ROOT="$MAIL_ROOT" AGENT_HUMAN_MAIL_ROOT="$HUMAN_MAIL_ROOT" AGENT_MAIL2_DB="$MAIL2_DB" \
+    AGENT_MAIL_PROG=agent-mail exec "$SELF_DIR/agent-mail2" "$@"
+}
+
+# Replaced by rename, not touched: a directory watch fires on entries changing, not on a
+# file's mtime. Best effort, because a ring is only a hint; a sender can die between
+# delivery and ring, so consumers still reconcile with a periodic scan.
+ring() {
+  local doorbells="$MAIL_STATE_ROOT/doorbells" inbox name
+  mkdir -p -m 700 "$doorbells" 2>/dev/null || return 0
+  for inbox in "$@"; do
+    name="$(basename -- "$(dirname -- "$inbox")")"
+    : >"$doorbells/.$name.$$" 2>/dev/null && mv -f "$doorbells/.$name.$$" "$doorbells/$name" 2>/dev/null || true
+  done
+}
+
+# Through the migrator rather than agent-mail2, so the mirror and the migration cannot map
+# a message differently. A failure never fails the command: the Maildir change already
+# happened, and a non-zero exit after a delivery invites a duplicate resend. --verify keeps
+# failing until a full migrate repairs it.
+mirror() {
+  # Read again, not the startup value: a command that began before --set-store both and
+  # delivers after its final migrate pass would otherwise go unmirrored.
+  [ "$(store_mode)" = both ] || return 0
+  local id="$1" error
+  if ! error="$(AGENT_MAIL2_DB="$MAIL2_DB" "$SELF_DIR/agent-mail-migrate" --quiet --message "$id" \
+      --agent-root "$MAIL_ROOT" --human-root "$HUMAN_MAIL_ROOT" 2>&1)"; then
+    echo "agent-mail: delivered, but mirroring $id into the SQLite store failed: $error" >&2
+    echo "agent-mail: repair with agent-mail-migrate, then agent-mail-migrate --verify" >&2
+    printf '%s\t%s\t%s\n' "$(now_iso)" "$id" "${error//$'\n'/ }" >>"$MAIL_STATE_ROOT/mirror-failures" || true
+  fi
+}
 
 # Accept the @+name mention form from prose and vim autocomplete. Stripped
 # before any address parsing because "@+name" contains "@" and would otherwise
@@ -309,6 +388,15 @@ resolve_inbox() {
     0) echo "$MAIL_ROOT/$id/inbox"; return 0 ;;
     *) die "ambiguous recipient '$id'; matches: ${hits[*]}" ;;
   esac
+}
+
+# The SQLite store holds text, so once it mirrors, undecodable mail would be delivered here
+# and fail every repair there; refuse it before delivery instead.
+require_utf8() {
+  [ "$(store_mode)" = maildir ] && return 0
+  iconv -f UTF-8 -t UTF-8 <"$1" >/dev/null 2>&1 && return 0
+  echo "agent-mail: message is not valid UTF-8; the SQLite store cannot hold it" >&2
+  return 1
 }
 
 ensure_maildir() {
@@ -658,6 +746,7 @@ cmd_send() {
       cat
     fi
   } > "$source_tmp"
+  require_utf8 "$source_tmp" || { rm -f "$source_tmp"; exit 1; }
 
   local tmp dst
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
@@ -671,12 +760,14 @@ cmd_send() {
     dst="${inboxes[$i]}/new/$msgid.md"
     mv "$tmp" "$dst"
   done
+  ring "${inboxes[@]}"
 
   retain_human_sent "$source_tmp" "$from" "$msgid"
   rm "$source_tmp"
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
     notify_human_delivery "${humans[$i]}" "${inboxes[$i]}" "$msgid" "$from" "$effective_subject"
   done
+  mirror "$msgid"
 
   echo "$msgid"
 }
@@ -790,6 +881,7 @@ cmd_read() {
     reply_source="$inbox/cur/$basename"
     mv "$f" "$reply_source"
     clear_escalation_marker "$inbox" "${basename%.md}"
+    mirror "${basename%.md}"
   fi
   printf 'Reply with: agent-mail send --reply-all %q --body-file FILE\n' "$reply_source" >&2
 }
@@ -810,6 +902,7 @@ cmd_discard() {
   local path; path="$(message_in_inbox "$inbox" "$id")" || die "no message '$id' in $inbox"
   rm -f "$path"
   clear_escalation_marker "$inbox" "$(basename "$path" .md)"
+  mirror "$(basename "$path" .md)"
 }
 
 message_path() {
@@ -850,6 +943,7 @@ cmd_archive() {
   [ ! -e "$dst" ] || die "archive destination already exists: $dst"
   mv "$path" "$dst"
   clear_escalation_marker "$inbox" "$(basename "$path" .md)"
+  mirror "$(basename "$path" .md)"
   printf '%s\n' "$dst"
 }
 
@@ -981,6 +1075,7 @@ cmd_deliver() {
     expanded_to+=", ${recipients[$i]}"
   done
 
+  require_utf8 "$draft" || exit 1
   local had_msgid="$msgid"
   [ -n "$msgid" ] || msgid="$(gen_msgid "${subject:-(no subject)}")"
   for inbox in "${inboxes[@]}"; do
@@ -1028,11 +1123,13 @@ cmd_deliver() {
     mv "$tmp_dst" "$dst"
     [ -n "$first_dst" ] || first_dst="$dst"
   done
+  ring "${inboxes[@]}"
   retain_human_sent "$draft" "$from" "$msgid"
   rm "$draft"
   for ((i = 0; i < ${#inboxes[@]}; i++)); do
     notify_human_delivery "${humans[$i]}" "${inboxes[$i]}" "$msgid" "$from" "${subject:-(no subject)}"
   done
+  mirror "$msgid"
   printf '%s\n' "$first_dst"
 }
 
@@ -1082,8 +1179,22 @@ cmd_sweep() {
   done
 }
 
+cmd_store() {
+  [ $# -eq 0 ] || die "store: expected no arguments"
+  printf '%s\tmarker:%s\tdb:%s\n' "$STORE_MODE" "$STORE_MARKER" "$MAIL2_DB"
+}
+
 [ $# -ge 1 ] || { usage >&2; exit 2; }
 sub="$1"; shift
+case "$STORE_MODE:$sub" in
+  *:resolve|*:store|*:addr|*:web|*:-h|*:--help) ;;
+  sqlite:send|sqlite:scan|sqlite:read|sqlite:receipt|sqlite:discard) delegate "$sub" "$@" ;;
+  sqlite:head|sqlite:thread|sqlite:search|sqlite:publish) delegate "$sub" "$@" ;;
+  both:head|both:thread|both:search|both:publish) delegate "$sub" "$@" ;;
+  maildir:head|maildir:thread|maildir:search|maildir:publish)
+    die "$sub reads the SQLite store, and the store marker says maildir ($STORE_MARKER)" ;;
+  sqlite:*) die "$sub works on the Maildir, and the store marker says sqlite ($STORE_MARKER)" ;;
+esac
 case "$sub" in
   send)    cmd_send "$@" ;;
   scan)    cmd_scan "$@" ;;
@@ -1098,6 +1209,8 @@ case "$sub" in
   reply-all) cmd_reply_all "$@" ;;
   deliver)   cmd_deliver "$@" ;;
   sweep)   cmd_sweep "$@" ;;
+  store)   cmd_store "$@" ;;
+  resolve) delegate resolve "$@" ;;
   # resolve_inbox returns a canonical path with status 0 for an unknown ID so
   # send can report the missing scratchpad with the name in it. addr has no such
   # second act: printing a plausible path for a recipient that does not exist
