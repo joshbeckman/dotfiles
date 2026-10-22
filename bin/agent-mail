@@ -142,13 +142,16 @@ delegate() {
 
 # A delivery touches doorbells/<mailbox>, one empty file per mailbox in one directory,
 # in every store, so a waker can watch a single directory and a poller can stat a single
-# file instead of listing an inbox or starting the CLI. Best effort: a missed ring only
-# means the next timed poll finds the mail.
+# file instead of listing an inbox or starting the CLI. Each ring replaces the file by
+# rename, so a directory watcher sees one IN_MOVED_TO rather than a truncate it could race.
+# Best effort, and only a hint: a sender can die between delivery and ring, so a consumer
+# still reconciles with a bounded scan on start and on an interval.
 ring() {
-  local doorbells="$MAIL_STATE_ROOT/doorbells" inbox
+  local doorbells="$MAIL_STATE_ROOT/doorbells" inbox name
   mkdir -p -m 700 "$doorbells" 2>/dev/null || return 0
   for inbox in "$@"; do
-    : >"$doorbells/$(basename -- "$(dirname -- "$inbox")")" 2>/dev/null || true
+    name="$(basename -- "$(dirname -- "$inbox")")"
+    : >"$doorbells/.$name.$$" 2>/dev/null && mv -f "$doorbells/.$name.$$" "$doorbells/$name" 2>/dev/null || true
   done
 }
 

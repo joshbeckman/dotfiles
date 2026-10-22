@@ -43,7 +43,7 @@ conversation() {
   rm -rf "$(dirname "$marker")/doorbells"
   m1="$(as $alice "$cmd" send --to "$bob,josh" --subject Plan --body 'I will take file A.' | tail -1)"
   # Every store rings the recipients' doorbells, and only theirs, in one directory a waker can watch.
-  [[ "$(ls "$(dirname "$marker")/doorbells" | tr '\n' ' ')" == "$bob josh " ]] || fail "delivery did not ring exactly the recipients' doorbells"
+  [[ "$(ls -A "$(dirname "$marker")/doorbells" | tr '\n' ' ')" == "$bob josh " ]] || fail "delivery did not ring exactly the recipients' doorbells"
   as $bob "$cmd" scan --to $bob | grep -Fq "$m1" || fail "the recipient's scan did not list the message"
   [[ "$(state_of "$m1" $bob)" == unread && "$(state_of "$m1" josh)" == unread ]] || fail "not delivered to the whole audience"
 
