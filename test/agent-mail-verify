@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# The alarm must look for the failure log beside the store marker, which is the parent of the human
+# mail root. AGENT_MAIL_ROOT names the scratchpads root, so a log there is a decoy.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+state="$tmp/state"
+mkdir -p "$state/humans" "$tmp/bin" "$tmp/scratchpads"
+sent="$tmp/sent"
+: > "$sent"
+cat > "$tmp/bin/agent-mail" <<'FAKE'
+#!/bin/sh
+[ "${1:-}" = "send" ] || exit 0
+printf '%s\n' "$*" >> "$AGENT_MAIL_TEST_SENT"
+FAKE
+cat > "$tmp/bin/agent-mail-migrate" <<'FAKE'
+#!/bin/sh
+exit "${AGENT_MAIL_TEST_VERIFY_EXIT:-0}"
+FAKE
+chmod +x "$tmp/bin/agent-mail" "$tmp/bin/agent-mail-migrate"
+run() {
+  AGENT_HUMAN_MAIL_ROOT="$state/humans" AGENT_MAIL_ROOT="$tmp/scratchpads" \
+    AGENT_MAIL_TEST_SENT="$sent" PATH="$tmp/bin:$PATH" "$ROOT/bin/agent-mail-verify"
+}
+fail=0
+check() { if [ "$1" = "$2" ]; then echo "  ok: $3"; else echo "  FAIL: $3 (wanted $2, got $1)"; fail=1; fi; }
+
+: > "$sent"; run
+check "$(wc -c < "$sent" | tr -d ' ')" "0" "a clean mirror stays silent"
+
+: > "$sent"; printf 'mailbox:josh\tmirror write failed\n' > "$state/mirror-failures"; run
+check "$(wc -l < "$sent" | tr -d ' ')" "1" "a failure log beside the marker raises the alarm"
+
+: > "$sent"; printf 'decoy\n' > "$tmp/scratchpads/mirror-failures"; rm -f "$state/mirror-failures"; run
+check "$(wc -c < "$sent" | tr -d ' ')" "0" "a failure log in the scratchpads root is ignored"
+
+: > "$sent"; rm -f "$state/mirror-failures"; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
+check "$(wc -l < "$sent" | tr -d ' ')" "1" "a failed verify raises the alarm"
+
+rm -f "$state/mirror-failures" "$tmp/scratchpads/mirror-failures"
+[ "$fail" = 0 ] && echo "agent-mail-verify tests passed" || { echo "agent-mail-verify tests failed"; exit 1; }
