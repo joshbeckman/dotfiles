@@ -276,6 +276,8 @@ FOLDERS = {'inbox': 'inbox/new', 'archive': 'inbox/cur', 'sent': 'sent', 'drafts
 # Byte for byte the marker grammar bin/agent-mail checks.
 STORE_MARKER = re.compile(rb'(maildir|both|sqlite)\n*')
 MESSAGE_KEY = re.compile(r'(inbox|archive|sent|drafts):([A-Za-z0-9_.@+\-]+\.md)')
+# A public conversation Josh is not in: readable, never his to archive or answer from here.
+PUBLIC_KEY = re.compile(r'public:([A-Za-z0-9_.@+\-]+)\.md')
 
 
 class MailError(Exception):
@@ -411,6 +413,29 @@ def excerpt(body, length=180):
         if len(lead) >= length or size >= len(body):
             return lead[:length]
         size *= 2
+
+
+def stamped(result, args):
+    """A stamp of the payload, so a poll that sends it back as version= answers in a few bytes
+    when nothing changed, while mail responses still stay out of the browser cache."""
+    stamp = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:16]
+    if args.get('version', [''])[0] == stamp:
+        return {'unchanged': True, 'version': stamp}
+    return dict(result, version=stamp)
+
+
+def parse_query(query):
+    """Search words, and the contacts named with with:, case-folded."""
+    words, people = [], []
+    for word in query.casefold().split():
+        if word.startswith('with:'):
+            address = word[5:]
+            if not re.fullmatch(r'@?\+?[A-Za-z0-9._-]+', address):
+                raise MailError('Use with:@+agent-handle or with:@human for contact searches')
+            people.append(address_key(address))
+        else:
+            words.append(word)
+    return words, people
 
 
 def stored_time(value):
@@ -578,6 +603,26 @@ class Mailbox:
     # the start of each body. Exact unless whitespace fills nearly all of this many characters.
     EXCERPT_SOURCE = 2000
 
+    RECIPIENTS = """(SELECT group_concat(recipient_mailbox_id, ', ') FROM
+                       (SELECT recipient_mailbox_id FROM message_recipients r
+                         WHERE r.message_id = m.message_id ORDER BY recipient_mailbox_id))"""
+    WORD_MATCH = ("instr(fold(m.sender_mailbox_id || char(10) || coalesce(recipients, '') || char(10)"
+                  " || coalesce(m.subject, '') || char(10) || m.body), ?) > 0")
+    # Threads Josh is in: something was delivered to him, or he wrote something.
+    JOSH_THREADS = """SELECT m2.thread_id FROM deliveries d JOIN messages m2 USING (message_id)
+                       WHERE d.recipient_mailbox_id = 'josh'
+                      UNION SELECT thread_id FROM messages WHERE sender_mailbox_id = 'josh'"""
+
+    @staticmethod
+    def stored_record(row, folder):
+        key = f'{folder}:{row["message_id"]}.md'
+        return {'id': row['message_id'], 'thread': row['thread_id'],
+                'parent': row['reply_to_message_id'] or '', 'from': row['sender_mailbox_id'],
+                'to': row['recipients'] or '', 'reply_to': row['reply_to_address'] or '',
+                'subject': row['subject'] or '', 'date': stored_time(row['sent_at']),
+                'body': row['body'], 'key': key, 'folder': folder,
+                'revision': hashlib.sha256(key.encode()).hexdigest()}
+
     def connect(self):
         db = sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=5)
         db.row_factory = sqlite3.Row
@@ -602,15 +647,12 @@ class Mailbox:
         if folder not in (None, 'all'):
             where.append('f.folder = ?'); params.append(folder)
         for word in words:
-            where.append("instr(fold(m.sender_mailbox_id || char(10) || coalesce(recipients, '') || char(10)"
-                         " || coalesce(m.subject, '') || char(10) || m.body), ?) > 0")
+            where.append(self.WORD_MATCH)
             params.append(word)
         body = f'substr(m.body, 1, {self.EXCERPT_SOURCE})' if excerpt else 'm.body'
         sql = f"""SELECT f.folder, m.message_id, m.thread_id, m.sequence, m.reply_to_message_id,
                          m.sender_mailbox_id, m.reply_to_address, m.subject, m.sent_at, {body} AS body,
-                         (SELECT group_concat(recipient_mailbox_id, ', ') FROM
-                            (SELECT recipient_mailbox_id FROM message_recipients r
-                              WHERE r.message_id = m.message_id ORDER BY recipient_mailbox_id)) AS recipients
+                         {self.RECIPIENTS} AS recipients
                     FROM ({self.STORED_FOLDERS}) f JOIN messages m USING (message_id)
                    {'WHERE ' + ' AND '.join(where) if where else ''}"""
         db = self.connect()
@@ -618,16 +660,57 @@ class Mailbox:
             rows = db.execute(sql, params).fetchall()
         finally:
             db.close()
-        found = {}
+        records = (self.stored_record(row, row['folder']) for row in rows)
+        return {record['key']: record for record in records}
+
+    PUBLIC_LIMIT = 500
+
+    def public_search(self, query):
+        """Public conversations Josh is not in, matched like his own search, one row each.
+
+        Threads he is in are left out: their copies are already in his folders, and a second,
+        read-only row for the same conversation would only confuse. An empty search lists
+        nothing, rather than the whole realm."""
+        words, people = parse_query(query)
+        if not self.sqlite() or not (words or people):
+            return []
+        sql = f"""SELECT m.message_id, m.thread_id, m.reply_to_message_id, m.sender_mailbox_id,
+                         m.reply_to_address, m.subject, m.sent_at,
+                         substr(m.body, 1, {self.EXCERPT_SOURCE}) AS body, {self.RECIPIENTS} AS recipients
+                    FROM messages m JOIN threads t ON t.thread_id = m.thread_id
+                   WHERE t.visibility = 'public' AND m.thread_id NOT IN ({self.JOSH_THREADS})
+                   {''.join(' AND ' + self.WORD_MATCH for _ in words)}
+                   ORDER BY m.sent_at DESC, m.message_id DESC LIMIT {self.PUBLIC_LIMIT}"""
+        db = self.connect()
+        try:
+            rows = db.execute(sql, words).fetchall()
+        finally:
+            db.close()
+        found = []
         for row in rows:
-            key = f'{row["folder"]}:{row["message_id"]}.md'
-            found[key] = {'id': row['message_id'], 'thread': row['thread_id'],
-                          'parent': row['reply_to_message_id'] or '', 'from': row['sender_mailbox_id'],
-                          'to': row['recipients'] or '', 'reply_to': row['reply_to_address'] or '',
-                          'subject': row['subject'] or '', 'date': stored_time(row['sent_at']),
-                          'body': row['body'], 'key': key, 'folder': row['folder'],
-                          'revision': hashlib.sha256(key.encode()).hexdigest()}
-        return found
+            record = self.stored_record(row, 'public')
+            participants = {address_key(a) for a in (record['from'] + ',' + record['to']).split(',') if a.strip()}
+            if all(p in participants for p in people):
+                found.append(record | {'excerpt': excerpt(record['body'])})
+        return conversations(found)
+
+    def public_thread(self, key):
+        match = PUBLIC_KEY.fullmatch(key) if isinstance(key, str) else None
+        if not match or not self.sqlite():
+            raise MailError('Invalid message key')
+        db = self.connect()
+        try:
+            rows = db.execute(
+                f"""SELECT m.*, {self.RECIPIENTS} AS recipients
+                      FROM messages m JOIN threads t ON t.thread_id = m.thread_id
+                     WHERE t.visibility = 'public'
+                       AND m.thread_id = (SELECT thread_id FROM messages WHERE message_id = ?)
+                     ORDER BY m.sequence""", (match.group(1),)).fetchall()
+        finally:
+            db.close()
+        if not rows:
+            raise MailError('No public conversation has this message', 404)
+        return [self.stored_record(row, 'public') for row in rows]
 
     def stored_counts(self):
         db = self.connect()
@@ -685,15 +768,7 @@ class Mailbox:
     def listing(self, folder, query):
         if folder not in (*FOLDERS, 'all'):
             raise MailError('Unknown folder')
-        words, people = [], []
-        for word in query.casefold().split():
-            if word.startswith('with:'):
-                address = word[5:]
-                if not re.fullmatch(r'@?\+?[A-Za-z0-9._-]+', address):
-                    raise MailError('Use with:@+agent-handle or with:@human for contact searches')
-                people.append(address_key(address))
-            else:
-                words.append(word)
+        words, people = parse_query(query)
         if self.sqlite():
             # Drafts are files in either store; stored mail arrives already matched to the words.
             messages, warnings = self.messages(drafts_only=True)
@@ -723,6 +798,8 @@ class Mailbox:
                 'counts': counts, 'warnings': warnings}
 
     def thread(self, key):
+        if isinstance(key, str) and key.startswith('public:'):
+            return self.public_thread(key)
         selected = self.message(key)
         messages, _ = self.messages(thread=selected['thread'])
         unique = {}
@@ -1326,6 +1403,10 @@ class Handler(BaseHTTPRequestHandler):
             # The client left mid-response: a reload, a closed tab, a phone losing signal. Both are
             # OSErrors, and the clause below would try to send a 503 down the same dead socket.
             return
+        except sqlite3.Error as e:
+            # Not an OSError, so it escaped as a traceback with no reply: the store marker can say
+            # sqlite a moment before the database exists, or the store can be locked past the timeout.
+            self.reply(503, {'error': 'The mail store is unavailable; retrying shortly: ' + str(e)})
         except (OSError, subprocess.TimeoutExpired) as e:
             self.reply(503, {'error': 'Local mail operation failed. Refresh before retrying: ' + str(e)})
 
@@ -1343,13 +1424,10 @@ class Handler(BaseHTTPRequestHandler):
             result = box.listing(args.get('folder', ['inbox'])[0], args.get('q', [''])[0])
             if args.get('group', [''])[0]:
                 result = dict(result, messages=conversations(result['messages']))
-            # The list polls every ten seconds. A stamp of the payload lets an unchanged poll
-            # answer in a few bytes, while mail responses still stay out of the browser cache.
-            stamp = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:16]
-            if args.get('version', [''])[0] == stamp:
-                result = {'unchanged': True, 'version': stamp}
-            else:
-                result = dict(result, version=stamp)
+            result = stamped(result, args)
+        elif route == '/api/search':
+            result = stamped({'available': box.sqlite(),
+                              'messages': box.public_search(args.get('q', [''])[0])}, args)
         elif route == '/api/thread':
             result = box.thread(key)
         elif route == '/api/draft':
@@ -1358,7 +1436,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/config':
             if args:
                 raise MailError('Configuration is not addressable')
-            result = {'realm': read_realm()}
+            result = {'realm': read_realm(), 'publicSearch': box.sqlite()}
         elif route == '/api/keywords':
             if args:
                 raise MailError('Keyword dictionary paths are configured locally, not through the API')

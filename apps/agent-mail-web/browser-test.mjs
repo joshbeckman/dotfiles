@@ -1821,6 +1821,40 @@ try {
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img')?.src.startsWith("data:image/svg+xml;charset=utf-8,"));
   assert.equal(assets.has("/composer-vendor.js"), true, "composing should fetch the deferred editor");
+
+  // Once the store is SQLite, a search can reach public conversations Josh is not in. They open
+  // read-only, and a private conversation never appears. Last, because the flip leaves the
+  // Maildir fixture behind.
+  await writeFile(join(tmp, "store"), "sqlite\n");
+  const publicRoot = cli("send", "--from", "alder-turner", "--to", "@+birch-weaver", "--subject", "Realm persimmon plan", "--body", "Anyone in the realm may read this.");
+  cli("send", "--from", "birch-weaver", "--to", "@+alder-turner", "--in-reply-to", publicRoot, "--subject", "Re: Realm persimmon plan", "--body", "Agreed, persimmon it is.");
+  cli("send", "--from", "alder-turner", "--to", "@+birch-weaver", "--private", "--subject", "Private persimmon", "--body", "Only for the two of us.");
+  await page.reload();
+  await page.locator("#search-scope").waitFor({ state: "visible" });
+  await page.locator("#search").fill("persimmon");
+  await page.locator("#search").press("Enter");
+  await page.getByRole("heading", { name: "Search results", exact: true }).waitFor();
+  assert.equal(await page.locator(".row").filter({ hasText: "Realm persimmon plan" }).count(), 0, "public threads stay out until asked for");
+  await page.locator("#search-public").check();
+  const publicRow = page.locator(".row").filter({ hasText: "Realm persimmon plan" });
+  await publicRow.waitFor();
+  assert.equal(await publicRow.locator(".chip-public").textContent(), "Public");
+  assert.equal(await page.locator(".row").filter({ hasText: "Private persimmon" }).count(), 0);
+  await publicRow.click();
+  await page.getByRole("heading", { name: "Re: Realm persimmon plan", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll("#thread details.message").length === 2);
+  assert.equal(await page.locator("#reader").evaluate((r) => r.classList.contains("read-only")), true);
+  assert.equal(await page.locator("#public-note").isVisible(), true);
+  assert.equal(await page.locator("#reply").isVisible(), false);
+  assert.equal(await page.locator('#thread button:has-text("Reply to this message")').count(), 0);
+  await page.keyboard.press("r");
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#editor").isVisible(), false, "r does nothing in a read-only conversation");
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-public-thread.png" });
+  await page.locator("#back").click();
+  await page.locator("#search-public").uncheck();
+  await page.waitForFunction(() => ![...document.querySelectorAll("#rows .row")].some((r) => r.textContent.includes("Realm persimmon plan")));
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(

@@ -361,29 +361,53 @@ function setNavOpen(open) {
 // The last stamped list for each folder and search, so switching folders draws at once and the
 // request only confirms it. The bridge answers an unchanged poll with the stamp alone.
 const listCache = new Map();
-const listCacheKey = () => folder + "\n" + $("search").value;
+// A search can reach public conversations Josh is not in, when the store offers it and he asks.
+const publicWanted = () =>
+  !$("search-scope").hidden && $("search-public").checked && $("search").value.trim() !== "";
+const listCacheKey = () => folder + "\n" + $("search").value + (publicWanted() ? "\npublic" : "");
 const FOLDER_NAMES = { inbox: "Inbox", archive: "Archive", sent: "Sent", drafts: "Drafts", all: "All mail" };
 const folderTitle = () => ($("search").value ? "Search results" : FOLDER_NAMES[folder] || folder);
+// Which cached list is on screen. Switching between two lists that are both cached, such as
+// turning public threads off, still has to draw the other one when its poll comes back unchanged.
+let shownListKey = "";
 async function refresh(quiet = false) {
   const generation = ++listGeneration;
   const cacheKey = listCacheKey();
   const cached = listCache.get(cacheKey);
+  const query = encodeURIComponent($("search").value);
+  const wantPublic = publicWanted();
   const result = await api(
-    "messages?group=1&folder=" +
-      folder +
-      "&q=" +
-      encodeURIComponent($("search").value) +
-      (cached ? "&version=" + cached.version : ""),
+    "messages?group=1&folder=" + folder + "&q=" + query + (cached ? "&version=" + cached.version : ""),
   );
+  // Public rows follow Josh's own, each half stamped on its own so either can stay unchanged.
+  const found = wantPublic
+    ? await api("search?q=" + query + (cached?.publicVersion ? "&version=" + cached.publicVersion : ""))
+    : null;
   if (generation !== listGeneration) return;
-  if (result.unchanged && cached) {
+  const listSame = Boolean(result.unchanged && cached);
+  const publicSame = !wantPublic || Boolean(found.unchanged && cached);
+  if (listSame && publicSame) {
+    if (shownListKey !== cacheKey) {
+      shownListKey = cacheKey;
+      applyList(cached);
+    }
     if (cached.warnings.length) status(cached.warnings.join("; "), true);
     else if (!quiet && $("status").classList.contains("error")) status("");
     return;
   }
-  listCache.set(cacheKey, result);
-  applyList(result);
-  if (result.warnings.length) status(result.warnings.join("; "), true);
+  const base = listSame ? cached.base : result;
+  const publicMessages = !wantPublic ? [] : publicSame ? cached.publicMessages : found.messages;
+  const entry = {
+    ...base,
+    base,
+    publicVersion: wantPublic ? (publicSame ? cached.publicVersion : found.version) : "",
+    publicMessages,
+    messages: [...base.messages, ...publicMessages],
+  };
+  listCache.set(cacheKey, entry);
+  shownListKey = cacheKey;
+  applyList(entry);
+  if (entry.warnings.length) status(entry.warnings.join("; "), true);
   else if (!quiet && $("status").classList.contains("error")) status("");
 }
 function applyList(result) {
@@ -580,7 +604,9 @@ function renderList() {
     const chip =
       m.folder === "drafts"
         ? '<span class="chip chip-draft">Draft</span>'
-        : showInbox && m.folder === "inbox"
+        : m.folder === "public"
+          ? '<span class="chip chip-public">Public</span>'
+          : showInbox && m.folder === "inbox"
           ? '<span class="chip chip-inbox">Inbox</span>'
           : "";
     row.innerHTML =
@@ -643,7 +669,10 @@ async function navigate(target, clearSearch = true, query = "") {
     selected = 0;
     const cached = listCache.get(listCacheKey());
     // Draw the folder from memory now; the request below only confirms or corrects it.
-    if (cached) applyList(cached);
+    if (cached) {
+      shownListKey = listCacheKey();
+      applyList(cached);
+    }
     else {
       items = [];
       $("folder-title").textContent = folderTitle();
@@ -685,6 +714,10 @@ async function openThread(m) {
       : m.key;
   current = { key, messages };
   $("thread-title").textContent = m.subject || "(no subject)";
+  // A public conversation Josh is not in is for reading: nothing in it is his to answer or file.
+  const readOnly = messages.length > 0 && messages.every((v) => v.folder === "public");
+  $("reader").classList.toggle("read-only", readOnly);
+  $("public-note").hidden = !readOnly;
   // A thread's id is the id of its root message, which is the reference for the whole
   // conversation rather than for one message in it.
   $("thread-id").textContent = messages[0]?.thread || messages[0]?.id || "";
@@ -828,11 +861,12 @@ function appendThreadMessage(message, open) {
   render();
   const actions = document.createElement("div");
   actions.className = "render-tools";
-  actions.append(
-    button("Reply to this message", () => newDraft("reply", message.key)),
-    button("Reply all", () => newDraft("reply-all", message.key)),
-    button("Copy id", () => copyId(message.id)),
-  );
+  if (message.folder !== "public")
+    actions.append(
+      button("Reply to this message", () => newDraft("reply", message.key)),
+      button("Reply all", () => newDraft("reply-all", message.key)),
+    );
+  actions.append(button("Copy id", () => copyId(message.id)));
   const identifier = document.createElement("code");
   identifier.className = "permalink";
   identifier.textContent = message.id;
@@ -1764,6 +1798,9 @@ $("back").onclick = () => {
 };
 $("archive").onclick = () => archiveThread().catch(error);
 $("reply").onclick = () => newDraft("reply").catch(error);
+$("search-public").onchange = () => {
+  if ($("search").value.trim()) navigate("all", false).catch(error);
+};
 $("reply-all").onclick = () => newDraft("reply-all").catch(error);
 $("save-draft").onclick = () => saveDraft().catch(error);
 $("close-draft").onclick = () => navigate("drafts").catch(error);
@@ -1884,7 +1921,7 @@ document.addEventListener("keydown", (e) => {
   } else if (key === "e" && ["mail-list", "reader"].includes(view)) {
     e.preventDefault();
     archiveThread().catch(error);
-  } else if ((key === "r" || key === "a") && view === "reader") {
+  } else if ((key === "r" || key === "a") && view === "reader" && !$("reader").classList.contains("read-only")) {
     e.preventDefault();
     newDraft(key === "r" ? "reply" : "reply-all").catch(error);
   } else if (view === "reader" && (key === "j" || key === "k")) {
@@ -1930,6 +1967,7 @@ refresh()
     // The realm distinguishes one machine's inbox from another; the bridge reads it locally.
     api("config")
       .then((config) => {
+        $("search-scope").hidden = !config.publicSearch;
         if (!config.realm) return;
         const realm = $("realm");
         realm.textContent = config.realm;

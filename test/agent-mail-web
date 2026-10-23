@@ -233,7 +233,7 @@ class WebTest(unittest.TestCase):
     def test_config_reports_the_realm_and_is_not_addressable(self):
         status, body = self.request('/api/config')
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {'realm': 'Testrealm'})
+        self.assertEqual(json.loads(body), {'realm': 'Testrealm', 'publicSearch': False})
         self.assertEqual(self.request('/api/config?x=1')[0], 400)
 
     def test_agent_avatar_is_distinct_from_same_named_human(self):
@@ -863,6 +863,11 @@ class WebTest(unittest.TestCase):
                      'x' * 179, 'x' * 181, ('word ' * 30 + '\t' * 40) * 20]:
             self.assertEqual(web.excerpt(body), re.sub(r'\s+', ' ', body)[:180], repr(body[:40]))
 
+    def test_public_search_is_offered_only_by_the_sqlite_store(self):
+        status, body = self.request('/api/search?q=needle')
+        self.assertEqual((status, json.loads(body)['available'], json.loads(body)['messages']), (200, False, []))
+        self.assertEqual(self.request('/api/thread?key=' + quote('public:' + self.id + '.md'))[0], 400)
+
     def test_a_waiting_window_hears_new_mail_without_holding_up_the_rest(self):
         self.assert_a_wait_hears_new_mail()
 
@@ -1428,6 +1433,42 @@ class SqliteWebTest(WebTest):
         self.assertEqual([m['id'] for m in self.box.thread(self.key)], [self.id, reply])
         self.assertEqual(self.box.message(self.key)['body'], '**Hello**\n\nA stored needle.\n')
         self.assertEqual(self.request('/api/thread?key=' + quote('archive:' + self.id + '.md'))[0], 404)
+
+    def test_a_search_can_reach_public_threads_josh_is_not_in(self):
+        public = web.cli('send', '--from', 'alder-turner', '--to', '@+birch-weaver',
+                         '--subject', 'Realm-wide persimmon plan', '--body', 'Anyone may read this.')
+        reply = web.cli('send', '--from', 'birch-weaver', '--to', '@+alder-turner', '--in-reply-to', public,
+                        '--subject', 'Re: Realm-wide persimmon plan', '--body', 'Agreed, persimmon it is.')
+        private = web.cli('send', '--from', 'alder-turner', '--to', '@+birch-weaver', '--private',
+                          '--subject', 'Private persimmon', '--body', 'Only for the two of us.')
+        web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--subject', 'Josh persimmon', '--body', 'His own.')
+        self.assertEqual(json.loads(self.request('/api/config')[1])['publicSearch'], True)
+        status, body = self.request('/api/search?q=' + quote('PERSIMMON'))
+        self.assertEqual(status, 200)
+        found = json.loads(body)
+        # One row for the public conversation, led by its newest message; not the private
+        # thread, and not Josh's own mail, which his folders already list.
+        self.assertEqual(found['available'], True)
+        self.assertEqual([(m['key'], m['count'], m['folder']) for m in found['messages']],
+                         [('public:' + reply + '.md', 2, 'public')])
+        self.assertEqual(json.loads(self.request('/api/search?q=&version=x')[1])['messages'], [])
+        self.assertEqual(json.loads(self.request('/api/search?q=' + quote('with:@+birch-weaver persimmon'))[1])['messages'][0]['thread'], public)
+        stamp = found['version']
+        self.assertEqual(json.loads(self.request('/api/search?q=persimmon&version=' + stamp)[1])['unchanged'], True)
+        # The conversation opens read-only, in its ledger order; a private one is not found.
+        status, body = self.request('/api/thread?key=' + quote('public:' + public + '.md'))
+        self.assertEqual((status, [m['id'] for m in json.loads(body)]), (200, [public, reply]))
+        self.assertEqual(self.request('/api/thread?key=' + quote('public:' + private + '.md'))[0], 404)
+        self.assertEqual(self.request('/api/draft', {'mode': 'reply', 'key': 'public:' + public + '.md'})[0], 400)
+
+    def test_a_store_that_cannot_be_opened_is_a_retryable_error(self):
+        # The marker can say sqlite a moment before the database exists.
+        self.box.database = self.root / 'not-yet.sqlite3'
+        with patch('sys.stderr', new_callable=io.StringIO) as stderr:
+            status, body = self.request('/api/messages?folder=inbox&q=')
+        self.assertEqual(status, 503)
+        self.assertIn('mail store is unavailable', json.loads(body)['error'])
+        self.assertNotIn('Traceback', stderr.getvalue())
 
     def test_a_waiting_window_hears_stored_mail(self):
         # agent-mail2 rings beside its database rather than through the Maildir.
