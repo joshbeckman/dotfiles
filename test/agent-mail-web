@@ -1470,6 +1470,28 @@ class SqliteWebTest(WebTest):
         self.assertIn('mail store is unavailable', json.loads(body)['error'])
         self.assertNotIn('Traceback', stderr.getvalue())
 
+    def test_a_stored_thread_is_in_ledger_order_with_read_receipts(self):
+        draft = self.box.save(dict(self.box.draft('reply-all', self.key), body='Who has read this?'))
+        status, body = self.request('/api/send', {'key': draft['key'], 'revision': draft['revision']})
+        self.assertEqual(status, 200, body)
+        sent_key = json.loads(body)['key']
+        sent_id = self.box.message(sent_key)['id']
+        web.cli('read', '--id', sent_id, '--to', 'alder-turner')
+        thread = json.loads(self.request('/api/thread?key=' + quote(self.key))[1])
+        self.assertEqual([m['id'] for m in thread], [self.id, sent_id])
+        self.assertEqual([m['sequence'] for m in thread], [1, 2])
+        # Receipts are on what Josh sent, one per recipient, with the time it was read.
+        self.assertNotIn('receipts', thread[0])
+        receipts = {r['to']: r for r in thread[1]['receipts']}
+        self.assertEqual(set(receipts), {'alder-turner-12345678', 'birch-weaver-87654321'})
+        self.assertEqual(receipts['alder-turner-12345678']['state'], 'read')
+        self.assertRegex(receipts['alder-turner-12345678']['at'], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{6})?Z$')
+        self.assertEqual((receipts['birch-weaver-87654321']['state'], receipts['birch-weaver-87654321']['at']), ('unread', ''))
+        # A listing keeps its shape: no ledger fields there.
+        row = self.box.listing('sent', '')['messages'][0]
+        self.assertNotIn('sequence', row)
+        self.assertNotIn('receipts', row)
+
     def test_a_waiting_window_hears_stored_mail(self):
         # agent-mail2 rings beside its database rather than through the Maildir.
         self.assert_a_wait_hears_new_mail()

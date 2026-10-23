@@ -859,6 +859,21 @@ details.message > summary time {
 details.message > .metadata {
   padding: 0.45rem 0.85rem 0;
 }
+details.message > .receipts {
+  margin: 0;
+  padding: 0.2rem 0.85rem 0;
+  font-size: 0.8rem;
+  color: var(--c-text-alt);
+}
+.receipt-read {
+  color: var(--c-green);
+}
+.msg-seq {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--c-text-alt);
+  font-variant-numeric: tabular-nums;
+}
 .metadata {
   font-size: 0.8rem;
   color: var(--c-text-alt);

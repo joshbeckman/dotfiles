@@ -710,7 +710,7 @@ class Mailbox:
             db.close()
         if not rows:
             raise MailError('No public conversation has this message', 404)
-        return [self.stored_record(row, 'public') for row in rows]
+        return [self.stored_record(row, 'public') | {'sequence': row['sequence']} for row in rows]
 
     def stored_counts(self):
         db = self.connect()
@@ -808,7 +808,43 @@ class Mailbox:
                 old = unique.get(m['id'])
                 if not old or m['folder'] == 'inbox':
                     unique[m['id']] = m
+        if self.sqlite():
+            return self.ledger(list(unique.values()))
         return sorted(unique.values(), key=lambda m: (m['date'], m['id']))
+
+    def ledger(self, messages):
+        """A stored thread in its ledger order, with each message's place in it, and on what Josh
+        sent, who has read it and when.
+
+        The sequence is the order the store accepted the messages, which dates only approximate:
+        two clocks, or two sends in one microsecond, can disagree with it. The Maildir never knew
+        either, so this is SQLite only."""
+        ids = [m['id'] for m in messages]
+        sent = [m['id'] for m in messages if m['folder'] == 'sent']
+        if not ids:
+            return messages
+        db = self.connect()
+        try:
+            sequence = dict(db.execute(
+                f"SELECT message_id, sequence FROM messages WHERE message_id IN ({','.join('?' * len(ids))})", ids))
+            receipts = {}
+            for row in (db.execute(
+                    f"""SELECT message_id, recipient_mailbox_id, read_at, discarded_at FROM deliveries
+                         WHERE message_id IN ({','.join('?' * len(sent))}) ORDER BY recipient_mailbox_id""",
+                    sent) if sent else ()):
+                state = 'discarded' if row['discarded_at'] is not None else 'read' if row['read_at'] is not None else 'unread'
+                at = row['discarded_at'] if state == 'discarded' else row['read_at']
+                receipts.setdefault(row['message_id'], []).append(
+                    {'to': row['recipient_mailbox_id'], 'state': state, 'at': stored_time(at) if at is not None else ''})
+        finally:
+            db.close()
+        placed = []
+        for m in messages:
+            m = dict(m, sequence=sequence.get(m['id']))
+            if m['folder'] == 'sent':
+                m['receipts'] = receipts.get(m['id'], [])
+            placed.append(m)
+        return sorted(placed, key=lambda m: (m['sequence'] is None, m['sequence'] or 0, m['date'], m['id']))
 
     def draft(self, mode, key=None):
         if mode not in ('compose', 'reply', 'reply-all'):

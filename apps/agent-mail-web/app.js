@@ -768,9 +768,13 @@ async function refreshThread() {
   const fresh = messages.filter((v) => !known.has(v.id));
   const keys = (list) => list.map((v) => v.key).join("\n");
   const moved = keys(open.messages) !== keys(messages.filter((v) => known.has(v.id)));
-  if (!fresh.length && !moved) return;
+  // Someone reading what Josh sent changes nothing else in the thread, so check receipts too.
+  const receipts = (list) => JSON.stringify(list.map((v) => v.receipts || null));
+  const read = receipts(open.messages) !== receipts(messages.filter((v) => known.has(v.id)));
+  if (!fresh.length && !moved && !read) return;
   if (fresh.length && !open.messages.length) $("thread").replaceChildren();
   for (const message of fresh) appendThreadMessage(message, true);
+  for (const message of messages) if (known.has(message.id)) showReceipts(message);
   current = { ...open, messages };
   threadSummary(messages);
   if (!fresh.length) return;
@@ -811,6 +815,30 @@ function snippetOf(body) {
     .trim()
     .slice(0, 160);
 }
+// Who has read what Josh sent, and when, under its header. The SQLite store keeps read times;
+// the Maildir never knew them, so its messages carry no receipts and show no line.
+function showReceipts(message, detail) {
+  detail ??= [...$("thread").children].find((d) => d.dataset.id === message.id);
+  if (!detail || !message.receipts) return;
+  const line = detail.querySelector(":scope > .receipts") || document.createElement("p");
+  line.className = "receipts";
+  line.replaceChildren(
+    ...message.receipts.flatMap((r, i) => {
+      const part = document.createElement("span");
+      part.className = "receipt receipt-" + r.state;
+      part.textContent =
+        r.state === "read"
+          ? `Read by ${r.to} ${date(r.at)}`
+          : r.state === "discarded"
+            ? `Discarded by ${r.to} ${date(r.at)}`
+            : `Not yet read by ${r.to}`;
+      if (r.at) part.title = fullFormat.format(new Date(r.at));
+      return i ? [" \u00b7 ", part] : [part];
+    }),
+  );
+  if (!message.receipts.length) line.textContent = "No recipients to read it";
+  if (!line.isConnected) detail.querySelector(":scope > .metadata").after(line);
+}
 function appendThreadMessage(message, open) {
   const detail = document.createElement("details");
   detail.className = "message";
@@ -828,11 +856,16 @@ function appendThreadMessage(message, open) {
     escape(to.join(", ") || "nobody") +
     '</span><span class="msg-snippet">' +
     escape(snippetOf(message.body)) +
-    "</span><time>" +
+    "</span>" +
+    (message.sequence
+      ? '<span class="msg-seq" title="Position in the conversation">#' + message.sequence + "</span>"
+      : "") +
+    "<time>" +
     escape(date(message.date)) +
     "</time>";
   describeTime(summary.querySelector("time"), message.date);
   summary.prepend(avatar(message.from));
+  detail.dataset.id = message.id;
   detail.append(summary);
   const metadata = document.createElement("p");
   metadata.className = "metadata";
@@ -843,6 +876,7 @@ function appendThreadMessage(message, open) {
   // One line, with the whole of it on hover: the parent id is for passing around, not reading.
   metadata.title = metadata.textContent;
   detail.append(metadata);
+  showReceipts(message, detail);
   const content = document.createElement("div");
   detail.append(content);
   $("thread").append(detail);
