@@ -86,6 +86,17 @@ Run any script with `--help` or read the source — they're short.
 - **No secrets in version control.** Credentials, tokens, and API keys live in the encrypted store managed by [`s`](https://github.com/tobi/s) (`s set NAME`, injected per-invocation with `s NAME -- cmd`), never in committed files or globally sourced env files.
 - **Conventional Commits.** Commit messages follow the `type(scope): description` format (e.g. `feat(zshrc):`, `fix(nvim):`).
 
+## Technology choices
+
+For software in this repo, use the simplest existing tool that fits. When choosing a new one, favor:
+
+- **Git** for history and records over time; **SQLite or PostgreSQL** for canonical data storage.
+- **Bash** for local scripts; **Rust** for fast programs; **Ruby** for expressive programs.
+- **JSON** for static configuration and **JSONL** for streams and logs; **HTML, CSS, and JavaScript** for interfaces and applications.
+- **Events, event loops, and message passing** for concurrent work, such as actor inboxes, pipelines, and channels.
+
+Weigh designs against the [Principles of Good Systems](https://www.joshbeckman.org/notes/principles-of-system): safety, liveness, observability, controllability, composability, and scalability.
+
 ## Work and private content
 
 This repo is **public** and used on both personal and work (Shopify) machines. Internal tooling on the work machine writes proprietary content into tracked files — e.g. `/opt/dev/...` scripts add proxy URLs and an `apiKeyHelper` to `.claude/settings.json`; setup scripts drop a Shopify email, signing key, and internal paths into `.gitconfig`. These lines reappear after they're removed, so every commit needs a manual pass.
