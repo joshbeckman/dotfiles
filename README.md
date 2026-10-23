@@ -55,9 +55,9 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Background jobs
 
-- **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh, the Agent Mail web bridge ([details](apps/agent-mail-web/README.md#installed-app-and-notifications)), and `panad`, the pana daemon
+- **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh, the Agent Mail web bridge ([details](apps/agent-mail-web/README.md#installed-app-and-notifications)), `panad`, the pana daemon, and the hourly Agent Mail drift alarm (`bin/agent-mail-verify`; load it once with `launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.agent-mail-verify.plist`, as the Linux timer is enabled by `setup`)
 
-- **`.config/systemd/user/`** — the two-hour refresh as a user timer and `panad.service` as a service, both linked and enabled by `setup` on Linux
+- **`.config/systemd/user/`** — the two-hour refresh and the hourly Agent Mail drift alarm as user timers, and `panad.service` as a service, all linked and enabled by `setup` on Linux
 
 `bin/panad-service` is the one entry point both units run. It rebuilds `PATH` from the login shell, then injects the provider credentials with `s`. A service job has no TTY, so `s KEY -- panad` alone would fail with `reading password from TTY`; the wrapper points `S_KEY_COMMAND` at the login Keychain instead, and no secret is written to a tracked file. Load the macOS job once after the first install:
 
