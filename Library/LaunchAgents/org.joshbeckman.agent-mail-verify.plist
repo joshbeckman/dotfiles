@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.joshbeckman.agent-mail-verify</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/joshbeckman/dotfiles/bin/agent-mail-verify</string>
+	</array>
+	<!-- Hourly, as the Linux timer runs it. An interval rather than calendar times:
+	     launchd skips runs missed while asleep and never overlaps the job with itself. -->
+	<key>StartInterval</key>
+	<integer>3600</integer>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- launchd's own PATH is /usr/bin:/bin:/usr/sbin:/sbin, and the script shells
+		     out to agent-mail and agent-mail-migrate. -->
+		<key>PATH</key>
+		<string>/Users/joshbeckman/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/Users/joshbeckman/Library/Logs/agent-mail-verify.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/joshbeckman/Library/Logs/agent-mail-verify.log</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>

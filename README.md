@@ -55,7 +55,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Background jobs
 
-- **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh and the Agent Mail web bridge ([details](apps/agent-mail-web/README.md#installed-app-and-notifications))
+- **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh, the Agent Mail web bridge ([details](apps/agent-mail-web/README.md#installed-app-and-notifications)), and the hourly Agent Mail drift alarm (`bin/agent-mail-verify`; load it once with `launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.agent-mail-verify.plist`, as the Linux timer is enabled by `setup`)
 
 - **`.config/systemd/user/`** — the same two-hour refresh on Linux, as a user timer that `setup` enables
 
