@@ -46,7 +46,7 @@ class WebTest(unittest.TestCase):
         self.box = web.Mailbox()
         self.id = web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--to', '@+birch-weaver', '--subject', 'A test thread', '--body', '**Hello**\n\nA searchable needle.\n')
         self.key = 'inbox:' + self.id + '.md'
-        self.server = web.HTTPServer(('127.0.0.1', 0), web.Handler)
+        self.server = web.Server(('127.0.0.1', 0), web.Handler)
         self.server.box = self.box
         self.server.token = 'fixture-token'
         self.server.authority = '127.0.0.1:' + str(self.server.server_port)
@@ -500,7 +500,7 @@ class WebTest(unittest.TestCase):
 
     def test_launch_port_defaults_and_override(self):
         for flags, port in (([], 8765), (['--port', '0'], 0), (['--port', '8799'], 8799)):
-            with self.subTest(port=port), patch.object(sys, 'argv', ['agent-mail-web', '--no-open', *flags]), patch.object(web, 'HTTPServer') as factory, patch('sys.stdout', new_callable=io.StringIO):
+            with self.subTest(port=port), patch.object(sys, 'argv', ['agent-mail-web', '--no-open', *flags]), patch.object(web, 'Server') as factory, patch('sys.stdout', new_callable=io.StringIO):
                 factory.return_value.server_port = port or 12345
                 factory.return_value.serve_forever.side_effect = KeyboardInterrupt
                 web.main()
@@ -720,7 +720,7 @@ class WebTest(unittest.TestCase):
 
     def test_two_bridges_cannot_send_one_draft_twice(self):
         draft = self.box.save(dict(self.box.draft('compose'), to='alder-turner', body='Exactly once'))
-        other = web.HTTPServer(('127.0.0.1', 0), web.Handler)
+        other = web.Server(('127.0.0.1', 0), web.Handler)
         other.box = web.Mailbox()
         other.token = 'fixture-token'
         other.authority = '127.0.0.1:' + str(other.server_port)
@@ -856,6 +856,41 @@ class WebTest(unittest.TestCase):
         fresh = json.loads(self.request('/api/messages?folder=inbox&q=&group=1&version=' + version)[1])
         self.assertNotEqual(fresh['version'], version)
         self.assertEqual(len(fresh['messages']), 2)
+
+    def test_a_waiting_window_hears_new_mail_without_holding_up_the_rest(self):
+        self.assert_a_wait_hears_new_mail()
+
+    def assert_a_wait_hears_new_mail(self):
+        import time
+        status, body = self.request('/api/wait?since=&timeout=0')
+        self.assertEqual(status, 200)
+        stamp = json.loads(body)['doorbell']
+        # Nothing rang: the wait runs out its timeout and reports no change.
+        started = time.monotonic()
+        quiet = json.loads(self.request('/api/wait?since=' + quote(stamp) + '&timeout=0.3')[1])
+        self.assertEqual(quiet, {'doorbell': stamp, 'changed': False})
+        self.assertGreaterEqual(time.monotonic() - started, 0.25)
+        # A long wait answers as soon as a delivery rings, and other requests are served meanwhile.
+        heard = {}
+        waiter = threading.Thread(target=lambda: heard.update(
+            zip(('status', 'body'), self.request('/api/wait?since=' + quote(stamp) + '&timeout=20'))))
+        waiter.start()
+        time.sleep(0.3)
+        started = time.monotonic()
+        self.assertEqual(self.request('/api/config')[0], 200)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(waiter.is_alive())
+        started = time.monotonic()
+        web.cli('send', '--from', 'alder-turner', '--to', '@josh', '--subject', 'Ring', '--body', 'Ding.')
+        waiter.join(10)
+        self.assertFalse(waiter.is_alive())
+        self.assertLess(time.monotonic() - started, 5)
+        rang = json.loads(heard['body'])
+        self.assertEqual((heard['status'], rang['changed']), (200, True))
+        self.assertNotEqual(rang['doorbell'], stamp)
+        # It needs the token like any other read, and a bad timeout is a bad request.
+        self.assertEqual(self.request('/api/wait?since=&timeout=0', **{'X-Agent-Mail-Token': 'wrong'})[0], 403)
+        self.assertEqual(self.request('/api/wait?since=&timeout=soon')[0], 400)
 
     def test_a_client_that_hangs_up_is_not_an_error(self):
         import socket, struct, time
@@ -1365,6 +1400,10 @@ class SqliteWebTest(WebTest):
                         '\nSubject: Routed\n\nRoute replies elsewhere.')
         sent = self.box.message('sent:' + self.box.send_draft(path) + '.md')
         self.assertEqual((sent['reply_to'], sent['thread']), ('alder-turner-12345678', self.id))
+
+    def test_a_waiting_window_hears_stored_mail(self):
+        # agent-mail2 rings beside its database rather than through the Maildir.
+        self.assert_a_wait_hears_new_mail()
 
     def test_the_bridge_follows_a_flip_without_restarting(self):
         (self.root / 'store').write_text('both\n')

@@ -1671,6 +1671,22 @@ try {
   assert.equal((await readdir(join(humans, "josh/inbox/new"))).length, 0);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-split-empty.png" });
+  // A delivery rings Josh's doorbell, and the waiting app draws it well inside the ten-second
+  // poll, without anything here asking it to refresh.
+  const rungAt = Date.now();
+  const ring = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === "/api/wait" && !r.url().includes("timeout=0"),
+    { timeout: 6000 },
+  );
+  cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Rung in", "--body", "Heard at once.");
+  assert.equal((await (await ring).json()).changed, true, "the wait should answer because of the ring");
+  await page.locator(".row").filter({ hasText: "Rung in" }).waitFor({ timeout: 3000 });
+  assert(Date.now() - rungAt < 6000);
+  await page.locator(".row").filter({ hasText: "Rung in" }).click();
+  await page.getByRole("heading", { name: "Rung in", exact: true }).waitFor();
+  await page.keyboard.press("e");
+  await page.getByText("No messages here.", { exact: true }).waitFor();
+  await page.waitForFunction(() => !busy);
   await page.setViewportSize({ width: 1200, height: 850 });
 
   // Installed app: the token must survive a launch at "/" without the fragment,

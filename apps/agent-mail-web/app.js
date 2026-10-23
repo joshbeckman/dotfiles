@@ -1940,17 +1940,48 @@ refresh()
     // Badges are decoration: a failed team lookup leaves plain avatars.
     loadTeamBadges().catch(() => {});
     checkNewMail().catch(() => {});
+    listenForMail();
   });
 setInterval(() => loadTeamBadges().catch(() => {}), 300000);
+let lastRefresh = 0;
 function refreshVisible() {
   // Not while an archive or send is in flight: a poll landing between its requests would draw
   // the half-moved conversation back into the list for a moment.
   if (document.hidden || busy) return;
+  lastRefresh = Date.now();
   if (!$("mail-list").hidden) refresh(true).catch(error);
   // The thread stays visible beside an inline reply draft, and beside the list when split.
   if (current && !$("reader").hidden) refreshThread().catch(error);
 }
-setInterval(refreshVisible, 10000);
+// New mail arrives through the bridge's wait: a request that answers when a delivery rings
+// Josh's doorbell. The interval stays as a backstop, slowed to a minute while the wait is
+// healthy, because a ring is only a hint and a sender can die before ringing.
+let doorbellHealthy = false;
+async function listenForMail() {
+  let stamp = null;
+  for (;;) {
+    try {
+      const result = await api(
+        "wait?since=" + encodeURIComponent(stamp ?? "") + (stamp === null ? "&timeout=0" : ""),
+      );
+      doorbellHealthy = true;
+      const rang = stamp !== null && result.changed;
+      stamp = result.doorbell;
+      if (rang) {
+        refreshVisible();
+        checkNewMail().catch(() => {});
+      }
+    } catch (e) {
+      doorbellHealthy = false;
+      // A bridge from before the wait route; the interval alone keeps the app current.
+      if (e.status === 404) return;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+}
+setInterval(() => {
+  if (!doorbellHealthy || Date.now() - lastRefresh >= 60000) refreshVisible();
+}, 10000);
 // A hidden page is the normal state on a phone, and the interval above does nothing
 // while hidden, so returning to the app would otherwise show mail up to a full interval
 // old. The transcript view already refreshes on becoming visible; this is the same rule.
@@ -1989,7 +2020,14 @@ function notifyState() {
   const b = $("notify-button");
   b.hidden = !("Notification" in window) || Notification.permission !== "default";
 }
-async function checkNewMail() {
+// One check at a time: a ring and the interval can both ask, and two checks reading the same
+// seenInbox would announce the same message twice.
+let mailCheck = Promise.resolve();
+function checkNewMail() {
+  mailCheck = mailCheck.catch(() => {}).then(checkInbox);
+  return mailCheck;
+}
+async function checkInbox() {
   const allowed =
     typeof Notification !== "undefined" && Notification.permission === "granted";
   // Tells the bridge this window will notify, so terminal banners stand down. The heartbeat is

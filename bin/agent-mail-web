@@ -13,13 +13,16 @@ import os
 from pathlib import Path
 import re
 import secrets
+import select
+import socket
 import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 import urllib.request
 import webbrowser
@@ -521,6 +524,22 @@ class Mailbox:
         if path.is_symlink() or not path.is_file():
             raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
         return path
+
+    def doorbell(self):
+        """Josh's doorbell as a stamp that changes on every ring.
+
+        Each delivery replaces doorbells/josh by rename, so the inode changes even when two rings
+        land in one mtime tick. agent-mail rings beside the state root and agent-mail2 beside its
+        database; those are one directory unless AGENT_MAIL2_DB moves the database, so both count.
+        """
+        stamps = []
+        for root in dict.fromkeys((self.state, self.database.parent)):
+            try:
+                info = (root / 'doorbells' / 'josh').stat()
+            except OSError:
+                continue
+            stamps.append(f'{info.st_mtime_ns}-{info.st_ino}')
+        return '/'.join(stamps)
 
     def sqlite(self):
         """Read on every request, so the bridge follows a flip without a restart."""
@@ -1067,6 +1086,22 @@ def image_type(raw):
     return None
 
 
+class Server(ThreadingHTTPServer):
+    """Threaded only so that a client can wait for new mail without holding up the rest.
+
+    Every other request still runs one at a time under the lock: the mailbox, its message cache
+    and the draft files were written for a single thread, and a quick request does not need more.
+    """
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lock = threading.Lock()
+
+
+WAIT_POLL = 0.25
+WAIT_LIMIT = 25
+
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
@@ -1137,6 +1172,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_request(self):
+        if urlsplit(self.path).path == '/api/wait':
+            return self.handle_checked_request()
+        with self.server.lock:
+            return self.handle_checked_request()
+
+    def handle_checked_request(self):
         try:
             # Loopback plus any tailnet name this machine answers to, so Tailscale Serve
             # can proxy to it without the bridge binding anywhere but 127.0.0.1.
@@ -1216,7 +1257,9 @@ class Handler(BaseHTTPRequestHandler):
     def get(self, route, args):
         box = self.server.box
         key = args.get('key', [''])[0]
-        if route == '/api/messages':
+        if route == '/api/wait':
+            result = self.wait_for_mail(args)
+        elif route == '/api/messages':
             if self.headers.get('X-Agent-Mail-Notifier') == '1':
                 # agent-mail reads this mtime to skip its duplicate desktop banner.
                 fd = os.open(box.home / '.web-notifier', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -1282,6 +1325,26 @@ class Handler(BaseHTTPRequestHandler):
         else:
             raise MailError('Unknown endpoint', 404)
         self.reply(200, result)
+
+    def wait_for_mail(self, args):
+        """Answer as soon as Josh's doorbell rings, or after `timeout` seconds with no change.
+
+        A ring is only a hint, since a sender can die between delivery and ringing, so the app
+        keeps a slow poll as well. This runs outside the request lock and touches nothing but
+        the doorbell, so a waiting window never holds up the rest of the app.
+        """
+        since = args.get('since', [''])[0]
+        timeout = min(WAIT_LIMIT, max(0.0, float(args.get('timeout', [str(WAIT_LIMIT)])[0])))
+        deadline = time.monotonic() + timeout
+        while True:
+            stamp = self.server.box.doorbell()
+            if stamp != since or time.monotonic() >= deadline:
+                return {'doorbell': stamp, 'changed': stamp != since}
+            # Waiting on the socket rather than sleeping notices a closed tab at once, instead of
+            # keeping a thread for the rest of the timeout.
+            readable, _, _ = select.select([self.connection], [], [], WAIT_POLL)
+            if readable and not self.connection.recv(1, socket.MSG_PEEK):
+                raise ConnectionResetError('client closed the wait')
 
     def post(self, route, data):
         box = self.server.box
@@ -1384,7 +1447,7 @@ def main():
     box = Mailbox()
     token = load_token(box.home)
     try:
-        server = HTTPServer(('127.0.0.1', args.port), Handler)
+        server = Server(('127.0.0.1', args.port), Handler)
     except OSError as error:
         # A background bridge (see its LaunchAgent) shares the same token file.
         if args.port and existing_bridge(f'127.0.0.1:{args.port}'):
