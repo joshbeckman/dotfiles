@@ -1084,6 +1084,47 @@ class WebTest(unittest.TestCase):
                 self.assertEqual(len(keys), len(set(keys)), keys)
                 self.assertNotIn('CONTROL_ID', [entry.get('modelId') for entry in entries])
 
+    def test_agent_run_recognizes_nested_tool_records(self):
+        # Real shapes from the arun fixtures. A nested intent is not an ordinary tool call: a
+        # metadata discovery action differs from a remote call, and backend mail with action
+        # progress is nonterminal, so only a final reply_sent means the job answered. Each record
+        # gets one entry keyed by its own offset, and the private paths are shown as references
+        # rather than read.
+        parent = 'call_scripted_1'
+        private = '/home/josh/.local/state/agent/scratchpads/peziza-wheelwright-of-beacon-01a13adf/private'
+        records = [
+            {'type': 'tool_intent', 'at_ms': 1000, 'id': parent, 'name': 'bash', 'arguments': {'command': 'x'}},
+            {'type': 'nested_tool_intent', 'at_ms': 1100, 'id': '1792638990717-4085418-11', 'parent': parent,
+             'job': '1792638990655-4085418-0', 'backend': 'mcp', 'action': 'refresh', 'name': 'fixture',
+             'arguments': private + '/args.json'},
+            {'type': 'nested_tool_result', 'at_ms': 1200, 'id': '1792638990717-4085418-11', 'parent': parent,
+             'output': private + '/result.json', 'is_error': False, 'unknown': False,
+             'images': [{'path': private + '/shot.png', 'mime': 'image/png'}]},
+            {'type': 'nested_tool_resolved', 'at_ms': 1300, 'id': '1792639093959-4096437-16',
+             'result': 'Progress delivery verified by operator receipt: 01M5GSVK9QZT'},
+            {'type': 'tool_result', 'at_ms': 1400, 'id': parent, 'content': 'ok', 'is_error': False},
+        ]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        kinds = [entry['type'] for entry in entries]
+        for expected in ('nested_tool_intent', 'nested_tool_result', 'nested_tool_resolved'):
+            self.assertIn(expected, kinds)
+        # One entry per source record, and no two share a key.
+        self.assertEqual(len(entries), 5)
+        keys = [item['key'] for item in data['entries']]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+        # The result keeps its output and its images on the same entry rather than splitting them.
+        result = next(entry for entry in entries if entry['type'] == 'nested_tool_result')
+        self.assertEqual(result['output'], private + '/result.json')
+        self.assertEqual(result['images'][0]['path'], private + '/shot.png')
+        # The bridge does not start serving the private paths a record names. The attachment route
+        # refuses a name that is not a 32-hex image, so it answers 400 rather than 404; either way
+        # it refuses, which is the property under test.
+        self.assertIn(self.request('/api/attachment?name=args.json')[0], (400, 404))
+        self.assertEqual(self.request('/private/args.json')[0], 404)
+
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
         status, body = self.request('/api/transcript?thread=' + thread)

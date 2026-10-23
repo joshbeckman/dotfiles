@@ -44,7 +44,8 @@ AGENT_RUN_RECORD_TYPES = frozenset(('init', 'user', 'assistant_start', 'delta', 
                                     'tool_intent', 'tool_result', 'checkpoint', 'retry', 'settled',
                                     'reply_sending', 'reply_sent',
                                     'runtime_context', 'image_export', 'reply_skipped',
-                                    'model_request', 'model_changed', 'model_change_rejected'))
+                                    'model_request', 'model_changed', 'model_change_rejected',
+                                    'nested_tool_intent', 'nested_tool_result', 'nested_tool_resolved'))
 # Provider signatures are opaque blobs a provider needs to resume its own reasoning, not answer
 # text and not something a reader can use. They are hidden rather than projected, and hidden rather
 # than counted as unreadable, so a turn reads as uninterrupted prose.
