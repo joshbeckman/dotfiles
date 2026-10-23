@@ -1671,6 +1671,22 @@ try {
   assert.equal((await readdir(join(humans, "josh/inbox/new"))).length, 0);
   if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
     await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-split-empty.png" });
+  // A delivery rings Josh's doorbell, and the waiting app draws it well inside the ten-second
+  // poll, without anything here asking it to refresh.
+  const rungAt = Date.now();
+  const ring = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === "/api/wait" && !r.url().includes("timeout=0"),
+    { timeout: 6000 },
+  );
+  cli("send", "--from", "alder-turner", "--to", "@josh", "--subject", "Rung in", "--body", "Heard at once.");
+  assert.equal((await (await ring).json()).changed, true, "the wait should answer because of the ring");
+  await page.locator(".row").filter({ hasText: "Rung in" }).waitFor({ timeout: 3000 });
+  assert(Date.now() - rungAt < 6000);
+  await page.locator(".row").filter({ hasText: "Rung in" }).click();
+  await page.getByRole("heading", { name: "Rung in", exact: true }).waitFor();
+  await page.keyboard.press("e");
+  await page.getByText("No messages here.", { exact: true }).waitFor();
+  await page.waitForFunction(() => !busy);
   await page.setViewportSize({ width: 1200, height: 850 });
 
   // Installed app: the token must survive a launch at "/" without the fragment,
@@ -1805,10 +1821,67 @@ try {
   await page.reload();
   await page.waitForFunction(() => document.querySelector('.sender .avatar-wrap[data-key="agent:alder-turner"] img')?.src.startsWith("data:image/svg+xml;charset=utf-8,"));
   assert.equal(assets.has("/composer-vendor.js"), true, "composing should fetch the deferred editor");
+
+  // Once the store is SQLite, a search can reach public conversations Josh is not in. They open
+  // read-only, and a private conversation never appears. Last, because the flip leaves the
+  // Maildir fixture behind.
+  await writeFile(join(tmp, "store"), "sqlite\n");
+  const publicRoot = cli("send", "--from", "alder-turner", "--to", "@+birch-weaver", "--subject", "Realm persimmon plan", "--body", "Anyone in the realm may read this.");
+  cli("send", "--from", "birch-weaver", "--to", "@+alder-turner", "--in-reply-to", publicRoot, "--subject", "Re: Realm persimmon plan", "--body", "Agreed, persimmon it is.");
+  cli("send", "--from", "alder-turner", "--to", "@+birch-weaver", "--private", "--subject", "Private persimmon", "--body", "Only for the two of us.");
+  await page.reload();
+  await page.locator("#search-scope").waitFor({ state: "visible" });
+  await page.locator("#search").fill("persimmon");
+  await page.locator("#search").press("Enter");
+  await page.getByRole("heading", { name: "Search results", exact: true }).waitFor();
+  assert.equal(await page.locator(".row").filter({ hasText: "Realm persimmon plan" }).count(), 0, "public threads stay out until asked for");
+  await page.locator("#search-public").check();
+  const publicRow = page.locator(".row").filter({ hasText: "Realm persimmon plan" });
+  await publicRow.waitFor();
+  assert.equal(await publicRow.locator(".chip-public").textContent(), "Public");
+  assert.equal(await page.locator(".row").filter({ hasText: "Private persimmon" }).count(), 0);
+  await publicRow.click();
+  await page.getByRole("heading", { name: "Re: Realm persimmon plan", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll("#thread details.message").length === 2);
+  assert.equal(await page.locator("#reader").evaluate((r) => r.classList.contains("read-only")), true);
+  assert.equal(await page.locator("#public-note").isVisible(), true);
+  assert.equal(await page.locator("#reply").isVisible(), false);
+  assert.equal(await page.locator('#thread button:has-text("Reply to this message")').count(), 0);
+  await page.keyboard.press("r");
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#editor").isVisible(), false, "r does nothing in a read-only conversation");
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-public-thread.png" });
+  await page.locator("#back").click();
+  await page.locator("#search-public").uncheck();
+  await page.waitForFunction(() => ![...document.querySelectorAll("#rows .row")].some((r) => r.textContent.includes("Realm persimmon plan")));
+
+  // What Josh sends shows who has read it, and the line updates when they do.
+  await page.locator("#search").fill("");
+  await page.locator("#compose").click();
+  await page.locator("#editor").waitFor({ state: "visible" });
+  await page.locator("#to").fill("@+alder-turner, @+birch-weaver");
+  await page.locator("#subject").fill("Receipt check");
+  await page.locator("#body").fill("Tell me when you have read this.");
+  await page.locator("#body").press("Control+Enter");
+  await page.getByRole("heading", { name: "Sent", exact: true }).waitFor();
+  await page.locator(".row").filter({ hasText: "Receipt check" }).click();
+  await page.getByRole("heading", { name: "Receipt check", exact: true }).waitFor();
+  const receipts = page.locator("#thread details.message .receipts");
+  await receipts.waitFor();
+  assert.match(await receipts.textContent(), /Not yet read by alder-turner-12345678/);
+  assert.equal(await page.locator("#thread .msg-seq").first().textContent(), "#1");
+  cli("read", "--id", (await page.locator("#thread-id").textContent()).trim(), "--to", "alder-turner");
+  await page.evaluate(() => refreshThread());
+  await page.waitForFunction(() => /Read by alder-turner-12345678/.test(document.querySelector("#thread .receipts")?.textContent || ""));
+  assert.match(await receipts.textContent(), /Not yet read by birch-weaver-87654321/);
+  assert.equal(await page.locator("#thread details.message").count(), 1, "a receipt changes no messages");
+  if (process.env.AGENT_MAIL_TEST_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENT_MAIL_TEST_SCREENSHOT + "-receipts.png" });
   assert.deepEqual(remote, []);
   assert.deepEqual(errors, []);
   console.log(
-    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, local keyword completion, installable app token/worker/notifications, split list and reader, Back staying in the app, grouped and stamped list polls, folders drawn from memory, hover prefetch, archive before confirmation, light/dark and mobile.",
+    "Browser tests passed: stable reader sizing at fractional zoom, scratchpad SVG avatars with alias/update/unsafe/missing fallback, local avatars/favicon/team badges, read without archive, Mermaid labels, inert hostile HTML, blocked remote images, reply-all, direct sending and repeat guard, attachments, Sent/thread, archive/search, contacts/participant cards, relative recent dates with exact-time metadata, live registered-session transcript updates with inert content and preserved disclosures, inline reply context and navigation, live thread replies, draft save/delete races and reload, shortcuts, local keyword completion, installable app token/worker/notifications, split list and reader, Back staying in the app, grouped and stamped list polls, folders drawn from memory, hover prefetch, archive before confirmation, doorbell push, public-thread search, read receipts, light/dark and mobile.",
   );
 } finally {
   await browser?.close();

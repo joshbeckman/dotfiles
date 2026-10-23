@@ -47,6 +47,7 @@
     --c-selected: #1b2c4d;
     --c-accent-soft: #152a4d;
     --c-red: #ff8a8f;
+    --c-green: #4caf82;
   }
 }
 * {
@@ -667,6 +668,32 @@ button[aria-current="page"] {
 .chip-inbox {
   color: var(--c-link);
 }
+.chip-public {
+  color: var(--c-green);
+}
+/* The search label above is visually hidden; this one is a control and stays on screen. */
+#search-form .search-scope {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+}
+.search-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--c-text-alt);
+  white-space: nowrap;
+  cursor: pointer;
+}
+#reader.read-only #archive,
+#reader.read-only #reply,
+#reader.read-only #reply-all {
+  display: none;
+}
 .rows-empty {
   margin: 0;
   padding: 2.5rem 1rem;
@@ -831,6 +858,21 @@ details.message > summary time {
 }
 details.message > .metadata {
   padding: 0.45rem 0.85rem 0;
+}
+details.message > .receipts {
+  margin: 0;
+  padding: 0.2rem 0.85rem 0;
+  font-size: 0.8rem;
+  color: var(--c-text-alt);
+}
+.receipt-read {
+  color: var(--c-green);
+}
+.msg-seq {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--c-text-alt);
+  font-variant-numeric: tabular-nums;
 }
 .metadata {
   font-size: 0.8rem;

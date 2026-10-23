@@ -13,13 +13,16 @@ import os
 from pathlib import Path
 import re
 import secrets
+import select
+import socket
 import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 import urllib.request
 import webbrowser
@@ -273,6 +276,8 @@ FOLDERS = {'inbox': 'inbox/new', 'archive': 'inbox/cur', 'sent': 'sent', 'drafts
 # Byte for byte the marker grammar bin/agent-mail checks.
 STORE_MARKER = re.compile(rb'(maildir|both|sqlite)\n*')
 MESSAGE_KEY = re.compile(r'(inbox|archive|sent|drafts):([A-Za-z0-9_.@+\-]+\.md)')
+# A public conversation Josh is not in: readable, never his to archive or answer from here.
+PUBLIC_KEY = re.compile(r'public:([A-Za-z0-9_.@+\-]+)\.md')
 
 
 class MailError(Exception):
@@ -388,6 +393,49 @@ def parse_mail(path):
             'to': fields.get('to', ''), 'subject': fields.get('subject', ''),
             'date': fields.get('date', ''), 'body': body,
             'revision': hashlib.sha256(raw).hexdigest()}
+
+
+def excerpt(body, length=180):
+    """The first characters of a body with each run of whitespace collapsed to one space.
+
+    Collapsing a prefix gives a prefix of the collapsed whole, since a run cut short at the end
+    still becomes one space, so a short prefix answers exactly once it yields enough characters.
+    Collapsing every whole body cost most of an All mail listing.
+    """
+    size = 2 * length
+    while True:
+        part = body[:size]
+        # split() and the regex \s agree on what whitespace is; split is several times faster,
+        # and the edges put back the single space a leading or trailing run collapses to.
+        words = part.split()
+        lead = ((' ' if part[:1].isspace() else '') + ' '.join(words) +
+                (' ' if words and part[-1:].isspace() else ''))
+        if len(lead) >= length or size >= len(body):
+            return lead[:length]
+        size *= 2
+
+
+def stamped(result, args):
+    """A stamp of the payload, so a poll that sends it back as version= answers in a few bytes
+    when nothing changed, while mail responses still stay out of the browser cache."""
+    stamp = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:16]
+    if args.get('version', [''])[0] == stamp:
+        return {'unchanged': True, 'version': stamp}
+    return dict(result, version=stamp)
+
+
+def parse_query(query):
+    """Search words, and the contacts named with with:, case-folded."""
+    words, people = [], []
+    for word in query.casefold().split():
+        if word.startswith('with:'):
+            address = word[5:]
+            if not re.fullmatch(r'@?\+?[A-Za-z0-9._-]+', address):
+                raise MailError('Use with:@+agent-handle or with:@human for contact searches')
+            people.append(address_key(address))
+        else:
+            words.append(word)
+    return words, people
 
 
 def stored_time(value):
@@ -522,6 +570,22 @@ class Mailbox:
             raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
         return path
 
+    def doorbell(self):
+        """Josh's doorbell as a stamp that changes on every ring.
+
+        Each delivery replaces doorbells/josh by rename, so the inode changes even when two rings
+        land in one mtime tick. agent-mail rings beside the state root and agent-mail2 beside its
+        database; those are one directory unless AGENT_MAIL2_DB moves the database, so both count.
+        """
+        stamps = []
+        for root in dict.fromkeys((self.state, self.database.parent)):
+            try:
+                info = (root / 'doorbells' / 'josh').stat()
+            except OSError:
+                continue
+            stamps.append(f'{info.st_mtime_ns}-{info.st_ino}')
+        return '/'.join(stamps)
+
     def sqlite(self):
         """Read on every request, so the bridge follows a flip without a restart."""
         try:
@@ -530,38 +594,143 @@ class Mailbox:
             return False
         return bool(match) and match.group(1) == b'sqlite'
 
-    def stored(self):
-        """Josh's delivered and sent mail from the SQLite store, keyed as the Maildir keys it,
-        so the app cannot tell which store answered. Drafts stay files: they are documents
-        Josh is still editing, not mail."""
+    # Josh's mail and the folder each copy is in: delivered mail is Inbox until read, then
+    # Archive, and everything he sent is Sent.
+    STORED_FOLDERS = """SELECT message_id, CASE WHEN read_at IS NULL THEN 'inbox' ELSE 'archive' END AS folder
+                          FROM deliveries WHERE recipient_mailbox_id = 'josh' AND discarded_at IS NULL
+                        UNION ALL SELECT message_id, 'sent' FROM messages WHERE sender_mailbox_id = 'josh'"""
+    # A listing excerpts the first 180 characters after collapsing whitespace, so it reads only
+    # the start of each body. Exact unless whitespace fills nearly all of this many characters.
+    EXCERPT_SOURCE = 2000
+
+    RECIPIENTS = """(SELECT group_concat(recipient_mailbox_id, ', ') FROM
+                       (SELECT recipient_mailbox_id FROM message_recipients r
+                         WHERE r.message_id = m.message_id ORDER BY recipient_mailbox_id))"""
+    WORD_MATCH = ("instr(fold(m.sender_mailbox_id || char(10) || coalesce(recipients, '') || char(10)"
+                  " || coalesce(m.subject, '') || char(10) || m.body), ?) > 0")
+    # Threads Josh is in: something was delivered to him, or he wrote something.
+    JOSH_THREADS = """SELECT m2.thread_id FROM deliveries d JOIN messages m2 USING (message_id)
+                       WHERE d.recipient_mailbox_id = 'josh'
+                      UNION SELECT thread_id FROM messages WHERE sender_mailbox_id = 'josh'"""
+
+    @staticmethod
+    def stored_record(row, folder):
+        key = f'{folder}:{row["message_id"]}.md'
+        return {'id': row['message_id'], 'thread': row['thread_id'],
+                'parent': row['reply_to_message_id'] or '', 'from': row['sender_mailbox_id'],
+                'to': row['recipients'] or '', 'reply_to': row['reply_to_address'] or '',
+                'subject': row['subject'] or '', 'date': stored_time(row['sent_at']),
+                'body': row['body'], 'key': key, 'folder': folder,
+                'revision': hashlib.sha256(key.encode()).hexdigest()}
+
+    def connect(self):
         db = sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=5)
         db.row_factory = sqlite3.Row
+        # Python's casefold, so a stored search matches exactly as the Maildir one does; SQLite's
+        # lower() folds ASCII only.
+        db.create_function('fold', 1, lambda s: s.casefold() if s is not None else None, deterministic=True)
+        return db
+
+    def stored(self, thread=None, message=None, folder=None, words=(), excerpt=False):
+        """Josh's delivered and sent mail from the SQLite store, keyed as the Maildir keys it,
+        so the app cannot tell which store answered. Drafts stay files: they are documents
+        Josh is still editing, not mail.
+
+        Narrowed in SQL rather than loaded whole and filtered here: a thread, one message, a
+        folder, and search words, each matched case-folded across sender, recipients, subject
+        and body as the Maildir search does. With excerpt, only the start of each body is read."""
+        where, params = [], []
+        if thread is not None:
+            where.append('m.thread_id = ?'); params.append(thread)
+        if message is not None:
+            where.append('m.message_id = ?'); params.append(message)
+        if folder not in (None, 'all'):
+            where.append('f.folder = ?'); params.append(folder)
+        for word in words:
+            where.append(self.WORD_MATCH)
+            params.append(word)
+        body = f'substr(m.body, 1, {self.EXCERPT_SOURCE})' if excerpt else 'm.body'
+        sql = f"""SELECT f.folder, m.message_id, m.thread_id, m.sequence, m.reply_to_message_id,
+                         m.sender_mailbox_id, m.reply_to_address, m.subject, m.sent_at, {body} AS body,
+                         {self.RECIPIENTS} AS recipients
+                    FROM ({self.STORED_FOLDERS}) f JOIN messages m USING (message_id)
+                   {'WHERE ' + ' AND '.join(where) if where else ''}"""
+        db = self.connect()
         try:
-            recipients = dict(db.execute(
-                """SELECT message_id, group_concat(recipient_mailbox_id, ', ') FROM
-                     (SELECT * FROM message_recipients ORDER BY recipient_mailbox_id) GROUP BY message_id"""))
-            rows = [(('inbox' if row['read_at'] is None else 'archive'), row) for row in db.execute(
-                """SELECT m.*, d.read_at FROM deliveries d JOIN messages m USING(message_id)
-                   WHERE d.recipient_mailbox_id = 'josh' AND d.discarded_at IS NULL""")]
-            rows += [('sent', row) for row in db.execute("SELECT * FROM messages WHERE sender_mailbox_id = 'josh'")]
+            rows = db.execute(sql, params).fetchall()
         finally:
             db.close()
-        found = {}
-        for folder, row in rows:
-            key = f'{folder}:{row["message_id"]}.md'
-            found[key] = {'id': row['message_id'], 'thread': row['thread_id'],
-                          'parent': row['reply_to_message_id'] or '', 'from': row['sender_mailbox_id'],
-                          'to': recipients.get(row['message_id'], ''), 'reply_to': row['reply_to_address'] or '',
-                          'subject': row['subject'] or '', 'date': stored_time(row['sent_at']),
-                          'body': row['body'], 'key': key, 'folder': folder,
-                          'revision': hashlib.sha256(key.encode()).hexdigest()}
-        return found
+        records = (self.stored_record(row, row['folder']) for row in rows)
+        return {record['key']: record for record in records}
+
+    PUBLIC_LIMIT = 200
+
+    def public_search(self, query):
+        """Public conversations Josh is not in, matched like his own search, one row each.
+
+        Threads he is in are left out: their copies are already in his folders, and a second,
+        read-only row for the same conversation would only confuse. An empty search lists
+        nothing, rather than the whole realm."""
+        words, people = parse_query(query)
+        if not self.sqlite() or not (words or people):
+            return [], False
+        # Each with: name must appear among a message's sender and recipients. That narrows in SQL
+        # to a superset, since a handle's name is part of its mailbox id; the exact contact match
+        # is made below. Nothing is cut before both filters, so an old match is never lost.
+        names = [name for _, name in people]
+        sql = f"""SELECT m.message_id, m.thread_id, m.reply_to_message_id, m.sender_mailbox_id,
+                         m.reply_to_address, m.subject, m.sent_at,
+                         substr(m.body, 1, {self.EXCERPT_SOURCE}) AS body, {self.RECIPIENTS} AS recipients
+                    FROM messages m JOIN threads t ON t.thread_id = m.thread_id
+                   WHERE t.visibility = 'public' AND m.thread_id NOT IN ({self.JOSH_THREADS})
+                   {''.join(' AND ' + self.WORD_MATCH for _ in words)}
+                   {''.join(" AND instr(fold(m.sender_mailbox_id || ',' || coalesce(recipients, '')), ?) > 0" for _ in names)}
+                   ORDER BY m.sent_at DESC, m.message_id DESC"""
+        db = self.connect()
+        try:
+            rows = db.execute(sql, [*words, *names]).fetchall()
+        finally:
+            db.close()
+        found = []
+        for row in rows:
+            record = self.stored_record(row, 'public')
+            participants = {address_key(a) for a in (record['from'] + ',' + record['to']).split(',') if a.strip()}
+            if all(p in participants for p in people):
+                found.append(record | {'excerpt': excerpt(record['body'])})
+        rows = conversations(found)
+        return rows[:self.PUBLIC_LIMIT], len(rows) > self.PUBLIC_LIMIT
+
+    def public_thread(self, key):
+        match = PUBLIC_KEY.fullmatch(key) if isinstance(key, str) else None
+        if not match or not self.sqlite():
+            raise MailError('Invalid message key')
+        db = self.connect()
+        try:
+            rows = db.execute(
+                f"""SELECT m.*, {self.RECIPIENTS} AS recipients
+                      FROM messages m JOIN threads t ON t.thread_id = m.thread_id
+                     WHERE t.visibility = 'public'
+                       AND m.thread_id = (SELECT thread_id FROM messages WHERE message_id = ?)
+                     ORDER BY m.sequence""", (match.group(1),)).fetchall()
+        finally:
+            db.close()
+        if not rows:
+            raise MailError('No public conversation has this message', 404)
+        return [self.stored_record(row, 'public') | {'sequence': row['sequence']} for row in rows]
+
+    def stored_counts(self):
+        db = self.connect()
+        try:
+            return dict(db.execute(
+                f"SELECT folder, count(*) FROM ({self.STORED_FOLDERS}) GROUP BY folder").fetchall())
+        finally:
+            db.close()
 
     def message(self, key):
         if self.sqlite() and not str(key).startswith('drafts:'):
             if not isinstance(key, str) or not MESSAGE_KEY.fullmatch(key):
                 raise MailError('Invalid message key')
-            found = self.stored().get(key)
+            found = self.stored(message=MESSAGE_KEY.fullmatch(key).group(2)[:-3]).get(key)
             if found is None:
                 raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
             return dict(found)
@@ -573,11 +742,11 @@ class Mailbox:
             self.cache[key] = (stamp, dict(parse_mail(path), key=key, folder=key.split(':')[0]))
         return dict(self.cache[key][1])
 
-    def messages(self, thread=None):
+    def messages(self, thread=None, drafts_only=False):
         messages, warnings, present = [], [], set()
         sqlite = self.sqlite()
-        if sqlite:
-            messages = [m for m in self.stored().values() if thread is None or m['thread'] == thread]
+        if sqlite and not drafts_only:
+            messages = list(self.stored(thread=thread).values())
         for folder in (('drafts',) if sqlite else FOLDERS):
             for path in self.directory(folder).glob('*.md'):
                 key = folder + ':' + path.name
@@ -603,32 +772,40 @@ class Mailbox:
         return sorted(messages, key=lambda m: (m['date'], m['key']), reverse=True), warnings
 
     def listing(self, folder, query):
-        messages, warnings = self.messages()
         if folder not in (*FOLDERS, 'all'):
             raise MailError('Unknown folder')
-        counts = {f: sum(m['folder'] == f for m in messages) for f in FOLDERS}
-        words, people = [], []
-        for word in query.casefold().split():
-            if word.startswith('with:'):
-                address = word[5:]
-                if not re.fullmatch(r'@?\+?[A-Za-z0-9._-]+', address):
-                    raise MailError('Use with:@+agent-handle or with:@human for contact searches')
-                people.append(address_key(address))
-            else:
-                words.append(word)
+        words, people = parse_query(query)
+        if self.sqlite():
+            # Drafts are files in either store; stored mail arrives already matched to the words.
+            messages, warnings = self.messages(drafts_only=True)
+            counts = dict.fromkeys(FOLDERS, 0) | self.stored_counts() | {'drafts': len(messages)}
+            stored = list(self.stored(folder=folder, words=words, excerpt=True).values())
+            matched = {m['key'] for m in stored}
+            messages = sorted(stored + messages, key=lambda m: (m['date'], m['key']), reverse=True)
+        else:
+            messages, warnings = self.messages()
+            counts = {f: sum(m['folder'] == f for m in messages) for f in FOLDERS}
+            matched = set()
         matches = []
         for m in messages:
             if folder != 'all' and m['folder'] != folder:
                 continue
-            text = '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold()
-            participants = {address_key(a) for a in (m['from'] + ',' + m['to']).split(',') if a.strip()}
-            if all(w in text for w in words) and all(p in participants for p in people):
-                matches.append(m)
+            if words and m['key'] not in matched:
+                text = '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold()
+                if not all(w in text for w in words):
+                    continue
+            if people:
+                participants = {address_key(a) for a in (m['from'] + ',' + m['to']).split(',') if a.strip()}
+                if not all(p in participants for p in people):
+                    continue
+            matches.append(m)
         return {'messages': [dict((k, v) for k, v in m.items() if k != 'body') |
-                             {'excerpt': re.sub(r'\s+', ' ', m['body'])[:180]} for m in matches],
+                             {'excerpt': excerpt(m['body'])} for m in matches],
                 'counts': counts, 'warnings': warnings}
 
     def thread(self, key):
+        if isinstance(key, str) and key.startswith('public:'):
+            return self.public_thread(key)
         selected = self.message(key)
         messages, _ = self.messages(thread=selected['thread'])
         unique = {}
@@ -637,7 +814,43 @@ class Mailbox:
                 old = unique.get(m['id'])
                 if not old or m['folder'] == 'inbox':
                     unique[m['id']] = m
+        if self.sqlite():
+            return self.ledger(list(unique.values()))
         return sorted(unique.values(), key=lambda m: (m['date'], m['id']))
+
+    def ledger(self, messages):
+        """A stored thread in its ledger order, with each message's place in it, and on what Josh
+        sent, who has read it and when.
+
+        The sequence is the order the store accepted the messages, which dates only approximate:
+        two clocks, or two sends in one microsecond, can disagree with it. The Maildir never knew
+        either, so this is SQLite only."""
+        ids = [m['id'] for m in messages]
+        sent = [m['id'] for m in messages if m['folder'] == 'sent']
+        if not ids:
+            return messages
+        db = self.connect()
+        try:
+            sequence = dict(db.execute(
+                f"SELECT message_id, sequence FROM messages WHERE message_id IN ({','.join('?' * len(ids))})", ids))
+            receipts = {}
+            for row in (db.execute(
+                    f"""SELECT message_id, recipient_mailbox_id, read_at, discarded_at FROM deliveries
+                         WHERE message_id IN ({','.join('?' * len(sent))}) ORDER BY recipient_mailbox_id""",
+                    sent) if sent else ()):
+                state = 'discarded' if row['discarded_at'] is not None else 'read' if row['read_at'] is not None else 'unread'
+                at = row['discarded_at'] if state == 'discarded' else row['read_at']
+                receipts.setdefault(row['message_id'], []).append(
+                    {'to': row['recipient_mailbox_id'], 'state': state, 'at': stored_time(at) if at is not None else ''})
+        finally:
+            db.close()
+        placed = []
+        for m in messages:
+            m = dict(m, sequence=sequence.get(m['id']))
+            if m['folder'] == 'sent':
+                m['receipts'] = receipts.get(m['id'], [])
+            placed.append(m)
+        return sorted(placed, key=lambda m: (m['sequence'] is None, m['sequence'] or 0, m['date'], m['id']))
 
     def draft(self, mode, key=None):
         if mode not in ('compose', 'reply', 'reply-all'):
@@ -1067,6 +1280,25 @@ def image_type(raw):
     return None
 
 
+class Server(ThreadingHTTPServer):
+    """Threaded only so that a client can wait for new mail without holding up the rest.
+
+    Every other request still runs one at a time under the lock: the mailbox, its message cache
+    and the draft files were written for a single thread, and a quick request does not need more.
+    """
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lock = threading.Lock()
+        self.waits = threading.BoundedSemaphore(MAX_WAITS)
+
+
+WAIT_POLL = 0.25
+WAIT_LIMIT = 25
+# Each wait holds a thread for up to WAIT_LIMIT seconds; past this many, a window is told to retry.
+MAX_WAITS = 32
+
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
@@ -1137,6 +1369,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_request(self):
+        path = urlsplit(self.path).path
+        # A request that will be refused reads only fixed server settings, so it is refused
+        # without queuing on the lock behind the mailbox's work.
+        refused = (self.headers.get('Host') not in self.server.authorities or
+                   (path.startswith('/api/') and not hmac.compare_digest(
+                       self.headers.get('X-Agent-Mail-Token', ''), self.server.token)))
+        if refused:
+            return self.handle_checked_request()
+        if path == '/api/wait':
+            if not self.server.waits.acquire(blocking=False):
+                return self.reply(503, {'error': 'Too many windows are waiting for mail; retrying shortly'})
+            try:
+                return self.handle_checked_request()
+            finally:
+                self.server.waits.release()
+        with self.server.lock:
+            return self.handle_checked_request()
+
+    def handle_checked_request(self):
         try:
             # Loopback plus any tailnet name this machine answers to, so Tailscale Serve
             # can proxy to it without the bridge binding anywhere but 127.0.0.1.
@@ -1210,13 +1461,19 @@ class Handler(BaseHTTPRequestHandler):
             # The client left mid-response: a reload, a closed tab, a phone losing signal. Both are
             # OSErrors, and the clause below would try to send a 503 down the same dead socket.
             return
+        except sqlite3.Error as e:
+            # Not an OSError, so it escaped as a traceback with no reply: the store marker can say
+            # sqlite a moment before the database exists, or the store can be locked past the timeout.
+            self.reply(503, {'error': 'The mail store is unavailable; retrying shortly: ' + str(e)})
         except (OSError, subprocess.TimeoutExpired) as e:
             self.reply(503, {'error': 'Local mail operation failed. Refresh before retrying: ' + str(e)})
 
     def get(self, route, args):
         box = self.server.box
         key = args.get('key', [''])[0]
-        if route == '/api/messages':
+        if route == '/api/wait':
+            result = self.wait_for_mail(args)
+        elif route == '/api/messages':
             if self.headers.get('X-Agent-Mail-Notifier') == '1':
                 # agent-mail reads this mtime to skip its duplicate desktop banner.
                 fd = os.open(box.home / '.web-notifier', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -1225,13 +1482,10 @@ class Handler(BaseHTTPRequestHandler):
             result = box.listing(args.get('folder', ['inbox'])[0], args.get('q', [''])[0])
             if args.get('group', [''])[0]:
                 result = dict(result, messages=conversations(result['messages']))
-            # The list polls every ten seconds. A stamp of the payload lets an unchanged poll
-            # answer in a few bytes, while mail responses still stay out of the browser cache.
-            stamp = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:16]
-            if args.get('version', [''])[0] == stamp:
-                result = {'unchanged': True, 'version': stamp}
-            else:
-                result = dict(result, version=stamp)
+            result = stamped(result, args)
+        elif route == '/api/search':
+            messages, truncated = box.public_search(args.get('q', [''])[0])
+            result = stamped({'available': box.sqlite(), 'messages': messages, 'truncated': truncated}, args)
         elif route == '/api/thread':
             result = box.thread(key)
         elif route == '/api/draft':
@@ -1240,7 +1494,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/config':
             if args:
                 raise MailError('Configuration is not addressable')
-            result = {'realm': read_realm()}
+            result = {'realm': read_realm(), 'publicSearch': box.sqlite()}
         elif route == '/api/keywords':
             if args:
                 raise MailError('Keyword dictionary paths are configured locally, not through the API')
@@ -1282,6 +1536,29 @@ class Handler(BaseHTTPRequestHandler):
         else:
             raise MailError('Unknown endpoint', 404)
         self.reply(200, result)
+
+    def wait_for_mail(self, args):
+        """Answer as soon as Josh's doorbell rings, or after `timeout` seconds with no change.
+
+        A ring is only a hint, since a sender can die between delivery and ringing, so the app
+        keeps a slow poll as well. This runs outside the request lock and touches nothing but
+        the doorbell, so a waiting window never holds up the rest of the app.
+        """
+        since = args.get('since', [''])[0]
+        timeout = min(WAIT_LIMIT, max(0.0, float(args.get('timeout', [str(WAIT_LIMIT)])[0])))
+        deadline = time.monotonic() + timeout
+        while True:
+            stamp = self.server.box.doorbell()
+            if stamp != since or time.monotonic() >= deadline:
+                return {'doorbell': stamp, 'changed': stamp != since}
+            # Waiting on the socket rather than sleeping notices a closed tab at once, instead of
+            # keeping a thread for the rest of the timeout. A readable socket always ends the wait:
+            # bytes after the request would otherwise keep select() returning at once, spinning.
+            readable, _, _ = select.select([self.connection], [], [], WAIT_POLL)
+            if readable:
+                if not self.connection.recv(1, socket.MSG_PEEK):
+                    raise ConnectionResetError('client closed the wait')
+                return {'doorbell': stamp, 'changed': stamp != since}
 
     def post(self, route, data):
         box = self.server.box
@@ -1384,7 +1661,7 @@ def main():
     box = Mailbox()
     token = load_token(box.home)
     try:
-        server = HTTPServer(('127.0.0.1', args.port), Handler)
+        server = Server(('127.0.0.1', args.port), Handler)
     except OSError as error:
         # A background bridge (see its LaunchAgent) shares the same token file.
         if args.port and existing_bridge(f'127.0.0.1:{args.port}'):

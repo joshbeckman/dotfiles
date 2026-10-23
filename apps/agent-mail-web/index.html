@@ -72,6 +72,9 @@
           placeholder="Search sender, subject, or message"
           autocomplete="off"
         />
+        <label id="search-scope" class="search-scope" hidden
+          ><input id="search-public" type="checkbox" /> Public threads</label
+        >
         <button type="submit" class="search-submit">Search</button>
       </form>
       <div class="topbar-actions">
@@ -224,6 +227,9 @@
           <div class="reader-head">
             <h2 id="thread-title" tabindex="-1"></h2>
             <p id="participants"></p>
+            <p id="public-note" class="hint" hidden>
+              A public conversation you are not in. Read it here; it is not yours to file or answer.
+            </p>
             <code id="thread-id" class="permalink"></code>
           </div>
           <div id="thread-layout">

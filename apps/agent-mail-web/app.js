@@ -361,29 +361,56 @@ function setNavOpen(open) {
 // The last stamped list for each folder and search, so switching folders draws at once and the
 // request only confirms it. The bridge answers an unchanged poll with the stamp alone.
 const listCache = new Map();
-const listCacheKey = () => folder + "\n" + $("search").value;
+// A search can reach public conversations Josh is not in, when the store offers it and he asks.
+const publicWanted = () =>
+  !$("search-scope").hidden && $("search-public").checked && $("search").value.trim() !== "";
+const listCacheKey = () => folder + "\n" + $("search").value + (publicWanted() ? "\npublic" : "");
 const FOLDER_NAMES = { inbox: "Inbox", archive: "Archive", sent: "Sent", drafts: "Drafts", all: "All mail" };
 const folderTitle = () => ($("search").value ? "Search results" : FOLDER_NAMES[folder] || folder);
+// Which cached list is on screen. Switching between two lists that are both cached, such as
+// turning public threads off, still has to draw the other one when its poll comes back unchanged.
+let shownListKey = "";
 async function refresh(quiet = false) {
   const generation = ++listGeneration;
   const cacheKey = listCacheKey();
   const cached = listCache.get(cacheKey);
+  const query = encodeURIComponent($("search").value);
+  const wantPublic = publicWanted();
   const result = await api(
-    "messages?group=1&folder=" +
-      folder +
-      "&q=" +
-      encodeURIComponent($("search").value) +
-      (cached ? "&version=" + cached.version : ""),
+    "messages?group=1&folder=" + folder + "&q=" + query + (cached ? "&version=" + cached.version : ""),
   );
+  // Public rows follow Josh's own, each half stamped on its own so either can stay unchanged.
+  const found = wantPublic
+    ? await api("search?q=" + query + (cached?.publicVersion ? "&version=" + cached.publicVersion : ""))
+    : null;
   if (generation !== listGeneration) return;
-  if (result.unchanged && cached) {
+  const listSame = Boolean(result.unchanged && cached);
+  const publicSame = !wantPublic || Boolean(found.unchanged && cached);
+  if (listSame && publicSame) {
+    if (shownListKey !== cacheKey) {
+      shownListKey = cacheKey;
+      applyList(cached);
+    }
     if (cached.warnings.length) status(cached.warnings.join("; "), true);
     else if (!quiet && $("status").classList.contains("error")) status("");
     return;
   }
-  listCache.set(cacheKey, result);
-  applyList(result);
-  if (result.warnings.length) status(result.warnings.join("; "), true);
+  const base = listSame ? cached.base : result;
+  const publicMessages = !wantPublic ? [] : publicSame ? cached.publicMessages : found.messages;
+  const entry = {
+    ...base,
+    base,
+    publicVersion: wantPublic ? (publicSame ? cached.publicVersion : found.version) : "",
+    publicMessages,
+    publicTruncated: !wantPublic ? false : publicSame ? cached.publicTruncated : Boolean(found.truncated),
+    messages: [...base.messages, ...publicMessages],
+  };
+  listCache.set(cacheKey, entry);
+  shownListKey = cacheKey;
+  applyList(entry);
+  if (entry.warnings.length) status(entry.warnings.join("; "), true);
+  else if (entry.publicTruncated && !quiet)
+    status("Showing the newest public conversations that match. Add words to reach older ones.");
   else if (!quiet && $("status").classList.contains("error")) status("");
 }
 function applyList(result) {
@@ -580,7 +607,9 @@ function renderList() {
     const chip =
       m.folder === "drafts"
         ? '<span class="chip chip-draft">Draft</span>'
-        : showInbox && m.folder === "inbox"
+        : m.folder === "public"
+          ? '<span class="chip chip-public">Public</span>'
+          : showInbox && m.folder === "inbox"
           ? '<span class="chip chip-inbox">Inbox</span>'
           : "";
     row.innerHTML =
@@ -643,7 +672,10 @@ async function navigate(target, clearSearch = true, query = "") {
     selected = 0;
     const cached = listCache.get(listCacheKey());
     // Draw the folder from memory now; the request below only confirms or corrects it.
-    if (cached) applyList(cached);
+    if (cached) {
+      shownListKey = listCacheKey();
+      applyList(cached);
+    }
     else {
       items = [];
       $("folder-title").textContent = folderTitle();
@@ -685,6 +717,10 @@ async function openThread(m) {
       : m.key;
   current = { key, messages };
   $("thread-title").textContent = m.subject || "(no subject)";
+  // A public conversation Josh is not in is for reading: nothing in it is his to answer or file.
+  const readOnly = messages.length > 0 && messages.every((v) => v.folder === "public");
+  $("reader").classList.toggle("read-only", readOnly);
+  $("public-note").hidden = !readOnly;
   // A thread's id is the id of its root message, which is the reference for the whole
   // conversation rather than for one message in it.
   $("thread-id").textContent = messages[0]?.thread || messages[0]?.id || "";
@@ -735,9 +771,13 @@ async function refreshThread() {
   const fresh = messages.filter((v) => !known.has(v.id));
   const keys = (list) => list.map((v) => v.key).join("\n");
   const moved = keys(open.messages) !== keys(messages.filter((v) => known.has(v.id)));
-  if (!fresh.length && !moved) return;
+  // Someone reading what Josh sent changes nothing else in the thread, so check receipts too.
+  const receipts = (list) => JSON.stringify(list.map((v) => v.receipts || null));
+  const read = receipts(open.messages) !== receipts(messages.filter((v) => known.has(v.id)));
+  if (!fresh.length && !moved && !read) return;
   if (fresh.length && !open.messages.length) $("thread").replaceChildren();
   for (const message of fresh) appendThreadMessage(message, true);
+  for (const message of messages) if (known.has(message.id)) showReceipts(message);
   current = { ...open, messages };
   threadSummary(messages);
   if (!fresh.length) return;
@@ -778,6 +818,30 @@ function snippetOf(body) {
     .trim()
     .slice(0, 160);
 }
+// Who has read what Josh sent, and when, under its header. The SQLite store keeps read times;
+// the Maildir never knew them, so its messages carry no receipts and show no line.
+function showReceipts(message, detail) {
+  detail ??= [...$("thread").children].find((d) => d.dataset.id === message.id);
+  if (!detail || !message.receipts) return;
+  const line = detail.querySelector(":scope > .receipts") || document.createElement("p");
+  line.className = "receipts";
+  line.replaceChildren(
+    ...message.receipts.flatMap((r, i) => {
+      const part = document.createElement("span");
+      part.className = "receipt receipt-" + r.state;
+      part.textContent =
+        r.state === "read"
+          ? `Read by ${r.to} ${date(r.at)}`
+          : r.state === "discarded"
+            ? `Discarded by ${r.to} ${date(r.at)}`
+            : `Not yet read by ${r.to}`;
+      if (r.at) part.title = fullFormat.format(new Date(r.at));
+      return i ? [" \u00b7 ", part] : [part];
+    }),
+  );
+  if (!message.receipts.length) line.textContent = "No recipients to read it";
+  if (!line.isConnected) detail.querySelector(":scope > .metadata").after(line);
+}
 function appendThreadMessage(message, open) {
   const detail = document.createElement("details");
   detail.className = "message";
@@ -795,11 +859,16 @@ function appendThreadMessage(message, open) {
     escape(to.join(", ") || "nobody") +
     '</span><span class="msg-snippet">' +
     escape(snippetOf(message.body)) +
-    "</span><time>" +
+    "</span>" +
+    (message.sequence
+      ? '<span class="msg-seq" title="Position in the conversation">#' + message.sequence + "</span>"
+      : "") +
+    "<time>" +
     escape(date(message.date)) +
     "</time>";
   describeTime(summary.querySelector("time"), message.date);
   summary.prepend(avatar(message.from));
+  detail.dataset.id = message.id;
   detail.append(summary);
   const metadata = document.createElement("p");
   metadata.className = "metadata";
@@ -810,6 +879,7 @@ function appendThreadMessage(message, open) {
   // One line, with the whole of it on hover: the parent id is for passing around, not reading.
   metadata.title = metadata.textContent;
   detail.append(metadata);
+  showReceipts(message, detail);
   const content = document.createElement("div");
   detail.append(content);
   $("thread").append(detail);
@@ -828,11 +898,12 @@ function appendThreadMessage(message, open) {
   render();
   const actions = document.createElement("div");
   actions.className = "render-tools";
-  actions.append(
-    button("Reply to this message", () => newDraft("reply", message.key)),
-    button("Reply all", () => newDraft("reply-all", message.key)),
-    button("Copy id", () => copyId(message.id)),
-  );
+  if (message.folder !== "public")
+    actions.append(
+      button("Reply to this message", () => newDraft("reply", message.key)),
+      button("Reply all", () => newDraft("reply-all", message.key)),
+    );
+  actions.append(button("Copy id", () => copyId(message.id)));
   const identifier = document.createElement("code");
   identifier.className = "permalink";
   identifier.textContent = message.id;
@@ -1764,6 +1835,9 @@ $("back").onclick = () => {
 };
 $("archive").onclick = () => archiveThread().catch(error);
 $("reply").onclick = () => newDraft("reply").catch(error);
+$("search-public").onchange = () => {
+  if ($("search").value.trim()) navigate("all", false).catch(error);
+};
 $("reply-all").onclick = () => newDraft("reply-all").catch(error);
 $("save-draft").onclick = () => saveDraft().catch(error);
 $("close-draft").onclick = () => navigate("drafts").catch(error);
@@ -1884,7 +1958,7 @@ document.addEventListener("keydown", (e) => {
   } else if (key === "e" && ["mail-list", "reader"].includes(view)) {
     e.preventDefault();
     archiveThread().catch(error);
-  } else if ((key === "r" || key === "a") && view === "reader") {
+  } else if ((key === "r" || key === "a") && view === "reader" && !$("reader").classList.contains("read-only")) {
     e.preventDefault();
     newDraft(key === "r" ? "reply" : "reply-all").catch(error);
   } else if (view === "reader" && (key === "j" || key === "k")) {
@@ -1930,6 +2004,7 @@ refresh()
     // The realm distinguishes one machine's inbox from another; the bridge reads it locally.
     api("config")
       .then((config) => {
+        $("search-scope").hidden = !config.publicSearch;
         if (!config.realm) return;
         const realm = $("realm");
         realm.textContent = config.realm;
@@ -1940,17 +2015,48 @@ refresh()
     // Badges are decoration: a failed team lookup leaves plain avatars.
     loadTeamBadges().catch(() => {});
     checkNewMail().catch(() => {});
+    listenForMail();
   });
 setInterval(() => loadTeamBadges().catch(() => {}), 300000);
+let lastRefresh = 0;
 function refreshVisible() {
   // Not while an archive or send is in flight: a poll landing between its requests would draw
   // the half-moved conversation back into the list for a moment.
   if (document.hidden || busy) return;
+  lastRefresh = Date.now();
   if (!$("mail-list").hidden) refresh(true).catch(error);
   // The thread stays visible beside an inline reply draft, and beside the list when split.
   if (current && !$("reader").hidden) refreshThread().catch(error);
 }
-setInterval(refreshVisible, 10000);
+// New mail arrives through the bridge's wait: a request that answers when a delivery rings
+// Josh's doorbell. The interval stays as a backstop, slowed to a minute while the wait is
+// healthy, because a ring is only a hint and a sender can die before ringing.
+let doorbellHealthy = false;
+async function listenForMail() {
+  let stamp = null;
+  for (;;) {
+    try {
+      const result = await api(
+        "wait?since=" + encodeURIComponent(stamp ?? "") + (stamp === null ? "&timeout=0" : ""),
+      );
+      doorbellHealthy = true;
+      const rang = stamp !== null && result.changed;
+      stamp = result.doorbell;
+      if (rang) {
+        refreshVisible();
+        checkNewMail().catch(() => {});
+      }
+    } catch (e) {
+      doorbellHealthy = false;
+      // A bridge from before the wait route; the interval alone keeps the app current.
+      if (e.status === 404) return;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+}
+setInterval(() => {
+  if (!doorbellHealthy || Date.now() - lastRefresh >= 60000) refreshVisible();
+}, 10000);
 // A hidden page is the normal state on a phone, and the interval above does nothing
 // while hidden, so returning to the app would otherwise show mail up to a full interval
 // old. The transcript view already refreshes on becoming visible; this is the same rule.
@@ -1989,7 +2095,14 @@ function notifyState() {
   const b = $("notify-button");
   b.hidden = !("Notification" in window) || Notification.permission !== "default";
 }
-async function checkNewMail() {
+// One check at a time: a ring and the interval can both ask, and two checks reading the same
+// seenInbox would announce the same message twice.
+let mailCheck = Promise.resolve();
+function checkNewMail() {
+  mailCheck = mailCheck.catch(() => {}).then(checkInbox);
+  return mailCheck;
+}
+async function checkInbox() {
   const allowed =
     typeof Notification !== "undefined" && Notification.permission === "granted";
   // Tells the bridge this window will notify, so terminal banners stand down. The heartbeat is
