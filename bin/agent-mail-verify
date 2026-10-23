@@ -67,7 +67,11 @@ if [ "$missing" = 1 ]; then
   printf '\nRepair: agent-mail-migrate --replay-failures, then agent-mail-migrate --verify.\n' >>"$err"
 fi
 if [ "$store" = 1 ]; then
-  printf 'If replaying does not repair it, restore from %s/archives/.\n' "$state" >>"$err"
+  # The archives were a pre-flip snapshot and --finish deletes them, so they are not a repair here.
+  # The Maildir is the only other record, and it stopped receiving writes at the flip.
+  printf 'If replaying does not repair it, the Maildir under %s and %s is the pre-flip record; restoring from it loses everything sent since the flip.\n' \
+    "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent/scratchpads}" \
+    "${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}" >>"$err"
 fi
 if [ "$remind" = 1 ]; then
   printf 'Run agent-mail-migrate --finish when you are ready to retire the archive.\n' >>"$err"

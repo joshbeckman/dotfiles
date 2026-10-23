@@ -82,9 +82,15 @@ case "$(subject)" in
   *"SQLite does not verify"*) echo "  ok: the subject says the store did not verify" ;;
   *) echo "  FAIL: subject was $(subject)"; fail=1 ;;
 esac
+# The archives were a pre-flip snapshot and --finish deletes them, so the body must not point at
+# them. The Maildir is the only other record, and restoring from it loses post-flip mail.
 case "$(body)" in
-  *"archives/"*) echo "  ok: the body names the restore path" ;;
-  *) echo "  FAIL: body omitted the restore path"; fail=1 ;;
+  *"pre-flip record"*) echo "  ok: the body names the Maildir as the pre-flip record" ;;
+  *) echo "  FAIL: body omitted the pre-flip record"; fail=1 ;;
+esac
+case "$(body)" in
+  *"archives/"*) echo "  FAIL: the body still points at the deleted archives"; fail=1 ;;
+  *) echo "  ok: the body does not point at the archives" ;;
 esac
 
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
