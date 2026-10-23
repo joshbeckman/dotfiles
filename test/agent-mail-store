@@ -11,6 +11,7 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cmd="$root/bin/agent-mail"
 migrate="$root/bin/agent-mail-migrate"
 tmp="$(mktemp -d)"
+tmp="$(CDPATH= cd -- "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL_FROM AGENT_MAIL2_DB AGENT_MAIL2_HUMAN AGENT_SCRATCH_ROOT
 export AGENT_MAIL_STALE_HOURS=100000 PATH="$tmp/no-notify:$PATH"
@@ -66,7 +67,7 @@ conversation() {
   [[ "$(state_of "$m2" josh)" == unread ]] || fail "reply-all dropped a recipient"
 
   as $alice "$cmd" discard --to $alice --id "$m2"
-  [[ "$(state_of "$m2" $alice)" =~ ^(|discarded)$ ]] || fail "discard left the copy readable"
+  [[ "$(state_of "$m2" $alice)" =~ ^(discarded)?$ ]] || fail "discard left the copy readable"
   [[ "$(state_of "$m2" josh)" == unread ]] || fail "discard touched another recipient's copy"
   if as $alice "$cmd" read --to $alice --id "$m2" >/dev/null 2>&1; then fail "a discarded message was still readable"; fi
 }
@@ -106,7 +107,8 @@ assert read_at and abs(read_at / 1e6 - time.time()) < 120, read_at
 assert db.execute("select discarded_at from deliveries where message_id = ? and recipient_mailbox_id = ?", (m2, alice)).fetchone()[0]
 PY
 # Web-app paths mirror too: archive marks Josh's copy read.
-"$cmd" archive "$AGENT_HUMAN_MAIL_ROOT/josh/inbox/new/$m1.md" >/dev/null
+ln -s "$AGENT_HUMAN_MAIL_ROOT" "$tmp/human-link"
+"$cmd" archive "$tmp/human-link/josh/inbox/new/$m1.md" >/dev/null
 verified || fail "archive was not mirrored"
 
 # Concurrent replies in one thread are each mirrored once, with distinct sequences.

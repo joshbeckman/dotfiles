@@ -1556,7 +1556,7 @@ class Handler(BaseHTTPRequestHandler):
             # bytes after the request would otherwise keep select() returning at once, spinning.
             readable, _, _ = select.select([self.connection], [], [], WAIT_POLL)
             if readable:
-                if not self.connection.recv(1, socket.MSG_PEEK):
+                if not self.connection.recv(4096):
                     raise ConnectionResetError('client closed the wait')
                 return {'doorbell': stamp, 'changed': stamp != since}
 

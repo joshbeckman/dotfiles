@@ -928,7 +928,7 @@ cmd_discard() {
 message_path() {
   local path="$1" dir
   [ -f "$path" ] || die "message file not found: $path"
-  dir="$(CDPATH= cd -- "$(dirname -- "$path")" && pwd)"
+  dir="$(CDPATH= cd -- "$(dirname -- "$path")" && pwd -P)"
   case "$dir" in
     "$MAIL_ROOT"/*/inbox/new|"$MAIL_ROOT"/*/inbox/cur|"$HUMAN_MAIL_ROOT"/*/inbox/new|"$HUMAN_MAIL_ROOT"/*/inbox/cur|"$HUMAN_MAIL_ROOT"/*/sent)
       printf '%s/%s' "$dir" "$(basename -- "$path")" ;;
