@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The alarm watches mirror-failures.d/ beside the store marker, which is the parent of the human mail
-# root. AGENT_MAIL_ROOT names the scratchpads root, so anything there is a decoy.
+# The alarm reads the store marker, because what a failure means differs between `both` and `sqlite`.
+# It watches mirror-failures.d/ beside the marker; AGENT_MAIL_ROOT names the scratchpads root, so
+# anything there is a decoy.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
@@ -10,16 +11,24 @@ mkdir -p "$state/humans" "$state/mirror-failures.d/repaired" "$tmp/bin" "$tmp/sc
 sent="$tmp/sent"
 cat > "$tmp/bin/agent-mail" <<'FAKE'
 #!/bin/sh
+if [ "${1:-}" = "store" ]; then printf '%s\tmarker:/x\tdb:/y\n' "${AGENT_MAIL_TEST_MODE:-sqlite}"; exit 0; fi
 [ "${1:-}" = "send" ] || exit 0
-printf 'SEND\n' >> "$AGENT_MAIL_TEST_SENT"
+printf 'SEND %s\n' "$*" >> "$AGENT_MAIL_TEST_SENT"
 while [ $# -gt 0 ]; do
-  case "$1" in --body-file) cat "$2" >> "$AGENT_MAIL_TEST_SENT" ;; esac
+  case "$1" in
+    --subject) printf 'SUBJECT %s\n' "$2" >> "$AGENT_MAIL_TEST_SENT"; shift ;;
+    --body-file) cat "$2" >> "$AGENT_MAIL_TEST_SENT" ;;
+  esac
   shift
 done
 FAKE
 cat > "$tmp/bin/agent-mail-migrate" <<'FAKE'
 #!/bin/sh
-exit "${AGENT_MAIL_TEST_VERIFY_EXIT:-0}"
+if [ "${AGENT_MAIL_TEST_VERIFY_EXIT:-0}" != 0 ]; then
+  echo "verify: messages missing from sqlite" >&2
+  exit "${AGENT_MAIL_TEST_VERIFY_EXIT}"
+fi
+exit 0
 FAKE
 chmod +x "$tmp/bin/agent-mail" "$tmp/bin/agent-mail-migrate"
 run() {
@@ -27,46 +36,68 @@ run() {
     AGENT_MAIL_TEST_SENT="$sent" PATH="$tmp/bin:$PATH" "$ROOT/bin/agent-mail-verify"
 }
 reset_state() {
-  rm -rf "$state/mirror-failures.d" "$state/mirror-failures" "$state/mirror-failures.retired-bytes" "$state/migration-finished"
+  rm -rf "$state/mirror-failures.d" "$state/mirror-failures" \
+    "$state/mirror-failures.retired-bytes" "$state/migration-finished"
   mkdir -p "$state/mirror-failures.d/repaired"
   : > "$sent"
 }
 fail=0
 check() { if [ "$1" = "$2" ]; then echo "  ok: $3"; else echo "  FAIL: $3 (wanted $2, got $1)"; fail=1; fi; }
 count() { grep -c '^SEND' "$sent" || true; }
+subject() { grep '^SUBJECT ' "$sent" | head -1 | cut -d' ' -f2- || true; }
+body() { grep -v '^SEND\|^SUBJECT' "$sent" || true; }
 
 reset_state; run
-check "$(count)" "0" "a clean mirror stays silent"
+check "$(count)" "0" "a clean store stays silent"
 
-# The live box has no mirror-failures.d until the new writer lands, so the alarm has to survive its
-# absence rather than aborting on a missing directory.
 : > "$sent"; rm -rf "$state/mirror-failures.d"; run
 check "$(count)" "0" "a missing failure directory is not an error"
 
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/one"; run
 check "$(count)" "1" "a failure file raises the alarm"
+case "$(subject)" in
+  *"mail missing from SQLite"*) echo "  ok: the subject names missing mail" ;;
+  *) echo "  FAIL: subject was $(subject)"; fail=1 ;;
+esac
+case "$(body)" in
+  *"--replay-failures"*) echo "  ok: the body names the repair" ;;
+  *) echo "  FAIL: body omitted the repair"; fail=1 ;;
+esac
+
+reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/one"; AGENT_MAIL_TEST_MODE=both run
+case "$(subject)" in
+  *"mirror drifted"*) echo "  ok: under both it still says mirror drifted" ;;
+  *) echo "  FAIL: subject was $(subject)"; fail=1 ;;
+esac
 
 reset_state; printf 'partial\n' > "$state/mirror-failures.d/.one.tmp"; run
 check "$(count)" "0" "a file still being written is ignored"
 
-# A legacy mirror-failures is not renamed when retired, so its checked length lives in
-# mirror-failures.retired-bytes and only the tail past it is pending. Reading the file directly would
-# fire forever on retired lines, so the alarm leaves the legacy file to --verify and stays silent
-# when verify is clean.
-reset_state; printf 'when\tid\tread\tjosh\terror\n' > "$state/mirror-failures"; printf '120\n' > "$state/mirror-failures.retired-bytes"; run
-check "$(count)" "0" "a retired legacy log does not raise on its own"
+reset_state; printf 'when\tid\tread\tjosh\terror\n' > "$state/mirror-failures"; run
+check "$(count)" "0" "a legacy file is left to verify"
+
+reset_state; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
+check "$(count)" "1" "a failed verify raises the alarm"
+case "$(subject)" in
+  *"SQLite does not verify"*) echo "  ok: the subject says the store did not verify" ;;
+  *) echo "  FAIL: subject was $(subject)"; fail=1 ;;
+esac
+case "$(body)" in
+  *"archives/"*) echo "  ok: the body names the restore path" ;;
+  *) echo "  FAIL: body omitted the restore path"; fail=1 ;;
+esac
 
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
 check "$(count)" "1" "repaired records remind"
-if grep -q 'reminder to run --finish' "$sent"; then echo "  ok: the reminder says what it is"; else echo "  FAIL: reminder wording missing"; fail=1; fi
+case "$(subject)" in
+  *"waiting to be finished"*) echo "  ok: the reminder subject says what it is" ;;
+  *) echo "  FAIL: subject was $(subject)"; fail=1 ;;
+esac
 
 reset_state; : > "$state/migration-finished"; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
 check "$(count)" "0" "a finished migration stops reminding"
 
 reset_state; printf 'decoy\n' > "$tmp/scratchpads/mirror-failures"; mkdir -p "$tmp/scratchpads/mirror-failures.d"; printf 'decoy\n' > "$tmp/scratchpads/mirror-failures.d/one"; run
 check "$(count)" "0" "a failure log in the scratchpads root is ignored"
-
-reset_state; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
-check "$(count)" "1" "a failed verify raises the alarm"
 
 [ "$fail" = 0 ] && echo "agent-mail-verify tests passed" || { echo "agent-mail-verify tests failed"; exit 1; }
