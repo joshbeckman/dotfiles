@@ -402,12 +402,15 @@ async function refresh(quiet = false) {
     base,
     publicVersion: wantPublic ? (publicSame ? cached.publicVersion : found.version) : "",
     publicMessages,
+    publicTruncated: !wantPublic ? false : publicSame ? cached.publicTruncated : Boolean(found.truncated),
     messages: [...base.messages, ...publicMessages],
   };
   listCache.set(cacheKey, entry);
   shownListKey = cacheKey;
   applyList(entry);
   if (entry.warnings.length) status(entry.warnings.join("; "), true);
+  else if (entry.publicTruncated && !quiet)
+    status("Showing the newest public conversations that match. Add words to reach older ones.");
   else if (!quiet && $("status").classList.contains("error")) status("");
 }
 function applyList(result) {

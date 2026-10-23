@@ -863,9 +863,41 @@ class WebTest(unittest.TestCase):
                      'x' * 179, 'x' * 181, ('word ' * 30 + '\t' * 40) * 20]:
             self.assertEqual(web.excerpt(body), re.sub(r'\s+', ' ', body)[:180], repr(body[:40]))
 
+    def test_a_wait_cannot_spin_be_unbounded_or_queue_a_refusal(self):
+        import socket, time
+        stamp = quote(json.loads(self.request('/api/wait?since=&timeout=0')[1])['doorbell'])
+        # Bytes after the request end the wait at once, instead of keeping select() hot.
+        s = socket.create_connection(('127.0.0.1', self.server.server_port))
+        s.sendall(f'GET /api/wait?since={stamp}&timeout=20 HTTP/1.0\r\nHost: {self.server.authority}\r\n'
+                  f'X-Agent-Mail-Token: fixture-token\r\n\r\n'.encode())
+        time.sleep(0.3)
+        started = time.monotonic()
+        s.sendall(b'X')
+        s.settimeout(3)
+        reply = b''
+        while chunk := s.recv(4096):
+            reply += chunk
+        s.close()
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertIn(b'200 OK', reply.split(b'\r\n', 1)[0])
+        # Waits are bounded; one past the bound is told to retry rather than holding a thread.
+        self.server.waits = threading.BoundedSemaphore(1)
+        held = threading.Thread(target=lambda: self.request(f'/api/wait?since={stamp}&timeout=1'))
+        held.start()
+        time.sleep(0.2)
+        self.assertEqual(self.request('/api/wait?since=x&timeout=0')[0], 503)
+        held.join()
+        self.assertEqual(self.request('/api/wait?since=x&timeout=0')[0], 200)
+        # A request that will be refused does not queue behind the mailbox's work.
+        with self.server.lock:
+            started = time.monotonic()
+            self.assertEqual(self.request('/api/messages', **{'X-Agent-Mail-Token': 'wrong'})[0], 403)
+            self.assertEqual(self.request('/api/messages', Host='evil.example')[0], 403)
+            self.assertLess(time.monotonic() - started, 2)
+
     def test_public_search_is_offered_only_by_the_sqlite_store(self):
         status, body = self.request('/api/search?q=needle')
-        self.assertEqual((status, json.loads(body)['available'], json.loads(body)['messages']), (200, False, []))
+        self.assertEqual((status, json.loads(body)['available'], json.loads(body)['messages'], json.loads(body)['truncated']), (200, False, [], False))
         self.assertEqual(self.request('/api/thread?key=' + quote('public:' + self.id + '.md'))[0], 400)
 
     def test_a_waiting_window_hears_new_mail_without_holding_up_the_rest(self):
@@ -1460,6 +1492,22 @@ class SqliteWebTest(WebTest):
         self.assertEqual((status, [m['id'] for m in json.loads(body)]), (200, [public, reply]))
         self.assertEqual(self.request('/api/thread?key=' + quote('public:' + private + '.md'))[0], 404)
         self.assertEqual(self.request('/api/draft', {'mode': 'reply', 'key': 'public:' + public + '.md'})[0], 400)
+
+    def test_public_search_finds_old_matches_and_says_when_it_cuts(self):
+        (self.root / 'agents/cedar-cooper-11111111').mkdir()
+        (self.root / 'identities/cedar-cooper').write_text('11111111-0000-0000-0000-000000000003\n')
+        old = web.cli('send', '--from', 'alder-turner', '--to', '@+birch-weaver', '--subject', 'Old persimmon', '--body', 'First.')
+        for n in range(3):
+            web.cli('send', '--from', 'cedar-cooper', '--to', '@+birch-weaver', '--subject', f'New persimmon {n}', '--body', 'Later.')
+        self.box.PUBLIC_LIMIT = 2
+        search = lambda q: json.loads(self.request('/api/search?q=' + quote(q))[1])
+        # A contact filter is applied before anything is cut, so the old conversation is found.
+        found = search('persimmon with:@+alder-turner')
+        self.assertEqual(([m['thread'] for m in found['messages']], found['truncated']), ([old], False))
+        # Past the cap, the newest conversations are kept, and the response says it cut.
+        found = search('persimmon')
+        self.assertEqual((len(found['messages']), found['truncated']), (2, True))
+        self.assertNotIn(old, [m['thread'] for m in found['messages']])
 
     def test_a_store_that_cannot_be_opened_is_a_retryable_error(self):
         # The marker can say sqlite a moment before the database exists.

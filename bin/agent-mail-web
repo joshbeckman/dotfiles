@@ -663,7 +663,7 @@ class Mailbox:
         records = (self.stored_record(row, row['folder']) for row in rows)
         return {record['key']: record for record in records}
 
-    PUBLIC_LIMIT = 500
+    PUBLIC_LIMIT = 200
 
     def public_search(self, query):
         """Public conversations Josh is not in, matched like his own search, one row each.
@@ -673,17 +673,22 @@ class Mailbox:
         nothing, rather than the whole realm."""
         words, people = parse_query(query)
         if not self.sqlite() or not (words or people):
-            return []
+            return [], False
+        # Each with: name must appear among a message's sender and recipients. That narrows in SQL
+        # to a superset, since a handle's name is part of its mailbox id; the exact contact match
+        # is made below. Nothing is cut before both filters, so an old match is never lost.
+        names = [name for _, name in people]
         sql = f"""SELECT m.message_id, m.thread_id, m.reply_to_message_id, m.sender_mailbox_id,
                          m.reply_to_address, m.subject, m.sent_at,
                          substr(m.body, 1, {self.EXCERPT_SOURCE}) AS body, {self.RECIPIENTS} AS recipients
                     FROM messages m JOIN threads t ON t.thread_id = m.thread_id
                    WHERE t.visibility = 'public' AND m.thread_id NOT IN ({self.JOSH_THREADS})
                    {''.join(' AND ' + self.WORD_MATCH for _ in words)}
-                   ORDER BY m.sent_at DESC, m.message_id DESC LIMIT {self.PUBLIC_LIMIT}"""
+                   {''.join(" AND instr(fold(m.sender_mailbox_id || ',' || coalesce(recipients, '')), ?) > 0" for _ in names)}
+                   ORDER BY m.sent_at DESC, m.message_id DESC"""
         db = self.connect()
         try:
-            rows = db.execute(sql, words).fetchall()
+            rows = db.execute(sql, [*words, *names]).fetchall()
         finally:
             db.close()
         found = []
@@ -692,7 +697,8 @@ class Mailbox:
             participants = {address_key(a) for a in (record['from'] + ',' + record['to']).split(',') if a.strip()}
             if all(p in participants for p in people):
                 found.append(record | {'excerpt': excerpt(record['body'])})
-        return conversations(found)
+        rows = conversations(found)
+        return rows[:self.PUBLIC_LIMIT], len(rows) > self.PUBLIC_LIMIT
 
     def public_thread(self, key):
         match = PUBLIC_KEY.fullmatch(key) if isinstance(key, str) else None
@@ -1285,10 +1291,13 @@ class Server(ThreadingHTTPServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.lock = threading.Lock()
+        self.waits = threading.BoundedSemaphore(MAX_WAITS)
 
 
 WAIT_POLL = 0.25
 WAIT_LIMIT = 25
+# Each wait holds a thread for up to WAIT_LIMIT seconds; past this many, a window is told to retry.
+MAX_WAITS = 32
 
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
@@ -1360,8 +1369,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_request(self):
-        if urlsplit(self.path).path == '/api/wait':
+        path = urlsplit(self.path).path
+        # A request that will be refused reads only fixed server settings, so it is refused
+        # without queuing on the lock behind the mailbox's work.
+        refused = (self.headers.get('Host') not in self.server.authorities or
+                   (path.startswith('/api/') and not hmac.compare_digest(
+                       self.headers.get('X-Agent-Mail-Token', ''), self.server.token)))
+        if refused:
             return self.handle_checked_request()
+        if path == '/api/wait':
+            if not self.server.waits.acquire(blocking=False):
+                return self.reply(503, {'error': 'Too many windows are waiting for mail; retrying shortly'})
+            try:
+                return self.handle_checked_request()
+            finally:
+                self.server.waits.release()
         with self.server.lock:
             return self.handle_checked_request()
 
@@ -1462,8 +1484,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = dict(result, messages=conversations(result['messages']))
             result = stamped(result, args)
         elif route == '/api/search':
-            result = stamped({'available': box.sqlite(),
-                              'messages': box.public_search(args.get('q', [''])[0])}, args)
+            messages, truncated = box.public_search(args.get('q', [''])[0])
+            result = stamped({'available': box.sqlite(), 'messages': messages, 'truncated': truncated}, args)
         elif route == '/api/thread':
             result = box.thread(key)
         elif route == '/api/draft':
@@ -1530,10 +1552,13 @@ class Handler(BaseHTTPRequestHandler):
             if stamp != since or time.monotonic() >= deadline:
                 return {'doorbell': stamp, 'changed': stamp != since}
             # Waiting on the socket rather than sleeping notices a closed tab at once, instead of
-            # keeping a thread for the rest of the timeout.
+            # keeping a thread for the rest of the timeout. A readable socket always ends the wait:
+            # bytes after the request would otherwise keep select() returning at once, spinning.
             readable, _, _ = select.select([self.connection], [], [], WAIT_POLL)
-            if readable and not self.connection.recv(1, socket.MSG_PEEK):
-                raise ConnectionResetError('client closed the wait')
+            if readable:
+                if not self.connection.recv(1, socket.MSG_PEEK):
+                    raise ConnectionResetError('client closed the wait')
+                return {'doorbell': stamp, 'changed': stamp != since}
 
     def post(self, route, data):
         box = self.server.box
