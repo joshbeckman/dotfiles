@@ -918,7 +918,7 @@ def switch_store(target: str, marker: Path, db_path: Path, agent_root: Path, hum
     # Only the default database can be the runtime store: agent-mail2 recognises it as the one
     # whose mail notifies Josh, and a custom one would deliver silently.
     runtime = human_root.parent / "mail2.sqlite3"
-    if db_path != runtime:
+    if db_path.resolve() != runtime.resolve():
         raise MigrationError(f"the runtime store is {runtime}, so the store cannot be switched over {db_path}; "
                              "unset AGENT_MAIL2_DB and --db")
     if agent_root.resolve() != runtime_agent_root().resolve():

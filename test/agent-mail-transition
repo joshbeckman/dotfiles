@@ -8,6 +8,7 @@ set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
+tmp="$(CDPATH= cd -- "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 unset AGENT_SCRATCHPAD AGENT_HANDLE AGENT_MAIL_FROM AGENT_MAIL2_DB AGENT_MAIL2_HUMAN AGENT_SCRATCH_ROOT
 mkdir -p "$tmp/no-notify"
@@ -43,7 +44,8 @@ PY
 # --- the archive restores, and --finish removes it only when the mirror is exact --------
 realm archive
 m1="$(as $alice cmd send --to "$bob,josh" --subject Before -m 'history' | tail -1)"
-migrate --set-store both >"$tmp/out"
+ln -s "$dir/state" "$tmp/state-link"
+"$bin/agent-mail-migrate" --db "$tmp/state-link/mail2.sqlite3" --set-store both >"$tmp/out"
 archive="$(ls "$dir/state/archives/"*.tar.gz)"
 grep -Fq "archived and restored the mail to $archive" "$tmp/out" || fail "set-store did not report the archive"
 [[ "$(stat -c %a "$archive" 2>/dev/null || stat -f %Lp "$archive")" == 600 ]] || fail "the archive is not private"
