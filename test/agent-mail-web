@@ -857,6 +857,12 @@ class WebTest(unittest.TestCase):
         self.assertNotEqual(fresh['version'], version)
         self.assertEqual(len(fresh['messages']), 2)
 
+    def test_an_excerpt_collapses_whitespace_without_reading_the_whole_body(self):
+        import re
+        for body in ['', ' ', 'word', ' lead and trail ', 'a\u00a0b\u3000c\n\nd', '\n' * 3000 + 'late',
+                     'x' * 179, 'x' * 181, ('word ' * 30 + '\t' * 40) * 20]:
+            self.assertEqual(web.excerpt(body), re.sub(r'\s+', ' ', body)[:180], repr(body[:40]))
+
     def test_a_waiting_window_hears_new_mail_without_holding_up_the_rest(self):
         self.assert_a_wait_hears_new_mail()
 
@@ -1400,6 +1406,28 @@ class SqliteWebTest(WebTest):
                         '\nSubject: Routed\n\nRoute replies elsewhere.')
         sent = self.box.message('sent:' + self.box.send_draft(path) + '.md')
         self.assertEqual((sent['reply_to'], sent['thread']), ('alder-turner-12345678', self.id))
+
+    def test_the_store_narrows_listings_threads_and_messages_itself(self):
+        reply = web.cli('send', '--from', 'birch-weaver', '--to', '@josh', '--in-reply-to', self.id,
+                        '--subject', 'Re: A stored thread', '--body', 'Ünïcode   reply\n\n  with   SPACES.')
+        other = web.cli('send', '--from', 'birch-weaver', '--to', '@josh', '--subject', 'Unrelated', '--body', 'Elsewhere.')
+        self.assertEqual(self.request('/api/archive', {'key': 'inbox:' + other + '.md'})[0], 200)
+        # Words match case-folded across sender, recipients, subject and body, in the store.
+        keys = lambda folder, q: [m['key'] for m in self.box.listing(folder, q)['messages']]
+        self.assertEqual(keys('all', 'ÜNÏCODE spaces'), ['inbox:' + reply + '.md'])
+        self.assertEqual(keys('all', 'birch-weaver elsewhere'), ['archive:' + other + '.md'])
+        self.assertEqual(keys('inbox', 'elsewhere'), [])
+        self.assertEqual(keys('all', 'stored needle'), [self.key])
+        self.assertEqual(keys('all', 'with:@+birch-weaver unrelated'), ['archive:' + other + '.md'])
+        listing = self.box.listing('inbox', '')
+        self.assertEqual([m['key'] for m in listing['messages']], ['inbox:' + reply + '.md', self.key])
+        self.assertEqual(listing['counts'], {'inbox': 2, 'archive': 1, 'sent': 0, 'drafts': 0})
+        self.assertEqual(listing['messages'][0]['excerpt'], 'Ünïcode reply with SPACES.')
+        self.assertNotIn('body', listing['messages'][0])
+        # A thread and a message are fetched by id, and a key naming the wrong folder is not found.
+        self.assertEqual([m['id'] for m in self.box.thread(self.key)], [self.id, reply])
+        self.assertEqual(self.box.message(self.key)['body'], '**Hello**\n\nA stored needle.\n')
+        self.assertEqual(self.request('/api/thread?key=' + quote('archive:' + self.id + '.md'))[0], 404)
 
     def test_a_waiting_window_hears_stored_mail(self):
         # agent-mail2 rings beside its database rather than through the Maildir.

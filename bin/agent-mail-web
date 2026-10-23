@@ -393,6 +393,26 @@ def parse_mail(path):
             'revision': hashlib.sha256(raw).hexdigest()}
 
 
+def excerpt(body, length=180):
+    """The first characters of a body with each run of whitespace collapsed to one space.
+
+    Collapsing a prefix gives a prefix of the collapsed whole, since a run cut short at the end
+    still becomes one space, so a short prefix answers exactly once it yields enough characters.
+    Collapsing every whole body cost most of an All mail listing.
+    """
+    size = 2 * length
+    while True:
+        part = body[:size]
+        # split() and the regex \s agree on what whitespace is; split is several times faster,
+        # and the edges put back the single space a leading or trailing run collapses to.
+        words = part.split()
+        lead = ((' ' if part[:1].isspace() else '') + ' '.join(words) +
+                (' ' if words and part[-1:].isspace() else ''))
+        if len(lead) >= length or size >= len(body):
+            return lead[:length]
+        size *= 2
+
+
 def stored_time(value):
     seconds, micros = divmod(value, 1_000_000)
     stamp = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(seconds))
@@ -549,38 +569,79 @@ class Mailbox:
             return False
         return bool(match) and match.group(1) == b'sqlite'
 
-    def stored(self):
-        """Josh's delivered and sent mail from the SQLite store, keyed as the Maildir keys it,
-        so the app cannot tell which store answered. Drafts stay files: they are documents
-        Josh is still editing, not mail."""
+    # Josh's mail and the folder each copy is in: delivered mail is Inbox until read, then
+    # Archive, and everything he sent is Sent.
+    STORED_FOLDERS = """SELECT message_id, CASE WHEN read_at IS NULL THEN 'inbox' ELSE 'archive' END AS folder
+                          FROM deliveries WHERE recipient_mailbox_id = 'josh' AND discarded_at IS NULL
+                        UNION ALL SELECT message_id, 'sent' FROM messages WHERE sender_mailbox_id = 'josh'"""
+    # A listing excerpts the first 180 characters after collapsing whitespace, so it reads only
+    # the start of each body. Exact unless whitespace fills nearly all of this many characters.
+    EXCERPT_SOURCE = 2000
+
+    def connect(self):
         db = sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=5)
         db.row_factory = sqlite3.Row
+        # Python's casefold, so a stored search matches exactly as the Maildir one does; SQLite's
+        # lower() folds ASCII only.
+        db.create_function('fold', 1, lambda s: s.casefold() if s is not None else None, deterministic=True)
+        return db
+
+    def stored(self, thread=None, message=None, folder=None, words=(), excerpt=False):
+        """Josh's delivered and sent mail from the SQLite store, keyed as the Maildir keys it,
+        so the app cannot tell which store answered. Drafts stay files: they are documents
+        Josh is still editing, not mail.
+
+        Narrowed in SQL rather than loaded whole and filtered here: a thread, one message, a
+        folder, and search words, each matched case-folded across sender, recipients, subject
+        and body as the Maildir search does. With excerpt, only the start of each body is read."""
+        where, params = [], []
+        if thread is not None:
+            where.append('m.thread_id = ?'); params.append(thread)
+        if message is not None:
+            where.append('m.message_id = ?'); params.append(message)
+        if folder not in (None, 'all'):
+            where.append('f.folder = ?'); params.append(folder)
+        for word in words:
+            where.append("instr(fold(m.sender_mailbox_id || char(10) || coalesce(recipients, '') || char(10)"
+                         " || coalesce(m.subject, '') || char(10) || m.body), ?) > 0")
+            params.append(word)
+        body = f'substr(m.body, 1, {self.EXCERPT_SOURCE})' if excerpt else 'm.body'
+        sql = f"""SELECT f.folder, m.message_id, m.thread_id, m.sequence, m.reply_to_message_id,
+                         m.sender_mailbox_id, m.reply_to_address, m.subject, m.sent_at, {body} AS body,
+                         (SELECT group_concat(recipient_mailbox_id, ', ') FROM
+                            (SELECT recipient_mailbox_id FROM message_recipients r
+                              WHERE r.message_id = m.message_id ORDER BY recipient_mailbox_id)) AS recipients
+                    FROM ({self.STORED_FOLDERS}) f JOIN messages m USING (message_id)
+                   {'WHERE ' + ' AND '.join(where) if where else ''}"""
+        db = self.connect()
         try:
-            recipients = dict(db.execute(
-                """SELECT message_id, group_concat(recipient_mailbox_id, ', ') FROM
-                     (SELECT * FROM message_recipients ORDER BY recipient_mailbox_id) GROUP BY message_id"""))
-            rows = [(('inbox' if row['read_at'] is None else 'archive'), row) for row in db.execute(
-                """SELECT m.*, d.read_at FROM deliveries d JOIN messages m USING(message_id)
-                   WHERE d.recipient_mailbox_id = 'josh' AND d.discarded_at IS NULL""")]
-            rows += [('sent', row) for row in db.execute("SELECT * FROM messages WHERE sender_mailbox_id = 'josh'")]
+            rows = db.execute(sql, params).fetchall()
         finally:
             db.close()
         found = {}
-        for folder, row in rows:
-            key = f'{folder}:{row["message_id"]}.md'
+        for row in rows:
+            key = f'{row["folder"]}:{row["message_id"]}.md'
             found[key] = {'id': row['message_id'], 'thread': row['thread_id'],
                           'parent': row['reply_to_message_id'] or '', 'from': row['sender_mailbox_id'],
-                          'to': recipients.get(row['message_id'], ''), 'reply_to': row['reply_to_address'] or '',
+                          'to': row['recipients'] or '', 'reply_to': row['reply_to_address'] or '',
                           'subject': row['subject'] or '', 'date': stored_time(row['sent_at']),
-                          'body': row['body'], 'key': key, 'folder': folder,
+                          'body': row['body'], 'key': key, 'folder': row['folder'],
                           'revision': hashlib.sha256(key.encode()).hexdigest()}
         return found
+
+    def stored_counts(self):
+        db = self.connect()
+        try:
+            return dict(db.execute(
+                f"SELECT folder, count(*) FROM ({self.STORED_FOLDERS}) GROUP BY folder").fetchall())
+        finally:
+            db.close()
 
     def message(self, key):
         if self.sqlite() and not str(key).startswith('drafts:'):
             if not isinstance(key, str) or not MESSAGE_KEY.fullmatch(key):
                 raise MailError('Invalid message key')
-            found = self.stored().get(key)
+            found = self.stored(message=MESSAGE_KEY.fullmatch(key).group(2)[:-3]).get(key)
             if found is None:
                 raise MailError('Message no longer exists; refresh the inbox or check Sent', 404)
             return dict(found)
@@ -592,11 +653,11 @@ class Mailbox:
             self.cache[key] = (stamp, dict(parse_mail(path), key=key, folder=key.split(':')[0]))
         return dict(self.cache[key][1])
 
-    def messages(self, thread=None):
+    def messages(self, thread=None, drafts_only=False):
         messages, warnings, present = [], [], set()
         sqlite = self.sqlite()
-        if sqlite:
-            messages = [m for m in self.stored().values() if thread is None or m['thread'] == thread]
+        if sqlite and not drafts_only:
+            messages = list(self.stored(thread=thread).values())
         for folder in (('drafts',) if sqlite else FOLDERS):
             for path in self.directory(folder).glob('*.md'):
                 key = folder + ':' + path.name
@@ -622,10 +683,8 @@ class Mailbox:
         return sorted(messages, key=lambda m: (m['date'], m['key']), reverse=True), warnings
 
     def listing(self, folder, query):
-        messages, warnings = self.messages()
         if folder not in (*FOLDERS, 'all'):
             raise MailError('Unknown folder')
-        counts = {f: sum(m['folder'] == f for m in messages) for f in FOLDERS}
         words, people = [], []
         for word in query.casefold().split():
             if word.startswith('with:'):
@@ -635,16 +694,32 @@ class Mailbox:
                 people.append(address_key(address))
             else:
                 words.append(word)
+        if self.sqlite():
+            # Drafts are files in either store; stored mail arrives already matched to the words.
+            messages, warnings = self.messages(drafts_only=True)
+            counts = dict.fromkeys(FOLDERS, 0) | self.stored_counts() | {'drafts': len(messages)}
+            stored = list(self.stored(folder=folder, words=words, excerpt=True).values())
+            matched = {m['key'] for m in stored}
+            messages = sorted(stored + messages, key=lambda m: (m['date'], m['key']), reverse=True)
+        else:
+            messages, warnings = self.messages()
+            counts = {f: sum(m['folder'] == f for m in messages) for f in FOLDERS}
+            matched = set()
         matches = []
         for m in messages:
             if folder != 'all' and m['folder'] != folder:
                 continue
-            text = '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold()
-            participants = {address_key(a) for a in (m['from'] + ',' + m['to']).split(',') if a.strip()}
-            if all(w in text for w in words) and all(p in participants for p in people):
-                matches.append(m)
+            if words and m['key'] not in matched:
+                text = '\n'.join(m[k] for k in ('from', 'to', 'subject', 'body')).casefold()
+                if not all(w in text for w in words):
+                    continue
+            if people:
+                participants = {address_key(a) for a in (m['from'] + ',' + m['to']).split(',') if a.strip()}
+                if not all(p in participants for p in people):
+                    continue
+            matches.append(m)
         return {'messages': [dict((k, v) for k, v in m.items() if k != 'body') |
-                             {'excerpt': re.sub(r'\s+', ' ', m['body'])[:180]} for m in matches],
+                             {'excerpt': excerpt(m['body'])} for m in matches],
                 'counts': counts, 'warnings': warnings}
 
     def thread(self, key):
