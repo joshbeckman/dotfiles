@@ -44,7 +44,14 @@ AGENT_RUN_GROUP = 64 * 1024
 AGENT_RUN_RECORD_TYPES = frozenset(('init', 'user', 'assistant_start', 'delta', 'assistant_end',
                                     'tool_intent', 'tool_result', 'checkpoint', 'retry', 'settled',
                                     'reply_sending', 'reply_sent',
-                                    'runtime_context', 'image_export', 'reply_skipped'))
+                                    'runtime_context', 'image_export', 'reply_skipped',
+                                    'model_request', 'model_changed', 'model_change_rejected',
+                                    'nested_tool_intent', 'nested_tool_result', 'nested_tool_resolved'))
+# Provider signatures are opaque blobs a provider needs to resume its own reasoning, not answer
+# text and not something a reader can use. They are hidden rather than projected, and hidden rather
+# than counted as unreadable, so a turn reads as uninterrupted prose.
+AGENT_RUN_HIDDEN_DELTA_KINDS = frozenset(('reasoning_signature', 'reasoning_redacted',
+                                          'reasoning_opaque', 'tool_signature', 'text_signature'))
 
 
 def agent_run_log(thread_id):
@@ -166,6 +173,7 @@ def agent_run_entries(path):
         raw = raw[:complete]
     entries, offset, skipped = [], 0, 0
     group = None
+    seen_model = None
 
     def flush():
         nonlocal group
@@ -188,6 +196,45 @@ def agent_run_entries(path):
             skipped += 1
             continue
         kind = record.get('kind')
+        if record.get('type') == 'delta' and kind in AGENT_RUN_HIDDEN_DELTA_KINDS:
+            # Deliberately no flush: a signature can arrive mid-turn, and the prose on either
+            # side of it belongs to the same group.
+            continue
+        if record.get('type') in ('model_request', 'model_changed', 'model_change_rejected'):
+            # These arrive before every API call, including the calls that write summaries, and
+            # they arrive mid-turn, so none of them flushes the prose group. One record produces
+            # exactly one entry, keyed by its own offset: two entries under one key would collide
+            # in the viewer's keyed map and one of them would be erased.
+            if record.get('type') == 'model_changed':
+                # A selection names the model as id where a request names it as model, so the tuple
+                # is normalised here and the applied change becomes the state a later request is
+                # compared against. A control id is never used as a model id.
+                selection = (record.get('change') or {}).get('selection')
+                selection = selection if isinstance(selection, dict) else {}
+                seen_model = (selection.get('provider'), selection.get('id'),
+                              selection.get('api'), selection.get('thinking'))
+                entries.append({'key': str(start), 'entry': {
+                    'type': 'model_change', 'timestamp': record.get('at_ms'),
+                    'provider': selection.get('provider'), 'modelId': selection.get('id'),
+                    'api': selection.get('api'), 'thinkingLevel': selection.get('thinking')}})
+                continue
+            if record.get('type') == 'model_request':
+                model = record.get('model') or {}
+                state = (model.get('provider'), model.get('model'),
+                         model.get('api'), model.get('thinking'))
+                if state == seen_model:
+                    # Identical to what is already shown, which is the ordinary case: a request
+                    # precedes every API call and most of them change nothing.
+                    continue
+                seen_model = state
+                entries.append({'key': str(start), 'entry': {
+                    'type': 'model_change', 'timestamp': record.get('at_ms'),
+                    'provider': model.get('provider'), 'modelId': model.get('model'),
+                    'api': model.get('api'), 'thinkingLevel': model.get('thinking')}})
+                continue
+            # A rejection is its own entry and does not adopt the model it refused.
+            entries.append({'key': str(start), 'entry': record})
+            continue
         if record.get('type') == 'delta' and kind in ('content', 'reasoning_content', 'arguments'):
             if (group is not None and group['turn'] == record.get('turn') and group['kind'] == kind
                     and len(group['text']) < AGENT_RUN_GROUP):
@@ -210,6 +257,10 @@ def agent_run_entries(path):
     # everything the client already has.
     open_key = str(group['key']) if group is not None else None
     flush()
+    # A model entry is appended where its record sits while the prose around it is still
+    # accumulating, so the list is in insertion order rather than offset order. The viewer sorts
+    # by key anyway, and a caller should not have to.
+    entries.sort(key=lambda item: int(item['key']))
     return {'entries': entries, 'skipped': skipped, 'truncated': truncated,
             'partial': complete < size, 'end': complete, 'open': open_key}
 

@@ -954,6 +954,177 @@ class WebTest(unittest.TestCase):
         self.assertEqual(self.request('/contexts/' + 'b' * 64 + '.md')[0], 404)
         self.assertEqual(self.request('/api/attachment?name=' + attachment)[0], 404)
 
+    def test_agent_run_hides_provider_signatures_and_projects_model_requests(self):
+        # Signatures are opaque blobs a provider needs to resume its own reasoning, not prose.
+        # They must not appear, must not be counted as unreadable, and must not break the group
+        # of prose on either side of them.
+        records = [
+            {'type': 'delta', 'at_ms': 1000, 'turn': 1, 'kind': 'content', 'data': 'Before '},
+            {'type': 'delta', 'at_ms': 1050, 'turn': 1, 'kind': 'reasoning_signature', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1060, 'turn': 1, 'kind': 'tool_signature', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1070, 'turn': 1, 'kind': 'reasoning_redacted', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1080, 'turn': 1, 'kind': 'reasoning_opaque', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1090, 'turn': 1, 'kind': 'text_signature', 'data': 'opaque-blob'},
+            {'type': 'delta', 'at_ms': 1100, 'turn': 1, 'kind': 'content', 'data': 'after.', 'index': 3},
+            {'type': 'model_request', 'at_ms': 1200, 'turn': 2,
+             'model': {'provider': 'fireworks', 'model': 'deepseek-v4p1-flash', 'api': 'chat'}},
+            {'type': 'model_changed', 'at_ms': 1300, 'change': {'id': 'c1', 'selection': 'auto'}},
+            {'type': 'model_change_rejected', 'at_ms': 1400, 'id': 'c2', 'reason': 'not available'},
+        ]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        # No entry mentions a signature, and the prose on both sides is one group.
+        self.assertNotIn('opaque-blob', json.dumps(entries))
+        self.assertEqual(entries[0]['message']['content'], [{'type': 'text', 'text': 'Before after.'}])
+        self.assertEqual(len(entries), 4)
+        # A model request reads as the provider and model that answered the turn, carrying api and
+        # thinking on that same entry rather than a second one under the same key.
+        self.assertEqual(entries[1], {'type': 'model_change', 'timestamp': 1200, 'provider': 'fireworks',
+                                      'modelId': 'deepseek-v4p1-flash', 'api': 'chat', 'thinkingLevel': None})
+        # An applied change is one card, and the rejection stays its own.
+        self.assertEqual([entry['type'] for entry in entries[2:]], ['model_change', 'model_change_rejected'])
+        # Two entries under one key would collide in the viewer's keyed map and erase one of them.
+        keys = [item['key'] for item in data['entries']]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+
+    def test_agent_run_reports_only_real_model_changes(self):
+        # A runtime reports the model before every API call, including the summary calls, so most
+        # of these records say the same thing. Only a real difference is news.
+        base = {'provider': 'fireworks', 'model': 'deepseek-v4p1-flash', 'api': 'chat'}
+        records = [{'type': 'delta', 'at_ms': 1000, 'turn': 1, 'kind': 'content', 'data': 'Prose '},
+                   {'type': 'model_request', 'at_ms': 1100, 'turn': 1, 'model': dict(base)}]
+        records += [{'type': 'model_request', 'at_ms': 1100 + i, 'turn': 1, 'model': dict(base)}
+                    for i in range(1, 12)]
+        records += [{'type': 'delta', 'at_ms': 1200, 'turn': 1, 'kind': 'content', 'data': 'continues.'},
+                    {'type': 'model_request', 'at_ms': 1300, 'turn': 2,
+                     'model': dict(base, model='kimi-k3')},
+                    {'type': 'model_request', 'at_ms': 1400, 'turn': 2, 'model': dict(base, model='kimi-k3')},
+                    {'type': 'model_request', 'at_ms': 1500, 'turn': 3,
+                     'model': dict(base, model='kimi-k3', thinking='high')}]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        # The prose is one group, so the eleven identical requests did not split it either.
+        self.assertEqual(entries[0]['message']['content'], [{'type': 'text', 'text': 'Prose continues.'}])
+        # Initial model, then one switch, then one thinking change. Twelve requests, three cards.
+        # Initial model, then a switch, then a record where model and thinking change together. Each
+        # source record gets exactly one entry, so the third carries both rather than drawing a
+        # second entry under the same key, which is the case that would erase one of them.
+        self.assertEqual([entry['type'] for entry in entries[1:]], ['model_change'] * 3)
+        self.assertEqual(entries[1]['modelId'], 'deepseek-v4p1-flash')
+        self.assertEqual(entries[2]['modelId'], 'kimi-k3')
+        self.assertEqual(entries[2]['thinkingLevel'], None)
+        self.assertEqual(entries[3]['modelId'], 'kimi-k3')
+        self.assertEqual(entries[3]['thinkingLevel'], 'high')
+        keys = [item['key'] for item in data['entries']]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+
+    def test_agent_run_projects_an_applied_change_once(self):
+        # A runtime reports the change, then a request for it before every API call. That is one
+        # change, not a change plus a switch, and the prose around all of it stays one message.
+        records = [
+            {'type': 'delta', 'at_ms': 1000, 'turn': 1, 'kind': 'content', 'data': 'Prose '},
+            {'type': 'model_changed', 'at_ms': 1100,
+             'change': {'id': 'CONTROL_ID', 'selection': {'provider': 'fireworks', 'id': 'kimi-k3',
+                                                          'api': 'chat', 'thinking': 'high'}}},
+            {'type': 'model_request', 'at_ms': 1200, 'turn': 1,
+             'model': {'provider': 'fireworks', 'model': 'kimi-k3', 'api': 'chat', 'thinking': 'high'}},
+            {'type': 'model_request', 'at_ms': 1300, 'turn': 1,
+             'model': {'provider': 'fireworks', 'model': 'kimi-k3', 'api': 'chat', 'thinking': 'high'}},
+            {'type': 'model_change_rejected', 'at_ms': 1400, 'id': 'CONTROL_ID', 'reason': 'not available'},
+            {'type': 'delta', 'at_ms': 1500, 'turn': 1, 'kind': 'content', 'data': 'continues.'},
+        ]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        # Ordered by key, so the prose group comes first and the two later records after it. The
+        # change and both requests that follow produce exactly one card between them.
+        self.assertEqual([entry['type'] for entry in entries],
+                         ['message', 'model_change', 'model_change_rejected'])
+        self.assertEqual(entries[1]['modelId'], 'kimi-k3')
+        self.assertEqual(entries[1]['thinkingLevel'], 'high')
+        self.assertEqual(entries[2]['reason'], 'not available')
+        self.assertEqual(entries[0]['message']['content'], [{'type': 'text', 'text': 'Prose continues.'}])
+        keys = [item['key'] for item in data['entries']]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+        # A control id is not a model id. A rejection legitimately names the control it refused,
+        # so the check is on what became a model id rather than on the string appearing at all.
+        self.assertNotIn('CONTROL_ID', [entry.get('modelId') for entry in entries])
+
+    def test_agent_run_shows_a_different_request_after_an_applied_change(self):
+        # The applied change sets the state a request is compared against, so a request that differs
+        # from it still draws a card. A boolean that skipped the next request regardless would
+        # swallow the immediate one. Both sequences matter: a mismatch straight after the change,
+        # and a mismatch only after an identical request that must stay silent.
+        selection = {'provider': 'openai', 'id': 'gpt-4.1-nano', 'api': 'openai-responses',
+                     'thinking': 'high'}
+        matching = {'provider': 'openai', 'model': 'gpt-4.1-nano', 'api': 'openai-responses',
+                    'thinking': 'high'}
+        differing = dict(matching, thinking='off')
+        for label, requests in (('immediate mismatch', [differing]),
+                                ('mismatch after an identical request', [matching, differing])):
+            with self.subTest(sequence=label):
+                records = [{'type': 'model_changed', 'at_ms': 1000,
+                            'change': {'id': 'CONTROL_ID', 'selection': dict(selection)}}]
+                records += [{'type': 'model_request', 'at_ms': 1100 + i, 'turn': 1,
+                             'model': dict(model)} for i, model in enumerate(requests)]
+                thread, _ = self.agent_run(records=records)
+                data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+                entries = [item['entry'] for item in data['entries']]
+                # The change, then the differing request. An identical request between them is
+                # silent, so the differing one is the last entry either way.
+                self.assertEqual([entry['type'] for entry in entries], ['model_change', 'model_change'])
+                self.assertEqual(entries[0]['thinkingLevel'], 'high')
+                self.assertEqual(entries[1]['thinkingLevel'], 'off')
+                keys = [item['key'] for item in data['entries']]
+                self.assertEqual(len(keys), len(set(keys)), keys)
+                self.assertNotIn('CONTROL_ID', [entry.get('modelId') for entry in entries])
+
+    def test_agent_run_recognizes_nested_tool_records(self):
+        # Real shapes from the arun fixtures. A nested intent is not an ordinary tool call: a
+        # metadata discovery action differs from a remote call, and backend mail with action
+        # progress is nonterminal, so only a final reply_sent means the job answered. Each record
+        # gets one entry keyed by its own offset, and the private paths are shown as references
+        # rather than read.
+        parent = 'call_scripted_1'
+        private = '/home/josh/.local/state/agent/scratchpads/peziza-wheelwright-of-beacon-01a13adf/private'
+        records = [
+            {'type': 'tool_intent', 'at_ms': 1000, 'id': parent, 'name': 'bash', 'arguments': {'command': 'x'}},
+            {'type': 'nested_tool_intent', 'at_ms': 1100, 'id': '1792638990717-4085418-11', 'parent': parent,
+             'job': '1792638990655-4085418-0', 'backend': 'mcp', 'action': 'refresh', 'name': 'fixture',
+             'arguments': private + '/args.json'},
+            {'type': 'nested_tool_result', 'at_ms': 1200, 'id': '1792638990717-4085418-11', 'parent': parent,
+             'output': private + '/result.json', 'is_error': False, 'unknown': False,
+             'images': [{'path': private + '/shot.png', 'mime': 'image/png'}]},
+            {'type': 'nested_tool_resolved', 'at_ms': 1300, 'id': '1792639093959-4096437-16',
+             'result': 'Progress delivery verified by operator receipt: 01M5GSVK9QZT'},
+            {'type': 'tool_result', 'at_ms': 1400, 'id': parent, 'content': 'ok', 'is_error': False},
+        ]
+        thread, _ = self.agent_run(records=records)
+        data = json.loads(self.request('/api/transcript?thread=' + thread)[1])
+        self.assertEqual(data['skipped'], 0)
+        entries = [item['entry'] for item in data['entries']]
+        kinds = [entry['type'] for entry in entries]
+        for expected in ('nested_tool_intent', 'nested_tool_result', 'nested_tool_resolved'):
+            self.assertIn(expected, kinds)
+        # One entry per source record, and no two share a key.
+        self.assertEqual(len(entries), 5)
+        keys = [item['key'] for item in data['entries']]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+        # The result keeps its output and its images on the same entry rather than splitting them.
+        result = next(entry for entry in entries if entry['type'] == 'nested_tool_result')
+        self.assertEqual(result['output'], private + '/result.json')
+        self.assertEqual(result['images'][0]['path'], private + '/shot.png')
+        # The bridge does not start serving the private paths a record names. The attachment route
+        # refuses a name that is not a 32-hex image, so it answers 400 rather than 404; either way
+        # it refuses, which is the property under test.
+        self.assertIn(self.request('/api/attachment?name=args.json')[0], (400, 404))
+        self.assertEqual(self.request('/private/args.json')[0], 404)
+
     def test_agent_run_projects_records_for_the_existing_viewer(self):
         thread, _ = self.agent_run(records=self.agent_run_records())
         status, body = self.request('/api/transcript?thread=' + thread)
