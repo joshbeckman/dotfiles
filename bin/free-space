@@ -19,7 +19,8 @@ Modes:
   --yes       Skip the confirmation prompt when used with --apply.
 
 Targeted cleanup (optional positional filters; default is all):
-  aerials     macOS dynamic/aerial wallpapers (redownloaded on demand)
+  wallpaper   macOS dynamic wallpapers and their render cache
+  tmpapps     macOS app bundles left behind in the user temp directory
   npm         ~/.npm cache
   claude      Claude Desktop vm_bundles + caches
   brew        Homebrew download cache (brew cleanup)
@@ -33,7 +34,7 @@ Durable agent scratchpads are intentionally excluded from cache cleanup. Use
 
 Examples:
   free-space                 # show everything reclaimable, delete nothing
-  free-space aerials brew    # dry-run just those two
+  free-space wallpaper brew  # dry-run just those two
   free-space --apply         # clean everything (with confirmation)
   free-space --apply --yes npm cache
 USAGE
@@ -69,7 +70,8 @@ TOTAL_KB=0
 # One-line explanation per target, shown in the report.
 describe() {
   case "$1" in
-    aerials)  echo "macOS aerial/dynamic wallpaper videos (redownloaded on demand)" ;;
+    wallpaper) echo "macOS dynamic wallpaper videos and render cache (redownloaded on demand)" ;;
+    tmpapps)  echo "macOS app bundles unpacked into the user temp directory by installers" ;;
     npm)      echo "~/.npm package cache" ;;
     claude)   echo "Claude Desktop VM images + web caches (regenerable)" ;;
     brew)     echo "Homebrew download cache (brew cleanup -s)" ;;
@@ -101,9 +103,13 @@ dir_kb() {
   echo "$total"
 }
 
-# reclaim LABEL PATH...
+# reclaim [--self] LABEL PATH...
 # Measures the paths, prints the line, and (if --apply) removes their contents.
+# With --self it removes the paths themselves, for targets whose parent
+# directory is disposable rather than a stable path an app expects to exist.
 reclaim() {
+  local mode=contents
+  while [ "${1:-}" = "--self" ]; do mode=self; shift; done
   local label="$1"; shift
   local kb; kb=$(dir_kb "$@")
   if [ "$kb" -eq 0 ]; then
@@ -115,8 +121,12 @@ reclaim() {
     local p
     for p in "$@"; do
       [ -e "$p" ] || continue
-      # Delete the *contents*, not the dir itself, so apps keep their expected paths.
-      find "$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+      if [ "$mode" = self ]; then
+        rm -rf "$p" 2>/dev/null || true
+      else
+        # Delete the *contents*, not the dir itself, so apps keep their expected paths.
+        find "$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+      fi
     done
     printf '  %-14s %10s  freed      %s\n' "$label" "$(human "$kb")" "$(describe "$label")"
   else
@@ -137,10 +147,47 @@ if [ "$APPLY" -eq 1 ] && [ "$ASSUME_YES" -eq 0 ]; then
   echo
 fi
 
-if selected aerials; then
-  # These are Apple's dynamic wallpaper / aerial screensaver videos. macOS
-  # re-downloads them when a wallpaper needs them, so they are safe to drop.
-  reclaim "aerials" "$HOME/Library/Application Support/com.apple.wallpaper/aerials"
+if selected wallpaper; then
+  # Apple's dynamic wallpaper and aerial screensaver videos. macOS re-downloads
+  # them when a wallpaper needs them, so they are safe to drop.
+  #
+  # The render cache is the one that runs away. The wallpaper agent converts
+  # each wallpaper image to an uncompressed .bmp per display and per scale and
+  # never evicts any of them, so a shuffle set accumulates tens of gigabytes.
+  # Target the extension directories rather than their parent so the agent
+  # keeps the cache layout it created.
+  reclaim "wallpaper" \
+    "$HOME/Library/Application Support/com.apple.wallpaper/aerials" \
+    "$HOME/Library/Containers/com.apple.wallpaper.agent/Data/Library/Caches/com.apple.wallpaper.caches/extension-com.apple.wallpaper.extension.image" \
+    "$HOME/Library/Containers/com.apple.wallpaper.agent/Data/Library/Caches/com.apple.wallpaper.caches/extension-com.apple.wallpaper.extension.aerials"
+fi
+
+if selected tmpapps; then
+  # Installers and self-updaters unpack an app bundle into the user's temp
+  # directory and never remove it; Raycast leaves one ~244 MB copy per launch.
+  # APFS clone sharing means the space freed is smaller than the reported size.
+  #
+  # A directory is dropped only when every entry in it is an .app bundle and it
+  # has been untouched for a day, so an updater keeps the copy it is running.
+  declare -a stale_apps=()
+  user_temp=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)
+  if [ -n "$user_temp" ] && [ -d "$user_temp" ]; then
+    while IFS= read -r d; do
+      entries=$(find "$d" -mindepth 1 -maxdepth 1 2>/dev/null)
+      [ -n "$entries" ] || continue
+      if printf '%s\n' "$entries" | grep -qv '\.app$'; then
+        continue
+      fi
+      stale_apps+=("$d")
+    done < <(find "$user_temp" -mindepth 1 -maxdepth 1 -type d -mtime +0 2>/dev/null)
+  fi
+  [ ${#stale_apps[@]} -gt 0 ] && reclaim --self "tmpapps" "${stale_apps[@]}"
+
+  # Chrome unpacks itself here to re-sign each update. Each clone is a full
+  # copy and Chrome never clears the ones it has finished with.
+  if [ -n "$user_temp" ]; then
+    reclaim "tmpapps" "${user_temp%/T}/X/com.google.Chrome.code_sign_clone"
+  fi
 fi
 
 if selected npm; then

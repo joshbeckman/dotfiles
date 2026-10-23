@@ -244,8 +244,23 @@ __setup_mac(){
         then
                 # Privileged installers need a separate manual run; never quit running apps.
                 local -x HOMEBREW_NO_ASK=1 HOMEBREW_NO_SUDO=1
+
+                # A large bottle needs room for the new version while the old one is
+                # still installed; llvm alone is several gigabytes. Without this check
+                # the pour fails with dozens of "No space left on device" lines naming
+                # individual archive members, which reads like a broken formula rather
+                # than a full disk. Fail once, with the command that fixes it.
+                local free_kb
+                free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
+                if [ "${free_kb:-0}" -lt 5242880 ]; then
+                        echo "  ======  only $((free_kb / 1024)) MB free on $HOME; need 5 GB. Run $DOTFILES_DIR/bin/free-space." >&2
+                        return 1
+                fi
+
                 echo "Refreshing your brew"
                 brew update
+                # Clean before upgrading as well as after: the pour needs the space.
+                brew cleanup
                 brew upgrade --no-ask --no-quit
                 brew cleanup
                 echo "Installing basics with brew bundle"

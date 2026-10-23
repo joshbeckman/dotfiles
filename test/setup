@@ -45,6 +45,11 @@ elif name == 'gem':
         target = bindir / 'try'
         target.write_text('#!/bin/sh\\nexit 0\\n')
         target.chmod(0o700)
+elif name == 'df':
+    # setup checks free space before a brew upgrade; the fake reports either a
+    # healthy disk or a nearly full one.
+    print('Filesystem 1024-blocks Used Available Capacity Mounted on')
+    print('/dev/disk1s5 100000000 1 %s 1%% /' % os.environ.get('FAKE_FREE_KB', '99999999'))
 elif name == 'ruby':
     print(os.environ.get('FAKE_GEM_BINDIR', ''))
 if name == os.environ.get('FAIL_COMMAND') and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
@@ -80,7 +85,7 @@ class SetupTest(unittest.TestCase):
         for path in ('.agents/prompts', '.agents/skills'):
             (self.repo / path).mkdir()
         for name in ('git', 'brew', 'pi', 'gh', 'uname', 'lsb_release', 'dpkg', 'sudo', 'apt-cache',
-                     'gem', 'ruby', 'curl', 'systemctl'):
+                     'gem', 'ruby', 'curl', 'systemctl', 'df'):
             self.executable(self.bin / name)
         for name in ('dfm', 's', 'gh-nvim-username-keywords', 'gh-nvim-labels-keywords',
                      'gh-nvim-repos-keywords', 'gh-nvim-email-keywords', 'agent-nvim-keywords'):
@@ -112,7 +117,7 @@ class SetupTest(unittest.TestCase):
         commands = self.records()
         brew = [c for c in commands if c['command'] == 'brew']
         self.assertEqual([c['args'] for c in brew], [
-            ['update'], ['upgrade', '--no-ask', '--no-quit'], ['cleanup'],
+            ['update'], ['cleanup'], ['upgrade', '--no-ask', '--no-quit'], ['cleanup'],
             ['bundle', 'install', '--no-upgrade', '--file', str(self.repo / 'Brewfile')]])
         for call in brew:
             self.assertEqual(call['no_ask'], '1')
@@ -138,6 +143,14 @@ class SetupTest(unittest.TestCase):
         result = self.run_setup(FAIL_COMMAND='brew', FAIL_ARG='upgrade')
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(self.records()[-1]['args'][0], 'upgrade')
+
+    def test_low_disk_space_stops_before_any_brew_write(self):
+        # A pour that runs out of space reports it once per archive member. The
+        # guard turns that into one message naming the command that reclaims.
+        result = self.run_setup(FAKE_FREE_KB='1024')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('free-space', result.stderr)
+        self.assertFalse(any(c['command'] == 'brew' for c in self.records()))
 
     def test_failed_plugin_update_does_not_continue_to_package_updates(self):
         self.assertEqual(self.run_setup().returncode, 0)

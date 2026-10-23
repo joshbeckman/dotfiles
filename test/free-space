@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+export HOME="$tmp/home"
+export PATH="$tmp/bin:$PATH"
+export TEST_TEMP="$tmp/user-temp"
+
+mkdir -p "$tmp/bin" "$HOME" "$TEST_TEMP"
+
+# free-space reaches the user temp directory through getconf, which is how
+# macOS names it. Stub it so the test never touches the real one.
+cat > "$tmp/bin/getconf" <<'SH'
+#!/bin/sh
+[ "$1" = "DARWIN_USER_TEMP_DIR" ] || exit 2
+printf '%s/\n' "$TEST_TEMP"
+SH
+chmod +x "$tmp/bin/getconf"
+
+failures=0
+check() {
+  if [ "$2" = "$3" ]; then
+    printf '  ok   %s\n' "$1"
+  else
+    printf '  FAIL %s: expected [%s], got [%s]\n' "$1" "$3" "$2"
+    failures=$((failures + 1))
+  fi
+}
+
+wallpaper_cache="$HOME/Library/Containers/com.apple.wallpaper.agent/Data/Library/Caches/com.apple.wallpaper.caches"
+mkdir -p "$wallpaper_cache/extension-com.apple.wallpaper.extension.image" \
+         "$HOME/Library/Application Support/com.apple.wallpaper/aerials"
+echo bmp > "$wallpaper_cache/extension-com.apple.wallpaper.extension.image/render.bmp"
+echo mp4 > "$HOME/Library/Application Support/com.apple.wallpaper/aerials/aerial.mp4"
+
+# A stale single-app temp directory, a fresh one, one holding extra files, and
+# Chrome's re-signing clones.
+mkdir -p "$TEST_TEMP/STALE-UUID/Some.app/Contents"
+echo app > "$TEST_TEMP/STALE-UUID/Some.app/Contents/binary"
+touch -t 202001010000 "$TEST_TEMP/STALE-UUID/Some.app/Contents/binary" "$TEST_TEMP/STALE-UUID/Some.app" "$TEST_TEMP/STALE-UUID"
+mkdir -p "$TEST_TEMP/FRESH-UUID/Some.app/Contents"
+echo app > "$TEST_TEMP/FRESH-UUID/Some.app/Contents/binary"
+mkdir -p "$TEST_TEMP/MIXED-UUID/Some.app"
+echo notes > "$TEST_TEMP/MIXED-UUID/keep.txt"
+touch -t 202001010000 "$TEST_TEMP/MIXED-UUID"
+mkdir -p "$TEST_TEMP/X/com.google.Chrome.code_sign_clone/code_sign_clone.abc"
+echo clone > "$TEST_TEMP/X/com.google.Chrome.code_sign_clone/code_sign_clone.abc/Chrome"
+
+# A dry run must not delete anything.
+"$repo/bin/free-space" >/dev/null
+check "dry run keeps wallpaper cache" \
+  "$([ -f "$wallpaper_cache/extension-com.apple.wallpaper.extension.image/render.bmp" ] && echo present)" "present"
+check "dry run keeps stale app dir" \
+  "$([ -d "$TEST_TEMP/STALE-UUID" ] && echo present)" "present"
+
+"$repo/bin/free-space" --apply --yes >/dev/null
+
+check "wallpaper render cache cleared" \
+  "$([ -f "$wallpaper_cache/extension-com.apple.wallpaper.extension.image/render.bmp" ] && echo present || echo gone)" "gone"
+check "wallpaper cache directory kept" \
+  "$([ -d "$wallpaper_cache/extension-com.apple.wallpaper.extension.image" ] && echo present)" "present"
+check "aerial videos cleared" \
+  "$([ -f "$HOME/Library/Application Support/com.apple.wallpaper/aerials/aerial.mp4" ] && echo present || echo gone)" "gone"
+check "stale app dir removed" \
+  "$([ -d "$TEST_TEMP/STALE-UUID" ] && echo present || echo gone)" "gone"
+check "fresh app dir kept" \
+  "$([ -d "$TEST_TEMP/FRESH-UUID" ] && echo present)" "present"
+check "temp dir with other files kept" \
+  "$([ -d "$TEST_TEMP/MIXED-UUID" ] && echo present)" "present"
+check "chrome code sign clone cleared" \
+  "$(ls "$TEST_TEMP/X/com.google.Chrome.code_sign_clone" | wc -l | tr -d ' ')" "0"
+
+# Target selection must still narrow the run.
+mkdir -p "$wallpaper_cache/extension-com.apple.wallpaper.extension.image"
+echo bmp > "$wallpaper_cache/extension-com.apple.wallpaper.extension.image/render.bmp"
+"$repo/bin/free-space" --apply --yes npm >/dev/null
+check "unselected target is untouched" \
+  "$([ -f "$wallpaper_cache/extension-com.apple.wallpaper.extension.image/render.bmp" ] && echo present)" "present"
+
+if [ "$failures" -gt 0 ]; then
+  printf '\n%d check(s) failed\n' "$failures"
+  exit 1
+fi
+echo "all free-space checks passed"
