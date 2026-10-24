@@ -319,6 +319,25 @@ grep -Fq 'has no scratchpad' "$tmp/failure-err"
 expect_failure 1 "$command" resolve @+nobody-of-testrealm
 grep -Fq $'agent\tnobody-of-testrealm\tno-scratchpad' "$tmp/failure-out"
 
+# A recipient that loses its pad after delivery blocks a later reply-all, which takes its
+# audience from stored rows. The sender never typed that recipient and cannot predict the
+# failure, so the refusal names it and the command that still works; an explicit --to keeps
+# the plain refusal, because there the sender did name it.
+gone="$tmp/gone-agent-66666666"
+mkdir -p "$gone"
+dead_thread="$(AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --to bob-agent-22222222,gone-agent-66666666 --subject 'seat that goes' --body 'two recipients')"
+rmdir "$gone"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/bob-agent-22222222" "$command" send \
+  --reply-all "$dead_thread" --if-head "$dead_thread" --body 'reply after the prune'
+grep -Fq 'has no scratchpad' "$tmp/failure-err"
+grep -Fq 'stored audience' "$tmp/failure-err"
+grep -Fq 'retry with --to' "$tmp/failure-err"
+expect_failure 1 env AGENT_SCRATCHPAD="$tmp/alice-agent-11111111" "$command" send \
+  --to gone-agent-66666666 --body nope
+grep -Fq 'has no scratchpad' "$tmp/failure-err"
+! grep -Fq 'stored audience' "$tmp/failure-err"
+
 # Shortened ids and v1 file paths resolve, as they do in agent-mail.
 ulid="${by_handle:0:26}"
 [[ "$(AGENT_SCRATCHPAD="$dana" "$command" read --peek --id "$ulid" 2>/dev/null | sed -n 's/^Message-ID: //p')" == "$by_handle" ]]

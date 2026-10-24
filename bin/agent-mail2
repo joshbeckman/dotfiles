@@ -496,7 +496,8 @@ def idle_hours(pad: str) -> int:
     return int((time.time() - mtime) // 3600)
 
 
-def expand_recipients(raw_values: list[str], teams: list[str] | None = None) -> list[Mailbox]:
+def expand_recipients(raw_values: list[str], teams: list[str] | None = None,
+                      reply_all: bool = False) -> list[Mailbox]:
     addresses: list[str] = []
     for raw in raw_values:
         for value in raw.split(","):
@@ -518,8 +519,16 @@ def expand_recipients(raw_values: list[str], teams: list[str] | None = None) -> 
     for address in addresses:
         mailbox = resolve(address)
         if mailbox.kind == "agent" and not os.path.isdir(mailbox.pad or ""):
+            # Reply-all takes its audience from stored rows, so a seat that has been pruned
+            # blocks the send without the sender ever naming it. The failure is per target
+            # message, which makes it impossible to predict from outside: say which address
+            # is dead and which command still works, or the sender reads this as "reply-all
+            # is broken" and stops.
+            hint = ""
+            if reply_all:
+                hint = "; it is in this message's stored audience, so retry with --to for the recipients that resolve"
             raise MailError(
-                f"recipient '{strip_sigils(address)}' has no scratchpad at {mailbox.pad} (not created or pruned?)"
+                f"recipient '{strip_sigils(address)}' has no scratchpad at {mailbox.pad} (not created or pruned?){hint}"
             )
         recipients.setdefault(mailbox.id, mailbox)
     if not recipients:
@@ -805,7 +814,7 @@ def append_message(args: argparse.Namespace) -> str:
             thread_id = resolve_thread(db, thread_id)
 
         teams: list[str] = []
-        recipients = expand_recipients(direct, teams)
+        recipients = expand_recipients(direct, teams, reply_all=bool(args.reply_all))
         if args.reply_all:
             # After resolution: a Reply-To alias of the author must not deliver to the author.
             recipients = [r for r in recipients if r.id != author.id]
