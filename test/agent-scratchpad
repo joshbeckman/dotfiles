@@ -6,6 +6,11 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export AGENT_SCRATCH_ROOT="$tmp/scratchpads"
 export PI_SESSIONS_DIR="$tmp/sessions"
+# A store of this test's own, so the machine's real one can never decide these cases.
+export AGENT_MAIL_ROOT="$AGENT_SCRATCH_ROOT"
+export AGENT_HUMAN_MAIL_ROOT="$tmp/humans"
+export AGENT_MAIL2_DB="$tmp/mail2.sqlite3"
+mkdir -p "$AGENT_HUMAN_MAIL_ROOT/josh"
 mkdir -p "$AGENT_SCRATCH_ROOT" "$PI_SESSIONS_DIR"
 
 make_pad() {
@@ -91,5 +96,45 @@ fi
 [[ ! -e "$AGENT_SCRATCH_ROOT/durable-agent-77777777/.durable" ]]
 "$root/bin/agent-scratchpad" prune --agent 'Durable Agent' --apply --yes >/dev/null
 [[ ! -e "$AGENT_SCRATCH_ROOT/durable-agent-77777777" ]]
+
+# Once the store is sqlite the inbox directory is a frozen archive: nothing moves those
+# files, so a pad's age protection has to come from the store. Both directions are pinned
+# here, because counting the wrong one either protects a pad for ever or prunes unread mail.
+make_pad frozen-agent-88888888 'Frozen Agent' frozen-session
+mkdir -p "$AGENT_SCRATCH_ROOT/frozen-agent-88888888/inbox/new"
+printf 'From: sender\n\nold mail that will never move\n' >"$AGENT_SCRATCH_ROOT/frozen-agent-88888888/inbox/new/frozen.md"
+make_pad waiting-agent-99999999 'Waiting Agent' waiting-session
+make_pad sender-agent-aaaa1111 'Sender Agent' sender-session
+touch -t 202001010000 "$AGENT_SCRATCH_ROOT/frozen-agent-88888888/"*.md \
+  "$AGENT_SCRATCH_ROOT/frozen-agent-88888888/inbox/new/frozen.md" \
+  "$AGENT_SCRATCH_ROOT/waiting-agent-99999999/"*.md \
+  "$AGENT_SCRATCH_ROOT/sender-agent-aaaa1111/"*.md
+
+# The Maildir still records the frozen file, which is the behaviour being replaced.
+grep -Fq 'unread=1' <<<"$("$root/bin/agent-scratchpad" prune --days 30 --include-unread)"
+
+printf 'sqlite\n' >"$tmp/store"
+"$root/bin/agent-mail2" init >/dev/null
+AGENT_SCRATCHPAD="$AGENT_SCRATCH_ROOT/sender-agent-aaaa1111" "$root/bin/agent-mail2" send \
+  --to waiting-agent-99999999 --subject 'unread in the store' --body 'nobody has read this' >/dev/null
+
+# The directory says one, the store says none: the frozen file must not protect the pad.
+frozen="$("$root/bin/agent-scratchpad" prune --days 30 --include-unread)"
+grep -Fq 'Frozen Agent' <<<"$frozen"
+grep -Fq 'unread=0' <<<"$frozen"
+grep -Fq 'Frozen Agent' <<<"$("$root/bin/agent-scratchpad" prune --days 30)"
+
+# The directory says none, the store says one: the pad must stay.
+waiting="$("$root/bin/agent-scratchpad" prune --days 30 --include-unread)"
+grep -Fq 'unread=1' <<<"$waiting"
+! grep -Fq 'Waiting Agent' <<<"$("$root/bin/agent-scratchpad" prune --days 30)"
+set +e
+"$root/bin/agent-scratchpad" prune --days 30 --apply --yes >"$tmp/apply-out" 2>"$tmp/apply-err"
+set -e
+# The selection step drops it before the apply-time re-check, so it is absent from the
+# list and survives the run that prunes its neighbours.
+! grep -Fq 'Waiting Agent' "$tmp/apply-out"
+[[ -d "$AGENT_SCRATCH_ROOT/waiting-agent-99999999" ]]
+[[ ! -e "$AGENT_SCRATCH_ROOT/frozen-agent-88888888" ]]
 
 printf 'agent-scratchpad tests passed\n'

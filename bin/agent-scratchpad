@@ -91,10 +91,41 @@ is_protected() {
 }
 
 unread_count() {
+  local json count
+  if [ "$(store_mode)" = sqlite ]; then
+    # The inbox directory is a frozen archive once the store is sqlite: nothing moves those
+    # files, so counting them would protect a pad from age pruning for ever. agent-session and
+    # the Pi notice ask the store for the same reason. An unanswerable store falls back to the
+    # directory, because keeping a pad is recoverable and pruning one is not.
+    json="$(agent-mail scan --to "$(basename "$1")" --json 2>/dev/null || true)"
+    count="$(printf '%s' "$json" | python3 -c 'import json, sys
+try:
+    print(len(json.load(sys.stdin).get("messages") or []))
+except Exception:
+    raise SystemExit(1)' 2>/dev/null || true)"
+    case "$count" in
+      ''|*[!0-9]*) unread_in_directory "$1" ;;
+      *) printf '%s\n' "$count" ;;
+    esac
+    return
+  fi
+  unread_in_directory "$1"
+}
+
+unread_in_directory() {
   local dir="$1/inbox/new"
   [ -d "$dir" ] || { echo 0; return; }
   find "$dir" -type f -name '*.md' | awk 'END { print NR + 0 }'
 }
+
+store_mode() {
+  if [ -z "$STORE_MODE" ]; then
+    STORE_MODE="$(agent-mail store 2>/dev/null | cut -f1 || true)"
+    case "$STORE_MODE" in sqlite|both|maildir) ;; *) STORE_MODE=maildir ;; esac
+  fi
+  printf '%s\n' "$STORE_MODE"
+}
+STORE_MODE=""
 
 pad_name() {
   sed -n '1s/^# //p' "$1/session.md" 2>/dev/null
