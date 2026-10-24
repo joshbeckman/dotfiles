@@ -73,7 +73,11 @@ export default function (pi: ExtensionAPI) {
 		// worth naming; ordinary one-shot prompts remain anonymous and consume none.
 		sessionId = ephemeral && !preferredSurname ? undefined : ctx.sessionManager.getSessionId() ?? syntheticChildSessionId;
 		realm = readRealm();
-		name = sessionId ? assignedName(sessionId) ?? recoverName(sessionId, sessionFile) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
+		// A record written before realms existed still names a session without one, and
+		// createScratchpad derives the transport address from that name. Left alone, the
+		// resumed session builds a bare pad beside its realm-suffixed claim, and its mail
+		// forks into two mailboxes that no query can join back together.
+		name = sessionId ? withRealm(assignedName(sessionId) ?? recoverName(sessionId, sessionFile, realm), realm) ?? (realm ? allocateName(sessionId, realm, preferredSurname) : undefined) : undefined;
 		scratchpad = name && sessionId ? createScratchpad(name, sessionId, ctx) : undefined;
 		// Exported rather than passed per-call: bash-tool children inherit the pi
 		// process env, so agent-trailer and friends can read it without the model
@@ -274,6 +278,8 @@ function resetPaneTitle() {
 	} catch {} // never let a cosmetic reset break shutdown
 }
 
+export { withRealm };
+
 export type Unread = { file: string; from: string; subject: string; at: number };
 
 // The store marker sits beside the human mailboxes, resolved as bin/agent-mail resolves them.
@@ -452,7 +458,12 @@ function assignedName(sessionId: string): string | undefined {
 	}
 }
 
-function recoverName(sessionId: string, sessionFile: string | undefined): string | undefined {
+function withRealm(name: string | undefined, realm: string | undefined): string | undefined {
+	if (!name || !realm) return name;
+	return name.toLowerCase().endsWith(` of ${realm.toLowerCase()}`) ? name : `${name} of ${realm}`;
+}
+
+function recoverName(sessionId: string, sessionFile: string | undefined, realm?: string): string | undefined {
 	// Scratchpads are the strongest legacy source: session.md carries the full id
 	// and the original name together. Do not infer identity from directory mtimes
 	// or "newest" paths; that already deleted one live agent's scratchpad.
@@ -462,7 +473,7 @@ function recoverName(sessionId: string, sessionFile: string | undefined): string
 			try {
 				const text = readFileSync(join(SCRATCH_ROOT, entry.name, "session.md"), "utf8");
 				if (!text.split("\n").includes(`- session: ${sessionId}`)) continue;
-				const name = /^# (.+)$/m.exec(text)?.[1]?.trim();
+				const name = withRealm(/^# (.+)$/m.exec(text)?.[1]?.trim(), realm);
 				if (name) return preserveAssignment(sessionId, name);
 			} catch {} // another process may be creating or pruning an unrelated dir
 		}
@@ -480,7 +491,8 @@ function recoverName(sessionId: string, sessionFile: string | undefined): string
 					const event = JSON.parse(line) as { name?: string };
 					const candidate = event.name?.split(" · ", 1)[0]?.trim();
 					if (candidate && /^[A-Z][A-Za-z'-]+ [A-Z][A-Za-z'-]+(?: of [A-Z][A-Za-z'-]+)?$/.test(candidate)) {
-						return preserveAssignment(sessionId, candidate);
+						const named = withRealm(candidate, realm);
+						if (named) return preserveAssignment(sessionId, named);
 					}
 				} catch {}
 			}

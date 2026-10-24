@@ -112,6 +112,55 @@ def normalize(value: str) -> str:
     return address
 
 
+# A transport address: a handle plus the first eight hex characters of a session ID (the
+# form a pad and a delivery both use), or that name with the full UUID.
+SESSION_ADDRESS = re.compile(
+    r"^(?P<base>.+)-(?P<sid>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?)$"
+)
+SESSION_ID = re.compile(
+    r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$"
+)
+
+_claims: dict[str, str] | None = None
+
+
+def claims() -> dict[str, str]:
+    """The identity registry's name claims: handle slug to session ID, as bin/agent-mail reads
+    them. Empty when the registry is absent, which is the case in the test suites."""
+    global _claims
+    if _claims is None:
+        _claims = {}
+        root = Path(os.environ.get("AGENT_IDENTITIES_DIR")
+                    or Path.home() / ".pi" / "agent" / "identities" / "by-name").expanduser()
+        try:
+            for claim in root.iterdir():
+                if claim.is_symlink() or not claim.is_file():
+                    continue
+                session_id = claim.read_text(encoding="utf-8", errors="replace").strip()
+                if SESSION_ID.fullmatch(session_id):
+                    _claims[claim.name] = session_id
+        except OSError:
+            pass
+    return _claims
+
+
+def canonical_sender(address: str) -> str:
+    """The mailbox the resolver would reach for this From header.
+
+    A session renamed to the realm-suffixed convention keeps the From header it was sent
+    with, so its transport address names a handle no pad has. bin/agent-mail resolves that
+    name through the identity registry and lands on the canonical pad; recording the header
+    verbatim instead forks one seat into two mailboxes, one holding only its sent mail.
+    """
+    match = SESSION_ADDRESS.match(address)
+    if not match or "-of-" in match["base"]:
+        return address
+    suffix = match["sid"].lower()[:8]
+    found = sorted(name for name, session_id in claims().items()
+                   if name.startswith(match["base"] + "-of-") and session_id.lower().startswith(suffix))
+    return f"{found[0]}-{suffix}" if len(found) == 1 else address
+
+
 def parse_time(value: str | None, fallback: int) -> int:
     if not value:
         return fallback
@@ -155,7 +204,7 @@ class Message:
         if self.subject is None and headers.get("subject"):
             self.subject = headers["subject"]
         if headers.get("from"):
-            self.sender = self.sender or normalize(headers["from"])
+            self.sender = self.sender or canonical_sender(normalize(headers["from"]))
         if headers.get("reply-to") and self.reply_address is None:
             self.reply_address = normalize(headers["reply-to"])
         if headers.get("team-to") and self.team_to is None:
@@ -165,7 +214,7 @@ class Message:
         self.sent_at = self.sent_at or parse_time(headers.get("date"), mtime_us(path))
 
     def offer_sender(self, mailbox: str) -> None:
-        self.sender = self.sender or mailbox
+        self.sender = self.sender or canonical_sender(mailbox)
 
 
 def mailboxes(agent_root: Path, human_root: Path) -> dict[str, dict[str, Path]]:
