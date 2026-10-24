@@ -472,6 +472,27 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
   process.env.PATH = path;
 }
 
+// --- a name written before realms existed ------------------------------------
+
+// createScratchpad derives the transport address from the session name, and the resolver
+// treats that address as the mailbox. A stored name without the realm therefore builds a
+// second pad beside the realm-suffixed claim, and one seat's mail forks in two. The
+// suffixing happens at read time rather than by rewriting the registry, so a record is
+// never silently renamed and the repair repeats on every resume.
+{
+  const mail = await import(pathToFileURL(join(EXTENSIONS, "agent-name.ts")).href);
+  eq("a bare name gains the realm", mail.withRealm("Skullcap Currier", "Lantern"), "Skullcap Currier of Lantern");
+  eq("a name that already carries the realm is unchanged", mail.withRealm("Coral Tanner of Lantern", "Lantern"), "Coral Tanner of Lantern");
+  eq("the check ignores case", mail.withRealm("Coral Tanner of lantern", "Lantern"), "Coral Tanner of lantern");
+  eq("no realm leaves the name alone", mail.withRealm("Skullcap Currier", undefined), "Skullcap Currier");
+  eq("no name stays no name", mail.withRealm(undefined, "Lantern"), undefined);
+  const source = readFileSync(join(EXTENSIONS, "agent-name.ts"), "utf8");
+  check(
+    "the scratchpad name flows from the realm-suffixed name",
+    /withRealm\(assignedName\(sessionId\)[\s\S]{0,200}createScratchpad\(name, sessionId, ctx\)/.test(source),
+  );
+}
+
 // --- thinking loop breaker ---------------------------------------------------
 
 // A reasoning model that degenerates streams one thinking block of hundreds of thousands of

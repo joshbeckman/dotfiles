@@ -10,6 +10,9 @@ trap 'rm -rf "$tmp"' EXIT
 export PATH="$root/bin:$PATH"
 export AGENT_SCRATCH_ROOT="$tmp/scratchpads"
 export AGENT_MAIL2_DB="$tmp/mail2.sqlite3"
+# An empty registry, so the real one on this machine can never change what a test sees.
+export AGENT_IDENTITIES_DIR="$tmp/identities/by-name"
+mkdir -p "$AGENT_IDENTITIES_DIR"
 
 agent1="alder-agent-11111111"
 agent2="birch-agent-22222222"
@@ -164,5 +167,50 @@ assert sorted(r[0] for r in db.execute("select recipient_mailbox_id from message
 assert [r[0] for r in db.execute("select recipient_mailbox_id from deliveries where message_id = ?", (sys.argv[2],))] == ["birch-agent-22222222"]
 PY
 migrate --verify | grep -qx verified
+
+# A From header written before a session was renamed to the realm-suffixed convention names a
+# handle no pad has. bin/agent-mail resolves that name through the identity registry and
+# reaches the canonical pad, so the store must record the same mailbox: otherwise one seat
+# owns its deliveries under one id and its sent mail under another, and no query joins them.
+# Both claims exist before the first run: canonicalization is read from the registry at
+# migration time, and rows are append-only, so a registry that changes later makes --verify
+# disagree with rows already written. The repair is a fresh database, not an incremental run.
+printf '11111111-1111-1111-1111-111111111111\n' > "$AGENT_IDENTITIES_DIR/alder-agent-of-testland"
+printf '22222222-2222-2222-2222-222222222222\n' > "$AGENT_IDENTITIES_DIR/birch-agent-of-testland"
+renamed_db="$tmp/renamed.sqlite3"
+h="20261006T090000Z--from-$agent1--to-josh--renamed--8-8"
+write_message "$AGENT_SCRATCH_ROOT/$agent1/inbox/new/$h.md" "$agent1" "josh" "2026-10-06T09:00:00Z" "$h" "$h" "" "Renamed" "after the rename"
+AGENT_MAIL2_DB="$renamed_db" migrate >/dev/null
+python3 - "$renamed_db" "$agent1" "$h" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+agent1, message = sys.argv[2], sys.argv[3]
+sender = db.execute("select sender_mailbox_id from messages where message_id = ?", (message,)).fetchone()[0]
+assert sender == "alder-agent-of-testland-11111111", sender
+assert db.execute("select count(*) from messages where sender_mailbox_id = ?", (agent1,)).fetchone()[0] == 0, "the stale name kept sent mail"
+PY
+# A name that already carries the realm is not rewritten again.
+i="20261007T090000Z--from-birch-agent-of-testland-22222222--to-josh--canonical--9-9"
+write_message "$AGENT_SCRATCH_ROOT/$agent2/inbox/new/$i.md" "birch-agent-of-testland-22222222" "josh" "2026-10-07T09:00:00Z" "$i" "$i" "" "Canonical" "already suffixed"
+AGENT_MAIL2_DB="$renamed_db" migrate >/dev/null
+python3 - "$renamed_db" "$i" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("select sender_mailbox_id from messages where message_id = ?", (sys.argv[2],)).fetchone()[0] == "birch-agent-of-testland-22222222"
+PY
+AGENT_MAIL2_DB="$renamed_db" migrate --verify | grep -qx verified
+rm "$AGENT_IDENTITIES_DIR/alder-agent-of-testland" "$AGENT_IDENTITIES_DIR/birch-agent-of-testland"
+
+# A name that is not a session address is never rewritten, even with a claim of the same base.
+printf '33333333-3333-3333-3333-333333333333\n' > "$AGENT_IDENTITIES_DIR/pr-monitor-of-testland"
+j="20261008T090000Z--from-pr-monitor--to-josh--bare--10-10"
+write_message "$tmp/humans/josh/sent/$j.md" "pr-monitor" "josh" "2026-10-08T09:00:00Z" "$j" "$j" "" "Bare" "no session suffix"
+AGENT_MAIL2_DB="$renamed_db" migrate >/dev/null
+python3 - "$renamed_db" "$j" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("select sender_mailbox_id from messages where message_id = ?", (sys.argv[2],)).fetchone()[0] == "pr-monitor"
+PY
+rm "$AGENT_IDENTITIES_DIR/pr-monitor-of-testland"
 
 echo "agent-mail-migrate tests passed"
