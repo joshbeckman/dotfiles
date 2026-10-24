@@ -822,14 +822,29 @@ def run_verify(db_path: Path, roots: tuple[Path, Path], notes: list[str] | None 
                         problems.append(
                             f"{len(drift)} messages differ from their archived copy "
                             f"({', '.join(sorted(drift)[:3])})")
-                elif notes is not None:
-                    # A caller that can report this distinction takes the note; one that could
-                    # only fail on it keeps the line on stderr, because an empty archive is a
-                    # normal state for a realm that cut over empty and not a drift.
-                    notes.append("the Maildir archive holds no messages, so completeness is unchecked")
                 else:
-                    print("agent-mail-migrate: the Maildir archive holds no messages, so "
-                          "completeness is unchecked", file=sys.stderr)
+                    # An empty archive is normal for a realm that cut over empty, and then the
+                    # note is all there is to say. It is not normal for a realm that had mail at
+                    # the cutover, because the archive lives inside the pads and pruning them
+                    # erodes it: there the reference was removed, and the check that would have
+                    # caught a missing message is gone. The marker's mtime is the cutover, so
+                    # the two cases are distinguishable without storing a count.
+                    oldest = db.execute("SELECT MIN(sent_at) FROM messages").fetchone()[0]
+                    marker = roots[1].resolve().parent / "store"
+                    try:
+                        cutover = int(marker.stat().st_mtime * 1_000_000)
+                    except OSError:
+                        cutover = None
+                    if oldest is not None and cutover is not None and oldest < cutover:
+                        problems.append(
+                            "the Maildir archive holds no messages, and the store holds mail from "
+                            "before the cutover, so the reference was removed and completeness "
+                            "cannot be checked")
+                    elif notes is not None:
+                        notes.append("the Maildir archive holds no messages, so completeness is unchecked")
+                    else:
+                        print("agent-mail-migrate: the Maildir archive holds no messages, so "
+                              "completeness is unchecked", file=sys.stderr)
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     problems.append("integrity check failed")
                 if backfill_pending(db):

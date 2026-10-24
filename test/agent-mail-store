@@ -157,6 +157,16 @@ set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT
   >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
 [[ "$status" == 3 ]] && grep -Fq 'completeness unchecked' "$tmp/out" \
   || fail "an empty archive did not report the unchecked status"
+# A realm that cut over with mail in the archive is the other case: an empty archive there means
+# the reference was pruned away, so the one check that would catch a missing message is gone, and
+# that is a failure rather than a caveat. The marker's mtime is the cutover, so a store holding
+# older mail tells the two realms apart without storing a count.
+touch -t 209901010000 "$marker"
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'the reference was removed' "$tmp/err" \
+  || fail "an archive pruned away from a realm that had mail was reported as a pass"
+touch "$marker"
 mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
 write_archived 'left behind'
 set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
