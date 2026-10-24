@@ -90,7 +90,7 @@ PY
 
 # --verify reconciles the Maildir against the database.
 AGENT_MAIL2_DB="$AGENT_MAIL2_DB" agent-mail-migrate --verify --agent-root "$AGENT_SCRATCH_ROOT" \
-  --human-root "$tmp/humans" | grep -qx verified
+  --human-root "$tmp/humans" | grep -q "^verified"
 
 migrate() {
   agent-mail-migrate --agent-root "$AGENT_SCRATCH_ROOT" --human-root "$tmp/humans" "$@"
@@ -115,7 +115,7 @@ assert state(c, agent1) == (None, None), "the other recipient's copy must be unt
 assert db.execute("select sequence from messages where message_id = ?", (e,)).fetchone()[0] == 4
 assert db.execute("select reply_to_message_id from messages where message_id = ?", (e,)).fetchone()[0] == c
 PY
-migrate --verify | grep -qx verified
+migrate --verify | grep -q "^verified"
 
 # A mailbox whose inbox has gone is not read as having discarded everything.
 mv "$AGENT_SCRATCH_ROOT/$agent1" "$tmp/pruned"
@@ -141,7 +141,7 @@ set -e
 [[ "$status" == 1 ]]
 grep -Fq "$a is read for $agent2 in the Maildir, unread in the database" "$tmp/verify-err"
 migrate >/dev/null
-migrate --verify | grep -qx verified
+migrate --verify | grep -q "^verified"
 
 # Sent mail whose every recipient copy is gone keeps its audience, without a delivery.
 f="20261004T090000Z--from-josh--to-gone--orphan--6-6"
@@ -153,7 +153,7 @@ db = sqlite3.connect(sys.argv[1])
 assert sorted(r[0] for r in db.execute("select recipient_mailbox_id from message_recipients where message_id = ?", (sys.argv[2],))) == ["birch-agent-22222222", "gone-agent-99999999"]
 assert db.execute("select count(*) from deliveries where message_id = ?", (sys.argv[2],)).fetchone()[0] == 0
 PY
-migrate --verify | grep -qx verified
+migrate --verify | grep -q "^verified"
 # One copy gone and one surviving: the gone recipient stays in the audience, and a To entry that
 # is only the handle of a surviving copy's mailbox is not added twice.
 g="20261005T090000Z--from-josh--to-partial--7-7"
@@ -166,7 +166,7 @@ db = sqlite3.connect(sys.argv[1])
 assert sorted(r[0] for r in db.execute("select recipient_mailbox_id from message_recipients where message_id = ?", (sys.argv[2],))) == ["birch-agent-22222222", "pruned-agent-77777777"]
 assert [r[0] for r in db.execute("select recipient_mailbox_id from deliveries where message_id = ?", (sys.argv[2],))] == ["birch-agent-22222222"]
 PY
-migrate --verify | grep -qx verified
+migrate --verify | grep -q "^verified"
 
 # A From header written before a session was renamed to the realm-suffixed convention names a
 # handle no pad has. bin/agent-mail resolves that name through the identity registry and
@@ -198,7 +198,7 @@ import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
 assert db.execute("select sender_mailbox_id from messages where message_id = ?", (sys.argv[2],)).fetchone()[0] == "birch-agent-of-testland-22222222"
 PY
-AGENT_MAIL2_DB="$renamed_db" migrate --verify | grep -qx verified
+AGENT_MAIL2_DB="$renamed_db" migrate --verify | grep -q "^verified"
 rm "$AGENT_IDENTITIES_DIR/alder-agent-of-testland" "$AGENT_IDENTITIES_DIR/birch-agent-of-testland"
 
 # A name that is not a session address is never rewritten, even with a claim of the same base.

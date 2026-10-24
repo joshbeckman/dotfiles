@@ -182,6 +182,12 @@ set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT
   || fail "verify passed with a body that disagrees with the archive"
 write_archived 'left behind'
 verified || fail "verify did not recover when the body matched again"
+# The success line carries its coverage, because pruning a pad removes part of the reference
+# and nothing else would show the check shrinking.
+"$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>/dev/null
+grep -Eq '^verified \([0-9]+ messages compared\)$' "$tmp/out" \
+  || fail "the success line did not report how much was compared"
 [[ "$("$cmd" addr $bob)" == "$AGENT_MAIL_ROOT/$bob/inbox" ]] || fail "addr stopped resolving"
 "$cmd" search Plan | grep -Fq "$m1" || fail "search did not see the conversation"
 "$cmd" sweep --dry-run >/dev/null || fail "sweep did not run against the SQLite store"
