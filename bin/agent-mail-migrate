@@ -51,6 +51,9 @@ unless --verify is clean.
   --visibility NAME  visibility for migrated threads (public or private; public default)
   --quiet            print nothing on success
 
+Exit status for --verify: 0 verified, 1 problems, 3 verified with completeness unchecked
+(the Maildir archive holds no messages, so a realm that cut over empty stays quiet).
+
 The store marker is <human-root>/../store, which bin/agent-mail reads: maildir (or absent,
 or anything unreadable) uses the Maildir alone; both writes the Maildir and mirrors each
 change here; sqlite uses this store alone. Once it says sqlite this tool refuses to write,
@@ -776,7 +779,7 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
     return counts
 
 
-def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
+def run_verify(db_path: Path, roots: tuple[Path, Path], notes: list[str] | None = None) -> list[str]:
     db = open_db(db_path)
     if backfill_pending(db) and store_mode(roots[1].resolve().parent / "store") != "sqlite":
         db.close()
@@ -819,6 +822,11 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
                         problems.append(
                             f"{len(drift)} messages differ from their archived copy "
                             f"({', '.join(sorted(drift)[:3])})")
+                elif notes is not None:
+                    # A caller that can report this distinction takes the note; one that could
+                    # only fail on it keeps the line on stderr, because an empty archive is a
+                    # normal state for a realm that cut over empty and not a drift.
+                    notes.append("the Maildir archive holds no messages, so completeness is unchecked")
                 else:
                     print("agent-mail-migrate: the Maildir archive holds no messages, so "
                           "completeness is unchecked", file=sys.stderr)
@@ -1067,11 +1075,19 @@ def main() -> int:
             print(plan(collect(mailboxes(agent_root, human_root))))
             return 0
         if args.verify:
-            problems = run_verify(db_path, (agent_root, human_root))
+            notes: list[str] = []
+            problems = run_verify(db_path, (agent_root, human_root), notes)
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
-            print("verified" if not problems else f"{len(problems)} problems")
-            return 1 if problems else 0
+            for note in notes:
+                print(f"agent-mail-migrate: {note}", file=sys.stderr)
+            if problems:
+                print(f"{len(problems)} problems")
+                return 1
+            # Distinct from both a pass and a failure: nothing is wrong, but a check did not run.
+            # An alarm that fired on this would fire for ever on a realm that cut over empty.
+            print("verified (completeness unchecked: no archived mail)" if notes else "verified")
+            return 3 if notes else 0
         counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message, args.import_only,
                                (args.apply, args.mailbox) if args.apply else None)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:

@@ -150,6 +150,13 @@ write_archived() {
   printf 'From: %s\nTo: %s\nDate: 2026-10-24T10:00:00Z\nMessage-ID: stranded\nThread-ID: stranded\nSubject: Stranded\n\n%s\n' \
     "$alice" "$bob" "$1" >"$AGENT_MAIL_ROOT/$bob/inbox/new/stranded.md"
 }
+# An archive that holds nothing is verified with a distinct status rather than a plain pass,
+# so a machine can tell "checked and clean" from "one check did not run", and a realm that cut
+# over empty does not make an alarm fire for ever.
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 3 ]] && grep -Fq 'completeness unchecked' "$tmp/out" \
+  || fail "an empty archive did not report the unchecked status"
 mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
 write_archived 'left behind'
 set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
