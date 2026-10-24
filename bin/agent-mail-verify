@@ -57,9 +57,10 @@ if [ "$missing" = 0 ] && [ "$store" = 0 ] && [ "$remind" = 0 ]; then
   exit 0
 fi
 
-if [ "$missing" = 1 ] && [ "$store" = 1 ]; then
-  subject="Agent mail store needs attention: mail missing from SQLite, and it did not verify"
-elif [ "$missing" = 1 ]; then
+# --verify reports unrepaired records too, so one pending record fails both this scan and verify.
+# That is one fault, not two, and a subject claiming both would be untrue. The pending record is the
+# actionable one, and verify's own message is in the body above.
+if [ "$missing" = 1 ]; then
   subject="Agent mail store needs attention: mail missing from SQLite"
 elif [ "$store" = 1 ]; then
   subject="Agent mail store needs attention: SQLite does not verify"
