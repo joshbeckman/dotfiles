@@ -51,6 +51,11 @@ unless --verify is clean.
   --visibility NAME  visibility for migrated threads (public or private; public default)
   --quiet            print nothing on success
 
+Exit status for --verify: 0 verified, 1 problems, 3 verified with completeness unchecked
+(the realm cut over with an empty archive), 4 the same, with the archive removed after a
+cutover that had mail. 3 and 4 are standing conditions, so agent-mail-verify logs them and
+mails only on 1.
+
 The store marker is <human-root>/../store, which bin/agent-mail reads: maildir (or absent,
 or anything unreadable) uses the Maildir alone; both writes the Maildir and mirrors each
 change here; sqlite uses this store alone. Once it says sqlite this tool refuses to write,
@@ -67,6 +72,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -776,7 +782,15 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
     return counts
 
 
-def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
+@dataclass
+class Verdict:
+    """What a verify found, what it could not check, and how much it did compare."""
+    problems: list[str] = field(default_factory=list)
+    notes: list[tuple[int, str]] = field(default_factory=list)
+    compared: int = 0
+
+
+def run_verify(db_path: Path, roots: tuple[Path, Path]) -> Verdict:
     db = open_db(db_path)
     if backfill_pending(db) and store_mode(roots[1].resolve().parent / "store") != "sqlite":
         db.close()
@@ -785,6 +799,8 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
     try:
         # Under the write lock, so a mirror committing mid-check cannot read as drift.
         db.execute("BEGIN IMMEDIATE")
+        verdict = Verdict()
+        problems: list[str] = []
         try:
             # A recorded mirror failure is drift until it is replayed, whichever store holds
             # the record, so the alarm needs only this command and not the record layout.
@@ -793,15 +809,68 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
             problems = [f"{len(pending)} recorded mirror failures are unrepaired ({', '.join(pending[:5])}); "
                         "run agent-mail-migrate --replay-failures"] if pending else []
             if store_mode(roots[1].resolve().parent / "store") == "sqlite":
-                # The Maildir is no longer the record, so there is nothing to compare it with;
-                # only the database's own soundness is left to check.
+                # The Maildir is no longer the record, so read state cannot be compared with it:
+                # a post-flip read is in the database alone, and the frozen file would report
+                # every one as drift. It is still frozen evidence, so completeness can be. The
+                # archive only ever loses files to a pruned pad, which weakens this check and
+                # can never fail it, and an empty archive would make it a tautology that passes
+                # on every store, so that case says so instead of reporting success.
+                archived = collect(mailboxes(*roots))
+                verdict.compared = len(archived)
+                if archived:
+                    stored = {row[0]: (row[1] or row[0], row[2]) for row in db.execute(
+                        "SELECT message_id, thread_id, body FROM messages")}
+                    missing = sorted(set(archived) - set(stored))
+                    if missing:
+                        problems.append(
+                            f"{len(missing)} archived messages are missing from the database "
+                            f"({', '.join(missing[:3])})")
+                    # Thread and body are frozen properties of the archive, so they keep the
+                    # comparison the old full verify made, less the two that legitimately move:
+                    # the sender canonicalization, and read state, which is the store's alone
+                    # after the flip. The routing headers wait on the backfill check below.
+                    drift = [m.message_id for m in archived.values()
+                             if m.message_id in stored
+                             and stored[m.message_id] != (m.thread_id or m.message_id, m.body)]
+                    if drift:
+                        problems.append(
+                            f"{len(drift)} messages differ from their archived copy "
+                            f"({', '.join(sorted(drift)[:3])})")
+                else:
+                    # An empty archive is normal for a realm that cut over empty, and then the
+                    # note is all there is to say. It is not normal for a realm that had mail at
+                    # the cutover, because the archive lives inside the pads and pruning them
+                    # erodes it: there the reference was removed, and the check that would have
+                    # caught a missing message is gone. The marker's mtime is the cutover, so
+                    # the two cases are distinguishable without storing a count.
+                    oldest = db.execute("SELECT MIN(sent_at) FROM messages").fetchone()[0]
+                    marker = roots[1].resolve().parent / "store"
+                    try:
+                        cutover = int(marker.stat().st_mtime * 1_000_000)
+                    except OSError:
+                        cutover = None
+                    # Standing conditions, not drift: neither clears up on its own, because a
+                    # frozen archive is not repopulated and the migrated mail keeps its date.
+                    # Reporting them as drift would make the alarm fire hourly for ever and stop
+                    # it meaning "wrong now", so each gets a code the alarm can log quietly.
+                    if oldest is not None and cutover is not None and oldest < cutover:
+                        note = (4, "the Maildir archive holds no messages, and the store holds mail from "
+                                   "before the cutover, so the reference was removed and completeness "
+                                   "cannot be checked")
+                    else:
+                        note = (3, "the Maildir archive holds no messages, so completeness is unchecked")
+                    verdict.notes.append(note)
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     problems.append("integrity check failed")
                 if backfill_pending(db):
                     problems.append("the v4 routing-header backfill never ran, and the store is already sqlite")
-                return problems
+                verdict.problems = problems
+                return verdict
             boxes = mailboxes(*roots)
-            return problems + verify(db, collect(boxes), boxes)
+            messages = collect(boxes)
+            verdict.compared = len(messages)
+            verdict.problems = problems + verify(db, messages, boxes)
+            return verdict
         finally:
             db.execute("ROLLBACK")
     finally:
@@ -878,7 +947,7 @@ def finish(marker: Path, db_path: Path, agent_root: Path, human_root: Path) -> i
     if store_mode(marker) == "maildir":
         raise MigrationError("the store is maildir, so there is no migration to finish")
     if store_mode(marker) == "both":
-        problems = run_verify(db_path, (agent_root, human_root))
+        problems = run_verify(db_path, (agent_root, human_root)).problems
         if problems:
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
@@ -912,7 +981,7 @@ def flip_to_sqlite(marker: Path, db_path: Path, roots: tuple[Path, Path], visibi
     # One last full sync while the Maildir is still the record, so the backfill and every
     # read and discard are in, then a clean verify before anything is written.
     run_migration(db_path, roots, visibility, None)
-    problems = run_verify(db_path, roots)
+    problems = run_verify(db_path, roots).problems
     if problems:
         for problem in problems:
             print(f"agent-mail-migrate: {problem}", file=sys.stderr)
@@ -977,7 +1046,7 @@ def switch_store(target: str, marker: Path, db_path: Path, agent_root: Path, hum
     if target == "sqlite":
         return flip_to_sqlite(marker, db_path, (agent_root, human_root), visibility)
     run_migration(db_path, (agent_root, human_root), visibility, None)
-    problems = run_verify(db_path, (agent_root, human_root))
+    problems = run_verify(db_path, (agent_root, human_root)).problems
     if problems:
         for problem in problems:
             print(f"agent-mail-migrate: {problem}", file=sys.stderr)
@@ -985,7 +1054,7 @@ def switch_store(target: str, marker: Path, db_path: Path, agent_root: Path, hum
     write_store(marker, "both")
     # A send between the verify and the marker write was mirrored by nobody.
     run_migration(db_path, (agent_root, human_root), visibility, None)
-    problems = run_verify(db_path, (agent_root, human_root))
+    problems = run_verify(db_path, (agent_root, human_root)).problems
     for problem in problems:
         print(f"agent-mail-migrate: {problem}", file=sys.stderr)
     print(f"store is both: the Maildir stays authoritative and every change is mirrored into {db_path}")
@@ -1040,11 +1109,26 @@ def main() -> int:
             print(plan(collect(mailboxes(agent_root, human_root))))
             return 0
         if args.verify:
-            problems = run_verify(db_path, (agent_root, human_root))
-            for problem in problems:
+            verdict = run_verify(db_path, (agent_root, human_root))
+            for problem in verdict.problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
-            print("verified" if not problems else f"{len(problems)} problems")
-            return 1 if problems else 0
+            for _, text in verdict.notes:
+                print(f"agent-mail-migrate: {text}", file=sys.stderr)
+            if verdict.problems:
+                print(f"{len(verdict.problems)} problems")
+                return 1
+            if not verdict.notes:
+                # The count is the coverage: pruning a pad removes part of the reference, and
+                # nothing else would show the check shrinking from one hour to the next.
+                print(f"verified ({verdict.compared} messages compared)")
+                return 0
+            # Neither a pass nor a failure, and not drift: nothing is wrong now, but a check did
+            # not run and will not start working again. 3 means it never could, 4 means the
+            # reference was removed. Both are logged rather than mailed, because a standing
+            # condition mailed hourly is an alarm nobody reads, and drift has to stay the one
+            # thing that mails.
+            print("verified (completeness unchecked: no archived mail)")
+            return max(code for code, _ in verdict.notes)
         counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message, args.import_only,
                                (args.apply, args.mailbox) if args.apply else None)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:

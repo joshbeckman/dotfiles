@@ -19,7 +19,16 @@ first_file() { find "$1" -maxdepth 1 -type f -name '[!.]*' -print -quit 2>/dev/n
 # in mirror-failures.retired-bytes and only what lies past that offset is pending, which --verify
 # reports. Reading the file directly would keep firing on lines that are already retired.
 drift=0
-agent-mail-migrate --verify >/dev/null 2>"$err" || drift=1
+status=0
+agent-mail-migrate --verify >/dev/null 2>"$err" || status=$?
+# 3 and 4 are verified with completeness unchecked, which is a standing condition rather than
+# drift: logged, and not mailed, because an alarm that fires every hour is one nobody reads.
+case "$status" in
+  0) ;;
+  3) printf 'agent-mail-migrate: completeness unchecked, the realm cut over with an empty archive\n' >&2 ;;
+  4) printf 'agent-mail-migrate: completeness unchecked, the archive was removed after a cutover that had mail\n' >&2 ;;
+  *) drift=1 ;;
+esac
 [ -n "$(first_file "$failures")" ] && drift=1
 
 # Repaired records with no finish stamp mean the migration is waiting to be retired, which is a

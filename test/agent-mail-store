@@ -142,6 +142,52 @@ set +e; "$migrate" --set-store sqlite >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$(cat "$marker")" == sqlite ]]
 conversation sqlite
 [[ -z "$(find "$AGENT_MAIL_ROOT" "$AGENT_HUMAN_MAIL_ROOT" -name '*.md' -print -quit)" ]] || fail "the sqlite store wrote Maildir files"
+# Read state cannot be compared once the store is authoritative, but the archive is frozen,
+# so the two questions it still answers are kept: a message it holds that the store never took,
+# and a body or thread that disagrees with the copy. The archive only loses files to a pruned
+# pad, which weakens the check and never fails it.
+write_archived() {
+  printf 'From: %s\nTo: %s\nDate: 2026-10-24T10:00:00Z\nMessage-ID: stranded\nThread-ID: stranded\nSubject: Stranded\n\n%s\n' \
+    "$alice" "$bob" "$1" >"$AGENT_MAIL_ROOT/$bob/inbox/new/stranded.md"
+}
+# An archive that holds nothing is verified with a distinct status rather than a plain pass,
+# so a machine can tell "checked and clean" from "one check did not run", and a realm that cut
+# over empty does not make an alarm fire for ever.
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 3 ]] && grep -Fq 'completeness unchecked' "$tmp/out" \
+  || fail "an empty archive did not report the unchecked status"
+# A realm that cut over with mail in the archive is the other case: an empty archive there means
+# the reference was pruned away, so the one check that would catch a missing message is gone, and
+# that is a failure rather than a caveat. The marker's mtime is the cutover, so a store holding
+# older mail tells the two realms apart without storing a count.
+touch -t 209901010000 "$marker"
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 4 ]] && grep -Fq 'the reference was removed' "$tmp/err" \
+  || fail "an archive pruned away from a realm that had mail was not reported as its own status"
+touch "$marker"
+mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
+write_archived 'left behind'
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'archived messages are missing' "$tmp/err" \
+  || fail "verify passed with an archived message the store never took"
+"$migrate" --import-only >/dev/null
+verified || fail "verify did not recover after the archived message was imported"
+write_archived 'someone edited the evidence'
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'differ from their archived copy' "$tmp/err" \
+  || fail "verify passed with a body that disagrees with the archive"
+write_archived 'left behind'
+verified || fail "verify did not recover when the body matched again"
+# The success line carries its coverage, because pruning a pad removes part of the reference
+# and nothing else would show the check shrinking.
+"$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>/dev/null
+grep -Eq '^verified \([0-9]+ messages compared\)$' "$tmp/out" \
+  || fail "the success line did not report how much was compared"
 [[ "$("$cmd" addr $bob)" == "$AGENT_MAIL_ROOT/$bob/inbox" ]] || fail "addr stopped resolving"
 "$cmd" search Plan | grep -Fq "$m1" || fail "search did not see the conversation"
 "$cmd" sweep --dry-run >/dev/null || fail "sweep did not run against the SQLite store"
