@@ -1,10 +1,11 @@
 #!/bin/sh
-# Alarm when the mirrored store has drifted. The Maildir is authoritative under `both`, so the
-# failure this catches is the mirror falling behind rather than mail going missing.
+# Alarm when the mail store needs attention. What a failure means depends on the store mode, so the
+# alarm reads the marker rather than assuming: under `both` the Maildir is authoritative and a failure
+# means the mirror is behind, while under `sqlite` there is no second copy and a failure means mail.
 #
 # Failures are one file per failure in mirror-failures.d/, retired by moving into repaired/. A file
 # being written starts with a dot and is ignored until it is renamed into place. The legacy
-# mirror-failures file is still read, because realms that ran the older code wrote one.
+# mirror-failures file is left to --verify, which knows the retired length.
 set -eu
 state="$(dirname -- "${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}")"
 failures="$state/mirror-failures.d"
@@ -15,38 +16,70 @@ trap 'rm -f "$err"' EXIT
 # -print -quit stops at the first match, so this stays cheap on a directory with many entries.
 first_file() { find "$1" -maxdepth 1 -type f -name '[!.]*' -print -quit 2>/dev/null; }
 
-# The legacy mirror-failures is no longer renamed when it is retired: its checked length is recorded
-# in mirror-failures.retired-bytes and only what lies past that offset is pending, which --verify
-# reports. Reading the file directly would keep firing on lines that are already retired.
-drift=0
+mode=maildir
+if command -v agent-mail >/dev/null 2>&1; then
+  mode="$(agent-mail store 2>/dev/null | cut -f1)" || mode=maildir
+fi
+[ -n "$mode" ] || mode=maildir
+
+# Two faults with different repairs, so they are counted apart and reported apart.
+missing=0
+if [ -n "$(first_file "$failures")" ]; then
+  missing=1
+  for file in "$failures"/*; do
+    [ -f "$file" ] || continue
+    printf 'Not yet in SQLite: ' >>"$err"
+    cat "$file" >>"$err" 2>/dev/null || true
+  done
+fi
+store=0
 status=0
-agent-mail-migrate --verify >/dev/null 2>"$err" || status=$?
-# 3 and 4 are verified with completeness unchecked, which is a standing condition rather than
-# drift: logged, and not mailed, because an alarm that fires every hour is one nobody reads.
+agent-mail-migrate --verify >/dev/null 2>>"$err" || status=$?
+# 3 and 4 are verified with completeness unchecked, which is a standing condition rather than drift:
+# logged, and not mailed, because an alarm that fires every hour is one nobody reads.
 case "$status" in
   0) ;;
   3) printf 'agent-mail-migrate: completeness unchecked, the realm cut over with an empty archive\n' >&2 ;;
   4) printf 'agent-mail-migrate: completeness unchecked, the archive was removed after a cutover that had mail\n' >&2 ;;
-  *) drift=1 ;;
+  *) store=1; printf '\nSQLite did not verify. Its integrity check failed or the v4 backfill is still owed.\n' >>"$err" ;;
 esac
-[ -n "$(first_file "$failures")" ] && drift=1
 
 # Repaired records with no finish stamp mean the migration is waiting to be retired, which is a
 # reminder rather than new drift.
 remind=0
-if [ ! -e "$state/migration-finished" ] && [ -n "$(first_file "$repaired")" ]; then
+if [ "$missing" = 0 ] && [ "$store" = 0 ] && [ ! -e "$state/migration-finished" ] \
+   && [ -n "$(first_file "$repaired")" ]; then
   remind=1
+  printf 'These ids are already present in SQLite. This is a reminder to run --finish, not new drift.\n' >>"$err"
 fi
 
-if [ "$drift" = 1 ]; then
-  for file in "$failures"/*; do
-    [ -f "$file" ] || continue
-    cat "$file" >>"$err" 2>/dev/null || true
-  done
-elif [ "$remind" = 1 ]; then
-  printf '\nThese ids are already present in SQLite. This is a reminder to run --finish, not new drift.\n' >>"$err"
+if [ "$missing" = 0 ] && [ "$store" = 0 ] && [ "$remind" = 0 ]; then
+  exit 0
 fi
 
-if [ "$drift" = 1 ] || [ "$remind" = 1 ]; then
-  agent-mail send --from agent-mail-verify --to josh --subject "Agent mail mirror drifted" --body-file "$err"
+if [ "$missing" = 1 ] && [ "$store" = 1 ]; then
+  subject="Agent mail store needs attention: mail missing from SQLite, and it did not verify"
+elif [ "$missing" = 1 ]; then
+  subject="Agent mail store needs attention: mail missing from SQLite"
+elif [ "$store" = 1 ]; then
+  subject="Agent mail store needs attention: SQLite does not verify"
+else
+  subject="Agent mail store needs attention: migration waiting to be finished"
 fi
+[ "$mode" = both ] && [ "$missing" = 1 ] && subject="$subject (mirror drifted)"
+
+if [ "$missing" = 1 ]; then
+  printf '\nRepair: agent-mail-migrate --replay-failures, then agent-mail-migrate --verify.\n' >>"$err"
+fi
+if [ "$store" = 1 ]; then
+  # The archives were a pre-flip snapshot and --finish deletes them, so they are not a repair here.
+  # The Maildir is the only other record, and it stopped receiving writes at the flip.
+  printf 'If replaying does not repair it, the Maildir under %s and %s is the pre-flip record; restoring from it loses everything sent since the flip.\n' \
+    "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent/scratchpads}" \
+    "${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}" >>"$err"
+fi
+if [ "$remind" = 1 ]; then
+  printf 'Run agent-mail-migrate --finish when you are ready to retire the archive.\n' >>"$err"
+fi
+
+agent-mail send --from agent-mail-verify --to josh --subject "$subject" --body-file "$err"

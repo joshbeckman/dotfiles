@@ -10,10 +10,14 @@ mkdir -p "$state/humans" "$state/mirror-failures.d/repaired" "$tmp/bin" "$tmp/sc
 sent="$tmp/sent"
 cat > "$tmp/bin/agent-mail" <<'FAKE'
 #!/bin/sh
+if [ "${1:-}" = "store" ]; then printf '%s\tmarker:/x\tdb:/y\n' "${AGENT_MAIL_TEST_MODE:-sqlite}"; exit 0; fi
 [ "${1:-}" = "send" ] || exit 0
 printf 'SEND\n' >> "$AGENT_MAIL_TEST_SENT"
 while [ $# -gt 0 ]; do
-  case "$1" in --body-file) cat "$2" >> "$AGENT_MAIL_TEST_SENT" ;; esac
+  case "$1" in
+    --subject) printf 'SUBJECT %s\n' "$2" >> "$AGENT_MAIL_TEST_SENT"; shift ;;
+    --body-file) cat "$2" >> "$AGENT_MAIL_TEST_SENT" ;;
+  esac
   shift
 done
 FAKE
@@ -33,6 +37,10 @@ reset_state() {
 }
 fail=0
 check() { if [ "$1" = "$2" ]; then echo "  ok: $3"; else echo "  FAIL: $3 (wanted $2, got $1)"; fail=1; fi; }
+subject() { grep '^SUBJECT ' "$sent" | head -1 | cut -d' ' -f2- || true; }
+body() { grep -v '^SEND\|^SUBJECT' "$sent" || true; }
+want() { case "$2" in *"$3"*) echo "  ok: $1" ;; *) echo "  FAIL: $1 (got $2)"; fail=1 ;; esac; }
+want_not() { case "$2" in *"$3"*) echo "  FAIL: $1"; fail=1 ;; *) echo "  ok: $1" ;; esac; }
 count() { grep -c '^SEND' "$sent" || true; }
 
 reset_state; run
@@ -45,6 +53,8 @@ check "$(count)" "0" "a missing failure directory is not an error"
 
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/one"; run
 check "$(count)" "1" "a failure file raises the alarm"
+want "the subject names missing mail" "$(subject)" "mail missing from SQLite"
+want "the body names the repair" "$(body)" "--replay-failures"
 
 reset_state; printf 'partial\n' > "$state/mirror-failures.d/.one.tmp"; run
 check "$(count)" "0" "a file still being written is ignored"
@@ -56,8 +66,12 @@ check "$(count)" "0" "a file still being written is ignored"
 reset_state; printf 'when\tid\tread\tjosh\terror\n' > "$state/mirror-failures"; printf '120\n' > "$state/mirror-failures.retired-bytes"; run
 check "$(count)" "0" "a retired legacy log does not raise on its own"
 
+reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/one"; AGENT_MAIL_TEST_MODE=both run
+want "under both it still says mirror drifted" "$(subject)" "mirror drifted"
+
 reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
 check "$(count)" "1" "repaired records remind"
+want "the reminder subject says what it is" "$(subject)" "waiting to be finished"
 if grep -q 'reminder to run --finish' "$sent"; then echo "  ok: the reminder says what it is"; else echo "  FAIL: reminder wording missing"; fail=1; fi
 
 reset_state; : > "$state/migration-finished"; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/repaired/one"; run
@@ -68,5 +82,16 @@ check "$(count)" "0" "a failure log in the scratchpads root is ignored"
 
 reset_state; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
 check "$(count)" "1" "a failed verify raises the alarm"
+
+reset_state; AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
+want "the failed-verify subject says so" "$(subject)" "SQLite does not verify"
+want "the body names the pre-flip record" "$(body)" "pre-flip record"
+want_not "the body does not point at the archives" "$(body)" "archives/"
+
+# 3 and 4 mean verified with completeness unchecked: a standing condition, logged rather than mailed.
+for code in 3 4; do
+  reset_state; AGENT_MAIL_TEST_VERIFY_EXIT=$code run 2>/dev/null || true
+  check "$(count)" "0" "verify exit $code does not raise the alarm"
+done
 
 [ "$fail" = 0 ] && echo "agent-mail-verify tests passed" || { echo "agent-mail-verify tests failed"; exit 1; }
