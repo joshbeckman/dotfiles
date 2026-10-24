@@ -17,9 +17,9 @@ Usage:
   agent-scratchpad durable AGENT [--remove]
 
 List or explicitly prune agent scratchpads. Prune is a dry run unless --apply is
-supplied. Age is the newest activity among the heartbeat, Pi session log,
-scratchpad files, and inbox messages. Live pads are never age-pruned, and neither
-are pads marked durable.
+supplied. Age is the newest file in the pad or in its Pi session log, so it measures
+the session and not the mail: a delivery no longer writes a file. Live pads are never
+age-pruned, and neither are pads marked durable.
 
 Options:
   --days N      Select pads inactive for at least N days.
