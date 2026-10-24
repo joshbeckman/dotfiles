@@ -801,12 +801,24 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
                 # on every store, so that case says so instead of reporting success.
                 archived = collect(mailboxes(*roots))
                 if archived:
-                    stored = {row[0] for row in db.execute("SELECT message_id FROM messages")}
-                    missing = sorted(set(archived) - stored)
+                    stored = {row[0]: (row[1] or row[0], row[2]) for row in db.execute(
+                        "SELECT message_id, thread_id, body FROM messages")}
+                    missing = sorted(set(archived) - set(stored))
                     if missing:
                         problems.append(
                             f"{len(missing)} archived messages are missing from the database "
                             f"({', '.join(missing[:3])})")
+                    # Thread and body are frozen properties of the archive, so they keep the
+                    # comparison the old full verify made, less the two that legitimately move:
+                    # the sender canonicalization, and read state, which is the store's alone
+                    # after the flip. The routing headers wait on the backfill check below.
+                    drift = [m.message_id for m in archived.values()
+                             if m.message_id in stored
+                             and stored[m.message_id] != (m.thread_id or m.message_id, m.body)]
+                    if drift:
+                        problems.append(
+                            f"{len(drift)} messages differ from their archived copy "
+                            f"({', '.join(sorted(drift)[:3])})")
                 else:
                     print("agent-mail-migrate: the Maildir archive holds no messages, so "
                           "completeness is unchecked", file=sys.stderr)
