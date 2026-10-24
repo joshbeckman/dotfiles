@@ -164,8 +164,8 @@ set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT
 touch -t 209901010000 "$marker"
 set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
   >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
-[[ "$status" == 1 ]] && grep -Fq 'the reference was removed' "$tmp/err" \
-  || fail "an archive pruned away from a realm that had mail was reported as a pass"
+[[ "$status" == 4 ]] && grep -Fq 'the reference was removed' "$tmp/err" \
+  || fail "an archive pruned away from a realm that had mail was not reported as its own status"
 touch "$marker"
 mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
 write_archived 'left behind'

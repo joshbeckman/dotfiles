@@ -52,7 +52,9 @@ unless --verify is clean.
   --quiet            print nothing on success
 
 Exit status for --verify: 0 verified, 1 problems, 3 verified with completeness unchecked
-(the Maildir archive holds no messages, so a realm that cut over empty stays quiet).
+(the realm cut over with an empty archive), 4 the same, with the archive removed after a
+cutover that had mail. 3 and 4 are standing conditions, so agent-mail-verify logs them and
+mails only on 1.
 
 The store marker is <human-root>/../store, which bin/agent-mail reads: maildir (or absent,
 or anything unreadable) uses the Maildir alone; both writes the Maildir and mirrors each
@@ -779,7 +781,8 @@ def run_migration(db_path: Path, roots: tuple[Path, Path], visibility: str,
     return counts
 
 
-def run_verify(db_path: Path, roots: tuple[Path, Path], notes: list[str] | None = None) -> list[str]:
+def run_verify(db_path: Path, roots: tuple[Path, Path],
+               notes: list[tuple[int, str]] | None = None) -> list[str]:
     db = open_db(db_path)
     if backfill_pending(db) and store_mode(roots[1].resolve().parent / "store") != "sqlite":
         db.close()
@@ -835,16 +838,20 @@ def run_verify(db_path: Path, roots: tuple[Path, Path], notes: list[str] | None 
                         cutover = int(marker.stat().st_mtime * 1_000_000)
                     except OSError:
                         cutover = None
+                    # Standing conditions, not drift: neither clears up on its own, because a
+                    # frozen archive is not repopulated and the migrated mail keeps its date.
+                    # Reporting them as drift would make the alarm fire hourly for ever and stop
+                    # it meaning "wrong now", so each gets a code the alarm can log quietly.
                     if oldest is not None and cutover is not None and oldest < cutover:
-                        problems.append(
-                            "the Maildir archive holds no messages, and the store holds mail from "
-                            "before the cutover, so the reference was removed and completeness "
-                            "cannot be checked")
-                    elif notes is not None:
-                        notes.append("the Maildir archive holds no messages, so completeness is unchecked")
+                        note = (4, "the Maildir archive holds no messages, and the store holds mail from "
+                                   "before the cutover, so the reference was removed and completeness "
+                                   "cannot be checked")
                     else:
-                        print("agent-mail-migrate: the Maildir archive holds no messages, so "
-                              "completeness is unchecked", file=sys.stderr)
+                        note = (3, "the Maildir archive holds no messages, so completeness is unchecked")
+                    if notes is not None:
+                        notes.append(note)
+                    else:
+                        print(f"agent-mail-migrate: {note[1]}", file=sys.stderr)
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     problems.append("integrity check failed")
                 if backfill_pending(db):
@@ -1090,19 +1097,25 @@ def main() -> int:
             print(plan(collect(mailboxes(agent_root, human_root))))
             return 0
         if args.verify:
-            notes: list[str] = []
+            notes: list[tuple[int, str]] = []
             problems = run_verify(db_path, (agent_root, human_root), notes)
             for problem in problems:
                 print(f"agent-mail-migrate: {problem}", file=sys.stderr)
-            for note in notes:
-                print(f"agent-mail-migrate: {note}", file=sys.stderr)
+            for _, text in notes:
+                print(f"agent-mail-migrate: {text}", file=sys.stderr)
             if problems:
                 print(f"{len(problems)} problems")
                 return 1
-            # Distinct from both a pass and a failure: nothing is wrong, but a check did not run.
-            # An alarm that fired on this would fire for ever on a realm that cut over empty.
-            print("verified (completeness unchecked: no archived mail)" if notes else "verified")
-            return 3 if notes else 0
+            if not notes:
+                print("verified")
+                return 0
+            # Neither a pass nor a failure, and not drift: nothing is wrong now, but a check did
+            # not run and will not start working again. 3 means it never could, 4 means the
+            # reference was removed. Both are logged rather than mailed, because a standing
+            # condition mailed hourly is an alarm nobody reads, and drift has to stay the one
+            # thing that mails.
+            print("verified (completeness unchecked: no archived mail)")
+            return max(code for code, _ in notes)
         counts = run_migration(db_path, (agent_root, human_root), args.visibility, args.message, args.import_only,
                                (args.apply, args.mailbox) if args.apply else None)
     except (MigrationError, OSError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:

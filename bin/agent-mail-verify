@@ -21,11 +21,12 @@ first_file() { find "$1" -maxdepth 1 -type f -name '[!.]*' -print -quit 2>/dev/n
 drift=0
 status=0
 agent-mail-migrate --verify >/dev/null 2>"$err" || status=$?
-# 3 is verified with completeness unchecked, which a realm that cut over empty reports for ever:
-# worth a line in the log, and not worth an hourly mail nobody would read.
+# 3 and 4 are verified with completeness unchecked, which is a standing condition rather than
+# drift: logged, and not mailed, because an alarm that fires every hour is one nobody reads.
 case "$status" in
   0) ;;
-  3) printf 'agent-mail-migrate: completeness unchecked, the archive holds no messages\n' >&2 ;;
+  3) printf 'agent-mail-migrate: completeness unchecked, the realm cut over with an empty archive\n' >&2 ;;
+  4) printf 'agent-mail-migrate: completeness unchecked, the archive was removed after a cutover that had mail\n' >&2 ;;
   *) drift=1 ;;
 esac
 [ -n "$(first_file "$failures")" ] && drift=1
