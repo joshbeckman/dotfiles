@@ -142,6 +142,19 @@ set +e; "$migrate" --set-store sqlite >/dev/null 2>"$tmp/err"; status=$?; set -e
 [[ "$(cat "$marker")" == sqlite ]]
 conversation sqlite
 [[ -z "$(find "$AGENT_MAIL_ROOT" "$AGENT_HUMAN_MAIL_ROOT" -name '*.md' -print -quit)" ]] || fail "the sqlite store wrote Maildir files"
+# Read state cannot be compared once the store is authoritative, but completeness still can:
+# the archive is frozen, so an archived message the store never took is the one failure that
+# would otherwise go unreported for ever. The archive can only lose files to a pruned pad,
+# which weakens the check and never fails it, so the guard is safe to keep.
+mkdir -p "$AGENT_MAIL_ROOT/$bob/inbox/new"
+printf 'From: %s\nTo: %s\nDate: 2026-10-24T10:00:00Z\nMessage-ID: stranded\nThread-ID: stranded\nSubject: Stranded\n\nleft behind\n' \
+  "$alice" "$bob" >"$AGENT_MAIL_ROOT/$bob/inbox/new/stranded.md"
+set +e; "$migrate" --verify --agent-root "$AGENT_MAIL_ROOT" --human-root "$AGENT_HUMAN_MAIL_ROOT" --db "$db" \
+  >"$tmp/out" 2>"$tmp/err"; status=$?; set -e
+[[ "$status" == 1 ]] && grep -Fq 'archived messages are missing' "$tmp/err" \
+  || fail "verify passed with an archived message missing from the store"
+rm "$AGENT_MAIL_ROOT/$bob/inbox/new/stranded.md"
+verified || fail "verify did not recover when the archive matched the store again"
 [[ "$("$cmd" addr $bob)" == "$AGENT_MAIL_ROOT/$bob/inbox" ]] || fail "addr stopped resolving"
 "$cmd" search Plan | grep -Fq "$m1" || fail "search did not see the conversation"
 "$cmd" sweep --dry-run >/dev/null || fail "sweep did not run against the SQLite store"

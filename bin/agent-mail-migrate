@@ -793,8 +793,23 @@ def run_verify(db_path: Path, roots: tuple[Path, Path]) -> list[str]:
             problems = [f"{len(pending)} recorded mirror failures are unrepaired ({', '.join(pending[:5])}); "
                         "run agent-mail-migrate --replay-failures"] if pending else []
             if store_mode(roots[1].resolve().parent / "store") == "sqlite":
-                # The Maildir is no longer the record, so there is nothing to compare it with;
-                # only the database's own soundness is left to check.
+                # The Maildir is no longer the record, so read state cannot be compared with it:
+                # a post-flip read is in the database alone, and the frozen file would report
+                # every one as drift. It is still frozen evidence, so completeness can be. The
+                # archive only ever loses files to a pruned pad, which weakens this check and
+                # can never fail it, and an empty archive would make it a tautology that passes
+                # on every store, so that case says so instead of reporting success.
+                archived = collect(mailboxes(*roots))
+                if archived:
+                    stored = {row[0] for row in db.execute("SELECT message_id FROM messages")}
+                    missing = sorted(set(archived) - stored)
+                    if missing:
+                        problems.append(
+                            f"{len(missing)} archived messages are missing from the database "
+                            f"({', '.join(missing[:3])})")
+                else:
+                    print("agent-mail-migrate: the Maildir archive holds no messages, so "
+                          "completeness is unchecked", file=sys.stderr)
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     problems.append("integrity check failed")
                 if backfill_pending(db):
