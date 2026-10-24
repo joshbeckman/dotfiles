@@ -41,7 +41,7 @@ case "$status" in
   0) ;;
   3) printf 'agent-mail-migrate: completeness unchecked, the realm cut over with an empty archive\n' >&2 ;;
   4) printf 'agent-mail-migrate: completeness unchecked, the archive was removed after a cutover that had mail\n' >&2 ;;
-  *) store=1; printf '\nSQLite did not verify. Its integrity check failed or the v4 backfill is still owed.\n' >>"$err" ;;
+  *) store=1 ;;
 esac
 
 # Repaired records with no finish stamp mean the migration is waiting to be retired, which is a
@@ -72,9 +72,14 @@ fi
 if [ "$missing" = 1 ]; then
   printf '\nRepair: agent-mail-migrate --replay-failures, then agent-mail-migrate --verify.\n' >>"$err"
 fi
-if [ "$store" = 1 ]; then
+# Only a store fault with no pending record gets the store advice. When a record is pending, verify
+# fails for that reason, and telling the reader to hunt corruption or restore the Maildir would send
+# them after a fault that is not there. verify's own message stays above, so a second fault is still
+# visible.
+if [ "$store" = 1 ] && [ "$missing" = 0 ]; then
   # The archives were a pre-flip snapshot and --finish deletes them, so they are not a repair here.
   # The Maildir is the only other record, and it stopped receiving writes at the flip.
+  printf '\nSQLite did not verify. Its integrity check failed or the v4 backfill is still owed.\n' >>"$err"
   printf 'If replaying does not repair it, the Maildir under %s and %s is the pre-flip record; restoring from it loses everything sent since the flip.\n' \
     "${AGENT_MAIL_ROOT:-$HOME/.local/state/agent/scratchpads}" \
     "${AGENT_HUMAN_MAIL_ROOT:-$HOME/.local/state/agent-mail/humans}" >>"$err"

@@ -94,6 +94,10 @@ reset_state; printf 'when\tid\tsend\tjosh\terror\n' > "$state/mirror-failures.d/
 AGENT_MAIL_TEST_VERIFY_EXIT=1 run || true
 want "one pending record does not claim two faults" "$(subject)" "mail missing from SQLite"
 want_not "and the subject does not say verify failed" "$(subject)" "did not verify"
+# Verify fails for the pending record, so the body must not send the reader after corruption or a
+# Maildir restore. Verify's own message stays, which is where a second fault would show.
+want_not "the body does not blame corruption" "$(body)" "integrity check failed"
+want_not "the body does not offer a Maildir restore" "$(body)" "pre-flip record"
 
 # 3 and 4 mean verified with completeness unchecked: a standing condition, logged rather than mailed.
 for code in 3 4; do
