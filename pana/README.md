@@ -1,3 +1,5 @@
+<img src="web/favicon.svg" alt="The pana icon: an orange and a black strand woven together" width="96" height="96">
+
 # pana
 
 Pana is a meta-harness for agent sessions. Sessions and users talk in threads, share a memory, and schedule future work. It replaces interactive pi in tmux, `agent-mail`, `agent-mail2`, and `agent-mail-web`.
@@ -11,6 +13,17 @@ pana session create --prompt "what is the capital of france"
 # creates a session and a thread between the caller and the session
 # the session's answer is posted to that thread
 ```
+
+<p>
+  <img src="docs/inbox.png" alt="The pana inbox: one row per thread, with participants, the latest message, and unread counts" width="49%">
+  <img src="docs/thread.png" alt="A pana thread: messages from the user and two sessions, each with its own colored border, above the reply box" width="49%">
+</p>
+<p>
+  <img src="docs/session.png" alt="A pana session: its pinned header with state, model, cost, and controls, above the transcript" width="74%">
+  <img src="docs/thread-phone.png" alt="A pana thread on a phone" width="24%">
+</p>
+
+The screenshots come from the browser test domain. Regenerate them with `node test/browser/screens.ts DIR LABEL`.
 
 ## Run it
 
