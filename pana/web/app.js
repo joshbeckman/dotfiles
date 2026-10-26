@@ -1836,8 +1836,10 @@ function onKeydown(event) {
 
 function showSection(section) {
 	state.section = section;
+	// Compose has no nav item of its own: it is the Threads page's New button.
+	const navSection = section === "compose" ? "threads" : section;
 	for (const link of document.querySelectorAll("#nav a")) {
-		if (link.dataset.section === section) link.setAttribute("aria-current", "page");
+		if (link.dataset.section === navSection) link.setAttribute("aria-current", "page");
 		else link.removeAttribute("aria-current");
 	}
 	for (const view of document.querySelectorAll(".view")) {

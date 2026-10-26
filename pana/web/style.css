@@ -388,7 +388,8 @@ button:focus-visible,
 }
 
 /* ---- Buttons ----------------------------------------------------------------------------- */
-button {
+button,
+a.button {
 	min-height: var(--control-h);
 	padding: 0 var(--s3);
 	background: var(--c-bg);
@@ -401,15 +402,24 @@ button {
 	font-size: 0.85rem;
 	white-space: nowrap;
 }
-button:hover {
+a.button {
+	display: inline-flex;
+	align-items: center;
+	color: var(--c-text);
+	text-decoration: none;
+}
+button:hover,
+a.button:hover {
 	background: var(--c-selected);
 }
-button.primary {
+button.primary,
+a.button.primary {
 	background: var(--p-blue);
 	border-color: var(--p-blue);
 	color: var(--c-on-accent);
 }
-button.primary:hover {
+button.primary:hover,
+a.button.primary:hover {
 	background: var(--p-black);
 	border-color: var(--p-black);
 	color: var(--c-bg);

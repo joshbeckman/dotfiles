@@ -877,4 +877,21 @@ describeBrowser("pana in a browser", () => {
 		expect(Math.abs(view.stickyTop - view.topbar)).toBeLessThan(4);
 		expect(view.controls).toBe(true);
 	});
+
+	it("UX-13 New on the Threads page opens the composer, and the nav has no Compose item", async () => {
+		await start([]);
+		await open();
+		const view = await evaluatePage<{ navCompose: boolean; composeVisible: boolean; current: string | null }>(`
+			location.hash = "#/threads";
+			await until(() => !document.getElementById("view-threads").hidden);
+			document.querySelector("[data-testid=threads-new]").click();
+			await until(() => !document.getElementById("view-compose").hidden);
+			return {
+				navCompose: Boolean(document.querySelector('#nav a[data-section="compose"]')),
+				composeVisible: !document.getElementById("view-compose").hidden,
+				current: document.querySelector('#nav a[aria-current="page"]')?.dataset.section ?? null,
+			};
+		`);
+		expect(view).toEqual({ navCompose: false, composeVisible: true, current: "threads" });
+	});
 });
