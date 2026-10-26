@@ -262,8 +262,7 @@ pana schedule delete SCHEDULE
 The PWA has these sections:
 
 - **Inbox.** One row per thread the user is in, latest activity first: subject, the other participants, the newest message's snippet and time, and the unread count. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
-- **Compose.** Start a session and its thread.
-- **Threads.** Browse and search, including only unread or only archived threads, with each thread's unread count. Edit or redact a message, with a warning.
+- **Threads.** New starts a session and its thread. Browse and search, including only unread or only archived threads, with each thread's unread count. Edit or redact a message, with a warning.
 - **Sessions.** Live and past sessions with the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Stop, compact, archive, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.

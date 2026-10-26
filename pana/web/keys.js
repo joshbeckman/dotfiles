@@ -11,7 +11,7 @@ export const KEYMAP = [
 	{ action: "go:threads", sequences: [["g", "t"]], description: "Go to Threads" },
 	{ action: "go:sessions", sequences: [["g", "s"]], description: "Go to Sessions" },
 	{ action: "go:memory", sequences: [["g", "m"]], description: "Go to Memory" },
-	{ action: "go:compose", sequences: [["g", "c"]], description: "Go to Compose" },
+	{ action: "go:compose", sequences: [["g", "c"]], description: "New thread" },
 	{ action: "go:schedules", sequences: [["g", "h"]], description: "Go to Schedules" },
 	{ action: "search", sequences: [["/"]], description: "Focus search" },
 	{ action: "reply", sequences: [["r"]], description: "Focus the reply box" },

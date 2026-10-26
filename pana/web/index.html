@@ -16,7 +16,6 @@
 			<h1>pana</h1>
 			<nav id="nav" aria-label="Sections">
 				<a data-section="inbox" href="#/inbox">Inbox<span id="nav-inbox-count" data-testid="nav-unread" hidden></span></a>
-				<a data-section="compose" href="#/compose">Compose</a>
 				<a data-section="threads" href="#/threads">Threads</a>
 				<a data-section="sessions" href="#/sessions">Sessions</a>
 				<a data-section="memory" href="#/memory">Memory</a>
@@ -58,7 +57,7 @@
 			</section>
 
 			<section class="view" id="view-compose" data-testid="compose" hidden>
-				<header class="view-header"><h2>Compose</h2></header>
+				<header class="view-header"><a href="#/threads" class="back">Back</a><h2>New thread</h2></header>
 				<form id="compose-form" class="panel">
 					<div class="field">
 						<label for="compose-to">Also to</label>
@@ -82,7 +81,12 @@
 
 			<section class="view" id="view-threads" data-testid="threads" hidden>
 				<div id="threads-browse">
-					<header class="view-header"><h2>Threads</h2></header>
+					<header class="view-header">
+						<h2>Threads</h2>
+						<div class="header-actions">
+							<a class="button primary" href="#/compose" data-testid="threads-new">New</a>
+						</div>
+					</header>
 					<form id="threads-search" class="search">
 						<label for="threads-query" class="visually-hidden">Search threads</label>
 						<input id="threads-query" data-testid="threads-query" type="search" placeholder="Search subjects and bodies" />
