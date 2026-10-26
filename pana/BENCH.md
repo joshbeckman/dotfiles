@@ -35,48 +35,48 @@ Apple M2, 8 cores, 8 GB, macOS 26.5, Node 26.12, SQLite 3.54. The faux model tak
 
 ## Results
 
-N=200, M=1000, K=5, then 10,000 threads. "Before" is the code this package started from (`6fdb299`). "After" is this branch. Both runs pass every SCALE-02 check. Runs vary by about 20% from one to the next; the speedups below held in every pair.
+N=200, M=1000, K=5, then 10,000 threads. "Before" is the code this package started from (`6fdb299`). "After" is this branch, with WP11's archives and unread counts merged and migration 5's indexes. Both runs pass every SCALE-02 check. Runs vary by about 20% from one to the next; the speedups below held in every pair.
 
 | Phase | Before | After | |
 |---|---|---|---|
-| sessions: 200 created at once | 1.1 s, 174/s | 0.9 s, 232/s | answers p50 1143 → 857 ms |
-| threads: 10,000 messages | 28.7 s, 349/s | 14.0 s, 714/s | answer p50 / p99 279 / 433 → 139 / 197 ms |
-| broadcast: 1,000 wakes | 3.1 s, 324/s | 1.9 s, 523/s | post p50 552 → 308 ms |
-| fan-out: 150 sessions | 2.5 s, 61/s | 1.4 s, 109/s | |
+| sessions: 200 created at once | 1.1 s, 174/s | 0.8 s, 244/s | answers p50 1143 → 815 ms |
+| threads: 10,000 messages | 28.7 s, 349/s | 14.1 s, 707/s | answer p50 / p99 279 / 433 → 142 / 191 ms |
+| broadcast: 1,000 wakes | 3.1 s, 324/s | 1.8 s, 552/s | post p50 552 → 401 ms |
+| fan-out: 150 sessions | 2.5 s, 61/s | 1.3 s, 114/s | |
 
 Server time per route, from the request log, in ms:
 
 | Route | Before p50 / p99 | After p50 / p99 |
 |---|---|---|
-| `threads.create` | 3.53 / 7.01 | 0.27 / 2.37 |
-| `threads.respond` | 1.92 / 6.97 | 0.88 / 4.87 |
-| `sessions.create` | 2.40 / 9.56 | 2.03 / 6.55 |
-| `inbox.list` | 94.75 / 107.58 | 0.38 / 0.98 |
-| `threads.search` | 1.55 / 2.11 | 0.07 / 0.25 |
-| `sessions.search` | 0.47 / 3.17 | 0.29 / 2.51 |
-| `schedules.list` | 0.63 / 1.63 | 0.24 / 1.41 |
+| `threads.create` | 3.53 / 7.01 | 0.29 / 2.44 |
+| `threads.respond` | 1.92 / 6.97 | 0.92 / 5.36 |
+| `sessions.create` | 2.40 / 9.56 | 2.08 / 7.18 |
+| `inbox.list` | 94.75 / 107.58 | 1.77 / 2.23 |
+| `threads.search` | 1.55 / 2.11 | 0.13 / 0.41 |
+| `sessions.search` | 0.47 / 3.17 | 0.30 / 2.04 |
+| `schedules.list` | 0.63 / 1.63 | 0.24 / 1.63 |
 
 Lists at 10,000 threads, as the client saw them (SCALE-03). Before, `/inbox` and `/schedules` returned everything, and `/threads` and `/sessions` returned one capped page with no way to the rest.
 
 | List | Items | Before: first call p50 / p99, size | After: first page p50 / p99, size | After: every page p99 |
 |---|---|---|---|---|
-| `/inbox` | 13,859 | 118 / 151 ms, 9.5 MB | 0.5 / 2.4 ms, 34 KB | 1.9 ms over 278 pages |
-| `/threads` | 10,000 | 1.6 / 2.4 ms, first 50 only | 0.12 / 0.34 ms | 0.42 ms over 200 pages |
-| `/sessions` | 350 | 0.6 / 1.0 ms, first 50 only | 0.39 / 1.0 ms | 0.39 ms over 7 pages |
-| `/schedules` | 200 | 0.9 / 2.8 ms, 81 KB | 0.35 / 0.53 ms | 0.39 ms over 4 pages |
+| `/inbox` | 13,859 | 118 / 151 ms, 9.5 MB | 1.9 / 2.7 ms, 35 KB | 2.9 ms over 278 pages |
+| `/threads` | 10,000 | 1.6 / 2.4 ms, first 50 only | 0.18 / 0.50 ms | 0.85 ms over 200 pages |
+| `/sessions` | 350 | 0.6 / 1.0 ms, first 50 only | 0.39 / 0.59 ms | 0.44 ms over 7 pages |
+| `/schedules` | 200 | 0.9 / 2.8 ms, 81 KB | 0.34 / 0.51 ms | 2.1 ms over 4 pages |
 
 | | Before | After |
 |---|---|---|
-| Requests | 14,422 | 14,907 |
-| `panad` RSS peak / end | 563 / 342 MB | 418 / 418 MB |
-| Live heap after a full collection | 70 MB | 45 MB |
-| Database | 41.8 MB | 41.8 MB |
+| Requests | 14,422 | 14,903 |
+| `panad` RSS peak / end | 563 / 342 MB | 346 / 346 MB |
+| Live heap after a full collection | 70 MB | 37 MB |
+| Database | 41.8 MB | 40.2 MB |
 
 RSS mostly measures how much heap V8 keeps between collections, so it moves with throughput. The live heap is the number that grows with sessions.
 
 ### 1,000 sessions
 
-`--sessions 1000 --threads 2000 --concurrency 100 --broadcast 0 --fanout 0`: more sessions, so more kept state.
+`--sessions 1000 --threads 2000 --concurrency 100 --broadcast 0 --fanout 0`: more sessions, so more kept state. Measured before the WP11 merge.
 
 | | Before | After |
 |---|---|---|
@@ -94,7 +94,8 @@ Each was found with a CPU profile of the bench's `panad` or with `PANA_BENCH_SQL
 | 2 | The project prompt section ran `git rev-parse --show-toplevel` on every model request. | `spawn` was 13% of CPU. | Walk up from `cwd` to the nearest `.git` through the execution environment. The bash tool's clean environment sets no `GIT_DIR`, so it finds the root git would. |
 | 3 | pi-durable kept each idle conversation's context for ten minutes, and checks every kept context again on each task change. | At 1,000 sessions, with fixes 1 and 2 in place: threads phase 67.0 s with the default, 43.9 s with 0; RSS at the end 637 MB against 397 MB. Live heap 86 → 39 MB. | `panad` defaults `contextRetentionMs` to 0, as the README promises: an idle session costs nothing but storage. A session's next run reads its transcript back from SQLite, which takes milliseconds against a model call of seconds. `documentRetentionMs` 0 was slower (55 s), so it keeps its default. |
 | 4 | The delivery hook checked the thread for archived sessions once per recipient, and that query reads every participant: P² rows for a message to P sessions. | Broadcast `threads.respond` to 200 sessions p50 41.5 ms. | Check once per append; one append calls the hook for all its recipients inside one transaction. p50 35.9 ms. |
-| 5 | List routes returned whole tables. | `/inbox` with 13,859 items: 9.5 MB and 118 ms a call, read inside the write line. | SCALE-03: `limit`, `cursor`, `nextCursor` on all four list routes, the CLI flags, and "Load more" in the PWA. |
+| 5 | List routes returned whole tables. | `/inbox` with 13,859 items: 9.5 MB and 118 ms a call, read inside the write line. | SCALE-03: `limit`, `cursor`, `nextCursor` on all four list routes, the CLI flags, and "Load more" in the PWA. WP11's archived and unread filters page with them. The inbox answers `unreadTotal`, so the PWA badge still counts past the first page. |
+| 6 | WP11's unread count ran once per listed thread, and found the reader's deliveries through `(recipient_id, created_at)`, so each count read the whole inbox. The auto-reply's lookup by submission read every delivery of the session the same way. | After the WP11 merge, a `/threads` page took 60 ms with 14,000 deliveries; `/inbox` 4 ms. | Migration 5: `(recipient_id, wake_submission_id)`, and a partial index on `(recipient_id, thread_id)` where `read_at` is null. A `/threads` page takes 0.18 ms, `/inbox` 1.9 ms. |
 
 ## Measured and left alone
 
@@ -108,5 +109,5 @@ Each was found with a CPU profile of the bench's `panad` or with `PANA_BENCH_SQL
 
 - pi-durable's scheduler checks every context it keeps on each task change (`#settleIdle`). With retention 0 it keeps only busy conversations, but with 1,000 sessions created at once that check was still 14% of CPU. That belongs upstream.
 - After these fixes `panad` is CPU-bound, and SQLite is about 55% of its CPU. BEGIN and COMMIT alone are a quarter.
-- The auto-reply and failure-notice lookups find a delivery by `(recipient_id, wake_submission_id)` through the `(recipient_id, created_at)` index, so they read every delivery of the session. That is 30–70 µs today. An index needs a migration; it waits so it does not collide with WP11's.
+- The inbox's `unreadTotal` reads every unread delivery of the reader through the partial index: 1.9 ms with 13,859 unread. A counter column would make it constant, at the cost of state to keep right.
 - Searches page by offset, so a deep page re-reads the hits before it.
