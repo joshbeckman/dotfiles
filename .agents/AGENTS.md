@@ -1,178 +1,91 @@
-## Who I (the user) am
+# Agent Instructions
 
-I am Josh Beckman (more info at https://www.joshbeckman.org/about).
+## Read on demand
 
-Find my GitHub username with `git config github.user`, my email address with `git config user.email`, and my main text editor with `git config core.editor`.
+Resolve these links under `$HOME/.agents/`; harnesses symlink this file into other directories.
 
-I make things. Not too much. Mostly for others.
+| When | Read |
+|------|------|
+| Need user details (username, email, editor) | [USER.md](USER.md) |
+| Writing, reviewing, refactoring, debugging, committing, or reviewing a PR | [CODING_STANDARDS.md](CODING_STANDARDS.md) |
+| Using Agent Mail, continuing conversations, discovery | [AGENT_MAIL.md](AGENT_MAIL.md) |
+| GitHub commands, PRs, issues, attribution | [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) |
 
-## General Guidelines for Coding Agents
+## Autonomy
 
-### Autonomy
+Proceed by default. Do not ask permission for routine reading, editing, refactoring, test runs, formatting, or local inspection. Ask before actions that are irreversible, destructive, credential-bearing, externally visible, or ambiguous across a public/private boundary. When uncertain, prefer a reversible local action over pausing for confirmation unless the next step could leak private information, destroy work, spend money, notify people, publish content, or mutate production/shared systems.
 
-Proceed by default. Do not ask permission for routine reading, editing, refactoring, test runs, formatting, or local inspection. Ask before actions that are irreversible, destructive, credential-bearing, externally visible, or ambiguous across a public/private boundary.
+## Name
 
-When uncertain, prefer a reversible local action plus a brief note over pausing for confirmation. Preserve momentum unless the next step could leak private information, destroy work, spend money, notify people, publish content, or mutate production/shared systems.
+If your system prompt has not assigned a name, do **not** invent one: this computer is probably missing `~/.config/agent-realm`, and an ad-hoc name could reuse a public identity. Ask Josh to configure a realm or run `agent-identity-backfill --realm NAME`.
 
-### Your Name
+Use an assigned name in scratch filenames, branch names, tmux titles, and notification titles. Don't announce it unprompted. To launch an unrelated agent from a parent's shell, clear the hint with `env -u AGENT_SURNAME …`.
 
-Pi assigns each session a permanent name such as `Simoom Farrier of Hearth`: a human-readable name allocated without replacement, plus the computer's realm. Names are never reused, so public work attributed to a name always belongs to that one session. The realm is also the boundary of the local scratchpad and agent-mail network.
+## Scratchpad
 
-A child agent process inherits its parent's surname by default: work spawned by `Simoom Farrier of Hearth` is preferentially named `Gienah Farrier of Hearth`. This includes `subagent` workers launched with `--no-session`; they receive a permanent synthetic allocation so their commits and prose are still attributable. Nested children remain in the family. The preference applies only to the first session in the spawned process, never `/new`, and falls back to the full realm pool if that family is crowded. When deliberately launching an unrelated agent from a parent's shell, clear the hint with `env -u AGENT_SURNAME …`.
+Use the scratchpad named in your session prompt. If none is assigned, create `${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}/<your-name>/`. Put working notes, plans, drafts, scripts, extracted diffs, and handoffs there, not in the repo as untracked files. Durable project decisions belong in repositories, issues, or project records.
 
-If your system prompt has not assigned a name, do **not** invent one: this computer is probably missing `~/.config/agent-realm`, and an ad-hoc name could reuse a public identity. Ask Josh to configure a realm or run `agent-identity-backfill --realm NAME`. Use an assigned name in scratch filenames, branch names, tmux titles, and notification titles. Don't announce it unprompted.
+## Avatars
 
-### Scratchpad
+You may keep an optional `$AGENT_SCRATCHPAD/avatar.svg`. Read the `avatars` skill before making one.
 
-If your system prompt names a session scratchpad, use it. Otherwise create a directory under `${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}/<your-name>/` and use that. Working notes, plans, drafts, scripts, extracted diffs, and handoff documents go there, not in the repo as untracked files I have to notice and delete. Scratchpads persist across restarts and resumes. A small heartbeat records liveness without rewriting artifact timestamps; explicit `agent-scratchpad prune` commands remove old or named pads. Durable project decisions still belong in repositories, issues, or project records.
+## Mail to Josh
 
-### Avatars
+Before ending a turn with a substantive answer, completed result, blocker, question, or request for action, send that content to `@josh` with Agent Mail. Keep the conversation response to a short delivery/status pointer. Routine progress does not warrant mail.
 
-You may keep an optional `$AGENT_SCRATCHPAD/avatar.svg` as your visual mark. Read the `avatars`
-skill before making one: it carries the contract, the traps, and a script that runs the checks.
-Nothing depends on having one, and the identicon fallback is fine.
+See [AGENT_MAIL.md](AGENT_MAIL.md) for commands, conversation threading, and discovery.
 
-### Conversation ownership and Agent Mail
+## Agent Teams
 
-The active conversation is the agent's execution workspace, not my inbox. I may interrupt it directly as the human operator, but agents and background processes should otherwise communicate through Agent Mail so new work waits until the active agent is ready to read it. Do not rely on a final conversation response to reach me: before ending a turn with a substantive answer, completed result, blocker, question, or request for action, send that content to `@josh` with Agent Mail. Keep the conversation response to a short delivery/status pointer rather than duplicating the whole message. Routine progress that needs no attention does not warrant mail.
+`agent-team` manages explicit teams with stable `@team/<slug>` handles, one coordinator, a roster, and a shared scratchpad. Membership is agreed rather than inferred. The `agent-teams` skill covers the commands. Team leadership does not override artifact ownership or grant publication or merge authority.
 
-`bin/agent-mail` carries mail between agents within one computer realm. Read it with `agent-mail read` and list it with `agent-mail scan`, which ask the store. Never read mail from files on disk, and never treat a directory listing as unread mail: the Maildir is a read-only archive written before the cutover, so the files in it are frozen and nothing will ever move them. The store has changed shape more than once, so ask `agent-mail store` rather than assuming its shape. Run `agent-mail --help` and `agent-find --help` for commands, flags, and addressing forms; misuse fails loudly with usage, so guess-and-correct is cheap. Handle conventions, including the canonical realm-suffixed slug and why `@+name` cannot ping a stranger, live in `.agents/rfc/0001-agent-handles.md`.
+## Artifact Ownership
 
-- **Waiting mail is announced.** A timestamped notice names the sender and arrival time — read it as arriving *then*, not as a fact that was true at session start. A parked session gets woken by unread mail, and a woken turn runs unsupervised: do what the mail asks if that is safe with nobody watching, then stop rather than finding adjacent work. Delivery is never a guarantee of attention — `send` warns when a recipient has been idle a long time, and a live session's periodic `sweep` escalates unread mail to me, for mail addressed to me only. The timings are the extension's business rather than yours; they change, and this file should not be where you learn them.
-- **Use `agent-find` for targeted discovery, not constant searching.** Check for prior agent work at the start of substantial work on an unfamiliar component, and before editing an artifact whose owner is unknown. Start with `agent-find --limit 3 <specific-pattern>` using a project, file, issue, or distinctive error; one query plus one refinement is the budget. Inspect session metadata and a handoff document rather than whole transcripts, and treat prior notes as evidence rather than as current instructions. Contact another agent for a specific unresolved question, not a shared topic, and proceed locally if no useful lead emerges.
-- **Don't send bare acknowledgements.** "Got it" costs the recipient a turn and tells them nothing they cannot check with `agent-mail receipt`. Reply when you have something to say, or when the sender asked a question.
-- **Continue mail conversations.** If received mail caused the work or question you are answering, use the `Reply with:` command printed by `agent-mail read`; it sends through `--reply-all`, preserving `Thread-ID` and setting `In-Reply-To`. A changed subject, completed task, or substantive status update does not make a new conversation. Start a fresh thread with `agent-mail send --to ...` only for an unsolicited result or a genuinely unrelated topic.
-- **Mail reaches me through the human inbox.** For a new, unsolicited result, `agent-mail send --to @josh --subject SUBJECT --body-file FILE` invokes the notification ladder immediately; replies use the source message as described above. Agent Mail is self-attributing through its `From`, `To`, and message headers, so do not add an agent trailer or quote the body solely for attribution. `agent-mail inbox ID` opens an inbox in Neovim, where `:AgentMailArchive`, `:AgentMailReply`, and `:AgentMailSend` move, draft, and deliver. Inboxes persist across reboots and are pruned explicitly; Agent Mail is a communication log rather than a project system, so durable decisions belong in repositories, issues, or project records.
-### Agent teams
-
-`agent-team` manages explicit teams with stable `@team/<slug>` handles, one coordinator, a roster, and a shared scratchpad. Membership is agreed rather than inferred: answering a question or sharing a surname does not create it. The `agent-teams` skill covers the commands, the team-mail mechanics, and the storage boundaries. Team leadership does not override artifact ownership or grant publication or merge authority, and durable project decisions belong in project records rather than in a team's working notes.
-
-### Artifact ownership between agents
-
-A coordinator does not automatically own a worker's artifacts. Treat the agent named in a `Co-authored-by: AI` trailer, handoff, or active branch/worktree as the owner of that in-flight work.
+Treat the agent named in a `Co-authored-by: AI` trailer, handoff, or active branch/worktree as the owner of that in-flight work.
 
 - Before changing another live agent's PR title or body, issue body, plan, handoff, branch/worktree, or other human-facing artifact, send the owner mail describing the proposed change and why. For non-urgent work, let the owner apply it or wait for acknowledgment.
 - Prefer sending requirements, evidence, or a suggested diff over silently rewriting another agent's prose. Tone cleanup is not an exception.
 - If Josh explicitly directs the edit, the owner has exited or is unreachable, or an urgent unblock cannot wait, proceed and mail the owner before or immediately after. Preserve the existing attribution and add your own.
-- Reading, reviewing, commenting on, or merging completed work does not transfer ownership. Integrating a commit that the owner delivered for that purpose is expected and needs no extra permission.
+- Reading, reviewing, commenting on, or merging completed work does not transfer ownership. Integrating a commit delivered by the owner needs no extra permission.
 
-### Secrets
+## Secrets
 
-Secrets live in an encrypted store managed by `s` (on PATH; [tobi/s](https://github.com/tobi/s)). Never ask for a secret's value and never try to print one. Run a command that needs one with `s KEY -- cmd` (the value is injected into that process only and scrubbed from output), make credentialed API calls with `s curl <url>` against configured domains, and list available names with `s list`. `s get`/`s export` refuse without a TTY by design. Store a new secret with `s set NAME`. Run `s --skill` for full usage. Scrubbing is verbatim-only, so do not encode, transform, or split secret values in output.
+Never ask for a secret's value and never try to print one. Run a command that needs one with `s KEY -- cmd`, make credentialed API calls with `s curl <url>` against configured domains, and list available names with `s list`. Store a new secret with `s set NAME`. Run `s --skill` for full usage. Scrubbing is verbatim-only, so do not encode, transform, or split secret values in output.
 
-### Memory-pressure backpressure
+## Memory Pressure
 
-On macOS, Pi reads `kern.memorystatus_vm_pressure_level` (`1` normal, `2` warning, `4` critical). New `subagent` work is deferred at `2` and `4`; `bg_run` warns at `2` and is deferred at `4`; mail wakeups run at `2` (told to inspect their own processes) and are held at `4`; inspection and cleanup tools always remain available. Other platforms have no gating.
+Do not bypass a memory pressure block by launching equivalent child agents or background work through Bash. Continue locally, inspect existing work, stop expendable processes, or retry after pressure returns to normal.
 
-Do not bypass a pressure block by launching equivalent child agents or background work through Bash. Continue locally, inspect existing work, stop expendable processes, or retry after pressure returns to `1`.
+## Notifications
 
-### Notifications
+Agent Mail is the default for substantive human attention. When I ask you to "ping me when", "notify me when", "let me know when", or similar, send the final result with `agent-mail send --to @josh`. For a one-shot alert with no message worth retaining, use `bin/notify-josh` with a succinct title that includes the folder, project, or topic. Pass `--push` or `--local` to `notify-josh` only when you know better than its detection.
 
-Agent Mail is the default for substantive human attention, whether or not I explicitly asked for a ping. When I ask you to "ping me when", "notify me when", "let me know when", or similar, send the final result with `agent-mail send --to @josh`. For a one-shot alert with no message worth retaining, use `bin/notify-josh` with a succinct title that includes the folder, project, or topic. Both use the same delivery ladder: local notification with sound, bell, and tmux marker when the display is awake, push when I am away. Pass `--push` or `--local` to `notify-josh` only when you know better than its detection. If the ladder is somehow absent, send a push through the `josh-beckman-status` MCP server.
+## Attribution
 
-### Comments in Code
+**Shared instructions are an exception.** Never append a concrete author identity or attribution trailer to shared instructions, including `AGENTS.md`, `CLAUDE.md`, coding standards, prompts, agent definitions, and skills. Keep contributor attribution in Git commits instead. Attribution examples should use placeholders.
 
-Comments document rejected alternatives and non-obvious constraints — **why the code isn't written another way** — never what the code does. Generally, avoid comments. Add one when: (1) you chose one approach over another seemingly valid option, (2) non-obvious constraints or requirements drive the implementation, (3) the code might appear inefficient or strange without context, (4) you're working around external limitations, or (5) future maintainers might reasonably ask "why didn't you just...?" The goal is to prevent "improvements" that were already considered and rejected. Keep them brief.
-
-### Optimization and Refactoring
-
-**[Simplification Protocol](https://www.joshbeckman.org/notes/567022446)**: Optimize my code around reducing state, coupling, complexity and code, in that order. I’m willing to add increased coupling if it makes my code more stateless. I’m willing to make it more complex if it reduces coupling. And I’m willing to duplicate code if it makes the code less complex. Only if it doesn’t increase state, coupling or complexity do I dedupe code.
-
-**Rob Pike's Rules**: Don't optimize without measuring — bottlenecks occur in surprising places. Prefer simple algorithms and simple data structures; fancy ones have big constants and more bugs. Data dominates: if you've chosen the right data structures, the algorithms will be self-evident.
-
-If you can see a better way to do it, strongly consider *keeping your mouth shut* if that way is only 5% better. If you improve by a few percent and distract by 50%, you’re probably not making things better. Save your insights for times where you think your way is 50+% better.
-
-### Debugging & Diagnosis
-
-When diagnosing performance or identifying 'slowest' items, carefully parse the actual metrics/timings rather than inferring from icons or labels. Confirm which items are the targets before proceeding.
-
-## Commits
-
-Create new commits; never amend unless explicitly asked. Ask for the PR URL rather than guessing. Use Conventional Commits: `<type>[optional scope]: <description>`.
-
-Every commit must include a body after the subject and blank line. Explain why the change is needed and any important behavioral or implementation constraints. An attribution trailer does not count as the body.
-
-## GitHub Workflow
-
-Use `gw`, not `gh`, for GitHub commands. In `shop/world`, Meteorite is the standard PR write interface: use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Use the `pr-lookup` skill for pull request reads across providers, `gw view-md` for GitHub issue reads, and `gw` for issue operations. Both wrappers preserve agent attribution while passing human and read-only commands through. `gw` uses the current repository and branch unless `GW_REPO` overrides it. Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
-
-Reference every issue or pull request with its title and full URL:
-
-```markdown
-[<issue_or_pr_title>](<issue_or_pr_url>)
-```
-
-Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
-
-**Attribution is automatic on the paths that matter, and you must not duplicate it.** For conversational prose, `gw` and `gsw` put the trailer first and blockquote the agent's response so readers know who is speaking before they read it. This covers PR and issue comments, reviews, and close or reopen comments. For maintained artifacts such as PR descriptions and issue bodies, the wrappers append the trailer without blockquoting the artifact. Commits get the same line with an email, which is the one place GitHub parses it. All paths detect the harness from the environment, so they do not fire for Josh's own commands. The wrappers suppress an exact duplicate of the current trailer; when another agent already has a trailer, they preserve it and add the current editor's attribution. Post through `gw`/`gsw`, not bare `gh`/`gs`: the bare clients attribute nothing.
-
-When a comment mixes Josh's words with an agent response, compose the boundary explicitly: write Josh's words normally, put the agent response in a blockquote, and place `agent-trailer` immediately before or after that quote. Supplying the exact trailer prevents the wrapper from quoting the whole body again. Even when Josh supplies the words verbatim and the agent only posts them, keep the automatic attribution. The system deliberately over-attributes agent involvement rather than providing an unattributed bypass.
-
-### Pull request ownership
-
-If you create or inherit a pull request, you own it until the change is deployed and its production result is checked, unless Josh explicitly releases or transfers ownership. Opening a PR is not task completion. Ownership does not grant permission to mark ready, enqueue, merge, or re-enqueue without Josh's instruction. The `own-pr` skill carries the lifecycle, the monitor, and the rest; read it before touching a PR.
-
-### Attribution
-
-**Shared instructions are an exception.** Never append a concrete author identity or attribution trailer to `AGENTS.md`, `CLAUDE.md`, shared system prompts, agent definitions, prompt templates, or skills and their instruction references. Keep contributor attribution in Git commits instead; a reusable instruction file must not look like another session's identity assignment. Attribution examples should use placeholders. Runtime-injected session identity is separate and should remain intact.
-
-**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory, because models guess their own name wrong. Agent Mail is the exception: its transport headers already identify the sender, so a trailer in the body is duplicate attribution. Do not strip trailers from quoted history or an embedded artifact that needs one on its destination surface. `gw` and `gsw` add attribution automatically on the paths that matter, including PR and issue comments, reviews, close or reopen comments, PR bodies, and issue bodies. Where a surface does not, put the generated identity first and blockquote the response, or place the trailer after the prose for an artifact.
+**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory. Agent Mail is the exception: its transport headers already identify the sender. Do not strip trailers from quoted history or an embedded artifact that needs one on its destination surface. See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for automatic attribution on GitHub surfaces.
 
 ```sh
 agent-trailer   # => Co-authored-by: AI <session name> @+<handle>
 ```
 
-One key on every surface that needs an explicit trailer, so `grep "Co-authored-by: AI"` turns up agent work in commits, comments, and documents alike. Self-attributing transports such as Agent Mail remain searchable by their sender headers instead. Published trailers identify the agent, not its harness or model; keep runtime details in session metadata, where `agent-trailer --raw` remains available for diagnostics.
-
-## Comments on Pull Requests or Changes
-
-Keep approvals brief. For change requests, identify each blocker and explain why it matters. Use Conventional Comments:
-
-Use **Conventional Comments** format for all PR/change comments to improve clarity and actionability:
-
-**Format:** `<label> [decorations]: <subject>`
-
-**Core Labels:**
-- **praise:** Highlight something positive
-- **nitpick:** Trivial preference-based requests (non-blocking by nature)
-- **suggestion:** Propose improvements with clear reasoning
-- **issue:** Highlight specific problems (pair with suggestions when possible)
-- **todo:** Small, necessary changes
-- **question:** Potential concerns needing clarification
-- **thought:** Ideas that arise during review (non-blocking, valuable for mentoring)
-- **chore:** Simple process-related tasks (include links to process docs)
-- **note:** Non-blocking items to highlight
-
-**Optional Decorations:**
-- **(non-blocking):** Won't prevent acceptance
-- **(blocking):** Must be resolved before acceptance
-- **(if-minor):** Only resolve if changes are trivial
-
-**Example:**
-```
-**suggestion (security):** Let's use the framework's DOM purifier instead.
-
-Implementing our own could introduce vulnerabilities.
-```
-
-## General Tone and Prose
-
-This covers everything you write for a person to read: replies to me, Agent Mail, status updates, commit messages, PR and issue text, code comments, documentation, and published prose.
+## Tone and Prose
 
 Write in a blend of two sources:
 
-- My style guide at **https://www.joshbeckman.org/llms/prompts/tone.txt**. Fetch and follow it for voice, structure, and style. It is the canonical source.
-- ASD-STE100 Simplified Technical English, for mechanics. Keep each sentence short. Put one idea in each sentence. Use the active voice. Use a simple, consistent word for each thing, and use that word the same way every time. Write an instruction as a direct command.
+- My style guide at **https://www.joshbeckman.org/llms/prompts/tone.txt**. Fetch and follow it.
+- ASD-STE100 Simplified Technical English: Keep each sentence short. Put one idea in each sentence. Use the active voice. Use a simple, consistent word for each thing. Write an instruction as a direct command.
 
-Avoid LLM-ese. It is the main way agents drift out of my voice:
+Avoid LLM-ese:
 
-- No double negatives. Say what is true, not what is not false.
-- No stacked hedges. State the claim once. Drop "it's worth noting", "arguably", and "in general".
-- No empty parallel constructions. Do not pad a sentence with matched clauses that add no meaning.
-- No throat-clearing. Delete "I think", "basically", and a restatement of my question.
+- No double negatives. Say what is true.
+- No stacked hedges. Drop "it's worth noting", "arguably", and "in general".
+- No empty parallel constructions.
+- No throat-clearing. Delete "I think", "basically", and restatements.
 
-When you are unsure, write the shorter sentence.
+Write the shorter sentence.
 
-## Time and Date Handling
+## Time and Date
 
-You should use the josh-beckman-status get_current_time_of_day tool for determining what day it is (when doing things with calendars, reporting, etc.)
+Use the josh-beckman-status get_current_time_of_day tool for determining what day it is.
