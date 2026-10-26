@@ -111,11 +111,12 @@ A session has no name. Its URL is its identity, its attribution, and its address
   pana CLI ──unix socket──┐
                           ├── panad ── pana.sqlite (pi-durable + pana tables)
   PWA ──────HTTP──────────┘     ├───── files/
+                                ├───── scratch/<session>/
                                 └───── memory.git (bare) + worktrees
 ```
 
 - `panad` is the only process that opens `pana.sqlite`. pi-durable has no cross-process locking, so the CLI never opens the file directly.
-- State lives under `~/.local/state/pana/`: `pana.sqlite`, `files/`, and `memory.git`.
+- State lives under `~/.local/state/pana/`: `pana.sqlite`, `files/`, `scratch/`, and `memory.git`.
 - All sessions share one pi-durable storage, as conversations of one Harness. pi-durable tables use the `pi_` prefix. Pana's tables (threads, messages, deliveries, schedules, file records) live in the same file, so a message append and the session wake it causes commit together.
 - `panad` binds HTTP to loopback. Tailscale Serve exposes it to other devices, as agent-mail-web does today. `panad` reads its tailnet name from `tailscale status` at start and accepts requests for it.
 - `panad` registers a model provider for each pi-ai provider whose API key is in its environment, such as `FIREWORKS_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`. A model ID is `provider/model-id`, e.g. `fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017`.
@@ -128,7 +129,7 @@ Pana runs beside the current pi setup and shares nothing with it.
 
 - `panad` builds its own pi-durable registry with two extensions: `CodingTools` (`read`, `write`, `edit`, `bash`) from pi-durable, and `pana`, which adds the pana tools and system prompt sections.
 - Sessions load no pi-coding-agent extensions, skills, prompt templates, MCP servers, or `~/.pi/agent/AGENTS.md`.
-- The `bash` tool runs commands with a clean environment: `PATH` (with pana's own `bin` first, so `pana` in a session is this `panad`'s build), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables that set pana's hook directory. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
+- The `bash` tool runs commands with a clean environment: `PATH` (with pana's own `bin` first, so `pana` in a session is this `panad`'s build), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH`, and the `GIT_CONFIG_*` variables that set pana's hook directory. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
 - A `bash` call that names no timeout stops after `tools.bashTimeoutSec` in `config.json` (600 seconds by default). Pana kills the command's whole process group, and the model gets an error result that says the call timed out.
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
@@ -221,7 +222,7 @@ A profile is a named JSON file in `~/.local/state/pana/profiles/`. It sets defau
 - `instructions`: text rendered last in the system prompt
 - `cwd`: a fixed directory, or `worktree` to create a git worktree per session
 
-The `default` profile applies when `--profile` is absent.
+The `default` profile applies when `--profile` is absent. With no `--cwd` and no profile `cwd`, a session starts in its scratch directory.
 
 ## Threads
 
@@ -263,6 +264,20 @@ pana memory log [PATH]
 ```
 
 A session discovers memory through a hint in `pana/prompt.md` and through the `pana_memory_*` tools.
+
+## Scratch
+
+Scratch is disposable and memory is durable.
+
+- Each session has its own scratch directory, `scratch/<session-id>/`, for throwaway work: scripts, downloads, clones, and output. It is `$PANA_SCRATCH` in `bash`. A session with no other working directory starts there.
+- Pana removes a session's scratch when the session is archived, or when it has been idle for `scratch.ttlDays` (8 by default). A sweep runs when `panad` starts and every 24 hours. With `scratch.maxTotalMB` set, the sweep also removes the longest-idle scratch until the total fits. It never touches a running session's scratch.
+- Nothing in scratch is copied to memory. The prompt tells each session to commit what is worth keeping, a useful script included, before it finishes.
+- After a removal, the session's prompt says when it happened and how much was removed, so the note lands in its transcript and a woken session knows its old files are gone. The PWA's session header shows the current scratch size.
+
+```sh
+pana scratch [--session SESSION]   # prints a scratch path; a session's own by default
+pana scratch prune [--dry-run]     # runs the sweep now and lists what it removed
+```
 
 ## Scheduling
 

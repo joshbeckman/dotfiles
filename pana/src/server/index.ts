@@ -26,6 +26,7 @@ import { createRequestLogger } from "./log.ts";
 import { createProviderModels, hasModel } from "./models.ts";
 import { detectTailscaleNames } from "./tailscale.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
+import { startScratchSweeper } from "../scratch/index.ts";
 
 export interface StartOptions {
 	/** State directory; default `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
@@ -161,6 +162,9 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			onReport: (error, what) => report(error, what),
 		});
 		cleanup.unshift(() => scheduler.close());
+		// SCR-05: sweep scratch now, then daily.
+		const sweeper = startScratchSweeper(runtime, report);
+		cleanup.unshift(() => sweeper.close());
 
 		if (existsSync(paths.socket)) unlinkSync(paths.socket);
 		const socketServer = createServer(createApp(appOptions, "socket"));

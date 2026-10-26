@@ -1135,6 +1135,7 @@ async function openSession(id) {
 		state.session.cwd,
 		state.session.parent ? refLink(state.session.parentUrl ?? state.session.parent, "session", `parent ${state.session.parent}`) : undefined,
 		cost(state.session.costUsd),
+		scratchSize(state.session.scratch),
 	]) {
 		if (part === undefined || part === null || part === "") continue;
 		if (details.childNodes.length > 0) details.append(" · ");
@@ -1168,6 +1169,19 @@ async function openSession(id) {
 
 function cost(usd) {
 	return typeof usd === "number" ? `$${usd.toFixed(4)}` : undefined;
+}
+
+// SCR-07: the session's scratch size, absent when it has no scratch directory.
+function scratchSize(scratch) {
+	if (!scratch || typeof scratch.bytes !== "number") return undefined;
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	let value = scratch.bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return `scratch ${unit === 0 || value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 function renderTranscript(entries) {

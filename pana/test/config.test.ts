@@ -90,6 +90,7 @@ describe("config and state", () => {
 			files: { maxBytes: 26214400 },
 			http: { port: 8766 },
 			tools: { bashTimeoutSec: 600 },
+			scratch: { ttlDays: 8 },
 		});
 		expect(DEFAULTS.files.maxBytes).toBe(25 * 1024 * 1024);
 
@@ -104,6 +105,7 @@ describe("config and state", () => {
 				budget: { sessionUsd: 5 },
 				files: { maxBytes: 10 },
 				http: { port: 9000 },
+				scratch: { ttlDays: 2, maxTotalMB: 512 },
 			}),
 		);
 		expect(custom).toMatchObject({
@@ -114,12 +116,14 @@ describe("config and state", () => {
 			budget: { sessionUsd: 5, domainDailyUsd: 500 },
 			files: { maxBytes: 10 },
 			http: { port: 9000 },
+			scratch: { ttlDays: 2, maxTotalMB: 512 },
 		});
+		expect(() => loadConfig(tempConfig({ domain: TEST_DOMAIN, user: TEST_USER, scratch: { ttlDays: 0 } }))).toThrow(/scratch.ttlDays/);
 	});
 
 	it("CFG-04 panad creates the state layout on first start, with web-token at mode 0600", async () => {
 		t = await startTestPanad();
-		for (const path of ["pana.sqlite", "files", "memory.git", "memory/worktrees", "profiles/default.json", "hooks", "web-token"]) {
+		for (const path of ["pana.sqlite", "files", "memory.git", "memory/worktrees", "scratch", "profiles/default.json", "hooks", "web-token"]) {
 			expect(existsSync(join(t.dir, path)), path).toBe(true);
 		}
 		expect(statSync(join(t.dir, "files")).isDirectory()).toBe(true);

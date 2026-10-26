@@ -38,8 +38,8 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 - [x] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
 - [x] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
-- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600).
-- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
+- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600), `scratch.ttlDays` (8), `scratch.maxTotalMB` (none).
+- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
 - [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
 ### IDs and URLs
@@ -212,7 +212,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 - [x] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
 - [x] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
-- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
+- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH` (SCR-01), and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
 - [x] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
 
 ### System prompt
@@ -322,7 +322,7 @@ Each package was built against contracts and fakes. These items prove the packag
 
 ## WP11: Refinements from first use
 
-- [x] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is.
+- [x] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is. SCR-02 later replaced the HOME default with the session's scratch directory; panad's own working directory is still never used.
 - [x] **REF-02** `pana session archive SESSION` calls `POST /sessions/:id/archive`. Only the user may archive. An archived session follows STA-07. The PWA session view has an Archive button that asks for confirmation.
 - [x] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default thread list only. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
 - [x] **REF-04** A new message delivered to a participant unarchives the thread for that participant.
@@ -355,3 +355,15 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **UX-11** The session view renders assistant text and thinking as Markdown, sanitized the same way as thread messages. Every entry has a Raw toggle that shows its exact source text, so nothing the renderer hides is lost.
 - [x] **UX-12** The session view streams work in progress. While a session runs, it shows the generation in progress (thinking and text as they stream) and every running tool call (its name, full arguments, elapsed time, and output as it streams). The stream comes from pi-durable's `pi.live` document through `/events`. In-progress blocks are replaced by the committed entries when they land. The thread's working chip (UX-09) names what the session is doing, e.g. "running bash · 3m".
 - [x] **ISO-05** A `bash` tool call without a timeout gets a default one (`tools.bashTimeoutSec` in config.json, default 600). A call that hits it is killed with its whole process group, and the model gets an error result that says it timed out.
+
+## WP16: Scratch
+
+A session's scratch directory is its own place for throwaway work: scripts, downloads, clones, and output. Scratch is disposable and memory is durable, so pana deletes scratch on its own schedule and never copies it into memory.
+
+- [x] **SCR-01** Each session has a scratch directory at `scratch/<session-id>/` under the state directory. panad creates it whenever it opens the session's environment, so it exists at the start of every run, even after a sweep removed it. The `bash` tool exports its path as `PANA_SCRATCH`. `pana scratch` (`GET /scratch`) prints the caller's path, and the user's call names a session with `--session`.
+- [x] **SCR-02** A session created with no `--cwd` and no profile `cwd` starts in its scratch directory. This replaces REF-01's HOME default. An explicit `--cwd`, a profile `cwd`, and a profile worktree still win.
+- [x] **SCR-03** `pana/prompt.md` gives the session its scratch path. It says scratch is for throwaway work and will be deleted, and that anything worth keeping, a useful script included, goes to memory with `pana memory commit`.
+- [x] **SCR-04** Archiving a session removes its scratch directory.
+- [x] **SCR-05** panad sweeps scratch when it starts and every 24 hours after, on `runtime.clock`. The sweep removes scratch that belongs to an archived session, to no session at all, or to a session whose state is not `running` or `waiting` and whose `updated_at` is older than `scratch.ttlDays` (config.json, default 8). When `scratch.maxTotalMB` is set and the remaining scratch is larger, it then removes the longest-idle scratch until the total fits. It never removes the scratch of a `running` or `waiting` session. Each removal checks the state and renames the directory inside one write transaction, so a wake cannot start a run between the check and the removal. The renamed directory is deleted after the commit.
+- [x] **SCR-06** Each removal records `scratch_removed_at` and `scratch_removed_bytes` on the session. The pana prompt section then says when the scratch was removed, why, and how large it was. The section's change puts that note in the session's transcript once, and a session woken later knows its old files are gone.
+- [x] **SCR-07** `pana scratch prune [--dry-run]` (`POST /scratch/prune`, the user only) runs the sweep now and lists each scratch it removed, or would remove, with its session, reason, and size. `GET /sessions/:id` includes `scratch: {path, bytes}`, `bytes` null when the directory does not exist, and the PWA's session header shows the size.

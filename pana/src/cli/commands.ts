@@ -460,6 +460,27 @@ export const COMMANDS: readonly CommandSpec[] = [
 		request: (params) => ({ method: "GET", path: "/memory/log", query: { path: text(params, "path") } }),
 	},
 	{
+		path: ["scratch"],
+		usage: "pana scratch [--session SESSION]",
+		summary: "Print a session's scratch directory; a session's own by default",
+		flags: [string("session", "--session SESSION", "The session whose scratch to print; the user must name one")],
+		positionals: [],
+		request: (params) => ({ method: "GET", path: "/scratch", query: { session: text(params, "session") } }),
+		// Like `pana memory`: the point is the path, so a shell can use it directly.
+		formatText: (value) => {
+			const path = (value as { path?: unknown } | null | undefined)?.path;
+			return typeof path === "string" ? `${path}\n` : renderText(value);
+		},
+	},
+	{
+		path: ["scratch", "prune"],
+		usage: "pana scratch prune [--dry-run]",
+		summary: "Remove archived, orphaned, and idle scratch now",
+		flags: [bool("dryRun", "--dry-run", "List what would be removed without removing it")],
+		positionals: [],
+		request: (params) => ({ method: "POST", path: "/scratch/prune", body: { dryRun: params.dryRun === true } }),
+	},
+	{
 		path: ["schedule", "session", "create"],
 		usage: 'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT',
 		altUsage: ["pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT"],

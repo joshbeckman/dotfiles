@@ -33,6 +33,13 @@ export interface ToolsConfig {
 	bashTimeoutSec: number;
 }
 
+export interface ScratchConfig {
+	/** Days a session may sit idle before the sweep removes its scratch (SCR-05). */
+	ttlDays: number;
+	/** The size all scratch may reach before the sweep removes the longest-idle; none by default. */
+	maxTotalMB?: number;
+}
+
 export interface Config {
 	domain: string;
 	user: string;
@@ -44,6 +51,7 @@ export interface Config {
 	files: FileLimits;
 	http: HttpConfig;
 	tools: ToolsConfig;
+	scratch: ScratchConfig;
 }
 
 export const DEFAULTS = {
@@ -52,6 +60,7 @@ export const DEFAULTS = {
 	files: { maxBytes: 26214400 },
 	http: { port: 8766 },
 	tools: { bashTimeoutSec: 600 },
+	scratch: { ttlDays: 8 },
 } as const;
 
 /** The state directory, from `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
@@ -100,6 +109,8 @@ export function loadConfig(dir = stateDir()): Config {
 	const files = (obj.files ?? {}) as Record<string, unknown>;
 	const http = (obj.http ?? {}) as Record<string, unknown>;
 	const tools = (obj.tools ?? {}) as Record<string, unknown>;
+	const scratch = (obj.scratch ?? {}) as Record<string, unknown>;
+	const maxTotalMB = positive(scratch.maxTotalMB, "scratch.maxTotalMB", "megabytes");
 
 	return {
 		domain: obj.domain,
@@ -122,14 +133,18 @@ export function loadConfig(dir = stateDir()): Config {
 		tools: {
 			bashTimeoutSec: positive(tools.bashTimeoutSec, "tools.bashTimeoutSec") ?? DEFAULTS.tools.bashTimeoutSec,
 		},
+		scratch: {
+			ttlDays: positive(scratch.ttlDays, "scratch.ttlDays", "days") ?? DEFAULTS.scratch.ttlDays,
+			...(maxTotalMB === undefined ? {} : { maxTotalMB }),
+		},
 	};
 }
 
-/** A positive number, or undefined when absent. Zero or a negative limit would kill every call. */
-function positive(value: unknown, key: string): number | undefined {
+/** A positive number, or undefined when absent. A zero limit would kill every call or every scratch. */
+function positive(value: unknown, key: string, unit = "seconds"): number | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-		throw new ConfigError(`config.json ${key} must be a positive number of seconds`, 2);
+		throw new ConfigError(`config.json ${key} must be a positive number of ${unit}`, 2);
 	}
 	return value;
 }
@@ -140,6 +155,7 @@ export interface StatePaths {
 	files: string;
 	memoryGit: string;
 	memoryWorktrees: string;
+	scratch: string;
 	profiles: string;
 	defaultProfile: string;
 	hooks: string;
@@ -157,6 +173,7 @@ export function statePaths(dir = stateDir()): StatePaths {
 		files: join(dir, "files"),
 		memoryGit: join(dir, "memory.git"),
 		memoryWorktrees: join(dir, "memory", "worktrees"),
+		scratch: join(dir, "scratch"),
 		profiles: join(dir, "profiles"),
 		defaultProfile: join(dir, "profiles", "default.json"),
 		hooks: join(dir, "hooks"),
@@ -169,7 +186,7 @@ export function statePaths(dir = stateDir()): StatePaths {
 
 /**
  * Create the state layout on first start (CFG-04): `pana.sqlite`, `files/`, `memory.git/`,
- * `memory/worktrees/`, `profiles/default.json`, `hooks/`, and a `web-token` with mode 0600.
+ * `memory/worktrees/`, `scratch/`, `profiles/default.json`, `hooks/`, and a `web-token` with mode 0600.
  * Returns the resolved paths. Existing files are left untouched.
  */
 export function ensureStateLayout(dir = stateDir()): StatePaths {
@@ -178,6 +195,7 @@ export function ensureStateLayout(dir = stateDir()): StatePaths {
 	mkdirSync(paths.files, { recursive: true });
 	mkdirSync(paths.memoryGit, { recursive: true });
 	mkdirSync(paths.memoryWorktrees, { recursive: true });
+	mkdirSync(paths.scratch, { recursive: true });
 	mkdirSync(paths.profiles, { recursive: true });
 	mkdirSync(paths.hooks, { recursive: true });
 

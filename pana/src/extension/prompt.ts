@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS } from "../config/index.ts";
+import { scratchPath } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 /** `pana/prompt.md`, loaded only by pana. */
@@ -23,17 +24,60 @@ export function promptTemplate(): string {
 	return readFileSync(PROMPT_PATH, "utf8");
 }
 
-export function fillPrompt(template: string, values: { sessionUrl: string; memoryPath: string; domain: string; bashTimeoutSec?: number }): string {
+export interface PromptValues {
+	sessionUrl: string;
+	memoryPath: string;
+	domain: string;
+	bashTimeoutSec?: number;
+	scratchPath?: string;
+	scratchTtlDays?: number;
+	/** When the sweep removed this session's scratch, and how large it was (SCR-06). */
+	scratchRemoved?: { at: number; bytes: number | null };
+}
+
+export function fillPrompt(template: string, values: PromptValues): string {
 	return template
 		.replaceAll("{{session_url}}", values.sessionUrl)
 		.replaceAll("{{memory_path}}", values.memoryPath)
+		.replaceAll("{{scratch_path}}", values.scratchPath ?? "")
+		.replaceAll("{{scratch_ttl_days}}", String(values.scratchTtlDays ?? DEFAULTS.scratch.ttlDays))
+		.replaceAll("{{scratch_note}}", values.scratchRemoved ? `\n${scratchNote(values.scratchRemoved)}\n` : "")
 		.replaceAll("{{domain}}", values.domain)
 		.replaceAll("{{bash_timeout}}", String(values.bashTimeoutSec ?? DEFAULTS.tools.bashTimeoutSec));
 }
 
-async function sessionId(runtime: Runtime, conversationId: number): Promise<string | undefined> {
-	const row = await runtime.db.get<{ id: string }>("SELECT id FROM sessions WHERE conversation_id = ?", conversationId);
-	return row?.id;
+/**
+ * SCR-06. The note is fixed once written, so the section changes, and lands in the transcript,
+ * only when a sweep removes the scratch.
+ */
+export function scratchNote(removed: { at: number; bytes: number | null }): string {
+	const when = new Date(removed.at).toISOString().slice(0, 16).replace("T", " ");
+	const size = removed.bytes === null ? "" : ` (${formatBytes(removed.bytes)})`;
+	return `Pana removed your scratch directory at ${when} UTC${size} while you were idle. Its old files are gone; the directory you have now is new and empty.`;
+}
+
+export function formatBytes(bytes: number): string {
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return `${unit === 0 || value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+interface PromptSessionRow {
+	id: string;
+	scratch_removed_at: number | null;
+	scratch_removed_bytes: number | null;
+}
+
+async function promptSession(runtime: Runtime, conversationId: number): Promise<PromptSessionRow | undefined> {
+	return runtime.db.get<PromptSessionRow>(
+		"SELECT id, scratch_removed_at, scratch_removed_bytes FROM sessions WHERE conversation_id = ?",
+		conversationId,
+	);
 }
 
 /**
@@ -111,17 +155,21 @@ export function projectSection(): PromptSection {
 	});
 }
 
-/** One section: `pana/prompt.md`, filled with this session's URL and memory path (PRM-03). */
+/** One section: `pana/prompt.md`, filled with this session's URL, memory, and scratch paths (PRM-03). */
 export function panaSection(getRuntime: () => Runtime): PromptSection {
 	return section("pana", async (input) => {
 		const runtime = getRuntime();
-		const id = await sessionId(runtime, input.conversationId);
-		if (!id) return "This conversation is not a pana session. Do not use the pana tools.";
+		const row = await promptSession(runtime, input.conversationId);
+		if (!row) return "This conversation is not a pana session. Do not use the pana tools.";
+		const id = row.id;
 		return fillPrompt(promptTemplate(), {
 			sessionUrl: runtime.url({ kind: "session", id }),
 			memoryPath: join(runtime.paths.memoryWorktrees, id),
 			domain: runtime.config.domain,
 			bashTimeoutSec: runtime.config.tools.bashTimeoutSec,
+			scratchPath: scratchPath(runtime, id),
+			scratchTtlDays: runtime.config.scratch.ttlDays,
+			...(row.scratch_removed_at == null ? {} : { scratchRemoved: { at: row.scratch_removed_at, bytes: row.scratch_removed_bytes } }),
 		});
 	});
 }
