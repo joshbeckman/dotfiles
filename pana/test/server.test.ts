@@ -125,7 +125,8 @@ const echo: Handlers = {
 
 describe("panad", () => {
 	it("SRV-01 panad listens on both transports and logs one JSONL line per request, never a body", async () => {
-		const t = await start({ handlers: echo });
+		// Pin one route to "unbuilt" so this stays a 501 whatever WP6 ships.
+		const t = await start({ handlers: { ...echo, "schedules.list": undefined } });
 		expect(typeof t.panad.tcpPort).toBe("number");
 
 		const secret = "SEKRIT-BODY-VALUE";
@@ -135,7 +136,7 @@ describe("panad", () => {
 		expect(created.status).toBe(201);
 		const missing = await t.client.get("/nope");
 		expect(missing.status).toBe(404);
-		const unbuilt = await t.client.get("/files/01JBFILE/a.txt");
+		const unbuilt = await t.client.get("/schedules");
 		expect(unbuilt.status).toBe(501);
 		const overTcp = await t.tcp.get("/inbox");
 		expect(overTcp.status).toBe(200);
@@ -152,7 +153,7 @@ describe("panad", () => {
 		}
 
 		const routes = lines.map((line) => line.route);
-		expect(routes).toEqual(["inbox.list", "threads.create", null, "files.download", "inbox.list"]);
+		expect(routes).toEqual(["inbox.list", "threads.create", null, "schedules.list", "inbox.list"]);
 		expect(lines.map((line) => line.status)).toEqual([200, 201, 404, 501, 200]);
 		expect(lines.map((line) => line.transport)).toEqual(["socket", "socket", "socket", "socket", "tcp"]);
 		expect(lines[0]!.caller).toBe(`pana://${TEST_DOMAIN}/users/${TEST_USER}`);
@@ -178,8 +179,8 @@ describe("panad", () => {
 
 		const paths = statePaths(dir);
 		expect(existsSync(paths.socket)).toBe(true);
-		const live = await request({ socketPath: paths.socket }, "GET", "/sessions");
-		expect(live.status).toBe(501);
+		const live = await request({ socketPath: paths.socket }, "GET", "/threads/01JBNOTATHREAD");
+		expect(live.status).toBe(404);
 
 		child.kill("SIGTERM");
 		const exit = await waitForExit(child);
@@ -189,17 +190,17 @@ describe("panad", () => {
 		// It stopped accepting: the socket is gone and no listener answers.
 		expect(existsSync(paths.socket)).toBe(false);
 		expect(existsSync(paths.pidFile)).toBe(false);
-		await expect(request({ socketPath: paths.socket }, "GET", "/sessions")).rejects.toThrow();
+		await expect(request({ socketPath: paths.socket }, "GET", "/threads/01JBNOTATHREAD")).rejects.toThrow();
 
 		// The request log survived the shutdown, complete and valid.
 		const lines = logLines(dir);
 		expect(lines).toHaveLength(1);
-		expect(lines[0]!.path).toBe("/sessions");
+		expect(lines[0]!.path).toBe("/threads/01JBNOTATHREAD");
 
 		// A clean close leaves state the next start can open.
 		const restarted = await start({ stateDir: dir });
-		const after = await restarted.client.get("/inbox");
-		expect(after.status).toBe(501);
+		const after = await restarted.client.get("/threads/01JBNOTATHREAD");
+		expect(after.status).toBe(404);
 	});
 
 	it("SRV-02 a run in progress when panad closes finishes after the next start", async () => {
