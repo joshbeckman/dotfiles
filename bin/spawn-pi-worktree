@@ -4,8 +4,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  spawn-pi-worktree [--dry-run] [--approve] [--secret KEY]... --tmux-session SESSION \
-    --title TITLE --cwd PATH --prompt TEXT
+  spawn-pi-worktree [--dry-run] [--approve] [--secret KEY]... [--model MODEL] \
+    [--thinking LEVEL] --tmux-session SESSION --title TITLE --cwd PATH --prompt TEXT
 
 Starts Pi in an existing directory and a new detached tmux window. The directory
 must already exist. When it is a git worktree, repository-specific setup must
@@ -16,6 +16,9 @@ the guard exists to protect a checkout, and a plain directory has none.
 Pi's provider key is injected with `s` when that tool is available. The key
 name comes from --secret (repeatable), then $SPAWN_PI_SECRETS, then Pi's own
 configured defaultProvider as <PROVIDER>_API_KEY.
+
+--model and --thinking pass through to Pi, so a coordinator can give a child a
+different model than its own default.
 EOF
 }
 
@@ -51,6 +54,8 @@ tmux_session=""
 title=""
 cwd=""
 prompt=""
+model=""
+thinking=""
 secrets=()
 
 while (($#)); do
@@ -62,6 +67,8 @@ while (($#)); do
     --title) (($# >= 2)) || die '--title requires a value'; title="$2"; shift 2 ;;
     --cwd) (($# >= 2)) || die '--cwd requires a value'; cwd="$2"; shift 2 ;;
     --prompt) (($# >= 2)) || die '--prompt requires a value'; prompt="$2"; shift 2 ;;
+    --model) (($# >= 2)) || die '--model requires a value'; model="$2"; shift 2 ;;
+    --thinking) (($# >= 2)) || die '--thinking requires a value'; thinking="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -119,6 +126,8 @@ fi
 
 pi_args=(--name "$title")
 $approve && pi_args+=(--approve)
+[[ -n "$model" ]] && pi_args+=(--model "$model")
+[[ -n "$thinking" ]] && pi_args+=(--thinking "$thinking")
 pi_args+=(-- "$prompt")
 
 pi_command=("$pi_path" "${pi_args[@]}")
