@@ -252,14 +252,14 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP6: Scheduling
 
-- [ ] **SCH-01** `schedule session create --cron C --prompt P` stores a schedule. At each cron time in `timezone`, it creates a session as SES-01 with the schedule's creator as caller.
-- [ ] **SCH-02** `--at T` runs once at T, then the schedule is `done`.
-- [ ] **SCH-03** `--cron` and `--at` together, or neither, exit 2. A past `--at` exits 2.
-- [ ] **SCH-04** `schedule thread create --at T --to A --body-file F` creates the thread at T, from the creator. The body is read at schedule time, not run time.
-- [ ] **SCH-05** On startup, a cron schedule whose time passed while `panad` was down skips to its next future time. A one-off whose time passed is marked `missed` and a notice goes to its creator.
-- [ ] **SCH-06** A scheduled session that fails posts a notice to the creator.
-- [ ] **SCH-07** `schedule list [--kind]` and `schedule delete` work. A deleted schedule never fires.
-- [ ] **SCH-08** A DST change fires a daily cron job once per day.
+- [x] **SCH-01** `schedule session create --cron C --prompt P` stores a schedule. At each cron time in `timezone`, it creates a session as SES-01 with the schedule's creator as caller.
+- [x] **SCH-02** `--at T` runs once at T, then the schedule is `done`.
+- [x] **SCH-03** `--cron` and `--at` together, or neither, exit 2. A past `--at` exits 2.
+- [x] **SCH-04** `schedule thread create --at T --to A --body-file F` creates the thread at T, from the creator. The body is read at schedule time, not run time.
+- [x] **SCH-05** On startup, a cron schedule whose time passed while `panad` was down skips to its next future time. A one-off whose time passed is marked `missed` and a notice goes to its creator.
+- [x] **SCH-06** A scheduled session that fails posts a notice to the creator.
+- [x] **SCH-07** `schedule list [--kind]` and `schedule delete` work. A deleted schedule never fires.
+- [x] **SCH-08** A DST change fires a daily cron job once per day.
 
 ---
 

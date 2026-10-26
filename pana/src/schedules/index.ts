@@ -1,6 +1,22 @@
-// Scheduling (WP6). Not built yet.
-//
-// TODO(WP6): implement SCH from SPEC.md. Keep this package's code in src/schedules/ and its tests in
-// test/schedules.test.ts. Register HTTP handlers in src/schedules/handlers.ts; src/server/handlers.ts already
-// merges them into panad.
-export {};
+// Scheduling: `src/schedules/store.ts` owns the table, `scheduler.ts` owns the timer (WP6).
+
+export {
+	activeSchedules,
+	claimSchedule,
+	createSchedule,
+	creatorAddress,
+	deleteSchedule,
+	dueSchedules,
+	listSchedules,
+	nextCronAt,
+	nextDueAt,
+	showSchedule,
+	skipScheduleTo,
+	updateSchedule,
+	type ScheduleInput,
+	type ScheduleKind,
+	type ScheduleRow,
+	type ScheduleState,
+	type ScheduleView,
+} from "./store.ts";
+export { startScheduler, type Scheduler, type SchedulerOptions } from "./scheduler.ts";

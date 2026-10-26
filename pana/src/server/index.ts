@@ -15,6 +15,7 @@ import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry, installGitHooks } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
 import { initPush } from "../push/index.ts";
+import { startScheduler } from "../schedules/index.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
 import { launchUrl, loopbackOrigin } from "../web/static.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
@@ -133,6 +134,14 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			tailscaleNames: options.tailscaleNames,
 			onRequest: options.onRequest,
 		};
+
+		// WP6: recover runs missed while panad was down, then arm the timer on `runtime.clock`.
+		const scheduler = await startScheduler({
+			runtime,
+			handlers: appOptions.handlers,
+			onReport: (error, what) => report(error, what),
+		});
+		cleanup.unshift(() => scheduler.close());
 
 		if (existsSync(paths.socket)) unlinkSync(paths.socket);
 		const socketServer = createServer(createApp(appOptions, "socket"));
