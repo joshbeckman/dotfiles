@@ -8,7 +8,10 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result, ExecutionError } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
 import { homedir, userInfo } from "node:os";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { memoryFor } from "../memory/handlers.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 /** The only variables a pana session's commands see, besides git's own env-config pair. */
@@ -107,10 +110,25 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
  * The `env` option for `Harness.open`: one clean environment per conversation, resolving the
  * session from the conversation so `bash` can export `PANA_SESSION` and attribute commits.
  */
+/**
+ * A session's memory worktree is made on first use: the first prompt render or tool call. Making
+ * it at session create put a `git worktree add` on every create, which serialized burst creates.
+ */
+async function ensureMemoryWorktree(runtime: Runtime, sessionId: string): Promise<void> {
+	if (existsSync(join(runtime.paths.memoryWorktrees, sessionId, ".git"))) return;
+	try {
+		await memoryFor(runtime).worktree({ id: sessionId, url: runtime.url({ kind: "session", id: sessionId }) });
+	} catch (error) {
+		// The session can still work without memory; `pana memory` will retry and report.
+		console.error(`panad: memory worktree for session ${sessionId}:`, error);
+	}
+}
+
 export function createPanaEnv(getRuntime: () => Runtime) {
 	return async (target: { conversationId: number; cwd?: string }): Promise<ExecutionEnv> => {
 		const runtime = getRuntime();
 		const row = await runtime.db.get<{ id: string }>("SELECT id FROM sessions WHERE conversation_id = ?", target.conversationId);
+		if (row) await ensureMemoryWorktree(runtime, row.id);
 		return new PanaExecutionEnv({
 			// REF-01: a session with no cwd of its own runs in the panad user's home, not panad's cwd.
 			cwd: target.cwd ?? homedir(),

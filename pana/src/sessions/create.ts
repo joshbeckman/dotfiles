@@ -16,8 +16,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
-import { formatUrl } from "../ids/index.ts";
-import { memoryFor } from "../memory/handlers.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { addressList, createThread, messageBody, type ThreadResult } from "../threads/store.ts";
@@ -230,8 +228,6 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	}
 
 	const id = runtime.newId();
-	// The prompt names this worktree, so it must exist before the session's first command.
-	await memoryFor(runtime).worktree({ id, url: formatUrl({ kind: "session", id }, runtime.config.domain) });
 	const cwdFlag = optionalString(input.cwd, "cwd");
 	let cwd: string | undefined;
 	if (profile.cwd === WORKTREE) {

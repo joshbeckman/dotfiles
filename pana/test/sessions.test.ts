@@ -763,10 +763,12 @@ describe("restart", () => {
 });
 
 describe("session environment", () => {
-	it("SES-01 a new session's memory worktree exists before its first run, and its bash finds this build's pana", async () => {
+	it("SES-01 a session's memory worktree is made on first use, not at create, and its bash finds this build's pana", async () => {
 		await start({ script: [{ text: "ok" }] });
 		const res = await create({ prompt: "hi", model: "faux/faux-1" });
 		const path = join(t!.runtime.paths.memoryWorktrees, res.session.id);
+		await settled(res.session.id);
+		// The first run rendered the prompt, which names the worktree, so it exists now.
 		expect(existsSync(join(path, ".git"))).toBe(true);
 
 		const { panaShellEnv, PANA_BIN } = await import("../src/extension/env.ts");

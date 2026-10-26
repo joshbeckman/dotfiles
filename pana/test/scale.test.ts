@@ -130,6 +130,13 @@ describe("list pagination", () => {
 			sessions.push(res.body.session.id);
 			await t.clock.advance(1);
 		}
+		// Each first run also makes the session's memory worktree, so wait for every run to settle.
+		for (let tries = 0; ; tries++) {
+			const busy = await t.runtime.db.get<{ n: number }>("SELECT count(*) AS n FROM sessions WHERE state <> 'idle'");
+			if (busy?.n === 0) break;
+			if (tries > 500) throw new Error("sessions did not settle");
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
 		// Threads from a session to the user grow the user's inbox and wake nothing.
 		for (let i = 0; i < 11; i++) {
 			const res = await t.client.post("/threads", { to: [TEST_USER], body: `thread ${i}` }, { caller: sessions[i % sessions.length] });
