@@ -192,6 +192,9 @@ export interface CreatedSession extends ThreadResult {
 	session: SessionRow;
 }
 
+/** Without a flag or profile value, sessions think, so the transcript has reasoning to show. */
+export const DEFAULT_THINKING = "medium";
+
 export async function createSession(runtime: Runtime, caller: Caller, input: CreateSessionInput): Promise<CreatedSession> {
 	const prompt = messageBody(input.prompt);
 	const to = addressList(input.to, "recipients");
@@ -204,8 +207,7 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 		throw ApiError.badRequest("missing_model", "no model: pass --model, set one in the profile, or set defaultModel");
 	}
 	const model = parseModel(runtime, modelName);
-	const thinkingName = optionalString(input.thinking, "thinking") ?? profile.thinking;
-	const thinking = thinkingName === undefined ? undefined : parseThinking(thinkingName);
+	const thinking = parseThinking(optionalString(input.thinking, "thinking") ?? profile.thinking ?? DEFAULT_THINKING);
 	const chosen = selection(runtime, profile, profileName);
 
 	let parent: { id: string; depth: number } | undefined;

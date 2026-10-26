@@ -195,7 +195,7 @@ pana session inbox read SESSION MESSAGE
 
 A profile is a named JSON file in `~/.local/state/pana/profiles/`. It sets defaults that `session create` flags override:
 
-- `model` and `thinking`
+- `model` and `thinking` (`thinking` defaults to `medium`, so transcripts carry reasoning; models without reasoning ignore it)
 - `extensions`: names from pana's registry
 - `tools`: an allowlist within those extensions
 - `instructions`: text rendered last in the system prompt

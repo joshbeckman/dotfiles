@@ -237,7 +237,7 @@ describe("session create", () => {
 	});
 
 	it("SES-03 profile values apply, flags override them, and an unknown profile is a 400", async () => {
-		await start({ script: [{ text: "one" }, { text: "two" }] });
+		await start({ script: [{ text: "one" }, { text: "two" }, { text: "three" }] });
 		writeFileSync(
 			join(t!.runtime.paths.profiles, "terse.json"),
 			JSON.stringify({ model: "faux/faux-1", thinking: "high", instructions: "Answer in one word." }),
@@ -252,12 +252,16 @@ describe("session create", () => {
 		const b = await create({ prompt: "hi", profile: "terse", thinking: "low" });
 		expect(b.session.thinking).toBe("low");
 
+		// With no flag and no profile value, a session thinks at the built-in default.
+		const c = await create({ prompt: "hi", model: "faux/faux-1" });
+		expect(c.session.thinking).toBe("medium");
+
 		const unknown = await t!.client.post<{ error: { code: string } }>("/sessions", { prompt: "hi", profile: "nope" });
 		expect(unknown.status).toBe(400);
 		expect(unknown.body.error.code).toBe("unknown_profile");
 
 		const sessions = await t!.runtime.db.all("SELECT id FROM sessions");
-		expect(sessions).toHaveLength(2);
+		expect(sessions).toHaveLength(3);
 	});
 
 	it("SES-04 cwd worktree creates a git worktree under <state>/worktrees/<ulid> from the --cwd repo", async () => {
