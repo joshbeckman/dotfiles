@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}"
 SESSION_ROOT="${PI_SESSIONS_DIR:-$HOME/.pi/agent/sessions}"
+# The sibling commands travel with this one; the list on PATH is whatever this host
+# installed, and a host that has not installed them yet must still work.
+SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 mkdir -p -m 700 "$ROOT"
 chmod 700 "$ROOT"
 ROOT="$(CDPATH= cd -- "$ROOT" && pwd -P)"
@@ -97,7 +100,7 @@ unread_count() {
     # files, so counting them would protect a pad from age pruning for ever. agent-session and
     # the Pi notice ask the store for the same reason. An unanswerable store falls back to the
     # directory, because keeping a pad is recoverable and pruning one is not.
-    json="$(agent-mail scan --to "$(basename "$1")" --json 2>/dev/null || true)"
+    json="$("$SELF_DIR/agent-mail" scan --to "$(basename "$1")" --json 2>/dev/null || true)"
     count="$(printf '%s' "$json" | python3 -c 'import json, sys
 try:
     print(len(json.load(sys.stdin).get("messages") or []))
@@ -120,7 +123,7 @@ unread_in_directory() {
 
 store_mode() {
   if [ -z "$STORE_MODE" ]; then
-    STORE_MODE="$(agent-mail store 2>/dev/null | cut -f1 || true)"
+    STORE_MODE="$("$SELF_DIR/agent-mail" store 2>/dev/null | cut -f1 || true)"
     case "$STORE_MODE" in sqlite|both|maildir) ;; *) STORE_MODE=maildir ;; esac
   fi
   printf '%s\n' "$STORE_MODE"
@@ -164,8 +167,8 @@ resolve_agent() {
   local query="$1" bare slug dir base
   bare="${query#@+}"
   bare="${bare#@}"
-  if command -v agent-slug >/dev/null 2>&1; then
-    slug="$(agent-slug "$bare" 2>/dev/null || true)"
+  if [ -x "$SELF_DIR/agent-slug" ]; then
+    slug="$("$SELF_DIR/agent-slug" "$bare" 2>/dev/null || true)"
   else
     slug="$(printf '%s' "$bare" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')"
   fi

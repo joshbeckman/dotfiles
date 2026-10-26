@@ -12,6 +12,15 @@ export AGENT_HUMAN_MAIL_ROOT="$tmp/humans"
 export AGENT_MAIL2_DB="$tmp/mail2.sqlite3"
 mkdir -p "$AGENT_HUMAN_MAIL_ROOT/josh"
 mkdir -p "$AGENT_SCRATCH_ROOT" "$PI_SESSIONS_DIR"
+# agent-scratchpad has to reach the commands beside it, not whichever copies this host
+# installed: a machine that never ran setup has none on PATH. Shadow them with stubs that
+# fail, so a regression to the PATH lookup shows up here instead of on a fresh host.
+mkdir -p "$tmp/path"
+for name in agent-mail agent-slug; do
+  printf '#!/bin/sh\necho "agent-scratchpad used %s from PATH" >&2\nexit 1\n' "$name" >"$tmp/path/$name"
+  chmod +x "$tmp/path/$name"
+done
+export PATH="$tmp/path:$PATH"
 
 make_pad() {
   local dir="$AGENT_SCRATCH_ROOT/$1" name="$2" session="$3" session_file="${4:-(none)}"
