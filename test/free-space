@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Platform: macOS
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,6 +44,12 @@ echo app > "$TEST_TEMP/STALE-UUID/Some.app/Contents/binary"
 touch -t 202001010000 "$TEST_TEMP/STALE-UUID/Some.app/Contents/binary" "$TEST_TEMP/STALE-UUID/Some.app" "$TEST_TEMP/STALE-UUID"
 mkdir -p "$TEST_TEMP/FRESH-UUID/Some.app/Contents"
 echo app > "$TEST_TEMP/FRESH-UUID/Some.app/Contents/binary"
+# Three hours old: past the retention window, so a retry-loop fan-out gets
+# cleaned before it can fill the disk, but well inside the day an installer
+# might keep a staging copy.
+mkdir -p "$TEST_TEMP/AGED-UUID/Some.app"
+echo app > "$TEST_TEMP/AGED-UUID/Some.app/binary"
+touch -t "$(date -v-3H +%Y%m%d%H%M)" "$TEST_TEMP/AGED-UUID/Some.app" "$TEST_TEMP/AGED-UUID"
 mkdir -p "$TEST_TEMP/MIXED-UUID/Some.app"
 echo notes > "$TEST_TEMP/MIXED-UUID/keep.txt"
 touch -t 202001010000 "$TEST_TEMP/MIXED-UUID"
@@ -68,6 +75,8 @@ check "stale app dir removed" \
   "$([ -d "$TEST_TEMP/STALE-UUID" ] && echo present || echo gone)" "gone"
 check "fresh app dir kept" \
   "$([ -d "$TEST_TEMP/FRESH-UUID" ] && echo present)" "present"
+check "three-hour-old app dir removed" \
+  "$([ -d "$TEST_TEMP/AGED-UUID" ] && echo present || echo gone)" "gone"
 check "temp dir with other files kept" \
   "$([ -d "$TEST_TEMP/MIXED-UUID" ] && echo present)" "present"
 check "chrome code sign clone cleared" \

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Platform: macOS
 set -euo pipefail
 
 # free-space — reclaim disk space from caches and regenerable data.
@@ -168,7 +169,10 @@ if selected tmpapps; then
   # APFS clone sharing means the space freed is smaller than the reported size.
   #
   # A directory is dropped only when every entry in it is an .app bundle and it
-  # has been untouched for a day, so an updater keeps the copy it is running.
+  # has been untouched for two hours, so an updater keeps the copy it is running.
+  # A day was too long: a retry loop made 786 copies inside a day and filled the
+  # disk before the next scheduled cleanup, while no installer holds a staging
+  # copy for more than minutes.
   declare -a stale_apps=()
   user_temp=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)
   if [ -n "$user_temp" ] && [ -d "$user_temp" ]; then
@@ -179,7 +183,7 @@ if selected tmpapps; then
         continue
       fi
       stale_apps+=("$d")
-    done < <(find "$user_temp" -mindepth 1 -maxdepth 1 -type d -mtime +0 2>/dev/null)
+    done < <(find "$user_temp" -mindepth 1 -maxdepth 1 -type d -mmin +120 2>/dev/null)
   fi
   [ ${#stale_apps[@]} -gt 0 ] && reclaim --self "tmpapps" "${stale_apps[@]}"
 

@@ -11,7 +11,8 @@ DOTFILES="${DOTFILES_DIR:-$HOME/dotfiles}"
 # The log lives where the platform keeps such things. Linux has no Library
 # directory, and the old default made a Linux run create one just to hold this
 # file. DOTFILES_REFRESH_LOG overrides either choice.
-case "$(uname -s)" in
+host="$(uname -s)"
+case "$host" in
   Darwin) default_log="$HOME/Library/Logs/dotfiles-refresh.log" ;;
   *)      default_log="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles-refresh/refresh.log" ;;
 esac
@@ -71,6 +72,17 @@ trap 'rm -f "$LOCK"' EXIT INT TERM
 # read back from the offset instead of from the tail of a shared, append-only log
 # (which would quote a previous run's "ok" or a concurrent run's skip).
 printf '\n=== %s dotfiles-refresh starting\n' "$(date -u +%FT%TZ)" >> "$LOG"
+
+# Self-updaters unpack an app bundle into the user temp directory and sometimes
+# never stop: a Raycast updater retry loop left 786 copies and took the disk from
+# 80 GB free to 284 MB in a day. free-space owns the detection and the safety
+# rules, so this job only has to run it often enough that a fan-out cannot outrun
+# the cleanup. Non-fatal and before run_start so a failure here cannot be reported
+# as a failed setup step.
+if [ "$host" = "Darwin" ] && [ -x "$DOTFILES/bin/free-space" ]; then
+  "$DOTFILES/bin/free-space" --apply --yes tmpapps >> "$LOG" 2>&1 || true
+fi
+
 run_start=$(($(wc -l < "$LOG" | tr -d ' ') + 1))
 
 set +e

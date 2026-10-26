@@ -65,7 +65,7 @@ random="$(/bin/bash "$repo/bin/trial" 2>"$tmp/trial-log")"
 [[ "$random" == "$HOME/src/trials/2024-01-01-"* && "$random" != "$HOME/src/trials/2024-01-01-" ]]
 [[ -d "$random" ]]
 
-for command in nme nvim-quick-note snapme auto-review-prs; do
+for command in nme nvim-quick-note snapme auto-review-prs free-space; do
   [[ "$(head -n 2 "$repo/bin/$command" | tail -n 1)" == '# Platform: macOS' ]]
 done
 
