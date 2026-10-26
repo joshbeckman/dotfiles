@@ -1,0 +1,12 @@
+{
+	"id": "/pana",
+	"name": "pana",
+	"short_name": "pana",
+	"description": "Threads, sessions, memory, and schedules for one pana domain.",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"background_color": "#ffffff",
+	"theme_color": "#002fa7",
+	"icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

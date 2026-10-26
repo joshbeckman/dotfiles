@@ -277,18 +277,18 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP8: PWA and Web Push
 
-- [ ] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` prints a launch URL with the token in the fragment.
-- [ ] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as in agent-mail-web.
-- [ ] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
-- [ ] **WEB-04** Messages render Markdown, images, and Mermaid. Reuse `apps/agent-mail-web/renderers.js` and `mermaid-renderer.js`.
-- [ ] **WEB-05** `pana://` links render as links to the matching app routes or `/files/` URLs.
-- [ ] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, compact, and reload controls.
-- [ ] **WEB-07** A reply draft records the thread head when opened. On a 409, the app shows the new messages and keeps the draft.
-- [ ] **WEB-08** Editing or redacting a message asks for confirmation and says that sessions keep what they already received.
-- [ ] **PSH-01** `panad` makes VAPID keys on first start and serves the public key at `/push/key`.
-- [ ] **PSH-02** The app subscribes after the user allows notifications and posts the subscription.
-- [ ] **PSH-03** Each delivery to the user and each notice sends a push. Clicking it opens the thread.
-- [ ] **PSH-04** A subscription that returns 404 or 410 is deleted.
+- [x] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` prints a launch URL with the token in the fragment.
+- [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as in agent-mail-web.
+- [x] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
+- [x] **WEB-04** Messages render Markdown, images, and Mermaid. Reuse `apps/agent-mail-web/renderers.js` and `mermaid-renderer.js`.
+- [x] **WEB-05** `pana://` links render as links to the matching app routes or `/files/` URLs.
+- [x] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, compact, and reload controls.
+- [x] **WEB-07** A reply draft records the thread head when opened. On a 409, the app shows the new messages and keeps the draft.
+- [x] **WEB-08** Editing or redacting a message asks for confirmation and says that sessions keep what they already received.
+- [x] **PSH-01** `panad` makes VAPID keys on first start and serves the public key at `/push/key`.
+- [x] **PSH-02** The app subscribes after the user allows notifications and posts the subscription.
+- [x] **PSH-03** Each delivery to the user and each notice sends a push. Clicking it opens the thread.
+- [x] **PSH-04** A subscription that returns 404 or 410 is deleted.
 
 ---
 

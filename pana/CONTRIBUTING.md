@@ -7,7 +7,8 @@
 ```sh
 cd pana
 npm install
-npm test           # Vitest, all suites
+npm test           # Vitest, all suites (no browser)
+npm run test:web   # the PWA browser suite (installed Chrome + chrome-devtools CLI)
 npx tsc --noEmit   # must be clean before you report
 ```
 
@@ -32,6 +33,7 @@ One directory per work package, so parallel agents rarely edit the same file.
 | `src/schedules` | WP6 | scheduling |
 | `src/search` | WP7 | subjects and search |
 | `src/web`, `src/push` | WP8 | the PWA and Web Push |
+| `web/` | WP8 | the PWA assets served by panad |
 | `test/harness` | WP0 | `startTestPanad`, fake clock, scripted model |
 
 Put your tests in `test/<package>.test.ts`. Mark unbuilt work with `TODO(WPn)`.

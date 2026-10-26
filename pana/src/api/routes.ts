@@ -43,6 +43,11 @@ export const ROUTES = [
 	{ method: "GET", pattern: "/push/subscriptions", name: "push.subscriptions.list", wp: "WP8" },
 	{ method: "POST", pattern: "/push/subscriptions", name: "push.subscriptions.create", wp: "WP8" },
 	{ method: "GET", pattern: "/events", name: "events.stream", wp: "WP8" },
+	// The PWA shell. `web.index` and `web.static` are the only routes that answer without the
+	// bearer token (see `src/web/static.ts`); the catch-all must stay last so it never shadows
+	// an API route.
+	{ method: "GET", pattern: "/", name: "web.index", wp: "WP8" },
+	{ method: "GET", pattern: "/*", name: "web.static", wp: "WP8" },
 ] as const satisfies readonly RouteDef[];
 
 export interface RouteDef {
