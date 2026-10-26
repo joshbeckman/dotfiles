@@ -119,7 +119,7 @@ describe("INT-01 model providers", () => {
 
 		const res = await t!.client.post("/sessions", { prompt: "hi", model: DEEPSEEK });
 		expect(res.status).toBe(400);
-		expect(res.body).toMatchObject({ error: { code: "unknown_model" } });
+		expect(res.body).toMatchObject({ error: { code: "unknown_model", message: expect.stringContaining("no fireworks provider") } });
 	});
 });
 

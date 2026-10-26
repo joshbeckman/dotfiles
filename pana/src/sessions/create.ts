@@ -107,7 +107,16 @@ export function parseModel(runtime: Runtime, value: string): ModelRef {
 		throw ApiError.badRequest("invalid_model", `model must be provider/modelId, got ${value}`);
 	}
 	const ref = { provider: value.slice(0, slash), modelId: value.slice(slash + 1) };
-	if (!runtime.models.getProvider(ref.provider) || !runtime.models.getModel(ref.provider, ref.modelId)) {
+	// panad registers only providers whose credentials it has (INT-01), so a missing provider
+	// usually means a missing key, not a typo.
+	if (!runtime.models.getProvider(ref.provider)) {
+		throw ApiError.badRequest(
+			"unknown_model",
+			`unknown model: ${value}: panad has no ${ref.provider} provider; set its API key in panad's environment`,
+			{ model: value },
+		);
+	}
+	if (!runtime.models.getModel(ref.provider, ref.modelId)) {
 		throw ApiError.badRequest("unknown_model", `unknown model: ${value}`, { model: value });
 	}
 	return ref;
