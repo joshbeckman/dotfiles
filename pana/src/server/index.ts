@@ -94,7 +94,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		const getRuntime = () => runtime;
 		const registry = options.registry ?? createPanaRegistry(getRuntime);
 		const env = options.env ?? createPanaEnv(getRuntime);
-		const settings = options.settings ?? {};
+		const settings = panaSettings(options.settings);
 		const harness = await Harness.open(
 			storage,
 			{
@@ -191,6 +191,27 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		await runCleanup(cleanup);
 		throw error;
 	}
+}
+
+/**
+ * How long pi-durable keeps an idle conversation's context in memory. Pana drops it at once, so an
+ * idle session costs nothing but storage, as the README promises.
+ *
+ * pi-durable's default is ten minutes. Under the bench, every context it keeps is checked again on
+ * each task change, so 1000 recently active sessions cost a third of the message throughput and
+ * 240 MB of RSS (BENCH.md). The price of 0 is that a session's next run reads its transcript back
+ * from SQLite, which takes milliseconds against a model call of seconds.
+ */
+export const CONTEXT_RETENTION_MS = 0;
+
+/**
+ * The caller's settings with pana's default retention. A getter keeps the caller's getters live,
+ * as pi-durable reads settings at every use.
+ */
+export function panaSettings(base: HarnessSettings = {}): HarnessSettings {
+	return Object.create(base, {
+		contextRetentionMs: { enumerable: true, get: () => base.contextRetentionMs ?? CONTEXT_RETENTION_MS },
+	}) as HarnessSettings;
 }
 
 async function runCleanup(steps: Array<() => Promise<void> | void>): Promise<void> {
