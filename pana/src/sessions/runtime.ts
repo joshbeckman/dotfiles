@@ -68,6 +68,8 @@ export class SessionRuntime {
 	#closed = false;
 	#unsubscribe: (() => void) | undefined;
 	#rollover: (() => void) | undefined;
+	/** The message whose thread `rejectArchived` last passed. */
+	#checkedMessage: string | undefined;
 
 	constructor(runtime: Runtime, report: Report) {
 		this.runtime = runtime;
@@ -127,7 +129,13 @@ export class SessionRuntime {
 	hooks(): DeliveryHooks {
 		return {
 			onDelivered: async (tx, event, runtime) => {
-				await rejectArchived(tx, event);
+				// One append calls this once per recipient, inside one transaction, so the thread's
+				// check holds for all of them. Checking each time made a broadcast quadratic in its
+				// participants (BENCH.md).
+				if (this.#checkedMessage !== event.messageId) {
+					await rejectArchived(tx, event);
+					this.#checkedMessage = event.messageId;
+				}
 				if (event.recipientKind !== "session") return;
 				if (event.requestId === null) return;
 				if (await overDomainBudget(tx, runtime)) {
