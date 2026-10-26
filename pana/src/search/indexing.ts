@@ -25,9 +25,14 @@ export interface SessionRun {
 	entries: readonly TranscriptEntry[];
 }
 
-/** Add one message body to the thread index. Repeating a message id replaces its row. */
+/**
+ * Add a new message's body to the thread index. Call it once per message, in the append.
+ *
+ * It does not delete first: `message_id` is an UNINDEXED FTS5 column, so a delete by it scans the
+ * whole index, and on every append that grew with the domain's history (BENCH.md). A new message
+ * has no row to replace. Revisions and redactions, which are rare, still delete by scan.
+ */
 export async function indexMessage(tx: SqliteExecutor, message: IndexedMessage): Promise<void> {
-	await tx.run("DELETE FROM messages_fts WHERE message_id = ?", message.id);
 	await tx.run(
 		"INSERT INTO messages_fts (body, message_id, thread_id) VALUES (?, ?, ?)",
 		message.body,
@@ -41,6 +46,7 @@ export async function indexMessage(tx: SqliteExecutor, message: IndexedMessage):
  * indexed; the original body stays in `message_events` and stays out of the index.
  */
 export async function reindexRevision(tx: SqliteExecutor, message: IndexedMessage): Promise<void> {
+	await removeRedacted(tx, message.id);
 	await indexMessage(tx, message);
 }
 

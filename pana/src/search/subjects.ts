@@ -55,6 +55,7 @@ export interface RecordSubjectOptions {
 /** Make `subject` current, add it to history, and repoint the subject index. */
 export async function recordSubject(tx: SqliteExecutor, options: RecordSubjectOptions): Promise<string> {
 	const subject = shorten(options.subject);
+	const before = await tx.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", options.threadId);
 	await tx.run("UPDATE threads SET subject = ? WHERE id = ?", subject, options.threadId);
 	await tx.run(
 		"INSERT INTO subjects (id, thread_id, subject, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -64,7 +65,9 @@ export async function recordSubject(tx: SqliteExecutor, options: RecordSubjectOp
 		options.source,
 		options.now,
 	);
-	await tx.run("DELETE FROM subjects_fts WHERE thread_id = ?", options.threadId);
+	// `thread_id` is an UNINDEXED FTS5 column, so this delete scans the whole index. A thread with
+	// no subject yet has no row, which spares every thread create the scan (BENCH.md).
+	if (before?.subject != null) await tx.run("DELETE FROM subjects_fts WHERE thread_id = ?", options.threadId);
 	await tx.run("INSERT INTO subjects_fts (subject, thread_id) VALUES (?, ?)", subject, options.threadId);
 	return subject;
 }
