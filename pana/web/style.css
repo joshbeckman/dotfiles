@@ -140,6 +140,10 @@ main {
 	flex-direction: column;
 	border-top: 1px solid var(--c-border);
 }
+.list > .more {
+	align-self: center;
+	margin: 0.8rem 0;
+}
 .item {
 	display: flex;
 	flex-direction: column;

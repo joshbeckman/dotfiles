@@ -11,6 +11,7 @@ import {
 	tokenFromInput,
 } from "./links.js";
 import { subscribeToPush } from "./push.js";
+import { nextCursor, pagePath, showMore } from "./pages.js";
 import { commitView, entryView, inboxRow, memoryHitView, messageView, scheduleBody, scheduleWhen, threadRow } from "./views.js";
 import { escapeHtml, hydrateFiles, renderDiagrams, renderMessage, rewriteLinks } from "./render.js";
 
@@ -300,12 +301,12 @@ function badge(text) {
 
 // ---- Inbox ----------------------------------------------------------------------------------
 
-async function loadInbox() {
-	const body = await api("GET", "/inbox");
+async function loadInbox(cursor) {
+	const body = await api("GET", pagePath("/inbox", cursor));
 	const list = $("inbox-list");
-	list.replaceChildren();
+	if (!cursor) list.replaceChildren();
 	const items = asList(body, ["deliveries"]);
-	if (items.length === 0) return empty(list, "No messages yet. Compose one to start a thread.");
+	if (items.length === 0 && !cursor) return empty(list, "No messages yet. Compose one to start a thread.");
 	for (const delivery of items) {
 		const row = inboxRow(delivery);
 		learnDomain(row.sender);
@@ -320,6 +321,7 @@ async function loadInbox() {
 			),
 		);
 	}
+	showMore(list, nextCursor(body), (next) => loadInbox(next).catch(fail));
 }
 
 // ---- Compose --------------------------------------------------------------------------------
@@ -353,15 +355,16 @@ async function submitCompose(event) {
 
 // ---- Threads --------------------------------------------------------------------------------
 
-async function searchThreads(event) {
+async function searchThreads(event, cursor) {
 	event?.preventDefault();
 	const query = $("threads-query").value.trim();
-	const body = await api("GET", `/threads?query=${encodeURIComponent(query)}`);
+	const body = await api("GET", pagePath(`/threads?query=${encodeURIComponent(query)}`, cursor));
 	const list = $("threads-list");
-	list.replaceChildren();
+	if (!cursor) list.replaceChildren();
 	const threads = asList(body, ["threads"]);
-	if (threads.length === 0) return empty(list, query ? `No threads match “${query}”.` : "No threads yet.");
-	const seen = new Set();
+	if (threads.length === 0 && !cursor) return empty(list, query ? `No threads match “${query}”.` : "No threads yet.");
+	// A later page can hit a thread an earlier page listed.
+	const seen = new Set([...list.querySelectorAll("[data-thread]")].map((element) => element.dataset.thread));
 	for (const hit of threads) {
 		const thread = threadRow(hit);
 		// A search returns one hit per matching message; list each thread once.
@@ -379,6 +382,7 @@ async function searchThreads(event) {
 			),
 		);
 	}
+	showMore(list, nextCursor(body), (next) => searchThreads(undefined, next).catch(fail));
 }
 
 async function messageElement(message, { threadId, focus }) {
@@ -580,12 +584,12 @@ function cancelAction() {
 
 // ---- Sessions -------------------------------------------------------------------------------
 
-async function loadSessionList(query = "") {
-	const body = await api("GET", `/sessions?query=${encodeURIComponent(query)}`);
+async function loadSessionList(query = "", cursor) {
+	const body = await api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, cursor));
 	const list = document.querySelector("#sessions-list");
-	list.replaceChildren();
+	if (!cursor) list.replaceChildren();
 	const sessions = asList(body, ["sessions"]);
-	if (sessions.length === 0) return empty(list, query ? `No sessions match “${query}”.` : "No sessions yet.");
+	if (sessions.length === 0 && !cursor) return empty(list, query ? `No sessions match “${query}”.` : "No sessions yet.");
 	for (const session of sessions) {
 		learnDomain(session.url);
 		const row = item(
@@ -599,6 +603,7 @@ async function loadSessionList(query = "") {
 		row.prepend(badge(session.state ?? "unknown"));
 		list.append(row);
 	}
+	showMore(list, nextCursor(body), (next) => loadSessionList(query, next).catch(fail));
 }
 
 async function openSession(id) {
@@ -767,12 +772,12 @@ async function createWorktree() {
 
 let editingSchedule;
 
-async function loadSchedules() {
-	const body = await api("GET", "/schedules");
+async function loadSchedules(cursor) {
+	const body = await api("GET", pagePath("/schedules", cursor));
 	const list = $("schedules-list");
-	list.replaceChildren();
+	if (!cursor) list.replaceChildren();
 	const schedules = asList(body, ["schedules"]);
-	if (schedules.length === 0) return empty(list, "No schedules yet.");
+	if (schedules.length === 0 && !cursor) return empty(list, "No schedules yet.");
 	for (const schedule of schedules) {
 		const row = document.createElement("div");
 		row.className = "item";
@@ -802,6 +807,7 @@ async function loadSchedules() {
 		row.append(title, meta, edit, remove);
 		list.append(row);
 	}
+	showMore(list, nextCursor(body), (next) => loadSchedules(next).catch(fail));
 }
 
 function startScheduleEdit(schedule) {
