@@ -34,6 +34,7 @@ export const ROUTES = [
 	{ method: "GET", pattern: "/memory/log", name: "memory.log", wp: "WP5" },
 	{ method: "GET", pattern: "/memory/files/*", name: "memory.files.read", wp: "WP5" },
 	{ method: "POST", pattern: "/memory/files/*", name: "memory.files.write", wp: "WP5" },
+	{ method: "GET", pattern: "/memory/files", name: "memory.files.list", wp: "WP10" },
 	{ method: "GET", pattern: "/schedules", name: "schedules.list", wp: "WP6" },
 	{ method: "POST", pattern: "/schedules", name: "schedules.create", wp: "WP6" },
 	{ method: "GET", pattern: "/schedules/:id", name: "schedules.show", wp: "WP6" },

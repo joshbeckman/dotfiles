@@ -360,6 +360,22 @@ export class Memory {
 			});
 	}
 
+	/** Every file on `main` with its size in bytes, sorted by path, for the PWA's Memory view. */
+	async listFiles(): Promise<Array<{ path: string; size: number }>> {
+		await this.ensureRepo();
+		const out = await gitOrThrow(["-C", this.options.gitDir, "ls-tree", "-r", "-l", "-z", MAIN]);
+		const files: Array<{ path: string; size: number }> = [];
+		for (const record of out.stdout.split("\0")) {
+			// `<mode> blob <hash> <size>\t<path>`
+			const tab = record.indexOf("\t");
+			if (tab === -1) continue;
+			const [, type, , size] = record.slice(0, tab).trim().split(/\s+/);
+			if (type !== "blob") continue;
+			files.push({ path: record.slice(tab + 1), size: Number(size) });
+		}
+		return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+	}
+
 	/** Read a file from `main`, or undefined when it is not there. */
 	async readFile(relativePath: string): Promise<MemoryFile | undefined> {
 		const path = normalizeMemoryPath(relativePath);

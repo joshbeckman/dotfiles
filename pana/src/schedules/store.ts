@@ -302,26 +302,31 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 }
 
 /**
- * Replace a schedule's timing and (when given) its payload, keeping the creator and ID. The PWA
- * edit form sends the whole schedule body, so a missing `payload` keeps the stored one.
+ * Replace a schedule's timing and (when given) its payload, keeping the creator and ID. A
+ * missing `payload` keeps the stored one, a missing `kind` keeps the stored kind, and an update
+ * with neither `cron` nor `at` keeps the stored time and state, so editing only the prompt of an
+ * `--at` schedule never moves or reactivates it.
  */
 export async function updateSchedule(runtime: Runtime, id: string, value: unknown): Promise<ScheduleView> {
 	const input = inputObject(value);
 	const now = runtime.clock.now();
-	const kind = scheduleKind(input.kind);
-	const timing = scheduleTiming(input, runtime.config.timezone, now);
+	const retime = hasValue(typeof input.cron === "string" ? input.cron.trim() : input.cron) || hasValue(input.at);
+	const timing = retime ? scheduleTiming(input, runtime.config.timezone, now) : undefined;
 	const view = await runtime.db.write(async (tx) => {
 		const existing = await scheduleRow(tx, id);
+		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
 		const payload = input.payload === undefined ? JSON.parse(existing.payload) : schedulePayload(input, kind);
+		const next = timing ?? { cron: existing.cron, at: existing.at, timezone: existing.timezone, nextAt: existing.next_at };
 		await tx.run(
-			`UPDATE schedules SET kind = ?, state = 'active', cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?
+			`UPDATE schedules SET kind = ?, state = ?, cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?
 			  WHERE id = ?`,
 			kind,
-			timing.cron,
-			timing.at,
-			timing.timezone,
+			timing ? "active" : existing.state,
+			next.cron,
+			next.at,
+			next.timezone,
 			JSON.stringify(payload),
-			timing.nextAt,
+			next.nextAt,
 			now,
 			id,
 		);

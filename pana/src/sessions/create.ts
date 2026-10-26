@@ -46,6 +46,8 @@ export interface CreateSessionInput {
 	cwd?: unknown;
 	profile?: unknown;
 	to?: unknown;
+	/** The thread subject; the PWA's Compose form sends it. Default: the prompt's first line. */
+	subject?: unknown;
 }
 
 function optionalString(value: unknown, field: string): string | undefined {
@@ -182,6 +184,7 @@ export interface CreatedSession extends ThreadResult {
 export async function createSession(runtime: Runtime, caller: Caller, input: CreateSessionInput): Promise<CreatedSession> {
 	const prompt = messageBody(input.prompt);
 	const to = addressList(input.to, "recipients");
+	const subject = optionalString(input.subject, "subject");
 	const profileName = optionalString(input.profile, "profile") ?? DEFAULT_PROFILE;
 	const profile = loadProfile(runtime, profileName);
 
@@ -259,7 +262,7 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 
 	let thread: ThreadResult;
 	try {
-		thread = await createThread(runtime, caller, { to: [id, ...to], body: prompt });
+		thread = await createThread(runtime, caller, { to: [id, ...to], body: prompt, subject });
 	} catch (error) {
 		await runtime.db.write((tx) => tx.run("UPDATE sessions SET state = 'archived', updated_at = ? WHERE id = ?", now, id));
 		throw error;

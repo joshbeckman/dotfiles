@@ -63,6 +63,10 @@ export const handlers: Handlers = {
 		if (!file) throw ApiError.notFound(`memory file ${path}`);
 		return { status: 200, body: file };
 	},
+	"memory.files.list": async (ctx: RequestContext) => ({
+		status: 200,
+		body: { tree: "main", files: await memoryFor(ctx.runtime).listFiles() },
+	}),
 	"memory.files.write": async (ctx: RequestContext) => {
 		const path = normalizeMemoryPath(ctx.params.rest ?? "");
 		const body = bodyObject(ctx.body);
