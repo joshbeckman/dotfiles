@@ -153,7 +153,8 @@ describe("panad", () => {
 		}
 
 		const routes = lines.map((line) => line.route);
-		expect(routes).toEqual(["inbox.list", "threads.create", null, "schedules.list", "inbox.list"]);
+		// WP8's static-shell catch-all owns unknown GET paths and answers them 404.
+		expect(routes).toEqual(["inbox.list", "threads.create", "web.static", "schedules.list", "inbox.list"]);
 		expect(lines.map((line) => line.status)).toEqual([200, 201, 404, 501, 200]);
 		expect(lines.map((line) => line.transport)).toEqual(["socket", "socket", "socket", "socket", "tcp"]);
 		expect(lines[0]!.caller).toBe(`pana://${TEST_DOMAIN}/users/${TEST_USER}`);
