@@ -1,6 +1,6 @@
 // panad: open the state directory, the shared database, and the Harness, then serve the API
-// on the Unix socket and on loopback TCP. WP1 owns logging, signals, and resume (SRV-01..03);
-// this is the minimal server the WP0 contract needs.
+// on the Unix socket and on loopback TCP. WP1 owns the request log (SRV-01), graceful shutdown
+// on SIGTERM (SRV-02), and resuming work a previous process left behind (SRV-03).
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
@@ -21,6 +21,7 @@ import { launchUrl, loopbackOrigin } from "../web/static.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
 import { defaultHandlers } from "./handlers.ts";
 import { acquirePidLock } from "./lock.ts";
+import { createRequestLogger } from "./log.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 
 export interface StartOptions {
@@ -43,6 +44,8 @@ export interface StartOptions {
 	/** Memory may be ahead of disk (see src/db/atomic.ts). Default: log and exit 1. */
 	onFatal?: (error: unknown) => void;
 	onRequest?: (entry: RequestLogEntry) => void;
+	/** Write `<state>/panad.log` (SRV-01). Default true. */
+	requestLog?: boolean;
 	/** Failures that do not stop panad, such as a wake the startup sweep could not submit. */
 	onReport?: (error: unknown, what: string) => void;
 }
@@ -123,16 +126,24 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		// PSH-01: the VAPID pair exists before the first push, not on the first request.
 		initPush(runtime);
 
+		// Finish wakes a crash interrupted, then pick up runs the last process left pending (SRV-03).
 		await sweepWakes(db, runtime.wake, (error, wake) => report(error, `wake for delivery ${wake.deliveryId}`));
 		harness.resume();
 
 		const webToken = readWebToken(dir);
+		const logger =
+			options.requestLog === false
+				? undefined
+				: createRequestLogger(paths.log, { now: () => clock.now(), onError: (error) => report(error, "request log") });
 		const appOptions = {
 			runtime,
 			handlers: { ...defaultHandlers, ...options.handlers },
 			webToken,
 			tailscaleNames: options.tailscaleNames,
-			onRequest: options.onRequest,
+			onRequest: (entry: RequestLogEntry) => {
+				logger?.(entry);
+				options.onRequest?.(entry);
+			},
 		};
 
 		// WP6: recover runs missed while panad was down, then arm the timer on `runtime.clock`.
@@ -198,8 +209,15 @@ function listen(server: Server, start: (server: Server, done: () => void) => voi
 
 function closeServer(server: Server): Promise<void> {
 	return new Promise((resolve) => {
-		server.close(() => resolve());
-		server.closeAllConnections();
+		// `close` stops accepting first; a connection that never goes idle, such as an open event
+		// stream, must not hold up a shutdown forever, so it is cut after a short grace period.
+		const force = setTimeout(() => server.closeAllConnections(), 250);
+		force.unref();
+		server.close(() => {
+			clearTimeout(force);
+			resolve();
+		});
+		server.closeIdleConnections();
 	});
 }
 
@@ -223,7 +241,11 @@ export async function main(_argv: string[]): Promise<number> {
 		console.error(`panad: open ${launchUrl(loopbackOrigin(panad.tcpPort), panad.webToken)}`);
 	}
 	return new Promise((resolve) => {
+		let stopping = false;
 		const stop = () => {
+			// A second signal means the operator is done waiting: leave now, without a clean close.
+			if (stopping) process.exit(1);
+			stopping = true;
 			panad.close().then(
 				() => resolve(0),
 				(error) => {

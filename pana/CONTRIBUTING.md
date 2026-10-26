@@ -25,7 +25,7 @@ One directory per work package, so parallel agents rarely edit the same file.
 | `src/db` | WP0 | schema, migrations, the shared adapter, wakes |
 | `src/api` | WP0 | route table, error shapes, exit codes, HTTP client |
 | `src/server` | WP0, WP1 | `startPanad`, request pipeline, runtime |
-| `src/cli` | WP1 | the `pana` command |
+| `src/cli` | WP1 | the `pana` command: parsing, output, and the one command layer the extension tools also use |
 | `src/threads` | WP2 | threads, messages, inbox, notices, files |
 | `src/sessions` | WP3 | session runtime; `wake.ts` submits session wakes |
 | `src/extension` | WP4 | the `pana` pi-durable extension |
