@@ -116,42 +116,42 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Threads
 
-- [ ] **THR-01** `thread create --to A,B` creates a thread whose participants are the caller, A, and B.
-- [ ] **THR-02** Every message goes to every participant except its sender, as one delivery row each.
-- [ ] **THR-03** `thread respond` without `--after` exits 2.
-- [ ] **THR-04** `thread respond --after M` where M is the thread's newest message appends the message.
-- [ ] **THR-05** `thread respond --after M` where M is older than the newest message returns 409 with the IDs of the newer messages, and appends nothing.
-- [ ] **THR-06** `--after` naming a message in another thread returns 400.
-- [ ] **THR-07** Two concurrent responds with the same `--after` produce exactly one append and one 409.
-- [ ] **THR-08** `--cc C` adds C as a participant. C receives this message and later ones, not earlier ones.
-- [ ] **THR-09** A caller who is not a participant cannot respond (403), except the user, who may respond to any thread and becomes a participant.
-- [ ] **THR-10** `thread read` returns messages in order with sender URLs, timestamps, and current revisions, and marks them read for the caller.
+- [x] **THR-01** `thread create --to A,B` creates a thread whose participants are the caller, A, and B.
+- [x] **THR-02** Every message goes to every participant except its sender, as one delivery row each.
+- [x] **THR-03** `thread respond` without `--after` exits 2.
+- [x] **THR-04** `thread respond --after M` where M is the thread's newest message appends the message.
+- [x] **THR-05** `thread respond --after M` where M is older than the newest message returns 409 with the IDs of the newer messages, and appends nothing.
+- [x] **THR-06** `--after` naming a message in another thread returns 400.
+- [x] **THR-07** Two concurrent responds with the same `--after` produce exactly one append and one 409.
+- [x] **THR-08** `--cc C` adds C as a participant. C receives this message and later ones, not earlier ones.
+- [x] **THR-09** A caller who is not a participant cannot respond (403), except the user, who may respond to any thread and becomes a participant.
+- [x] **THR-10** `thread read` returns messages in order with sender URLs, timestamps, and current revisions, and marks them read for the caller.
 
 ### Edits and redactions
 
-- [ ] **EDT-01** Only the user may revise or redact. A session gets 403.
-- [ ] **EDT-02** A revision appends a `message.revised` event. Reads show the newest body and a `revised` flag. The original stays in `message_events`.
-- [ ] **EDT-03** A redaction appends `message.redacted`. Reads show `[redacted]` and no body.
-- [ ] **EDT-04** No code path issues `UPDATE` or `DELETE` on `messages`. A test greps the source.
-- [ ] **EDT-05** Revisions and redactions do not create deliveries and do not wake sessions.
+- [x] **EDT-01** Only the user may revise or redact. A session gets 403.
+- [x] **EDT-02** A revision appends a `message.revised` event. Reads show the newest body and a `revised` flag. The original stays in `message_events`.
+- [x] **EDT-03** A redaction appends `message.redacted`. Reads show `[redacted]` and no body.
+- [x] **EDT-04** No code path issues `UPDATE` or `DELETE` on `messages`. A test greps the source.
+- [x] **EDT-05** Revisions and redactions do not create deliveries and do not wake sessions.
 
 ### Inbox
 
-- [ ] **INB-01** `session inbox S` lists S's deliveries with message ID, thread ID, subject, sender, recipients, time, and read state, newest first.
-- [ ] **INB-02** `session inbox read S M` returns the full message and marks it read for S.
-- [ ] **INB-03** `GET /inbox` with no `participant` returns the caller's inbox. A session may not read another session's inbox (403). The user may read any.
+- [x] **INB-01** `session inbox S` lists S's deliveries with message ID, thread ID, subject, sender, recipients, time, and read state, newest first.
+- [x] **INB-02** `session inbox read S M` returns the full message and marks it read for S.
+- [x] **INB-03** `GET /inbox` with no `participant` returns the caller's inbox. A session may not read another session's inbox (403). The user may read any.
 
 ### Notices
 
-- [ ] **NTC-01** `panad` posts notices as the domain URL `pana://<domain>`. A notice delivers to users only and never wakes a session.
+- [x] **NTC-01** `panad` posts notices as the domain URL `pana://<domain>`. A notice delivers to users only and never wakes a session.
 
 ### Files
 
-- [ ] **FIL-01** `--attach PATH` copies the file to `files/<ulid>/<basename>` and records path, size, media type, and uploader.
-- [ ] **FIL-02** The CLI appends a Markdown reference per attachment: `![name](url)` for images, `[name](url)` otherwise.
-- [ ] **FIL-03** A file over `files.maxBytes` returns 400 and copies nothing.
-- [ ] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
-- [ ] **FIL-05** File bytes are never stored in SQLite.
+- [x] **FIL-01** `--attach PATH` copies the file to `files/<ulid>/<basename>` and records path, size, media type, and uploader.
+- [x] **FIL-02** The CLI appends a Markdown reference per attachment: `![name](url)` for images, `[name](url)` otherwise.
+- [x] **FIL-03** A file over `files.maxBytes` returns 400 and copies nothing.
+- [x] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
+- [x] **FIL-05** File bytes are never stored in SQLite.
 
 ---
 
@@ -238,15 +238,15 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP5: Memory
 
-- [ ] **MEM-01** On first start, `memory.git` is a bare repo with one empty commit on `main`.
-- [ ] **MEM-02** `pana memory` prints the caller's worktree path, creating `memory/worktrees/<id>` on branch `writer/<id>` from `main` if needed.
-- [ ] **MEM-03** `pana memory commit -m M` stages all changes, commits with author name = caller URL and email = `<id>@<domain>`, rebases onto `main`, and moves `main` with a compare-and-swap `git update-ref`.
-- [ ] **MEM-04** A rebase conflict aborts the rebase, leaves the commit on `writer/<id>`, and exits 3 with the conflicting paths.
-- [ ] **MEM-05** Two writers committing different files at once both land on `main`.
-- [ ] **MEM-06** `pana memory commit` with no changes exits 0 and creates no commit.
-- [ ] **MEM-07** `pana memory search T` runs a case-insensitive `git grep` over `main` and returns path, line, and text.
-- [ ] **MEM-08** `pana memory log [PATH]` returns commits with author URL, time, and message.
-- [ ] **MEM-09** Memory edits from the PWA commit as the user through the same path as MEM-03.
+- [x] **MEM-01** On first start, `memory.git` is a bare repo with one empty commit on `main`.
+- [x] **MEM-02** `pana memory` prints the caller's worktree path, creating `memory/worktrees/<id>` on branch `writer/<id>` from `main` if needed.
+- [x] **MEM-03** `pana memory commit -m M` stages all changes, commits with author name = caller URL and email = `<id>@<domain>`, rebases onto `main`, and moves `main` with a compare-and-swap `git update-ref`.
+- [x] **MEM-04** A rebase conflict aborts the rebase, leaves the commit on `writer/<id>`, and exits 3 with the conflicting paths.
+- [x] **MEM-05** Two writers committing different files at once both land on `main`.
+- [x] **MEM-06** `pana memory commit` with no changes exits 0 and creates no commit.
+- [x] **MEM-07** `pana memory search T` runs a case-insensitive `git grep` over `main` and returns path, line, and text.
+- [x] **MEM-08** `pana memory log [PATH]` returns commits with author URL, time, and message.
+- [x] **MEM-09** Memory edits from the PWA commit as the user through the same path as MEM-03.
 
 ---
 
@@ -265,13 +265,13 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP7: Subjects and search
 
-- [ ] **SUB-01** A new thread's subject is the first line of its first message, trimmed to 80 characters.
-- [ ] **SUB-02** With `subjectModel` set, a background job replaces the subject. Thread create does not wait for it.
-- [ ] **SUB-03** A failed subject job leaves the first-line subject and logs the failure.
-- [ ] **SUB-04** `thread subject --regenerate` makes a new subject and keeps the old ones in `subjects`.
-- [ ] **SRC-01** `thread search --query Q` searches subjects and message bodies with FTS5 and returns thread, message, and a snippet.
-- [ ] **SRC-02** Redacted text is removed from the index. Revised text replaces the old text.
-- [ ] **SRC-03** `session search --query Q` searches user and assistant text of transcripts, indexed when each run settles.
+- [x] **SUB-01** A new thread's subject is the first line of its first message, trimmed to 80 characters.
+- [x] **SUB-02** With `subjectModel` set, a background job replaces the subject. Thread create does not wait for it.
+- [x] **SUB-03** A failed subject job leaves the first-line subject and logs the failure.
+- [x] **SUB-04** `thread subject --regenerate` makes a new subject and keeps the old ones in `subjects`.
+- [x] **SRC-01** `thread search --query Q` searches subjects and message bodies with FTS5 and returns thread, message, and a snippet.
+- [x] **SRC-02** Redacted text is removed from the index. Revised text replaces the old text.
+- [x] **SRC-03** `session search --query Q` searches user and assistant text of transcripts, indexed when each run settles.
 
 ---
 

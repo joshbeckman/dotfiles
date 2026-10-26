@@ -151,6 +151,19 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 2,
+		name: "subject search index",
+		// DB-02 lists FTS5 tables for messages and session transcripts only, so thread search
+		// (SRC-01) has nowhere to match subjects. This adds the one missing index rather than
+		// editing migration 1, which has shipped.
+		sql: `
+			CREATE VIRTUAL TABLE subjects_fts USING fts5(
+				subject,
+				thread_id UNINDEXED
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
