@@ -106,7 +106,16 @@ export async function seedDomain(): Promise<Seeded> {
 		{ caller: release.session.id },
 	);
 	must(fromRelease.status === 200, JSON.stringify(fromRelease.body));
-	await settle(t, async () => (await messageCount(t, groupId)) >= 4, "the first session to answer the second");
+	// RPL-06: a session's follow-up gets no automatic reply, so the first session's run ends
+	// silently and its answer is posted the way a session would, with pana_reply.
+	await settle(t, async () => (await t.runtime.db.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", capital.session.id))?.state === "idle" && (await t.model.calls()) >= 5, "the first session to read the second");
+	head = (await threadMessageIds(t, groupId)).at(-1)!;
+	const agreed = await t.client.post(
+		`/threads/${groupId}/messages`,
+		{ after: head, body: "Agreed. One answer: **Paris**." },
+		{ caller: capital.session.id },
+	);
+	must(agreed.status === 200, JSON.stringify(agreed.body));
 	await t.clock.advance(60_000);
 	head = (await threadMessageIds(t, groupId)).at(-1)!;
 	const followUp = await t.client.post(`/threads/${groupId}/messages`, { after: head, body: "Thanks, **both**. That settles it." });
