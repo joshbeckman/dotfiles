@@ -4,7 +4,7 @@
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, type HarnessSettings, type Registry } from "@earendil-works/pi-durable";
+import { Harness, type HarnessOptions, type HarnessSettings, type Registry } from "@earendil-works/pi-durable";
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,6 +12,7 @@ import type { Handlers } from "../api/types.ts";
 import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
+import { createPanaEnv, createPanaRegistry, installGitHooks } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
@@ -24,8 +25,10 @@ export interface StartOptions {
 	stateDir?: string;
 	clock?: Clock;
 	models?: Models;
-	/** TODO(WP4): default to the registry with CodingTools and `pana` (ISO-01). */
+	/** Default: the pana registry, `CodingTools` and `pana` only (ISO-01). */
 	registry?: Registry;
+	/** Default: the clean pana environment for every session (ISO-03). */
+	env?: HarnessOptions["env"];
 	settings?: HarnessSettings;
 	/** Merged over the packages' handlers. */
 	handlers?: Handlers;
@@ -78,13 +81,16 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 
 		const { db, storage } = await openSharedDatabase(paths.sqlite, { onFatal });
 		const models = options.models ?? createModels();
-		const registry = options.registry ?? createRegistry();
+		const getRuntime = () => runtime;
+		const registry = options.registry ?? createPanaRegistry(getRuntime);
+		const env = options.env ?? createPanaEnv(getRuntime);
 		const settings = options.settings ?? {};
 		const harness = await Harness.open(
 			storage,
 			{
 				models,
 				registry,
+				env,
 				settings,
 				now: () => clock.now(),
 				setTimer: clock.setTimer,
@@ -95,7 +101,6 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		cleanup.unshift(() => harness.close(BACKGROUND_CONTEXT));
 
 		let runtime!: Runtime;
-		const getRuntime = () => runtime;
 		runtime = {
 			config,
 			paths,
@@ -109,6 +114,9 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			...urlHelpers(config.domain, config.user),
 			wake: (options.wake ?? defaultWakeSubmitter)(getRuntime),
 		};
+
+		// The hook directory must exist before any session's bash runs (HOK-01).
+		installGitHooks(paths.hooks, config.domain);
 
 		await sweepWakes(db, runtime.wake, (error, wake) => report(error, `wake for delivery ${wake.deliveryId}`));
 		harness.resume();
