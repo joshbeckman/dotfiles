@@ -6,8 +6,9 @@
 // 1. sessions: N sessions created at once, each answering its first prompt.
 // 2. threads: M threads between the user and those sessions, K user messages each. Each message
 //    waits for the session's answer before the next, C threads at a time.
-// 3. fan-out: F sessions that each create B children, down to `spawnDepth`.
-// 4. lists (optional): T threads in the user's inbox, then timed pages of every list route.
+// 3. broadcast: R messages to one thread with all N sessions, so each append wakes N sessions.
+// 4. fan-out: F sessions that each create B children, down to `spawnDepth`.
+// 5. lists (optional): T threads in the user's inbox, then timed pages of every list route.
 //
 // Then it stops panad and checks the database (SCALE-02). Latency per route comes from
 // panad's own request log (SRV-01), so it covers the sessions' tool calls too.
@@ -30,6 +31,8 @@ export interface BenchOptions {
 	sessions: number;
 	threads: number;
 	messages: number;
+	/** Messages to one thread with every session; 0 skips the phase. */
+	broadcast: number;
 	fanout: number;
 	branch: number;
 	spawnDepth: number;
@@ -51,6 +54,7 @@ export const DEFAULTS: BenchOptions = {
 	sessions: 200,
 	threads: 1000,
 	messages: 5,
+	broadcast: 5,
 	fanout: 10,
 	branch: 2,
 	spawnDepth: 3,
@@ -79,6 +83,8 @@ export interface PhaseResult {
 	perSecond: number;
 	/** End to end: a user message posted until its answer arrived over /events. */
 	answer?: Stats;
+	/** The user's own post requests, as the client saw them. */
+	post?: Stats;
 }
 
 export interface ListResult {
@@ -352,7 +358,30 @@ export async function runBench(partial: Partial<BenchOptions> = {}): Promise<Ben
 		);
 		phases.push(phase("threads", started, options.threads * options.messages * 2, "messages", threadAnswers));
 
-		// 3. Fan-out: every root's tree, all at once.
+		// 3. Broadcast: each message wakes every session. They acknowledge with an empty answer, so
+		// nothing is posted back and the thread's head stays the user's.
+		if (options.broadcast > 0) {
+			log(`broadcast: ${options.broadcast} messages to ${sessionIds.length} sessions`);
+			started = performance.now();
+			const posts: number[] = [];
+			let t0 = performance.now();
+			const created = must(await call<Created>("POST", "/threads", { to: sessionIds, body: "bench ack 1" }), "broadcast create");
+			posts.push(performance.now() - t0);
+			let head = created.message.id;
+			for (let k = 2; k <= options.broadcast; k++) {
+				t0 = performance.now();
+				const next = must(
+					await call<{ message: { id: string } }>("POST", `/threads/${created.thread.id}/messages`, { after: head, body: `bench ack ${k}` }),
+					"broadcast respond",
+				);
+				posts.push(performance.now() - t0);
+				head = next.message.id;
+			}
+			await settle(call, options.sessions, options.timeoutMs);
+			phases.push({ ...phase("broadcast", started, options.broadcast * sessionIds.length, "wakes"), post: stats(posts) });
+		}
+
+		// 4. Fan-out: every root's tree, all at once.
 		const perTree = treeSize(options.branch, options.spawnDepth);
 		const expectedSessions = options.sessions + options.fanout * perTree;
 		log(`fan-out: ${options.fanout} trees of ${perTree} sessions`);
@@ -369,7 +398,7 @@ export async function runBench(partial: Partial<BenchOptions> = {}): Promise<Ben
 		await settle(call, expectedSessions, options.timeoutMs);
 		phases.push(phase("fan-out", started, options.fanout * perTree, "sessions"));
 
-		// 4. Lists: seed the inbox, then time every list route.
+		// 5. Lists: seed the inbox, then time every list route.
 		if (options.listThreads > 0) {
 			lists.push(...(await listPhase(call, sessionIds, options, log)));
 		}
@@ -531,12 +560,12 @@ export function formatReport(result: BenchResult): string {
 	const lines: string[] = [];
 	const o = result.options;
 	lines.push(
-		`pana bench: N=${o.sessions} sessions, M=${o.threads} threads x K=${o.messages} messages, fan-out ${o.fanout} x B=${o.branch} to depth ${o.spawnDepth}, C=${o.concurrency}, model ${o.latencyMs} ms`,
+		`pana bench: N=${o.sessions} sessions, M=${o.threads} threads x K=${o.messages} messages, broadcast ${o.broadcast}, fan-out ${o.fanout} x B=${o.branch} to depth ${o.spawnDepth}, C=${o.concurrency}, model ${o.latencyMs} ms`,
 		"",
 		"phase      time (s)  units               rate/s   answer p50 / p99 (ms)",
 	);
 	for (const p of result.phases) {
-		const answer = p.answer ? `${p.answer.p50} / ${p.answer.p99}` : "";
+		const answer = p.answer ? `${p.answer.p50} / ${p.answer.p99}` : p.post ? `post ${p.post.p50} / ${p.post.p99}` : "";
 		lines.push(
 			`${p.name.padEnd(10)} ${(p.ms / 1000).toFixed(1).padStart(8)}  ${`${p.units} ${p.unit}`.padEnd(18)} ${String(p.perSecond).padStart(7)}   ${answer}`,
 		);

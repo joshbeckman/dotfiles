@@ -6,6 +6,7 @@ const FLAGS: Record<string, keyof BenchOptions> = {
 	"--sessions": "sessions",
 	"--threads": "threads",
 	"--messages": "messages",
+	"--broadcast": "broadcast",
 	"--fanout": "fanout",
 	"--branch": "branch",
 	"--spawn-depth": "spawnDepth",
@@ -27,6 +28,7 @@ Options (defaults in brackets):
   --sessions N       sessions created at once [${DEFAULTS.sessions}]
   --threads M        threads between the user and those sessions [${DEFAULTS.threads}]
   --messages K       user messages per thread, each answered [${DEFAULTS.messages}]
+  --broadcast R      messages to one thread with every session [${DEFAULTS.broadcast}]
   --fanout F         sessions that create child sessions [${DEFAULTS.fanout}]
   --branch B         children each of those creates per level [${DEFAULTS.branch}]
   --spawn-depth D    config spawnDepth, the depth of each fan-out tree [${DEFAULTS.spawnDepth}]

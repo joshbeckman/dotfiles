@@ -96,7 +96,7 @@ export function respond(messages: readonly Message[]): AssistantMessage {
 				calls.push(fauxToolCall("pana_session_create", { prompt: `bench spawn ${order.depth - 1} ${order.branch} ${input.id}.${i}` }));
 			}
 		}
-		if (input !== starter && needsReply(input.body)) {
+		if (input.id !== starter?.id && needsReply(input.body)) {
 			calls.push(fauxToolCall("pana_reply", { thread: input.threadId, after: input.id, body: answerBody(input.id) }));
 		}
 	}
