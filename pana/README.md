@@ -47,7 +47,7 @@ pana thread read THREAD
 pana thread respond --thread THREAD --after MESSAGE --body "Thanks"
 ```
 
-Open the launch URL in a browser to authorize the PWA. For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
+Open the launch URL in a browser to authorize the PWA. In Safari, use `http://localhost:8766/#<web-token>` instead: Safari answered "denied" for notifications on `127.0.0.1` even after Allow, and the app links there when it does. For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
 
 ```sh
 tailscale serve --bg 8766
@@ -261,7 +261,7 @@ pana schedule delete SCHEDULE
 
 The PWA has these sections:
 
-- **Inbox.** Messages to the user, newest first, with unread ones marked and counted. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
+- **Inbox.** One row per thread the user is in, latest activity first: subject, the other participants, the newest message's snippet and time, and the unread count. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
 - **Compose.** Start a session and its thread.
 - **Threads.** Browse and search, including only unread or only archived threads, with each thread's unread count. Edit or redact a message, with a warning.
 - **Sessions.** Live and past sessions with the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Stop, compact, archive, reload.
@@ -269,6 +269,10 @@ The PWA has these sections:
 - **Schedules.** Create, edit, and delete.
 
 A reply draft records the thread head when it opens. If the thread moves before send, the PWA shows the new messages and keeps the draft.
+
+Each participant has one color, from the style guide palette, in every thread: the user is blue, the domain's notices are black, and each session keeps the color its URL hashes to. Opening a thread shows its newest message; a message link shows that message.
+
+The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `s`, `m`, `c`, or `h` changes section, `/` searches, `r` replies, `e` archives, `u` or `Esc` goes back, and `?` lists every key. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
 
 `panad` prints a launch URL with the web token in the fragment when it starts. Treat that URL as private: anyone who has it can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
 

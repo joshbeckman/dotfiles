@@ -61,6 +61,22 @@ export async function closePage(id: number): Promise<void> {
 	await command(["close_page", String(id)]).catch(() => undefined);
 }
 
+/**
+ * Save a screenshot of the selected page. The 1.6 CLI writes only under the OS temp directory,
+ * so callers pass a path there and move the file.
+ */
+export async function screenshot(filePath: string, fullPage = false): Promise<void> {
+	await command(["take_screenshot", "--filePath", filePath, ...(fullPage ? ["--fullPage", "true"] : [])]);
+}
+
+export async function emulateColorScheme(scheme: "dark" | "light" | "auto"): Promise<void> {
+	await command(["emulate", "--colorScheme", scheme]);
+}
+
+export async function resizePage(width: number, height: number): Promise<void> {
+	await command(["resize_page", String(width), String(height)]);
+}
+
 /** Evaluate an async function source in the page and return its JSON value. */
 export async function evaluate<T>(source: string): Promise<T> {
 	const result = (await command(["evaluate_script", source])) as

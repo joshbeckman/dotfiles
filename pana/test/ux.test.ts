@@ -2,10 +2,14 @@
 // server's thread inbox (UX-03) and the PWA modules whose logic is pure (UX-01, UX-02, UX-06,
 // UX-08).
 
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPanaCli } from "../src/cli/commands.ts";
 import { snippetOf } from "../src/threads/index.ts";
 import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
+import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection } from "../web/keys.js";
+import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
+import { inboxThreadRow, PALETTE, participantColor, refLabel, SESSION_COLORS } from "../web/views.js";
 
 interface Person {
 	id: string;
@@ -167,5 +171,324 @@ describe("UX-03 the inbox lists threads by latest activity", () => {
 		expect(snippetOf("  a\n\nb\tc  ")).toBe("a b c");
 		expect(snippetOf("alpha beta gamma delta", 12)).toBe("alpha beta…");
 		expect(snippetOf(undefined)).toBe("");
+	});
+});
+
+describe("UX-03 the PWA reads the thread inbox", () => {
+	it("UX-03 inboxThreadRow maps a real thread inbox row", async () => {
+		t = await startTestPanad();
+		const a = await seedSession();
+		await post("/threads", { to: [TEST_USER], body: "Hello from A" }, a);
+		const raw = (await t.client.get<ThreadInbox>("/inbox?view=threads")).body.threads[0]!;
+		const row = inboxThreadRow(raw);
+		expect(row).toMatchObject({
+			threadId: raw.threadId,
+			subject: "Hello from A",
+			snippet: "Hello from A",
+			unreadCount: 1,
+			archived: false,
+			sender: { url: t.runtime.url({ kind: "session", id: a }), kind: "session" },
+		});
+		expect(row.participants.map((p) => p.kind).sort()).toEqual(["session", "user"]);
+		expect(row.at).toBe(raw.latest.createdAt);
+	});
+});
+
+describe("UX-08 the keymap", () => {
+	const page = { inInput: false, inForm: false, apple: true };
+
+	it("UX-08 single keys, g sequences, and the keys that go back", () => {
+		const keys = createKeyReader();
+		const press = (key: string, timeStamp = 0, context = page) => keys.press({ key, timeStamp }, context);
+		expect(press("j")).toBe("next");
+		expect(press("k")).toBe("previous");
+		expect(press("Enter")).toBe("open");
+		expect(press("o")).toBe("open");
+		expect(press("/")).toBe("search");
+		expect(press("r")).toBe("reply");
+		expect(press("e")).toBe("archive");
+		expect(press("u")).toBe("back");
+		expect(press("Escape")).toBe("back");
+		expect(press("?")).toBe("help");
+		for (const [key, section] of [["i", "inbox"], ["t", "threads"], ["s", "sessions"], ["m", "memory"], ["c", "compose"], ["h", "schedules"]] as const) {
+			expect(press("g", 10)).toBe("pending");
+			expect(keys.pending).toEqual(["g"]);
+			expect(press(key, 20)).toBe(`go:${section}`);
+		}
+		expect(press("x")).toBeNull();
+	});
+
+	it("UX-08 a stale or broken prefix lets the next key act alone, and modified keys pass through", () => {
+		const keys = createKeyReader({ timeout: 1000 });
+		expect(keys.press({ key: "g", timeStamp: 0 }, page)).toBe("pending");
+		expect(keys.press({ key: "i", timeStamp: 5000 }, page)).toBeNull();
+		expect(keys.press({ key: "g", timeStamp: 6000 }, page)).toBe("pending");
+		expect(keys.press({ key: "j", timeStamp: 6100 }, page)).toBe("next");
+		expect(keys.press({ key: "j", metaKey: true }, page)).toBeNull();
+		expect(keys.press({ key: "r", ctrlKey: true }, page)).toBeNull();
+	});
+
+	it("UX-08 inside a text input only Esc acts, and it leaves the input", () => {
+		const keys = createKeyReader();
+		const input = { inInput: true, inForm: true, apple: false };
+		for (const key of ["j", "k", "g", "/", "?", "e", "Enter"]) expect(keys.press({ key }, input)).toBeNull();
+		expect(keys.press({ key: "Escape" }, input)).toBe("leave-input");
+		expect(isTextInput({ tagName: "TEXTAREA" })).toBe(true);
+		expect(isTextInput({ tagName: "INPUT", type: "search" })).toBe(true);
+		expect(isTextInput({ tagName: "INPUT", type: "checkbox" })).toBe(false);
+		expect(isTextInput({ tagName: "DIV", isContentEditable: true })).toBe(true);
+		expect(isTextInput({ tagName: "BUTTON" })).toBe(false);
+	});
+
+	it("UX-08 the help overlay lists exactly the keymap", () => {
+		const rows = helpRows(true);
+		expect(rows.map((row) => row.action)).toEqual([...KEYMAP, ...INPUT_KEYMAP].map((binding) => binding.action));
+		expect(rows.find((row) => row.action === "go:schedules")!.keys).toEqual(["g then h"]);
+		expect(rows.find((row) => row.action === "open")!.keys).toEqual(["Enter", "o"]);
+		expect(rows.find((row) => row.action === "back")!.keys).toEqual(["u", "Esc"]);
+		expect(rows.find((row) => row.action === "submit")!.keys).toEqual(["⌘ Enter"]);
+		expect(helpRows(false).find((row) => row.action === "submit")!.keys).toEqual(["Ctrl Enter"]);
+		// Every key the reader acts on is a row in the overlay, and no row names an unbound key.
+		const keys = createKeyReader();
+		for (const binding of KEYMAP) {
+			for (const sequence of binding.sequences) {
+				let action: string | null = null;
+				for (const key of sequence) action = keys.press({ key }, page);
+				expect(action, sequence.join(" ")).toBe(binding.action);
+			}
+		}
+	});
+
+	it("UX-08 j and k move through a list and stop at its ends", () => {
+		expect(moveSelection(-1, 3, "next")).toBe(0);
+		expect(moveSelection(-1, 3, "previous")).toBe(2);
+		expect(moveSelection(0, 3, "next")).toBe(1);
+		expect(moveSelection(2, 3, "next")).toBe(2);
+		expect(moveSelection(0, 3, "previous")).toBe(0);
+		expect(moveSelection(0, 0, "next")).toBe(-1);
+	});
+});
+
+describe("UX-02 Cmd+Enter submits the focused form", () => {
+	it("UX-02 Cmd+Enter on Apple platforms and Ctrl+Enter elsewhere, only inside a form", () => {
+		expect(isApplePlatform("MacIntel")).toBe(true);
+		expect(isApplePlatform("iPhone")).toBe(true);
+		expect(isApplePlatform("Linux x86_64")).toBe(false);
+		expect(isApplePlatform("Win32")).toBe(false);
+
+		expect(isSubmitChord({ key: "Enter", metaKey: true }, true)).toBe(true);
+		expect(isSubmitChord({ key: "Enter", ctrlKey: true }, true)).toBe(false);
+		expect(isSubmitChord({ key: "Enter", ctrlKey: true }, false)).toBe(true);
+		expect(isSubmitChord({ key: "Enter", metaKey: true }, false)).toBe(false);
+		expect(isSubmitChord({ key: "Enter" }, true)).toBe(false);
+		expect(isSubmitChord({ key: "Enter", metaKey: true, shiftKey: true }, true)).toBe(false);
+
+		const keys = createKeyReader();
+		expect(keys.press({ key: "Enter", metaKey: true }, { inInput: true, inForm: true, apple: true })).toBe("submit");
+		expect(keys.press({ key: "Enter", ctrlKey: true }, { inInput: false, inForm: true, apple: false })).toBe("submit");
+		expect(keys.press({ key: "Enter", metaKey: true }, { inInput: false, inForm: false, apple: true })).toBeNull();
+	});
+});
+
+describe("UX-06 participant colors", () => {
+	it("UX-06 the user is always blue, the domain black, and a session keeps one palette color", () => {
+		expect(PALETTE).toEqual({
+			blue: "#002FA7",
+			orange: "#FF7900",
+			purple: "#903465",
+			green: "#237F52",
+			red: "#BD2024",
+			yellow: "#FFCC00",
+			black: "#0D0D0D",
+		});
+		expect(participantColor({ url: "pana://a.example/users/josh", kind: "user" })).toBe("blue");
+		expect(participantColor("pana://a.example/users/someone")).toBe("blue");
+		expect(participantColor({ url: "pana://a.example", kind: "domain" })).toBe("black");
+		expect(participantColor("pana://a.example")).toBe("black");
+
+		const urls = Array.from({ length: 40 }, (_, i) => `pana://a.example/sessions/01KE6P4YM0M457PFE07QVF${String(i).padStart(4, "0")}`);
+		const colors = urls.map((url) => participantColor({ url, kind: "session" }));
+		for (const color of colors) expect(SESSION_COLORS).toContain(color);
+		// Stable: the same URL always maps to the same color, with or without its kind.
+		expect(urls.map((url) => participantColor(url))).toEqual(colors);
+		// Spread: forty sessions use every session color.
+		expect(new Set(colors).size).toBe(SESSION_COLORS.length);
+	});
+
+	it("UX-06 the stylesheet defines every palette color and a rule per participant color", () => {
+		const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8").toLowerCase();
+		for (const [name, hex] of Object.entries(PALETTE)) {
+			expect(css).toContain(`--p-${name}: ${hex.toLowerCase()};`);
+			expect(css).toContain(`[data-color="${name}"]`);
+		}
+	});
+
+	it("UX-06 short labels name a participant without its domain", () => {
+		expect(refLabel("pana://a.example/users/josh")).toBe("josh");
+		expect(refLabel("pana://a.example/sessions/01KE6P4YM0M457PFE07QVFK8KM")).toBe("session VFK8KM");
+		expect(refLabel("pana://a.example")).toBe("a.example");
+	});
+});
+
+describe("UX-01 notifications name the real cause", () => {
+	const mac = { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36" };
+	const safari = { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15" };
+	const iphone = { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1" };
+	const loopback = { origin: "http://127.0.0.1:8766", host: "127.0.0.1:8766" };
+
+	function hooks(overrides: Record<string, unknown> = {}) {
+		const calls: string[] = [];
+		const subscription = {
+			endpoint: "https://push.example/new",
+			toJSON: () => ({ endpoint: "https://push.example/new", keys: { p256dh: "p", auth: "a" } }),
+		};
+		const options = {
+			permission: "default",
+			requestPermission: async () => {
+				calls.push("requestPermission");
+				return "granted";
+			},
+			register: async () => {
+				calls.push("register");
+				return {
+					pushManager: {
+						getSubscription: async () => null,
+						subscribe: async () => {
+							calls.push("subscribe");
+							return subscription;
+						},
+					},
+				};
+			},
+			getKey: async () => {
+				calls.push("getKey");
+				return KEY;
+			},
+			post: async () => {
+				calls.push("post");
+			},
+			...overrides,
+		};
+		return { calls, options };
+	}
+	const KEY = "BEv1EDtILf1kHQLWIE-suliwhvMNYqSRQ7lD0QCR56IkomfN6aOVZQz_FezcstfV4sFIBx1QxtSXSWliz9jzCWs";
+
+	it("UX-01 Allow subscribes, and the prompt is asked before anything else is awaited", async () => {
+		const { calls, options } = hooks();
+		const pending = subscribeToPush({ ...options, env: browserEnv({ ...mac, ...loopback }) });
+		// Still inside the click's task: the prompt has already been requested.
+		expect(calls).toEqual(["requestPermission"]);
+		expect(await pending).toEqual({ subscribed: true, endpoint: "https://push.example/new" });
+		expect(calls).toEqual(["requestPermission", "register", "getKey", "subscribe", "post"]);
+	});
+
+	it("UX-01 each failure has its own cause, and none is reported as a bare 'permission denied'", async () => {
+		const env = browserEnv({ ...mac, ...loopback });
+		let clock = 0;
+		const now = () => clock;
+		const slowDeny = async () => {
+			clock += 2000;
+			return "denied";
+		};
+		const cases: Array<[string, Record<string, unknown>, string]> = [
+			["insecure", { env: browserEnv({ ...mac, secure: false, origin: "http://lantern:8766" }) }, "secure page"],
+			["unsupported", { env: browserEnv({ ...mac, hasPushManager: false }) }, "no Web Push"],
+			["blocked", { permission: "denied" }, "already blocks notifications for http://127.0.0.1:8766"],
+			["denied", { requestPermission: async () => "denied" }, "without showing a prompt"],
+			["denied", { requestPermission: slowDeny }, "System Settings › Notifications › Google Chrome"],
+			["dismissed", { requestPermission: async () => "default" }, "crossed-out bell"],
+			["no-worker", { register: async () => Promise.reject(new Error("no active service worker after 10 s")) }, "service worker did not start"],
+			["no-key", { getKey: async () => "" }, "push key"],
+			[
+				"subscribe-failed",
+				{
+					register: async () => ({
+						pushManager: {
+							getSubscription: async () => null,
+							subscribe: async () => Promise.reject(Object.assign(new Error("Registration failed - permission denied"), { name: "NotAllowedError" })),
+						},
+					}),
+				},
+				"NotAllowedError: Registration failed - permission denied",
+			],
+			[
+				"subscribe-failed",
+				{
+					register: async () => ({
+						pushManager: {
+							getSubscription: async () => null,
+							subscribe: async () => Promise.reject(Object.assign(new Error("Registration failed - push service error"), { name: "AbortError" })),
+						},
+					}),
+				},
+				"push service",
+			],
+			["server", { post: async () => Promise.reject(new Error("bad subscription")) }, "did not store the subscription"],
+		];
+		for (const [cause, overrides, text] of cases) {
+			const { options } = hooks(overrides);
+			const result = await subscribeToPush({ env, now, ...options } as never);
+			expect(result.cause, cause).toBe(cause);
+			const caseEnv = (overrides.env as ReturnType<typeof browserEnv>) ?? env;
+			const message = explainPush(result, caseEnv).text;
+			expect(message, cause).toContain(text);
+			expect(message).not.toMatch(/^Notifications are off: permission denied/);
+		}
+	});
+
+	it("UX-01 a blocked permission is never prompted for again", async () => {
+		const { calls, options } = hooks({ permission: "denied" });
+		await subscribeToPush({ ...options, env: browserEnv({ ...mac, ...loopback }) });
+		expect(calls).toEqual([]);
+	});
+
+	it("UX-01 Safari on 127.0.0.1 points to localhost, the host Safari can notify", () => {
+		const env = browserEnv({ ...safari, ...loopback });
+		expect(env).toMatchObject({ browser: "safari", platform: "mac" });
+		const message = explainPush({ subscribed: false, cause: "denied", elapsed: 3000 }, env, { localhostUrl: "http://localhost:8766/#token" });
+		expect(message.text).toContain("Safari");
+		expect(message.text).toContain("IP address");
+		expect(message.link).toEqual({ href: "http://localhost:8766/#token", label: "Open pana on localhost" });
+		// On localhost the same answer names Safari's own settings instead.
+		const named = explainPush({ subscribed: false, cause: "denied", elapsed: 3000 }, browserEnv({ ...safari, origin: "http://localhost:8766", host: "localhost:8766" }));
+		expect(named.text).toContain("System Settings › Notifications › Safari");
+		expect(named.link).toBeUndefined();
+		expect(isIpHost("127.0.0.1:8766")).toBe(true);
+		expect(isIpHost("[::1]:8766")).toBe(true);
+		expect(isIpHost("localhost:8766")).toBe(false);
+		expect(isIpHost("lantern.tail1234.ts.net")).toBe(false);
+	});
+
+	it("UX-01 an iPhone outside the Home Screen app is told to add it", () => {
+		const env = browserEnv({ ...iphone, hasPushManager: false, origin: "https://lantern.example.ts.net", host: "lantern.example.ts.net" });
+		expect(explainPush({ subscribed: false, cause: "unsupported" }, env).text).toContain("Add to Home Screen");
+	});
+
+	it("UX-01 a subscription for an older VAPID key is replaced", async () => {
+		const unsubscribed: string[] = [];
+		const old = {
+			endpoint: "https://push.example/old",
+			options: { applicationServerKey: new Uint8Array([1, 2, 3]).buffer },
+			unsubscribe: async () => {
+				unsubscribed.push("old");
+				return true;
+			},
+			toJSON: () => ({ endpoint: "https://push.example/old" }),
+		};
+		const fresh = { endpoint: "https://push.example/fresh", toJSON: () => ({ endpoint: "https://push.example/fresh" }) };
+		const posted: unknown[] = [];
+		const result = await subscribeToPush({
+			env: browserEnv({ ...mac, ...loopback }),
+			permission: "granted",
+			register: async () => ({ pushManager: { getSubscription: async () => old, subscribe: async () => fresh } }),
+			getKey: async () => KEY,
+			post: async (subscription) => {
+				posted.push(subscription);
+			},
+		});
+		expect(unsubscribed).toEqual(["old"]);
+		expect(result.endpoint).toBe("https://push.example/fresh");
+		expect(posted).toEqual([{ endpoint: "https://push.example/fresh" }]);
+		expect(urlBase64ToUint8Array(KEY)).toHaveLength(65);
 	});
 });

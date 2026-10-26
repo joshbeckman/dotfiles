@@ -35,6 +35,28 @@ export function inboxRow(delivery: any): {
 	read: boolean;
 	unreadCount: number;
 };
+export interface PersonRef {
+	url: string;
+	kind: string;
+}
+export function inboxThreadRow(thread: any): {
+	threadId: string;
+	threadUrl?: string;
+	subject: string;
+	participants: PersonRef[];
+	messageId?: string;
+	messageUrl?: string;
+	sender: PersonRef;
+	snippet: string;
+	at: number;
+	unreadCount: number;
+	archived: boolean;
+};
+export const PALETTE: Record<"blue" | "orange" | "purple" | "green" | "red" | "yellow" | "black", string>;
+export const SESSION_COLORS: string[];
+export function participantColor(participant: string | { url?: string; kind?: string }): string;
+export function refLabel(url: string): string;
+export function shortTime(at: number, now?: number, locale?: string): string;
 export function threadRow(thread: any): {
 	id: string;
 	url: string;
@@ -50,6 +72,7 @@ export function messageView(message: any): {
 	threadId?: string;
 	threadUrl?: string;
 	sender: string;
+	senderKind: string;
 	at: number;
 	body: string;
 	revised: boolean;

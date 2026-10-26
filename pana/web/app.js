@@ -1,5 +1,6 @@
-// The pana PWA (WEB-01..08). Plain ES modules, no framework: a hash router, one fetch wrapper,
-// and a renderer per section. The server owns auth (API-04); this file only carries the token.
+// The pana PWA (WEB-01..08, WP13). Plain ES modules, no framework: a hash router, one fetch
+// wrapper, a renderer per section, and one keyboard module. The server owns auth (API-04); this
+// file only carries the token.
 
 import {
 	CONFIRM_ARCHIVE_SESSION,
@@ -13,10 +14,23 @@ import {
 	routeFromHash,
 	tokenFromInput,
 } from "./links.js";
-import { subscribeToPush } from "./push.js";
+import { browserEnv, explainPush, subscribeToPush } from "./push.js";
 import { nextCursor, pagePath, showMore } from "./pages.js";
-import { commitView, entryView, inboxRow, memoryHitView, messageView, scheduleBody, scheduleWhen, threadRow } from "./views.js";
-import { escapeHtml, hydrateFiles, renderDiagrams, renderMessage, rewriteLinks } from "./render.js";
+import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
+import {
+	commitView,
+	entryView,
+	inboxThreadRow,
+	memoryHitView,
+	messageView,
+	participantColor,
+	refLabel,
+	scheduleBody,
+	scheduleWhen,
+	shortTime,
+	threadRow,
+} from "./views.js";
+import { renderMessage } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,26 +43,41 @@ if (launchToken) {
 }
 let token = launchToken || localStorage.getItem(TOKEN_KEY) || "";
 
+const APPLE = isApplePlatform(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+
 const state = {
 	domain: "",
 	domainResolved: undefined,
 	section: "inbox",
 	thread: null,
+	threadArchived: false,
 	session: null,
 	draft: null,
 	confirm: null,
 	eventAbort: undefined,
 	domainReady: undefined,
+	/** The list a detail view returns to with Back (UX-08). */
+	lastList: "#/inbox",
+	push: undefined,
+	workerError: "",
 };
 
 let statusTimer;
-function status(text, error = false) {
+function status(text, error = false, link = undefined) {
 	clearTimeout(statusTimer);
-	$("status").textContent = text;
-	$("status").classList.toggle("error", error);
+	const node = $("status");
+	node.replaceChildren(document.createTextNode(text));
+	if (link) {
+		const anchor = document.createElement("a");
+		anchor.href = link.href;
+		anchor.textContent = link.label;
+		anchor.dataset.testid = "status-link";
+		node.append(" ", anchor);
+	}
+	node.classList.toggle("error", error);
 	if (text && !error) {
 		statusTimer = setTimeout(() => {
-			$("status").textContent = "";
+			node.textContent = "";
 		}, 6000);
 	}
 }
@@ -257,45 +286,64 @@ function asList(body, keys) {
 	return [];
 }
 
+function span(text, className) {
+	const node = document.createElement("span");
+	if (className) node.className = className;
+	node.textContent = text;
+	return node;
+}
+
+/**
+ * One list row. The row is a focusable element with a click handler rather than a <button>,
+ * because rows hold links (REF-08) and a button may not contain interactive content. Row actions
+ * sit beside the row's text inside the same box (REF-07, UX-07).
+ */
 function item(title, meta, onClick, extra = {}) {
-	const button = document.createElement("button");
-	button.type = "button";
-	button.className = `item${extra.unread ? " unread" : ""}${extra.archived ? " archived" : ""}`;
-	if (extra.testid) button.dataset.testid = extra.testid;
-	if (extra.threadId) button.dataset.thread = extra.threadId;
-	if (extra.sessionId) button.dataset.session = extra.sessionId;
-	if (extra.id) button.dataset.id = extra.id;
+	const row = document.createElement("div");
+	row.className = `item${extra.actions?.length ? " row" : ""}${extra.unread ? " unread" : ""}${extra.archived ? " archived" : ""}`;
+	row.tabIndex = 0;
+	row.setAttribute("role", "listitem");
+	row.dataset.selectable = "";
+	if (extra.testid) row.dataset.testid = extra.testid;
+	if (extra.threadId) row.dataset.thread = extra.threadId;
+	if (extra.sessionId) row.dataset.session = extra.sessionId;
+	if (extra.id) row.dataset.id = extra.id;
+	const main = document.createElement("div");
+	main.className = "item-main";
 	const titleEl = document.createElement("span");
 	titleEl.className = "title";
 	if (typeof title === "string") titleEl.textContent = title;
 	else titleEl.append(title);
-	button.append(titleEl);
+	main.append(titleEl);
 	if (meta) {
 		const metaEl = document.createElement("span");
 		metaEl.className = "meta";
 		for (const part of meta) {
 			if (part === undefined || part === null || part === "") continue;
 			if (part instanceof Node) metaEl.append(part);
-			else {
-				const span = document.createElement("span");
-				span.textContent = String(part);
-				metaEl.append(span);
-			}
+			else metaEl.append(span(String(part)));
 		}
-		button.append(metaEl);
+		main.append(metaEl);
 	}
-	button.addEventListener("click", onClick);
-	if (!extra.actions) return button;
-	// REF-07: row actions sit beside the row, because a button may not contain a button.
-	const row = document.createElement("div");
-	row.className = "row";
-	row.dataset.thread = extra.threadId ?? "";
-	row.append(button, ...extra.actions);
+	if (extra.below) main.append(extra.below);
+	row.append(main);
+	if (extra.aside) row.append(extra.aside);
+	if (extra.actions?.length) {
+		const actions = document.createElement("div");
+		actions.className = "item-actions";
+		actions.append(...extra.actions);
+		row.append(actions);
+	}
+	row.addEventListener("click", (event) => {
+		// A link or an action inside the row does its own thing.
+		if (event.target?.closest?.("a, button")) return;
+		onClick(event);
+	});
 	return row;
 }
 
 /** A link to an ID's own view (REF-08), or plain text when the ID has no view here. */
-function refLink(value, kind, label) {
+function refLink(value, kind, label, title) {
 	const text = String(value ?? "");
 	if (!text) return document.createTextNode("");
 	const href = text.startsWith("pana://") ? appHref(text, state.domain) : idHref(text, kind);
@@ -303,12 +351,23 @@ function refLink(value, kind, label) {
 	const anchor = document.createElement("a");
 	anchor.href = href;
 	anchor.textContent = label ?? text;
+	if (title) anchor.title = title;
 	anchor.dataset.testid = "ref-link";
 	if (/^https?:/i.test(href)) {
 		anchor.target = "_blank";
 		anchor.rel = "noopener noreferrer";
 	}
 	return anchor;
+}
+
+/** A participant as a short, colored name that links to its view (REF-08, UX-06). */
+function personLink(person) {
+	const url = typeof person === "string" ? person : person.url;
+	const link = refLink(url, "user", refLabel(url), url);
+	const wrap = span("", "person");
+	wrap.dataset.color = participantColor(person);
+	wrap.append(link);
+	return wrap;
 }
 
 /** Text with every `pana://` URL inside it turned into a link to its view (REF-08). */
@@ -334,6 +393,16 @@ function when(value) {
 	return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
+function timeEl(value) {
+	const node = document.createElement("time");
+	node.className = "when";
+	node.textContent = shortTime(value);
+	node.title = when(value);
+	const date = new Date(Number(value));
+	if (!Number.isNaN(date.getTime())) node.dateTime = date.toISOString();
+	return node;
+}
+
 function empty(container, text) {
 	container.replaceChildren();
 	const p = document.createElement("p");
@@ -343,26 +412,32 @@ function empty(container, text) {
 }
 
 function badge(text) {
-	const span = document.createElement("span");
-	span.className = `badge ${text}`;
-	span.textContent = text;
-	return span;
+	return span(text, `badge ${text}`);
 }
 
-// ---- Inbox ----------------------------------------------------------------------------------
+function unreadBadge(count) {
+	const node = span(`${count} unread`, "unread-count");
+	node.dataset.testid = "unread-count";
+	return node;
+}
+
+// ---- Inbox (UX-03) --------------------------------------------------------------------------
+
+// Live events can start several loads at once, and their answers can arrive out of order. Only
+// the newest load may draw, or an older answer would leave a stale list or badge behind.
+let unreadGeneration = 0;
+let inboxGeneration = 0;
 
 /** REF-06: the nav badge is the caller's unread delivery count across every thread. */
 async function refreshUnread(archived = false, cursor) {
-	const body = await api("GET", pagePath(`/inbox${archived ? "?archived=1" : ""}`, cursor));
-	const items = asList(body, ["deliveries"]);
+	const generation = archived ? -1 : ++unreadGeneration;
+	const body = await api("GET", pagePath(`/inbox?view=threads${archived ? "&archived=1" : ""}`, cursor));
+	const items = asList(body, ["threads"]);
 	// SCALE-03: the inbox is paged, so the server counts the unread deliveries past this page too.
-	const unread =
-		typeof body?.unreadTotal === "number"
-			? body.unreadTotal
-			: items.filter((delivery) => delivery.readAt === null || delivery.readAt === undefined).length;
+	const unread = typeof body?.unreadTotal === "number" ? body.unreadTotal : items.reduce((sum, thread) => sum + (thread.unreadCount ?? 0), 0);
 	const badge = $("nav-inbox-count");
 	// The archived view is not the inbox, so it never rewrites the badge.
-	if (badge && !archived) {
+	if (badge && generation === unreadGeneration) {
 		badge.textContent = String(unread);
 		badge.hidden = unread === 0;
 	}
@@ -372,35 +447,54 @@ async function refreshUnread(archived = false, cursor) {
 async function loadInbox(cursor) {
 	// REF-07: the same view shows the archived threads, so Unarchive has a home in the inbox.
 	const showArchived = Boolean($("inbox-archived")?.checked);
+	const generation = cursor ? inboxGeneration : ++inboxGeneration;
 	const { items, body } = await refreshUnread(showArchived, cursor);
+	if (generation !== inboxGeneration) return;
 	const list = $("inbox-list");
 	if (!cursor) list.replaceChildren();
 	if (items.length === 0 && !cursor) {
 		return empty(list, showArchived ? "No archived threads." : "No messages yet. Compose one to start a thread.");
 	}
-	for (const delivery of items) {
-		const row = inboxRow(delivery);
-		learnDomain(row.sender);
-		const archive = showArchived
-			? rowAction("inbox-unarchive", "Unarchive", () => void archiveThread(row.threadId, false))
-			: rowAction("inbox-archive", "Archive", () => void archiveThread(row.threadId, true));
-		list.append(
-			item(
-				row.subject,
-				[
-					refLink(row.sender, "user"),
-					when(row.at),
-					row.unreadCount > 0 ? `${row.unreadCount} unread` : undefined,
-					row.read ? undefined : "unread",
-				],
-				() => {
-					location.hash = `#/threads/${row.threadId}?message=${row.messageId}`;
-				},
-				{ unread: !row.read, testid: "inbox-item", threadId: row.threadId, id: row.messageId, actions: [archive] },
-			),
-		);
-	}
+	for (const raw of items) list.append(inboxItem(inboxThreadRow(raw), showArchived));
 	showMore(list, nextCursor(body), (next) => loadInbox(next).catch(fail));
+}
+
+function inboxItem(row, showArchived) {
+	learnDomain(row.threadUrl);
+	// The reader is in every thread of their own inbox, so the row names the others.
+	const others = row.participants.filter((person) => person.kind !== "user");
+	const people = span("", "people");
+	for (const person of others) people.append(personLink(person));
+	const snippet = document.createElement("span");
+	snippet.className = "snippet";
+	snippet.dataset.testid = "inbox-snippet";
+	const who = span(`${row.sender.kind === "user" ? "You" : refLabel(row.sender.url)}: `, "snippet-sender");
+	who.dataset.color = participantColor(row.sender);
+	snippet.append(who, document.createTextNode(row.snippet));
+	const aside = document.createElement("div");
+	aside.className = "item-aside";
+	aside.append(timeEl(row.at));
+	const archive = showArchived
+		? rowAction("inbox-unarchive", "Unarchive", () => void archiveThread(row.threadId, false))
+		: rowAction("inbox-archive", "Archive", () => void archiveThread(row.threadId, true));
+	const node = item(
+		row.subject,
+		[people, row.unreadCount > 0 ? unreadBadge(row.unreadCount) : undefined],
+		() => {
+			location.hash = `#/threads/${row.threadId}`;
+		},
+		{
+			unread: row.unreadCount > 0,
+			archived: showArchived,
+			testid: "inbox-item",
+			threadId: row.threadId,
+			id: row.messageId,
+			below: snippet,
+			aside,
+			actions: [archive],
+		},
+	);
+	return node;
 }
 
 function rowAction(testid, label, onClick) {
@@ -422,10 +516,10 @@ async function archiveThread(threadId, archived) {
 	try {
 		await api("POST", `/threads/${threadId}/${archived ? "archive" : "unarchive"}`, {});
 		status(archived ? "Archived." : "Unarchived.");
-		if (state.section === "threads" && state.thread?.id === threadId) await openThread(threadId);
+		if (state.section === "threads" && state.thread?.id === threadId && !$("thread").hidden) await openThread(threadId);
 		await refreshUnread().catch(() => {});
 		if (state.section === "inbox") await loadInbox();
-		else if (state.section === "threads") await searchThreads();
+		else if (state.section === "threads" && $("thread").hidden) await searchThreads();
 	} catch (error) {
 		fail(error);
 	}
@@ -486,48 +580,64 @@ async function searchThreads(event, cursor) {
 		const archive = rowAction(thread.archived ? "thread-unarchive" : "thread-archive", thread.archived ? "Unarchive" : "Archive", () =>
 			void archiveThread(thread.id, !thread.archived),
 		);
+		const aside = document.createElement("div");
+		aside.className = "item-aside";
+		aside.append(timeEl(thread.at));
 		list.append(
 			item(
 				thread.subject,
-				[
-					thread.snippet,
-					when(thread.at),
-					thread.unreadCount > 0 ? `${thread.unreadCount} unread` : undefined,
-					thread.archived ? "archived" : undefined,
-				],
+				[thread.unreadCount > 0 ? unreadBadge(thread.unreadCount) : undefined, thread.archived ? badge("archived") : undefined, thread.snippet],
 				() => {
 					location.hash = `#/threads/${thread.id}`;
 				},
-				{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, actions: [archive] },
+				{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, aside, actions: [archive] },
 			),
 		);
 	}
 	showMore(list, nextCursor(body), (next) => searchThreads(undefined, next).catch(fail));
 }
 
-async function messageElement(message, { threadId, focus }) {
+async function messageElement(message, { focus }) {
 	const view = messageView(message);
 	learnDomain(view.sender);
 	const article = document.createElement("article");
 	article.className = "message";
+	article.tabIndex = -1;
 	article.dataset.testid = "message";
 	article.dataset.id = view.id ?? "";
 	article.dataset.sender = view.sender;
+	// UX-06: the left border is the sender's own color in every thread.
+	article.dataset.color = participantColor({ url: view.sender, kind: view.senderKind });
 
 	const header = document.createElement("header");
-	const sender = view.sender ? refLink(view.sender, "user") : document.createTextNode("unknown sender");
-	if (sender instanceof HTMLElement) sender.dataset.testid = "message-sender";
-	const time = document.createElement("span");
-	time.textContent = when(view.at);
+	const sender = view.sender ? refLink(view.sender, "user", refLabel(view.sender), view.sender) : document.createTextNode("unknown sender");
+	if (sender instanceof HTMLElement) {
+		sender.dataset.testid = "message-sender";
+		sender.classList.add("sender");
+	}
 	const messageLink = refLink(view.url ?? `${view.threadId}`, "thread", `#${String(view.id ?? "").slice(-6)}`);
 	if (messageLink instanceof HTMLElement) messageLink.dataset.testid = "message-link";
-	header.append(sender, time, messageLink);
-	if (view.revised) {
-		const edited = document.createElement("span");
-		edited.className = "badge";
-		edited.textContent = "edited";
-		header.append(edited);
+	header.append(sender, timeEl(view.at), messageLink);
+	if (view.revised) header.append(span("edited", "badge"));
+
+	// UX-04: edit and redact are small secondary controls in the header, not full buttons.
+	const actions = document.createElement("span");
+	actions.className = "message-actions";
+	for (const [action, label] of [
+		["edit", "Edit"],
+		["redact", "Redact"],
+	]) {
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "link-button";
+		button.dataset.action = action;
+		button.dataset.id = view.id ?? "";
+		button.dataset.testid = `message-${action}`;
+		button.textContent = label;
+		button.addEventListener("click", () => startConfirm(action, view, article));
+		actions.append(button);
 	}
+	header.append(actions);
 	article.append(header);
 
 	const body = document.createElement("div");
@@ -549,25 +659,16 @@ async function messageElement(message, { threadId, focus }) {
 		});
 	}
 
-	const actions = document.createElement("div");
-	actions.className = "row-actions";
-	for (const [action, label] of [
-		["edit", "Edit"],
-		["redact", "Redact"],
-	]) {
-		const button = document.createElement("button");
-		button.type = "button";
-		button.dataset.action = action;
-		button.dataset.id = view.id ?? "";
-		button.dataset.testid = `message-${action}`;
-		button.textContent = label;
-		button.addEventListener("click", () => startConfirm(action, view));
-		actions.append(button);
-	}
-	article.append(actions);
-
 	if (focus) article.classList.add("focus");
 	return article;
+}
+
+/** Put the edit and redact form back in its hidden home before the messages are replaced. */
+function parkConfirm() {
+	$("confirm").hidden = true;
+	$("edit-field").hidden = true;
+	$("confirm-home").append($("confirm"));
+	state.confirm = null;
 }
 
 async function openThread(id, focusMessage) {
@@ -575,6 +676,7 @@ async function openThread(id, focusMessage) {
 	const thread = body.thread;
 	const messages = body.messages ?? [];
 	state.thread = thread;
+	state.threadArchived = Boolean(body.archived);
 	learnDomain(thread?.url);
 
 	const draft = newDraft({ id, messages });
@@ -585,19 +687,16 @@ async function openThread(id, focusMessage) {
 	$("draft-head").textContent = draft.after ?? "(no messages yet)";
 	$("stale").hidden = true;
 	$("stale-new").replaceChildren();
-	$("confirm").hidden = true;
-	state.confirm = null;
+	parkConfirm();
 
 	$("thread-subject").textContent = thread?.subject ?? "(no subject)";
 	const threadUrl = $("thread-url");
 	threadUrl.replaceChildren(refLink(thread?.url ?? id, "thread"));
-	// REF-08: participants are links to their own views.
+	// REF-08 and UX-06: participants are colored links to their own views.
 	const participants = $("thread-participants");
 	participants.replaceChildren();
-	for (const [index, participant] of (thread?.participants ?? []).entries()) {
-		if (index > 0) participants.append(document.createTextNode(", "));
-		const url = typeof participant === "object" ? participant.url : participant;
-		participants.append(refLink(url, "user"));
+	for (const participant of thread?.participants ?? []) {
+		participants.append(personLink(typeof participant === "object" ? participant : { url: participant }));
 	}
 	// REF-07: one toggle, labelled for the thread's state for this reader.
 	const archiveButton = $("thread-archive");
@@ -607,17 +706,21 @@ async function openThread(id, focusMessage) {
 	const container = $("thread-messages");
 	container.replaceChildren();
 	for (const message of messages) {
-		container.append(await messageElement(message, { threadId: id, focus: message.id === focusMessage }));
+		container.append(await messageElement(message, { focus: message.id === focusMessage }));
 	}
 	if (messages.length === 0) empty(container, "No messages yet.");
 
+	document.querySelector("#thread .back")?.setAttribute("href", state.lastList);
+	$("threads-browse").hidden = true;
 	$("threads-list").hidden = true;
 	$("thread").hidden = false;
-	$("thread-subject").focus?.();
-	if (focusMessage) {
-		container.querySelector(".focus")?.scrollIntoView?.({ block: "center" });
-		await api("POST", `/messages/${focusMessage}/read`).catch(() => {});
+	// UX-05: land on the linked message, or else on the newest one.
+	const target = (focusMessage && container.querySelector(".focus")) || container.querySelector("[data-testid=message]:last-of-type");
+	if (target) {
+		select(target, { scroll: false });
+		target.scrollIntoView({ block: focusMessage ? "center" : "start" });
 	}
+	if (focusMessage) await api("POST", `/messages/${focusMessage}/read`).catch(() => {});
 	// REF-06: reading the thread clears its unread count.
 	await refreshUnread().catch(() => {});
 }
@@ -657,9 +760,7 @@ async function showStale(error, draft) {
 	const newer = headIndex === -1 ? messages.filter((message) => newerIds.has(message.id)) : messages.slice(headIndex + 1);
 	const container = $("stale-new");
 	container.replaceChildren();
-	for (const message of newer) {
-		container.append(await messageElement(message, { threadId: draft.threadId }));
-	}
+	for (const message of newer) container.append(await messageElement(message, {}));
 	$("stale").hidden = false;
 	$("reply-body").value = $("reply-body").value || draft.body;
 	state.thread = thread;
@@ -671,37 +772,25 @@ async function showStale(error, draft) {
 	status("The thread moved. Your draft is kept; the next reply lands after the new messages.");
 }
 
-function startConfirm(action, message) {
+/** WEB-08: the confirmation opens inside the message it acts on (UX-07). */
+function startConfirm(action, message, article) {
 	state.confirm = { action, messageId: message.id, original: message.body };
 	$("confirm-text").textContent = action === "redact" ? CONFIRM_REDACT : CONFIRM_EDIT;
-	const editor = $("edit-area");
-	if (editor) editor.remove();
-	if (action === "edit") {
-		const area = document.createElement("div");
-		area.id = "edit-area";
-		area.className = "confirm";
-		const label = document.createElement("label");
-		label.htmlFor = "edit-body";
-		label.textContent = "New body";
-		const textarea = document.createElement("textarea");
-		textarea.id = "edit-body";
-		textarea.dataset.testid = "edit-body";
-		textarea.rows = 6;
-		textarea.value = message.body;
-		area.append(label, textarea);
-		$("confirm").before(area);
-	}
+	$("edit-field").hidden = action !== "edit";
+	$("edit-body").value = action === "edit" ? message.body : "";
+	$("confirm-yes").textContent = action === "redact" ? "Redact" : "Save edit";
+	(article ?? $("confirm-home")).append($("confirm"));
 	$("confirm").hidden = false;
-	$("confirm-yes").focus();
+	if (action === "edit") $("edit-body").focus();
+	else $("confirm-yes").focus();
 }
 
-async function confirmAction() {
+async function confirmAction(event) {
+	event?.preventDefault();
 	const pending = state.confirm;
 	if (!pending) return;
-	const editBody = pending.action === "edit" ? $("edit-body")?.value : undefined;
-	$("confirm").hidden = true;
-	$("edit-area")?.remove();
-	state.confirm = null;
+	const editBody = pending.action === "edit" ? $("edit-body").value : undefined;
+	parkConfirm();
 	try {
 		if (pending.action === "redact") {
 			await api("POST", `/messages/${pending.messageId}/redact`, {});
@@ -709,16 +798,14 @@ async function confirmAction() {
 			await api("POST", `/messages/${pending.messageId}/revisions`, { body: editBody });
 		}
 		status(pending.action === "redact" ? "Redacted." : "Edited.");
-		if (state.thread) await openThread(state.thread.id);
+		if (state.thread) await openThread(state.thread.id, pending.messageId);
 	} catch (error) {
 		fail(error);
 	}
 }
 
 function cancelAction() {
-	$("confirm").hidden = true;
-	$("edit-area")?.remove();
-	state.confirm = null;
+	parkConfirm();
 }
 
 // ---- Sessions -------------------------------------------------------------------------------
@@ -731,22 +818,27 @@ async function loadSessionList(query = "", cursor) {
 	if (sessions.length === 0 && !cursor) return empty(list, query ? `No sessions match “${query}”.` : "No sessions yet.");
 	for (const session of sessions) {
 		learnDomain(session.url);
+		const title = document.createDocumentFragment();
+		const swatch = span("", "person");
+		swatch.dataset.color = participantColor({ url: session.url ?? "", kind: "session" });
+		swatch.append(refLink(session.url ?? session.id, "session", session.id, session.url));
+		title.append(badge(session.state ?? "unknown"), swatch);
+		const aside = document.createElement("div");
+		aside.className = "item-aside";
+		aside.append(timeEl(session.updatedAt));
 		const row = item(
-			refLink(session.url ?? session.id, "session", session.id),
+			title,
 			[
-				session.state,
 				session.model,
-				session.parent ? refLink(session.parentUrl ?? session.parent, "session", `parent ${session.parent}`) : undefined,
-				when(session.updatedAt),
+				session.parent ? refLink(session.parentUrl ?? session.parent, "session", `parent ${refLabel(session.parentUrl ?? "") || session.parent}`) : undefined,
 				cost(session.costUsd),
 				session.snippet,
 			],
 			() => {
 				location.hash = `#/sessions/${session.id}`;
 			},
-			{ testid: "session-item", sessionId: session.id },
+			{ testid: "session-item", sessionId: session.id, aside },
 		);
-		row.prepend(badge(session.state ?? "unknown"));
 		list.append(row);
 	}
 	showMore(list, nextCursor(body), (next) => loadSessionList(query, next).catch(fail));
@@ -778,6 +870,9 @@ async function openSession(id) {
 		archive.hidden = state.session.state === "archived";
 		archive.dataset.id = state.session.id;
 	}
+	document.querySelector("#session .back")?.setAttribute("href", state.lastList);
+	$("session-confirm").hidden = true;
+	$("sessions-browse").hidden = true;
 	$("sessions-list").hidden = true;
 	$("session").hidden = false;
 	renderTranscript(asList(transcript, ["entries"]));
@@ -853,10 +948,7 @@ function blockElement(block) {
 		return result;
 	}
 	if (block.type === "image") {
-		const span = document.createElement("span");
-		span.className = "block-image";
-		span.textContent = `[image ${block.mediaType}]`;
-		return span;
+		return span(`[image ${block.mediaType}]`, "block-image");
 	}
 	const pre = document.createElement("pre");
 	pre.className = `block-${block.type}`;
@@ -915,7 +1007,7 @@ async function confirmArchiveSession() {
 
 async function loadMemory() {
 	const [worktree, listing] = await Promise.all([api("GET", "/memory/worktree"), api("GET", "/memory/files")]);
-	$("memory-worktree").textContent = worktree?.path ? `Worktree: ${worktree.path}` : "No memory worktree yet.";
+	$("memory-worktree").textContent = worktree?.path ? `Your worktree: ${worktree.path}` : "No memory worktree yet.";
 	const files = asList(listing, ["files"]);
 	const list = $("memory-files");
 	list.replaceChildren();
@@ -928,6 +1020,7 @@ async function loadMemory() {
 				id: file.path,
 			});
 			row.dataset.path = file.path;
+			if (file.path === openMemoryPath) row.classList.add("focus");
 			list.append(row);
 		}
 	}
@@ -942,7 +1035,10 @@ async function loadMemoryLog() {
 	if (commits.length === 0) return empty(list, "No memory commits yet.");
 	for (const raw of commits) {
 		const commit = commitView(raw);
-		list.append(item(commit.message, [commit.author, commit.short, when(Date.parse(commit.at))], () => {}, { testid: "memory-commit", id: commit.hash }));
+		const aside = document.createElement("div");
+		aside.className = "item-aside";
+		aside.append(timeEl(Date.parse(commit.at)));
+		list.append(item(commit.message, [commit.author, commit.short], () => {}, { testid: "memory-commit", id: commit.hash, aside }));
 	}
 }
 
@@ -974,14 +1070,16 @@ async function openMemoryFile(path) {
 	openMemoryPath = path;
 	const file = await api("GET", `/memory/files/${memoryPath(path)}`);
 	const content = file.content;
+	$("memory-path").textContent = path;
 	$("memory-file").textContent = content;
 	$("memory-file").hidden = false;
 	$("memory-edit").value = content;
-	$("memory-edit").hidden = false;
-	$("memory-save").hidden = false;
+	$("memory-open").hidden = false;
+	for (const row of document.querySelectorAll("#memory-files .item")) row.classList.toggle("focus", row.dataset.path === path);
 }
 
-async function saveMemory() {
+async function saveMemory(event) {
+	event?.preventDefault();
 	if (!openMemoryPath) return status("Open a memory file first.", true);
 	try {
 		await api("POST", `/memory/files/${memoryPath(openMemoryPath)}`, { content: $("memory-edit").value });
@@ -996,7 +1094,7 @@ async function saveMemory() {
 async function createWorktree() {
 	try {
 		const created = await api("POST", "/memory/worktree", {});
-		if (created?.path) $("memory-worktree").textContent = `Worktree: ${created.path}`;
+		if (created?.path) $("memory-worktree").textContent = `Your worktree: ${created.path}`;
 		status("Memory worktree ready.");
 		await loadMemory();
 	} catch (error) {
@@ -1015,35 +1113,24 @@ async function loadSchedules(focus, cursor) {
 	const schedules = asList(body, ["schedules"]);
 	if (schedules.length === 0 && !cursor) return empty(list, "No schedules yet.");
 	for (const schedule of schedules) {
-		const row = document.createElement("div");
-		row.className = "item";
-		row.dataset.testid = "schedule-item";
-		row.dataset.id = schedule.id;
-		const title = document.createElement("span");
-		title.className = "title";
-		title.textContent = `${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`;
-		const meta = document.createElement("span");
-		meta.className = "meta";
 		const payload = schedule.payload ?? {};
-		// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
-		meta.append(refLink(schedule.url ?? schedule.id, "schedule", schedule.id));
-		for (const part of [payload.prompt ?? payload.body ?? payload.subject, `next ${when(schedule.nextAt)}`]) {
-			if (part === undefined || part === null || part === "") continue;
-			meta.append(" · ", document.createTextNode(String(part)));
-		}
-		const edit = document.createElement("button");
-		edit.type = "button";
-		edit.textContent = "Edit";
-		edit.dataset.testid = "schedule-edit";
-		edit.addEventListener("click", () => startScheduleEdit(schedule));
-		const remove = document.createElement("button");
-		remove.type = "button";
-		remove.textContent = "Delete";
+		const meta = [
+			// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
+			refLink(schedule.url ?? schedule.id, "schedule", schedule.id),
+			payload.prompt ?? payload.body ?? payload.subject,
+			`next ${when(schedule.nextAt)}`,
+		];
+		const edit = rowAction("schedule-edit", "Edit", () => startScheduleEdit(schedule));
+		delete edit.dataset.action;
+		const remove = rowAction("schedule-delete", "Delete", () => void deleteSchedule(schedule.id));
 		remove.dataset.action = "delete-schedule";
 		remove.dataset.id = schedule.id;
-		remove.dataset.testid = "schedule-delete";
-		remove.addEventListener("click", () => void deleteSchedule(schedule.id));
-		row.append(title, meta, edit, remove);
+		remove.classList.add("danger");
+		const row = item(`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`, meta, () => startScheduleEdit(schedule), {
+			testid: "schedule-item",
+			id: schedule.id,
+			actions: [edit, remove],
+		});
 		list.append(row);
 	}
 	showMore(list, nextCursor(body), (next) => loadSchedules(undefined, next).catch(fail));
@@ -1051,6 +1138,7 @@ async function loadSchedules(focus, cursor) {
 		const row = [...document.querySelectorAll("#schedules-list .item")].find((el) => el.dataset.id === focus);
 		if (row) {
 			row.classList.add("focus");
+			select(row);
 			row.scrollIntoView({ block: "center" });
 		}
 	}
@@ -1063,8 +1151,20 @@ function startScheduleEdit(schedule) {
 	$("schedule-prompt").value = String(schedule.payload?.prompt ?? schedule.payload?.body ?? "");
 	$("schedule-to").value = Array.isArray(schedule.payload?.to) ? schedule.payload.to.join(", ") : "";
 	$("schedule-create").textContent = "Update";
+	$("schedule-form-title").textContent = `Edit schedule ${refLabel(schedule.url ?? "") || schedule.id}`;
+	$("schedule-cancel").hidden = false;
 	status(`Editing ${schedule.id}.`);
 	$("schedule-prompt").focus();
+}
+
+function resetScheduleForm() {
+	editingSchedule = undefined;
+	$("schedule-create").textContent = "Create";
+	$("schedule-form-title").textContent = "New schedule";
+	$("schedule-cancel").hidden = true;
+	$("schedule-prompt").value = "";
+	$("schedule-when").value = "";
+	$("schedule-to").value = "";
 }
 
 async function createSchedule(event) {
@@ -1077,11 +1177,7 @@ async function createSchedule(event) {
 	try {
 		if (editingSchedule) await api("POST", `/schedules/${editingSchedule.id}`, body);
 		else await api("POST", "/schedules", body);
-		editingSchedule = undefined;
-		$("schedule-create").textContent = "Create";
-		$("schedule-prompt").value = "";
-		$("schedule-when").value = "";
-		$("schedule-to").value = "";
+		resetScheduleForm();
 		status("Schedule saved.");
 		await loadSchedules();
 	} catch (error) {
@@ -1099,7 +1195,7 @@ async function deleteSchedule(id) {
 	}
 }
 
-// ---- Push -----------------------------------------------------------------------------------
+// ---- Renderer bundles -----------------------------------------------------------------------
 
 let vendorLoading;
 // The Markdown renderer is the agent-mail-web bundle. Loading it from JS removes any doubt
@@ -1144,30 +1240,260 @@ function ensureMermaid() {
 	return mermaidLoading;
 }
 
-async function enablePush() {
-	try {
-		const result = await subscribeToPush({
-			permission: typeof Notification === "undefined" ? "denied" : Notification.permission,
-			requestPermission: () => Notification.requestPermission(),
-			register: () => navigator.serviceWorker.ready,
-			getKey: async () => (await api("GET", "/push/key")).publicKey,
-			post: (subscription) => api("POST", "/push/subscriptions", subscription),
-		});
-		status(result.subscribed ? "Notifications enabled." : `Notifications are off: ${result.reason}`);
-	} catch (error) {
-		fail(error);
-	}
+// ---- Push (PSH-02, UX-01) -------------------------------------------------------------------
+
+function pushEnv() {
+	return browserEnv({
+		userAgent: navigator.userAgent,
+		secure: window.isSecureContext,
+		hasNotification: typeof Notification !== "undefined",
+		hasServiceWorker: "serviceWorker" in navigator,
+		hasPushManager: "PushManager" in window,
+		standalone: matchMedia("(display-mode: standalone)").matches || navigator.standalone === true,
+		origin: location.origin,
+		host: location.host,
+	});
+}
+
+/** The same app on `localhost`, for Safari, which ties notifications to a host name. */
+function localhostUrl() {
+	if (location.hostname !== "127.0.0.1" && location.hostname !== "[::1]") return undefined;
+	return `${location.protocol}//localhost${location.port ? `:${location.port}` : ""}/#${token}`;
+}
+
+/** `Notification.requestPermission`, including the callback form older Safari still has. */
+function requestNotificationPermission() {
+	return new Promise((resolve) => {
+		const promise = Notification.requestPermission(resolve);
+		if (promise && typeof promise.then === "function") promise.then(resolve);
+	});
+}
+
+function workerReady(ms) {
+	return Promise.race([
+		navigator.serviceWorker.ready,
+		new Promise((_, reject) =>
+			setTimeout(() => reject(new Error(state.workerError || `no active service worker after ${ms / 1000} s`)), ms),
+		),
+	]);
+}
+
+/**
+ * Runs inside the click handler. `subscribeToPush` calls `requestPermission` before its first
+ * await, so the prompt still has the click's user activation.
+ */
+async function enablePush({ quiet = false } = {}) {
+	const env = pushEnv();
+	const result = await subscribeToPush({
+		env,
+		permission: env.hasNotification ? Notification.permission : "denied",
+		requestPermission: requestNotificationPermission,
+		register: () => workerReady(10_000),
+		getKey: async () => (await api("GET", "/push/key")).publicKey,
+		post: (subscription) => api("POST", "/push/subscriptions", subscription),
+	});
+	state.push = result;
+	if (quiet && result.subscribed) return result;
+	const message = explainPush(result, env, { localhostUrl: localhostUrl() });
+	status(message.text, !result.subscribed, message.link);
+	return result;
 }
 
 function registerWorker() {
 	if (!("serviceWorker" in navigator)) return;
-	navigator.serviceWorker.register("/sw.js", { type: "module" }).catch(() => {});
+	navigator.serviceWorker.register("/sw.js", { type: "module" }).catch((error) => {
+		state.workerError = `the service worker failed to register: ${error?.message ?? error}`;
+	});
 	navigator.serviceWorker.addEventListener("message", (event) => {
 		if (event.data?.type !== "open") return;
 		const target = String(event.data.target ?? "");
 		const hash = target.includes("#") ? target.slice(target.indexOf("#")) : target;
 		if (hash.startsWith("#/")) location.hash = hash;
 	});
+}
+
+// ---- Keyboard (UX-02, UX-08) ----------------------------------------------------------------
+
+const keys = createKeyReader();
+
+/** The rows or messages `j` and `k` move through in the view that is showing. */
+function selectables() {
+	const visible = (selector) => [...document.querySelectorAll(selector)].filter((el) => el.offsetParent !== null);
+	switch (state.section) {
+		case "inbox":
+			return visible("#inbox-list [data-selectable]");
+		case "threads":
+			return $("thread").hidden ? visible("#threads-list [data-selectable]") : visible("#thread-messages [data-testid=message]");
+		case "sessions":
+			return $("session").hidden ? visible("#sessions-list [data-selectable]") : [];
+		case "memory":
+			return visible("#memory-results [data-selectable], #memory-files [data-selectable]");
+		case "schedules":
+			return visible("#schedules-list [data-selectable]");
+		default:
+			return [];
+	}
+}
+
+function selected() {
+	return document.querySelector(".selected");
+}
+
+function select(element, { scroll = true } = {}) {
+	for (const node of document.querySelectorAll(".selected")) if (node !== element) node.classList.remove("selected");
+	if (!element) return;
+	element.classList.add("selected");
+	if (scroll) element.scrollIntoView({ block: "nearest" });
+}
+
+function moveBy(action) {
+	const items = selectables();
+	const index = moveSelection(items.indexOf(selected()), items.length, action);
+	if (index >= 0) select(items[index]);
+}
+
+function openSelection() {
+	const element = selected();
+	if (!element || !selectables().includes(element)) return;
+	if (element.dataset.testid === "message") {
+		element.querySelector("[data-testid=message-link]")?.click();
+		return;
+	}
+	element.click();
+}
+
+function focusSearch() {
+	const search = { threads: "threads-query", sessions: "sessions-query", memory: "memory-query" }[state.section];
+	if (search && !$(search).closest("[hidden]")) {
+		$(search).focus();
+		$(search).select();
+		return;
+	}
+	// The views without a search box search threads.
+	location.hash = "#/threads";
+	setTimeout(() => $("threads-query").focus(), 0);
+}
+
+function focusReply() {
+	if (state.section === "threads" && !$("thread").hidden) {
+		$("reply-body").focus();
+		return;
+	}
+	const threadId = selected()?.dataset.thread;
+	if (!threadId) return;
+	location.hash = `#/threads/${threadId}`;
+	const until = Date.now() + 5000;
+	const wait = () => {
+		if (!$("thread").hidden && state.thread?.id === threadId) $("reply-body").focus();
+		else if (Date.now() < until) setTimeout(wait, 50);
+	};
+	wait();
+}
+
+function archiveKey() {
+	if (state.section === "threads" && !$("thread").hidden && state.thread) {
+		void archiveThread(state.thread.id, !state.threadArchived);
+		return;
+	}
+	const row = selected();
+	const threadId = row?.dataset.thread;
+	if (!threadId) return;
+	const archived = row.classList.contains("archived");
+	void archiveThread(threadId, !archived);
+}
+
+function goBack() {
+	if (!$("help").hidden) return toggleHelp(false);
+	if (state.confirm) return cancelAction();
+	if (!$("session-confirm").hidden) {
+		$("session-confirm").hidden = true;
+		return;
+	}
+	const detail = (state.section === "threads" && !$("thread").hidden) || (state.section === "sessions" && !$("session").hidden);
+	if (detail) location.hash = state.lastList;
+}
+
+function renderHelp() {
+	const table = $("help-keys");
+	table.replaceChildren();
+	const groups = [
+		["page", "Outside a text box"],
+		["input", "In a text box"],
+	];
+	for (const [scope, title] of groups) {
+		const body = document.createElement("tbody");
+		const head = document.createElement("tr");
+		const th = document.createElement("th");
+		th.colSpan = 2;
+		th.scope = "colgroup";
+		th.textContent = title;
+		head.append(th);
+		body.append(head);
+		for (const row of helpRows(APPLE).filter((entry) => entry.scope === scope)) {
+			const tr = document.createElement("tr");
+			tr.dataset.action = row.action;
+			const keysCell = document.createElement("td");
+			keysCell.className = "keys";
+			row.keys.forEach((label, index) => {
+				if (index > 0) keysCell.append(" or ");
+				label.split(" then ").forEach((key, step) => {
+					if (step > 0) keysCell.append(" then ");
+					const kbd = document.createElement("kbd");
+					kbd.textContent = key;
+					keysCell.append(kbd);
+				});
+			});
+			const what = document.createElement("td");
+			what.textContent = row.description;
+			tr.append(keysCell, what);
+			body.append(tr);
+		}
+		table.append(body);
+	}
+}
+
+function toggleHelp(show = $("help").hidden) {
+	if (show) renderHelp();
+	$("help").hidden = !show;
+	if (show) $("help-close").focus();
+}
+
+function runKey(action, { target, form }) {
+	if (action === "submit") return form?.requestSubmit();
+	if (action === "leave-input") return target?.blur?.();
+	if (action === "help") return toggleHelp();
+	if (action === "back") return goBack();
+	if (!$("help").hidden) toggleHelp(false);
+	if (action.startsWith("go:")) {
+		location.hash = `#/${action.slice(3)}`;
+		return;
+	}
+	switch (action) {
+		case "next":
+		case "previous":
+			return moveBy(action);
+		case "open":
+			return openSelection();
+		case "search":
+			return focusSearch();
+		case "reply":
+			return focusReply();
+		case "archive":
+			return archiveKey();
+	}
+}
+
+function onKeydown(event) {
+	if (event.defaultPrevented || event.isComposing) return;
+	const target = event.target instanceof Element ? event.target : document.activeElement;
+	const inInput = isTextInput(target);
+	const form = target?.closest?.("form") ?? null;
+	// A focused button, link, or summary keeps its own Enter.
+	if (!inInput && event.key === "Enter" && !isSubmitChord(event, APPLE) && target?.closest?.("button, a, summary")) return;
+	const action = keys.press(event, { inInput, inForm: Boolean(form), apple: APPLE });
+	if (!action) return;
+	event.preventDefault();
+	if (action !== "pending") runKey(action, { target, form });
 }
 
 // ---- Router ---------------------------------------------------------------------------------
@@ -1186,6 +1512,8 @@ function showSection(section) {
 async function route() {
 	const { section, id, query } = routeFromHash(location.hash);
 	showSection(section);
+	select(null);
+	if (!id && section !== "compose") state.lastList = location.hash || "#/inbox";
 	if (!token) {
 		showAuthorize();
 		return;
@@ -1201,6 +1529,7 @@ async function route() {
 				$("compose-to").focus();
 				break;
 			case "threads":
+				$("threads-browse").hidden = false;
 				$("threads-list").hidden = false;
 				$("thread").hidden = true;
 				if (query.get("query")) $("threads-query").value = query.get("query");
@@ -1208,6 +1537,7 @@ async function route() {
 				else await searchThreads();
 				break;
 			case "sessions":
+				$("sessions-browse").hidden = false;
 				$("sessions-list").hidden = false;
 				$("session").hidden = true;
 				if (id) await openSession(id);
@@ -1236,13 +1566,15 @@ async function boot() {
 	// A returning user already allowed notifications; refresh or create the subscription
 	// without asking again.
 	if (typeof Notification !== "undefined" && Notification.permission === "granted" && "serviceWorker" in navigator) {
-		void enablePush();
+		void enablePush({ quiet: true });
 	}
 	void startEvents();
 	await route();
 }
 
 // ---- Wiring ---------------------------------------------------------------------------------
+
+for (const hint of document.querySelectorAll("[data-chord]")) hint.textContent = sequenceLabel(["Mod+Enter"], APPLE);
 
 $("authorize-form").addEventListener("submit", (event) => {
 	event.preventDefault();
@@ -1261,7 +1593,7 @@ $("reply-body").addEventListener("input", () => {
 	draft.body = $("reply-body").value;
 	sessionStorage.setItem(`pana-draft:${draft.threadId}`, draft.body);
 });
-$("confirm-yes").addEventListener("click", () => void confirmAction());
+$("confirm").addEventListener("submit", (event) => void confirmAction(event));
 $("confirm-no").addEventListener("click", cancelAction);
 $("thread-archive").addEventListener("click", () => {
 	const thread = state.thread;
@@ -1277,8 +1609,23 @@ $("threads-archived").addEventListener("change", () => void searchThreads());
 $("inbox-archived").addEventListener("change", () => void loadInbox());
 $("threads-unread").addEventListener("change", () => void searchThreads());
 $("memory-search").addEventListener("submit", (event) => void searchMemory(event));
+$("memory-edit-form").addEventListener("submit", (event) => void saveMemory(event));
 $("schedule-form").addEventListener("submit", (event) => void createSchedule(event));
+$("schedule-cancel").addEventListener("click", () => {
+	resetScheduleForm();
+	status("");
+});
 $("enable-push").addEventListener("click", () => void enablePush());
+$("show-help").addEventListener("click", () => toggleHelp(true));
+$("help-close").addEventListener("click", () => toggleHelp(false));
+$("help").addEventListener("click", (event) => {
+	if (event.target === $("help")) toggleHelp(false);
+});
+document.addEventListener("keydown", onKeydown);
+document.addEventListener("focusin", (event) => {
+	const row = event.target?.closest?.("[data-selectable]");
+	if (row) select(row, { scroll: false });
+});
 document.addEventListener("click", (event) => {
 	const action = event.target?.closest?.("[data-action]")?.dataset.action;
 	if (action === "stop" || action === "compact") void sessionAction(action);
@@ -1288,7 +1635,6 @@ document.addEventListener("click", (event) => {
 		else void loadSessionList();
 	}
 	if (action === "create-worktree") void createWorktree();
-	if (action === "save-memory") void saveMemory();
 });
 window.addEventListener("hashchange", () => void route());
 window.addEventListener("online", () => void startEvents());
@@ -1300,6 +1646,7 @@ if (bootParams.get("thread")) history.replaceState(null, "", `/#/threads/${bootP
 // Exposed for the browser tests and for a human debugging a window.
 window.__pana = {
 	get state() {
+		const current = selected();
 		return {
 			domain: state.domain,
 			section: state.section,
@@ -1307,8 +1654,13 @@ window.__pana = {
 			sessionId: state.session?.id,
 			draft: state.draft ? { threadId: state.draft.threadId, after: state.draft.after } : undefined,
 			confirm: state.confirm?.action,
+			selected: current ? { testid: current.dataset.testid, id: current.dataset.id, thread: current.dataset.thread } : undefined,
+			help: !$("help").hidden,
+			push: state.push,
+			apple: APPLE,
 		};
 	},
+	enablePush,
 };
 
 void boot();

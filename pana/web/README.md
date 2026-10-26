@@ -7,11 +7,12 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 | `index.html` | the shell and the six sections |
 | `app.js` | hash router, API calls, and per-section rendering |
 | `links.js` | pure helpers: `pana://` links, routes, drafts, notification targets |
-| `views.js` | the only reader of handler response fields, and the schedule form's request body |
+| `views.js` | the only reader of handler response fields, the schedule form's request body, and participant colors (UX-06) |
 | `render.js` | Markdown, `pana://` links, authenticated images, Mermaid |
-| `push.js` | permission → subscribe → post the subscription |
+| `push.js` | permission → subscribe → post the subscription, and the cause and fix for each failure (UX-01) |
+| `keys.js` | the keymap, the key reader, and the help overlay's rows (UX-02, UX-08) |
 | `sw.js` | push display and notification click |
-| `style.css`, `fonts.css`, `fonts/` | the site style guide: IBM Plex Sans, blue `#002FA7`, orange `#FF7900`, black `#0D0D0D`, white |
+| `style.css`, `fonts.css`, `fonts/` | the site style guide: IBM Plex Sans, IBM Plex Mono (Berkeley Mono when installed), and the palette black `#0D0D0D`, white, blue `#002FA7`, orange `#FF7900`, purple `#903465`, green `#237F52`, red `#BD2024`, yellow `#FFCC00`; one spacing scale, `--s1` to `--s6` |
 | `manifest.webmanifest`, `favicon.svg` | installability |
 
 ## Borrowed from agent-mail-web
@@ -32,3 +33,5 @@ npm run test:web  # drives the installed Chrome through the chrome-devtools CLI
 ```
 
 The browser suite starts a real test `panad` with the scripted faux model, seeds it through the API, and asserts each section end to end, checking results through the API too. It needs `chrome-devtools` on `PATH`; without it the suite skips instead of downloading a browser. `test/integration.test.ts` also runs `views.js` against real handler output under `npm test`.
+
+`node test/browser/screens.ts DIR LABEL` seeds a domain (`test/browser/seed.ts`) and saves a full-page screenshot of every section to `DIR/LABEL-<section>.png`, for reviewing a visual change.

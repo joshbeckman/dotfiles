@@ -62,7 +62,7 @@ describe("PSH-02 the app subscribes after the user allows notifications", () => 
 			getKey: async () => "x",
 			post: async () => {},
 		});
-		expect(denied).toEqual({ subscribed: false, reason: "permission denied" });
+		expect(denied).toMatchObject({ subscribed: false, reason: "permission denied" });
 		expect(registered).toBe(0);
 
 		const unavailable = await subscribeToPush({
@@ -71,7 +71,7 @@ describe("PSH-02 the app subscribes after the user allows notifications", () => 
 			getKey: async () => "x",
 			post: async () => {},
 		});
-		expect(unavailable).toEqual({ subscribed: false, reason: "push is not available" });
+		expect(unavailable).toMatchObject({ subscribed: false, reason: "push is not available" });
 	});
 
 	it("PSH-02 reuses an existing subscription instead of asking for another", async () => {

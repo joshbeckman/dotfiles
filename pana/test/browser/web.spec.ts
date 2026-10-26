@@ -122,13 +122,16 @@ describeBrowser("pana in a browser", () => {
 		await open();
 
 		// Inbox: the session's reply to the user, with its sender.
-		const inbox = await evaluatePage<{ title: string; meta: string; unread: boolean }>(`
+		// UX-03 changed the inbox to one row per thread; the session is a short, linked name.
+		const inbox = await evaluatePage<{ title: string; who: string; href: string; unread: boolean }>(`
 			await until(() => document.querySelectorAll("#inbox-list .item").length === 1);
 			const row = document.querySelector("#inbox-list .item");
-			return { title: row.querySelector(".title").textContent, meta: row.querySelector(".meta").textContent, unread: row.classList.contains("unread") };
+			const link = row.querySelector(".meta [data-testid=ref-link]");
+			return { title: row.querySelector(".title").textContent, who: link.title, href: link.getAttribute("href"), unread: row.classList.contains("unread") };
 		`);
 		expect(inbox.title).toBe("What is the capital of France?");
-		expect(inbox.meta).toContain(seeded.session.url);
+		expect(inbox.who).toBe(seeded.session.url);
+		expect(inbox.href).toBe(`#/sessions/${seeded.session.id}`);
 		expect(inbox.unread).toBe(true);
 
 		// Compose: a real session and thread; its reply shows up in the open thread.
@@ -560,18 +563,21 @@ describeBrowser("pana in a browser", () => {
 		const head = (await messages(seeded.thread.id)).at(-1)!.id;
 		const sent = await t!.client.post(`/threads/${seeded.thread.id}/messages`, { after: head, body: "a live delivery" }, { caller: seeded.session.id });
 		expect(sent.status).toBe(200);
-		const live = await evaluatePage<{ nav: string; items: number; count: string }>(`
+		// UX-03: the live delivery lands in the thread's one row, which shows the new snippet.
+		const live = await evaluatePage<{ nav: string; items: number; count: string; snippet: string }>(`
 			await until(() => document.getElementById("nav-inbox-count").textContent === "1");
-			await until(() => document.querySelectorAll("#inbox-list .item").length >= 2);
+			await until(() => document.querySelector("#inbox-list .item .meta")?.textContent.includes("1 unread"));
 			return {
 				nav: document.getElementById("nav-inbox-count").textContent,
 				items: document.querySelectorAll("#inbox-list .item").length,
 				count: document.querySelector("#inbox-list .item .meta").textContent,
+				snippet: document.querySelector("#inbox-list [data-testid=inbox-snippet]").textContent,
 			};
 		`);
 		expect(live.nav).toBe("1");
-		expect(live.items).toBeGreaterThanOrEqual(2);
+		expect(live.items).toBe(1);
 		expect(live.count).toContain("1 unread");
+		expect(live.snippet).toContain("a live delivery");
 
 		// REF-07: the inbox row's Archive button removes it.
 		const inboxArchived = await evaluatePage<number>(`
@@ -592,11 +598,11 @@ describeBrowser("pana in a browser", () => {
 			await until(() => document.getElementById("inbox-list").textContent.includes("No archived threads"));
 			box.checked = false;
 			box.dispatchEvent(new Event("change"));
-			await until(() => document.querySelectorAll("#inbox-list .item").length >= 2);
+			await until(() => document.querySelectorAll("#inbox-list .item").length === 1);
 			return { unarchive, items: document.querySelectorAll("#inbox-list .item").length };
 		`);
-		expect(inboxRestored.unarchive).toBeGreaterThanOrEqual(1);
-		expect(inboxRestored.items).toBeGreaterThanOrEqual(2);
+		expect(inboxRestored.unarchive).toBe(1);
+		expect(inboxRestored.items).toBe(1);
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toHaveLength(2);
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toEqual([]);
 	});

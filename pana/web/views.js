@@ -18,6 +18,93 @@ export function inboxRow(delivery) {
 	};
 }
 
+/** One row of `GET /inbox?view=threads` (UX-03): a thread with its newest message. */
+export function inboxThreadRow(thread) {
+	const latest = thread.latest ?? {};
+	return {
+		threadId: thread.threadId,
+		threadUrl: thread.threadUrl,
+		subject: thread.subject ?? "(no subject)",
+		participants: Array.isArray(thread.participants) ? thread.participants.map(person) : [],
+		messageId: latest.messageId,
+		messageUrl: latest.messageUrl,
+		sender: person(latest.sender ?? {}),
+		snippet: String(latest.snippet ?? ""),
+		at: latest.createdAt,
+		unreadCount: count(thread.unreadCount),
+		archived: Boolean(thread.archived),
+	};
+}
+
+function person(value) {
+	return { url: String(value?.url ?? ""), kind: String(value?.kind ?? "") };
+}
+
+/**
+ * The style guide palette (UX-06). The user is always blue and the domain's notices are black;
+ * every session gets one of the other colors from a hash of its URL, so it keeps that color in
+ * every thread and every window.
+ */
+export const PALETTE = {
+	blue: "#002FA7",
+	orange: "#FF7900",
+	purple: "#903465",
+	green: "#237F52",
+	red: "#BD2024",
+	yellow: "#FFCC00",
+	black: "#0D0D0D",
+};
+
+export const SESSION_COLORS = ["orange", "purple", "green", "red", "yellow"];
+
+/** FNV-1a: small, stable across browsers and Node, and spreads similar ULIDs apart. */
+function hash(text) {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < text.length; i++) {
+		h ^= text.charCodeAt(i);
+		h = Math.imul(h, 0x01000193) >>> 0;
+	}
+	return h;
+}
+
+/** The palette name for a participant: `{url, kind}` from a handler, or a bare URL. */
+export function participantColor(participant) {
+	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
+	const kind = typeof participant === "string" ? kindOf(url) : String(participant?.kind || kindOf(url));
+	if (kind === "user") return "blue";
+	if (kind === "domain") return "black";
+	return SESSION_COLORS[hash(url) % SESSION_COLORS.length];
+}
+
+function kindOf(url) {
+	const match = /^pana:\/\/[^/?#]+(?:\/([a-z]+)\/)?/.exec(url);
+	if (!match) return "";
+	if (!match[1]) return "domain";
+	return { users: "user", sessions: "session" }[match[1]] ?? match[1];
+}
+
+/** A short name for a participant URL: the username, `session` and the ID's tail, or the domain. */
+export function refLabel(url) {
+	const text = String(url ?? "");
+	const match = /^pana:\/\/([^/?#]+)(?:\/([a-z]+)\/([^/?#]+))?/.exec(text);
+	if (!match) return text;
+	const [, domain, kind, id] = match;
+	if (!kind) return domain;
+	if (kind === "users") return id;
+	if (kind === "sessions") return `session ${id.slice(-6)}`;
+	return `${kind.replace(/s$/, "")} ${id.slice(-6)}`;
+}
+
+/** A list row's time: the clock time today, the month and day this year, the full date before. */
+export function shortTime(at, now = Date.now(), locale = undefined) {
+	const date = new Date(Number(at));
+	if (Number.isNaN(date.getTime())) return "";
+	const today = new Date(Number(now));
+	if (date.toDateString() === today.toDateString()) return date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+	if (date.getFullYear() === today.getFullYear()) return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
+	return date.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
+}
+
 /** One row of `GET /threads`: a listing (`ThreadSummary`) or a search hit (`ThreadHit`). */
 export function threadRow(thread) {
 	return {
@@ -40,6 +127,7 @@ export function messageView(message) {
 		threadId: message.threadId,
 		threadUrl: message.threadUrl,
 		sender: message.sender?.url ?? "",
+		senderKind: message.sender?.kind ?? "",
 		at: message.createdAt,
 		body: message.body ?? "",
 		revised: Boolean(message.revised),
