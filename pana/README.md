@@ -265,7 +265,7 @@ The PWA has these sections:
 - **Inbox.** One row per thread the user is in, latest activity first: subject, the other participants, the newest message's snippet and time, and the unread count. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
 - **Compose.** Start a session and its thread.
 - **Threads.** Browse and search, including only unread or only archived threads, with each thread's unread count. Edit or redact a message, with a warning.
-- **Sessions.** Live and past sessions with the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Stop, compact, archive, reload.
+- **Sessions.** Live and past sessions with the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Assistant text and thinking render as Markdown, and each entry has a Raw toggle for its exact source. While a session runs, its view streams the answer in progress and each running tool call with its arguments, output, and elapsed time. Stop, compact, archive, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.
 
@@ -273,7 +273,7 @@ A reply draft records the thread head when it opens. If the thread moves before 
 
 Each participant has one color, from the style guide palette, in every thread: the user is blue, the domain's notices are black, and each session keeps the color its URL hashes to. Opening a thread shows its newest message; a message link shows that message.
 
-While a session works, it shows just above the reply box in its own color with a pulsing dot, and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
+While a session works, it shows just above the reply box in its own color with a pulsing dot and what it is doing, such as "running bash · 3m", and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
 
 The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `s`, `m`, `c`, or `h` changes section, `/` searches, `r` replies, `e` archives, `u` or `Esc` goes back, and `?` lists every key. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
 

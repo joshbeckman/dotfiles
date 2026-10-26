@@ -52,8 +52,10 @@ export interface ScriptedModel {
 	/**
 	 * Hold every model call from now on until the returned function releases them. The call still
 	 * returns its stream immediately, so a page can see the session working while the run waits.
+	 * With `{ at: "end" }` the answer streams in full and only its final event waits, so the
+	 * partial answer (thinking, text, tool calls) is in flight while the turn is held open.
 	 */
-	gate(): () => void;
+	gate(options?: { at?: "start" | "end" }): () => void;
 }
 
 function toUsage(spec: TurnUsage | undefined): Usage | undefined {
@@ -109,17 +111,22 @@ export function createScriptedModel(script: Script = []): ScriptedModel {
 
 	const inner = faux.provider;
 	let held: Promise<void> | undefined;
+	let holdAtEnd = false;
 
 	const wrap = <F extends (...args: never[]) => ReturnType<typeof inner.streamSimple>>(stream: F): F =>
 		((...args: Parameters<F>) => {
 			const usage = usages[consumed++];
 			const gate = held;
+			const atEnd = holdAtEnd;
 			if (!usage && !gate) return stream(...args);
 			const outer = createAssistantMessageEventStream();
 			void (async () => {
-				if (gate) await gate;
+				if (gate && !atEnd) await gate;
 				const source = stream(...args);
-				for await (const event of source) outer.push(usage ? patch(event, usage) : event);
+				for await (const event of source) {
+					if (gate && atEnd && (event.type === "done" || event.type === "error")) await gate;
+					outer.push(usage ? patch(event, usage) : event);
+				}
 				const result = await source.result();
 				outer.end(usage ? { ...result, usage } : result);
 			})();
@@ -142,8 +149,9 @@ export function createScriptedModel(script: Script = []): ScriptedModel {
 		append: (turns) => load(turns, true),
 		remaining: () => faux.getPendingResponseCount(),
 		calls: () => faux.state.callCount,
-		gate: () => {
+		gate: (options) => {
 			let release: () => void = () => {};
+			holdAtEnd = options?.at === "end";
 			held = new Promise<void>((resolve) => {
 				release = () => {
 					held = undefined;

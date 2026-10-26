@@ -7,8 +7,8 @@ export interface EntryUsage {
 }
 
 export type EntryBlock =
-	| { type: "text"; text: string }
-	| { type: "thinking"; text: string }
+	| { type: "text"; text: string; markdown?: true }
+	| { type: "thinking"; text: string; markdown?: true }
 	| { type: "tool-call"; name: string; callId?: string; arguments: Record<string, unknown> }
 	| { type: "tool-result"; name: string; callId?: string; output: string; isError: boolean }
 	| { type: "image"; mediaType: string }
@@ -90,6 +90,9 @@ export function messageView(message: any): {
 	redacted: boolean;
 };
 export function entryView(entry: any): EntryView;
+export function entryRaw(entry: any): string;
+export function elapsedLabel(ms: number): string;
+export function liveActivityLabel(live: { activity?: string; since?: number } | null | undefined, now: number): string;
 export function commitView(commit: any): { hash: string; short: string; author: string; at: string; message: string };
 export function memoryHitView(hit: any): { path: string; text: string };
 export function scheduleWhen(schedule: { cron?: string | null; at?: number | null }): string;

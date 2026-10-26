@@ -25,6 +25,7 @@ import {
 } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { sessionStates, workingSessions, type SessionState, type WorkingSession } from "../sessions/state.ts";
+import { liveActivities } from "../sessions/live.ts";
 import { announce } from "./announce.ts";
 import { deliveryHooks } from "./delivery.ts";
 
@@ -74,6 +75,8 @@ export interface ParticipantView extends PersonView {
 	joinedMessageId: string | null;
 	/** A session's current state; absent for the user and the domain (UX-09). */
 	state?: SessionState;
+	/** What a working session is doing now, e.g. "running bash", and since when (UX-12). */
+	activity?: { activity: string; since?: number; at: number };
 }
 
 export interface MessageView {
@@ -625,9 +628,22 @@ export async function readThread(
 	});
 	const sessions = read.thread.participants.filter((participant) => participant.kind === "session");
 	const states = await sessionStates(runtime.db, runtime, sessions.map((participant) => participant.id));
-	const participants = read.thread.participants.map((participant) =>
-		participant.kind === "session" && states.has(participant.id) ? { ...participant, state: states.get(participant.id)! } : participant,
-	);
+	const working = sessions.map((participant) => participant.id).filter((id) => states.get(id) === "running" || states.get(id) === "waiting");
+	const activities =
+		working.length === 0
+			? new Map()
+			: await liveActivities(
+					runtime,
+					await runtime.db.all<{ id: string; conversationId: number | null }>(
+						`SELECT id, conversation_id AS conversationId FROM sessions WHERE id IN (${working.map(() => "?").join(",")})`,
+						...working,
+					),
+				);
+	const participants = read.thread.participants.map((participant) => {
+		if (participant.kind !== "session" || !states.has(participant.id)) return participant;
+		const activity = activities.get(participant.id);
+		return { ...participant, state: states.get(participant.id)!, ...(activity ? { activity } : {}) };
+	});
 	return { ...read, thread: { ...read.thread, participants } };
 }
 

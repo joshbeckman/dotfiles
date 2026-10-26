@@ -832,6 +832,53 @@ button.quiet:hover,
 	color: var(--p-red);
 }
 
+/* UX-11: the meta line carries the Raw toggle; Markdown flows as prose, not preformatted text. */
+.entry .entry-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--s2);
+}
+.entry .raw-toggle {
+	flex: none;
+	font-size: 0.75rem;
+}
+.entry .markdown {
+	white-space: normal;
+}
+.entry .markdown > :first-child {
+	margin-top: 0;
+}
+.entry .markdown > :last-child {
+	margin-bottom: 0;
+}
+.entry .entry-raw[hidden],
+.entry .entry-body[hidden] {
+	display: none;
+}
+
+/* UX-12: work in progress sits below the committed transcript, marked as not yet final. */
+.transcript-live {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+	margin-top: var(--s2);
+}
+.transcript-live[hidden] {
+	display: none;
+}
+.entry.live {
+	border-left-style: dashed;
+}
+.entry .live-output {
+	max-height: 24rem;
+	overflow-y: auto;
+}
+.working-activity {
+	color: var(--c-text-alt);
+	font-variant-numeric: tabular-nums;
+}
+
 /* ---- Memory ------------------------------------------------------------------------------ */
 .file-body {
 	margin: 0;

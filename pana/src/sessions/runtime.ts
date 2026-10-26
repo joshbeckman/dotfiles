@@ -19,6 +19,7 @@ import {
 	type ConversationId,
 	type EntryId,
 	type EntryRecord,
+	type LiveState,
 	type SubmissionId,
 	type SubmissionRecord,
 	type UsageState,
@@ -31,6 +32,7 @@ import { configureDelivery, type DeliveredEvent, type DeliveryHooks } from "../t
 import { postNotice } from "../threads/store.ts";
 import { publish, subscriberCount } from "../web/index.ts";
 import { nextDayStart, overDomainBudget, recordCost, usageCost } from "./budget.ts";
+import { LiveFeed } from "./live.ts";
 import { setSessionState } from "./state.ts";
 import { MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND } from "./wake.ts";
 
@@ -61,8 +63,9 @@ type Report = (error: unknown, what: string) => void;
 
 type Job = () => Promise<void>;
 
-/** `UsageDoc`'s kind; the token does not expose it. */
+/** `UsageDoc`'s and `LiveDoc`'s kinds; the tokens do not expose them. */
 const USAGE_DOC_KIND = "pi.usage";
+const LIVE_DOC_KIND = "pi.live";
 
 /** Unanswered reasons that are not a failure of the run itself. */
 const NOT_FAILURES = new Set(["aborted", "reset"]);
@@ -76,10 +79,12 @@ export class SessionRuntime {
 	#rollover: (() => void) | undefined;
 	/** The message whose thread `rejectArchived` last passed. */
 	#checkedMessage: string | undefined;
+	readonly #live: LiveFeed;
 
 	constructor(runtime: Runtime, report: Report) {
 		this.runtime = runtime;
 		this.#report = report;
+		this.#live = new LiveFeed(runtime, (job, what) => this.enqueue(job, what));
 	}
 
 	start(): void {
@@ -113,6 +118,7 @@ export class SessionRuntime {
 	async close(): Promise<void> {
 		this.#closed = true;
 		this.#unsubscribe?.();
+		this.#live.close();
 		this.#rollover?.();
 		this.#rollover = undefined;
 		await this.#queue;
@@ -289,6 +295,7 @@ export class SessionRuntime {
 		const settled = new Map<ConversationId, SubmissionRecord[]>();
 		const usage = new Map<ConversationId, UsageState>();
 		const entries: EntryRecord[] = [];
+		const live = new Map<ConversationId, LiveState | null>();
 		for (const change of publication.changes) {
 			if (change.type === "entry") {
 				entries.push(change.value);
@@ -301,6 +308,8 @@ export class SessionRuntime {
 				settled.set(value.conversationId, list);
 			} else if (change.type === "document" && change.record.kind === USAGE_DOC_KIND && change.conversationId !== undefined && change.value) {
 				usage.set(change.conversationId, change.value as UsageState);
+			} else if (change.type === "document" && change.record.kind === LIVE_DOC_KIND && change.conversationId !== undefined) {
+				live.set(change.conversationId, change.value as LiveState | null);
 			}
 		}
 		for (const [conversationId, inputs] of settled) {
@@ -311,9 +320,13 @@ export class SessionRuntime {
 		}
 		// WEB-06: an open Sessions view streams new transcript entries. With no window open there is
 		// nothing to tell, and a window that opens later loads the transcript route instead.
-		if (entries.length > 0 && subscriberCount(this.runtime) > 0) {
+		const watched = subscriberCount(this.runtime) > 0;
+		if (entries.length > 0 && watched) {
 			this.enqueue(() => this.#publishEntries(entries), "transcript event");
 		}
+		// UX-12: after the entries, so a window sees each committed entry before the live state
+		// that no longer holds its in-progress block.
+		if (watched) for (const [conversationId, value] of live) this.#live.note(conversationId, value);
 	}
 
 	/** Stream entries to the PWA in the transcript route's shape, oldest first. */

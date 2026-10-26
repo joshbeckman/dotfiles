@@ -12,6 +12,7 @@ import { decodeCursor, decodeOffset, pageOf, type Page } from "../api/pagination
 import { searchSessions } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { usageCost } from "./budget.ts";
+import { currentLive, type LiveView } from "./live.ts";
 import { SESSION_STATES, type SessionRow, type SessionState } from "./runtime.ts";
 // UX-09 keeps the `waiting` rule next to the state writer that publishes it.
 import { waitingConversations } from "./state.ts";
@@ -36,6 +37,8 @@ export interface SessionView {
 
 export interface SessionDetail extends SessionView {
 	usage: UsageState;
+	/** UX-12: the work in progress, so a window that opens mid-run shows it before any event. */
+	live: LiveView | null;
 }
 
 export function sessionView(runtime: Runtime, row: SessionRow, waiting: Set<number>): SessionView {
@@ -74,7 +77,8 @@ export async function showSession(runtime: Runtime, id: string): Promise<Session
 			? undefined
 			: await runtime.harness.snapshot(UsageDoc, row.conversation_id as ConversationId, ctx);
 	const plain: UsageState = usage ? (JSON.parse(JSON.stringify(usage)) as UsageState) : { models: {}, tools: {} };
-	return { ...view, costUsd: usageCost(plain), usage: plain };
+	const live = await currentLive(runtime, row.conversation_id);
+	return { ...view, costUsd: usageCost(plain), usage: plain, live };
 }
 
 export interface SearchSessionsInput {

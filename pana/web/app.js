@@ -19,9 +19,12 @@ import { nextCursor, pagePath, showMore } from "./pages.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
 	commitView,
+	elapsedLabel,
+	entryRaw,
 	entryView,
 	inboxThreadRow,
 	isWorking,
+	liveActivityLabel,
 	memoryHitView,
 	messageView,
 	participantColor,
@@ -62,6 +65,11 @@ const state = {
 	lastList: "#/inbox",
 	/** threadId -> sessionId -> working session (UX-09), from responses and `session.state`. */
 	working: new Map(),
+	/**
+	 * sessionId -> `{view, skew}` (UX-12): the work in progress from `session.live` or a response,
+	 * and how far this clock runs ahead of panad's, so elapsed times are panad's.
+	 */
+	live: new Map(),
 	push: undefined,
 	workerError: "",
 };
@@ -202,6 +210,12 @@ function handleEvent(event) {
 		applyStateEvent(event);
 		return;
 	}
+	// UX-12: work in progress. It carries no entry, so it must not fall through to a reload.
+	if (event.kind === "session.live" && typeof event.sessionId === "string") {
+		rememberLive(event.sessionId, event.live, event.at);
+		liveChanged(event.sessionId);
+		return;
+	}
 	if (event.kind?.startsWith("session.") && event.sessionId && event.sessionId === state.session?.id) {
 		if (event.entry) appendEntry(event.entry);
 		else void loadTranscript();
@@ -285,6 +299,8 @@ function appendEntry(entry) {
 	// Follow new entries only when the reader is already at the bottom, so reading back is undisturbed.
 	const following = nearBottom();
 	transcript.append(entryElement(entry));
+	// UX-12: the committed entry replaces the in-progress block it came from.
+	if (state.session && settleLive(state.session.id, entry)) renderLive();
 	if (following) scrollToLatest();
 }
 
@@ -488,6 +504,12 @@ function syncWorkingMark(row, threadId = row.dataset.thread) {
 function applyStateEvent(event) {
 	const next = String(event.state ?? "");
 	const sessionId = String(event.sessionId);
+	if (!isWorking(next) && state.live.delete(sessionId) && state.session?.id === sessionId) renderLive();
+	// The open session's header follows too, so a finished run does not still read "running".
+	if (state.session?.id === sessionId && next) {
+		state.session.state = next;
+		$("session-meta").querySelector(".badge")?.replaceWith(badge(next));
+	}
 	for (const threadId of Array.isArray(event.threadIds) ? event.threadIds.map(String) : []) {
 		const map = workingMap(threadId);
 		if (isWorking(next)) map.set(sessionId, { sessionId, url: String(event.url ?? ""), state: next });
@@ -524,7 +546,138 @@ function workingChip(session) {
 	chip.title = `${refLabel(session.url)} is ${session.state}`;
 	chip.append(span("", "working-dot"));
 	chip.append(refLink(session.url, "session", refLabel(session.url)));
+	// UX-12: what the session is doing, e.g. "running bash · 3m".
+	const live = state.live.get(session.sessionId);
+	if (live) {
+		const activity = span("", "working-activity");
+		activity.dataset.testid = "working-activity";
+		tickingLabel(activity, live, (now) => liveActivityLabel(live.view, now));
+		chip.append(activity);
+	}
 	return chip;
+}
+
+// ---- Work in progress (UX-12) -----------------------------------------------------------------
+
+/** Keep a session's live view, with this clock's lead over panad's from the view's own time. */
+function rememberLive(sessionId, view, at) {
+	if (!view) {
+		state.live.delete(sessionId);
+		return;
+	}
+	const stamp = Number(view.at ?? at);
+	state.live.set(sessionId, { view, skew: Number.isFinite(stamp) ? Date.now() - stamp : 0 });
+}
+
+/** A label that recomputes from panad's clock each second while it is on the page. */
+function tickingLabel(node, live, render) {
+	node.dataset.ticking = "true";
+	node.__render = () => {
+		node.textContent = render(Date.now() - live.skew);
+	};
+	node.__render();
+}
+
+setInterval(() => {
+	for (const node of document.querySelectorAll("[data-ticking]")) node.__render?.();
+}, 1000);
+
+function liveChanged(sessionId) {
+	if (state.session?.id === sessionId) renderLive();
+	for (const [threadId, map] of state.working) if (map.has(sessionId)) workingChanged(threadId);
+}
+
+/**
+ * A committed entry landed: drop the in-progress block it replaces, before the next `session.live`
+ * says so. Returns whether anything was dropped.
+ */
+function settleLive(sessionId, entry) {
+	const live = state.live.get(sessionId)?.view;
+	if (!live) return false;
+	let changed = false;
+	if (entry.kind === "pi.assistant" && live.generation) {
+		live.generation = undefined;
+		changed = true;
+	}
+	const done = new Set();
+	for (const message of Array.isArray(entry.model) ? entry.model : []) if (message?.role === "toolResult") done.add(message.toolCallId);
+	if (done.size > 0 && Array.isArray(live.tools)) {
+		const kept = live.tools.filter((tool) => !done.has(tool.callId));
+		changed ||= kept.length !== live.tools.length;
+		live.tools = kept;
+	}
+	return changed;
+}
+
+/** The open session's work in progress, below its committed transcript. */
+function renderLive() {
+	const node = $("transcript-live");
+	const live = state.session ? state.live.get(state.session.id) : undefined;
+	node.replaceChildren();
+	const view = live?.view;
+	const tools = Array.isArray(view?.tools) ? view.tools.filter((tool) => tool.status !== "done") : [];
+	const blocks = Array.isArray(view?.generation?.blocks) ? view.generation.blocks : [];
+	if (!view || (blocks.length === 0 && tools.length === 0 && !view.generation?.retryAt)) {
+		node.hidden = true;
+		return;
+	}
+	const following = nearBottom();
+	if (view.generation && (blocks.length > 0 || view.generation.retryAt)) {
+		const div = document.createElement("div");
+		div.className = "entry live";
+		div.dataset.testid = "live-generation";
+		div.dataset.role = "assistant";
+		const meta = span("", "entry-meta");
+		tickingLabel(meta, live, (now) => ["assistant", "in progress", liveActivityLabel(view, now)].join(" · "));
+		const body = document.createElement("div");
+		body.className = "entry-body";
+		for (const block of blocks) {
+			if (block.type === "toolCall") {
+				body.append(blockElement({ type: "tool-call", name: block.name, arguments: block.arguments }));
+				continue;
+			}
+			// Live thinking stays open: watching it stream is the point of this block.
+			const element = blockElement({ type: block.type, text: block.text, markdown: true }, { open: true });
+			element.dataset.testid = block.type === "thinking" ? "live-thinking" : "live-text";
+			body.append(element);
+		}
+		if (view.generation.retryAt) body.append(span(`Retrying: ${view.generation.retryError ?? "provider error"}`, "live-retry"));
+		div.append(meta, body);
+		node.append(div);
+	}
+	for (const tool of tools) node.append(liveToolElement(tool, live));
+	node.hidden = false;
+	// Output streams at the bottom, so its box shows the newest lines.
+	for (const output of node.querySelectorAll(".live-output")) output.scrollTop = output.scrollHeight;
+	if (following) scrollToLatest();
+}
+
+function liveToolElement(tool, live) {
+	const div = document.createElement("div");
+	div.className = "entry live";
+	div.dataset.testid = "live-tool";
+	div.dataset.role = "tool";
+	div.dataset.tool = String(tool.name ?? "");
+	div.dataset.callId = String(tool.callId ?? "");
+	const meta = span("", "entry-meta");
+	const label = tool.status === "running" ? "running" : "pending";
+	if (typeof tool.startedAt === "number") {
+		tickingLabel(meta, live, (now) => `${tool.name} · ${label} · ${elapsedLabel(now - tool.startedAt)}`);
+	} else {
+		meta.textContent = `${tool.name} · ${label}`;
+	}
+	meta.dataset.testid = "live-tool-meta";
+	const body = document.createElement("div");
+	body.className = "entry-body";
+	body.append(blockElement({ type: "tool-call", name: tool.name, arguments: tool.arguments ?? {} }));
+	const output = document.createElement("pre");
+	output.className = "live-output";
+	output.dataset.testid = "live-tool-output";
+	const dropped = Number(tool.droppedBytes ?? 0);
+	output.textContent = `${dropped > 0 ? `[${dropped} earlier bytes not shown]\n` : ""}${tool.output ?? ""}`;
+	body.append(output);
+	div.append(meta, body);
+	return div;
 }
 
 // ---- Inbox (UX-03) --------------------------------------------------------------------------
@@ -815,6 +968,12 @@ async function openThread(id, focusMessage) {
 	const working = workingMap(id);
 	working.clear();
 	for (const session of workingParticipants(thread)) working.set(session.sessionId, session);
+	// UX-12: what each working session is doing now; a fuller view from `session.live` is kept.
+	for (const participant of thread?.participants ?? []) {
+		if (participant?.kind !== "session") continue;
+		if (!participant.activity) state.live.delete(participant.id);
+		else if (!state.live.get(participant.id)?.view?.tools) rememberLive(participant.id, participant.activity);
+	}
 	renderThreadWorking();
 	// REF-07: one toggle, labelled for the thread's state for this reader.
 	const archiveButton = $("thread-archive");
@@ -994,6 +1153,8 @@ async function openSession(id) {
 	$("sessions-list").hidden = true;
 	$("session").hidden = false;
 	renderTranscript(asList(transcript, ["entries"]));
+	rememberLive(state.session.id, body.session.live);
+	renderLive();
 	scrollToLatest();
 }
 
@@ -1031,18 +1192,74 @@ function entryElement(entry) {
 	]
 		.filter(Boolean)
 		.join(" · ");
+	// UX-11: the exact source of the entry, built only when asked for.
+	const toggle = document.createElement("button");
+	toggle.type = "button";
+	toggle.className = "link-button raw-toggle";
+	toggle.dataset.testid = "entry-raw-toggle";
+	toggle.textContent = "Raw";
+	toggle.setAttribute("aria-pressed", "false");
 	const body = document.createElement("div");
 	body.className = "entry-body";
 	for (const block of view.blocks ?? []) body.append(blockElement(block));
-	div.append(meta, body);
+	toggle.addEventListener("click", () => {
+		let raw = div.querySelector(":scope > .entry-raw");
+		if (!raw) {
+			raw = document.createElement("pre");
+			raw.className = "entry-raw";
+			raw.dataset.testid = "entry-raw";
+			raw.textContent = entryRaw(entry);
+			raw.hidden = true;
+			div.append(raw);
+		}
+		const showing = raw.hidden;
+		raw.hidden = !showing;
+		body.hidden = showing;
+		toggle.setAttribute("aria-pressed", String(showing));
+		toggle.textContent = showing ? "Rendered" : "Raw";
+	});
+	const head = document.createElement("div");
+	head.className = "entry-head";
+	head.append(meta, toggle);
+	div.append(head, body);
 	return div;
 }
 
-function blockElement(block) {
+/** UX-11: the model's text, as Markdown sanitized the same way as a thread message. */
+function markdownElement(text, testid) {
+	const node = document.createElement("div");
+	node.className = "body markdown";
+	if (testid) node.dataset.testid = testid;
+	const { marked, DOMPurify } = window.MailRenderers ?? {};
+	// The HTML is in place when this returns; only images and diagrams finish later.
+	void renderMessage(node, text, {
+		marked,
+		DOMPurify,
+		domain: state.domain,
+		fetchFile,
+		ensureMermaid,
+		idPrefix: `transcript-diagram-${++diagramCount}`,
+		dark: matchMedia("(prefers-color-scheme: dark)").matches,
+	}).catch(() => {});
+	return node;
+}
+
+let diagramCount = 0;
+
+function blockElement(block, { open = false } = {}) {
 	if (block.type === "thinking") {
 		// REF-09: thinking is collapsed by default.
-		return details("details-thinking", "Thinking", block.text, { testid: "entry-thinking" });
+		if (!block.markdown) return details("details-thinking", "Thinking", block.text, { testid: "entry-thinking", open });
+		const node = document.createElement("details");
+		node.className = "details-thinking";
+		node.dataset.testid = "entry-thinking";
+		if (open) node.open = true;
+		const summary = document.createElement("summary");
+		summary.textContent = "Thinking";
+		node.append(summary, markdownElement(block.text));
+		return node;
 	}
+	if (block.type === "text" && block.markdown) return markdownElement(block.text, "entry-text");
 	if (block.type === "tool-call") {
 		const wrap = document.createElement("div");
 		wrap.className = "tool-call";

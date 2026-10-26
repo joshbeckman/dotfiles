@@ -306,7 +306,7 @@ describe("REF-09 the transcript view", () => {
 		expect(kinds).toEqual(expect.arrayContaining(["pana.message", "pi.assistant", "pi.tool-result"]));
 
 		const thinking = entries.flatMap((entry) => entry.blocks).find((block) => block.type === "thinking");
-		expect(thinking).toEqual({ type: "thinking", text: "I should look before I answer." });
+		expect(thinking).toEqual({ type: "thinking", text: "I should look before I answer.", markdown: true });
 
 		const call = entries.flatMap((entry) => entry.blocks).find((block) => block.type === "tool-call");
 		expect(call).toMatchObject({ type: "tool-call", name: "bash", arguments: { command: expect.stringContaining("repeat(2500)") } });

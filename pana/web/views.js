@@ -181,15 +181,19 @@ function contentText(content) {
 	return parts.join("\n");
 }
 
-/** The blocks of one message's content, in order. */
-function contentBlocks(content) {
-	if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
+/**
+ * The blocks of one message's content, in order. UX-11: the model's own text and thinking are
+ * Markdown; what a user or a tool wrote stays plain text.
+ */
+function contentBlocks(content, markdown = false) {
+	const prose = (type, text) => (markdown ? { type, text, markdown: true } : { type, text });
+	if (typeof content === "string") return content ? [prose("text", content)] : [];
 	if (!Array.isArray(content)) return [];
 	const blocks = [];
 	for (const block of content) {
-		if (block?.type === "text" && typeof block.text === "string") blocks.push({ type: "text", text: block.text });
+		if (block?.type === "text" && typeof block.text === "string") blocks.push(prose("text", block.text));
 		else if (block?.type === "thinking" && typeof block.thinking === "string") {
-			blocks.push({ type: "thinking", text: block.thinking });
+			blocks.push(prose("thinking", block.thinking));
 		} else if (block?.type === "toolCall") {
 			blocks.push({
 				type: "tool-call",
@@ -257,7 +261,7 @@ export function entryView(entry) {
 			});
 			continue;
 		}
-		blocks.push(...contentBlocks(message?.content));
+		blocks.push(...contentBlocks(message?.content, message?.role === "assistant"));
 	}
 	if (blocks.length === 0 && entry.data !== undefined && entry.data !== null) {
 		blocks.push({ type: "json", text: JSON.stringify(entry.data, null, 2) });
@@ -267,6 +271,45 @@ export function entryView(entry) {
 	const view = { id: entry.id, kind, role, label: ENTRY_LABELS[kind] ?? kind, text, blocks };
 	if (usage) view.usage = usage;
 	return view;
+}
+
+/**
+ * UX-11: an entry's exact source text, for its Raw toggle. Every string the model or a tool
+ * wrote appears verbatim, so Markdown the renderer hides (comments, stripped HTML, link targets)
+ * is still readable. Tool arguments and entry data, which are JSON, are shown as JSON.
+ */
+export function entryRaw(entry) {
+	const parts = [];
+	for (const message of Array.isArray(entry?.model) ? entry.model : []) {
+		const content = message?.content;
+		if (typeof content === "string") {
+			parts.push(content);
+			continue;
+		}
+		for (const block of Array.isArray(content) ? content : []) {
+			if (block?.type === "text" && typeof block.text === "string") parts.push(block.text);
+			else if (block?.type === "thinking" && typeof block.thinking === "string") parts.push(block.thinking);
+			else if (block?.type === "toolCall") parts.push(`${block.name ?? ""} ${JSON.stringify(block.arguments ?? {}, null, 2)}`);
+			else if (block?.type === "image") parts.push(`[image ${block.mimeType ?? ""}]`);
+		}
+	}
+	if (entry?.data !== undefined && entry.data !== null) parts.push(JSON.stringify(entry.data, null, 2));
+	return parts.join("\n\n");
+}
+
+/** UX-12: a short elapsed time for a working chip or a running tool: "42s", "3m", "1h 5m". */
+export function elapsedLabel(ms) {
+	const seconds = Math.max(0, Math.floor(Number(ms) / 1000) || 0);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** UX-12: what a working session is doing, with its elapsed time when its start is known. */
+export function liveActivityLabel(live, now) {
+	const activity = String(live?.activity ?? "working");
+	return typeof live?.since === "number" ? `${activity} · ${elapsedLabel(now - live.since)}` : activity;
 }
 
 /** One commit of `GET /memory/log`. */
