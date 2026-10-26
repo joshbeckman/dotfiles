@@ -427,6 +427,81 @@ describe("pana CLI routes", () => {
 		expect(JSON.parse(asJson.stderr)).toEqual({ error: { code: "stale", message: "thread moved", newer: ["01JBX"] } });
 	});
 
+	it("covers the WP5 memory and WP7 search route shapes", async () => {
+		const seen: Array<{ route: string; query: Record<string, string>; body: unknown }> = [];
+		const record = (route: string, body: unknown): Handler => (request) => {
+			seen.push({ route, query: Object.fromEntries(request.query), body: request.body });
+			return { status: 200, body };
+		};
+		const worktree = {
+			caller: `pana://${TEST_DOMAIN}/users/${TEST_USER}`,
+			path: "/state/memory/worktrees/tester",
+			branch: "writer/tester",
+			repo: "/state/memory.git",
+			created: false,
+		};
+		const commit = { branch: "writer/tester", commit: { hash: "abc123", authorUrl: worktree.caller, email: "x", time: "t", message: "m" }, reused: false };
+		const threadHit = {
+			threadId: "01JBTHREAD",
+			threadUrl: `pana://${TEST_DOMAIN}/threads/01JBTHREAD`,
+			subject: "Paris",
+			messageId: "01JBMESSAGE",
+			messageUrl: `pana://${TEST_DOMAIN}/threads/01JBTHREAD?message=01JBMESSAGE`,
+			snippet: "the [capital] of France",
+			matched: "message",
+			createdAt: 0,
+		};
+		const t = await start({
+			handlers: {
+				"memory.worktree": record("memory.worktree", worktree),
+				"memory.search": record("memory.search", { tree: "main", query: "paris", matches: [{ path: "places.md", line: 4, text: "Paris" }] }),
+				"memory.commit": record("memory.commit", commit),
+				"memory.log": record("memory.log", { tree: "main", path: null, commits: [commit.commit] }),
+				"threads.search": record("threads.search", { threads: [threadHit] }),
+				"threads.subject": record("threads.subject", { threadUrl: threadHit.threadUrl, subject: "Paris", history: [] }),
+			},
+		});
+
+		// `pana memory` prints the path alone, so a shell can use it.
+		const worktreeRun = await run(["memory"], t);
+		expect(worktreeRun.code).toBe(0);
+		expect(worktreeRun.stdout).toBe(`${worktree.path}\n`);
+
+		expect((await run(["memory", "search", "paris"], t)).code).toBe(0);
+		expect((await run(["memory", "commit", "-m", "note"], t)).code).toBe(0);
+		expect((await run(["memory", "log", "places.md"], t)).code).toBe(0);
+		expect((await run(["thread", "search", "--query", "paris"], t)).code).toBe(0);
+		expect((await run(["--json", "thread", "subject", "01JBTHREAD"], t)).code).toBe(0);
+		expect((await run(["thread", "subject", "01JBTHREAD", "--regenerate"], t)).code).toBe(0);
+
+		expect(seen).toEqual([
+			{ route: "memory.worktree", query: {}, body: undefined },
+			{ route: "memory.search", query: { query: "paris" }, body: undefined },
+			{ route: "memory.commit", query: {}, body: { message: "note" } },
+			{ route: "memory.log", query: { path: "places.md" }, body: undefined },
+			{ route: "threads.search", query: { query: "paris" }, body: undefined },
+			{ route: "threads.subject", query: {}, body: { regenerate: false } },
+			{ route: "threads.subject", query: {}, body: { regenerate: true } },
+		]);
+
+		// Thread hits arrive in the shape WP7 returns, so the JSON mode is a passthrough.
+		const asJson = await run(["--json", "thread", "search", "--query", "paris"], t);
+		expect(JSON.parse(asJson.stdout)).toEqual({ threads: [threadHit] });
+	});
+
+	it("a memory conflict exits 3", async () => {
+		const t = await start({
+			handlers: {
+				"memory.commit": () => {
+					throw ApiError.stale("memory conflict", { paths: ["places.md"] });
+				},
+			},
+		});
+		const result = await run(["memory", "commit", "-m", "note"], t);
+		expect(result.code).toBe(3);
+		expect(result.stderr).toContain("memory conflict");
+	});
+
 	it("thread create uploads attachments and appends a Markdown reference", async () => {
 		const uploads: Array<{ headers: Record<string, string | string[] | undefined>; bytes: number }> = [];
 		const t = await start({

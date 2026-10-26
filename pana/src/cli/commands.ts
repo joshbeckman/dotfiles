@@ -5,6 +5,7 @@
 import type { ApiResponse } from "../api/client.ts";
 import { UsageError } from "./args.ts";
 import { withAttachments } from "./body.ts";
+import { renderText } from "./output.ts";
 
 export type FlagType = "string" | "boolean" | "list";
 
@@ -59,6 +60,8 @@ export interface CommandSpec {
 	positionals: readonly PositionalSpec[];
 	/** The command needs a body from the flags (CLI-04). */
 	needsBody?: boolean;
+	/** Text output for a handler's reply, when the generic record rendering reads badly. */
+	formatText?: (value: unknown) => string;
 	run(ctx: CommandContext): Promise<ApiResponse>;
 }
 
@@ -277,6 +280,12 @@ export const COMMANDS: readonly CommandSpec[] = [
 		flags: [],
 		positionals: [],
 		run: (ctx) => ctx.call("GET", "/memory/worktree"),
+		// WP5 also returns the branch, repo, and caller. The point of `pana memory` is the path,
+		// so a shell can use it directly.
+		formatText: (value) => {
+			const path = (value as { path?: unknown } | null | undefined)?.path;
+			return typeof path === "string" ? `${path}\n` : renderText(value);
+		},
 	},
 	{
 		path: ["memory", "search"],

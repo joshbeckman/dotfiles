@@ -131,7 +131,9 @@ export async function main(argv: readonly string[], overrides: Partial<CliIo> = 
 
 		const response = await command.run(ctx);
 		if (response.status < 200 || response.status >= 300) return fail(io, response, json);
-		io.stdout.write(json ? renderJson(response.body) : renderText(response.body));
+		io.stdout.write(
+			json ? renderJson(response.body) : (command.formatText?.(response.body) ?? renderText(response.body)),
+		);
 		return 0;
 	} catch (error) {
 		if (error instanceof ApiResponseError) return fail(io, error.response, json);
