@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# smoke: start a throwaway panad, ask a real model one question through the CLI, and print
+# the thread. It proves the model providers, the session runtime, and the CLI work together.
+
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: pana/scripts/smoke [--keep] [-h|--help]
+
+Start panad on a temporary state directory (domain smoke.example, user $USER) with the
+provider keys in this environment, run
+
+  pana session create --prompt "What is the capital of France? Answer in one word."
+
+and wait up to PANA_SMOKE_TIMEOUT seconds for the session's answer. Print the thread and
+the PWA launch URL. Exit 0 when the session answered.
+
+Options:
+  --keep   leave panad and its state directory running for a look in the PWA
+
+Environment:
+  PANA_SMOKE_MODEL    model, provider/model-id
+                      (default fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017)
+  PANA_SMOKE_FAUX     1 runs a scripted faux model instead; no keys or network needed
+  PANA_SMOKE_TIMEOUT  seconds to wait for the answer (default 120)
+  PANA_SMOKE_PORT     HTTP port for the PWA (default: any free port)
+
+Pass provider keys in the environment, e.g. s FIREWORKS_API_KEY -- pana/scripts/smoke.
+USAGE
+}
+
+keep=0
+for arg in "$@"; do
+  case "$arg" in
+    --keep) keep=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'smoke: unknown argument: %s\n' "$arg" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+here="$(cd "$(dirname "$0")/.." && pwd)"
+pana="$here/bin/pana"
+timeout="${PANA_SMOKE_TIMEOUT:-120}"
+port="${PANA_SMOKE_PORT:-0}"
+user="$(printf '%s' "${USER:-$(id -un)}" | tr '[:upper:]' '[:lower:]')"
+
+if [ "${PANA_SMOKE_FAUX:-}" = 1 ]; then
+  model="${PANA_SMOKE_MODEL:-faux/faux-1}"
+else
+  model="${PANA_SMOKE_MODEL:-fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017}"
+fi
+
+tmp="${TMPDIR:-/tmp}"
+state="$(mktemp -d "${tmp%/}/pana-smoke.XXXXXX")"
+log="$state/panad.out"
+export PANA_STATE="$state"
+pid=""
+
+cleanup() {
+  local status=$?
+  if [ "$keep" = 1 ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    printf '\npanad is still running (pid %s) on %s\n' "$pid" "$state"
+    printf '  CLI:  PANA_STATE=%s %s thread search --query France\n' "$state" "$pana"
+    printf '  stop: kill %s && rm -rf %s\n' "$pid" "$state"
+    exit "$status"
+  fi
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+  if [ "$status" -ne 0 ] && [ -s "$log" ]; then
+    printf '
+--- panad output ---
+' >&2
+    tail -n 40 "$log" >&2
+  fi
+  rm -rf "$state"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+# Read one field from JSON on stdin with a JavaScript expression over `v`.
+field() {
+  node -e '
+    let s = "";
+    process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      const v = JSON.parse(s);
+      const r = new Function("v", `return (${process.argv[1]})`)(v);
+      if (r !== undefined && r !== null) console.log(typeof r === "string" ? r : JSON.stringify(r));
+    });
+  ' "$1"
+}
+
+printf '{"domain":"smoke.example","user":"%s","defaultModel":"%s","http":{"port":%s}}\n' \
+  "$user" "$model" "$port" >"$state/config.json"
+
+# panad runs from the state directory so the session's prompt picks up no AGENTS.md from
+# wherever this script was started.
+if [ "${PANA_SMOKE_FAUX:-}" = 1 ]; then
+  printf '[{"text":"Paris"}]\n' >"$state/faux-script.json"
+  (cd "$state" && PANA_FAUX_SCRIPT="$state/faux-script.json" exec node "$here/test/fixtures/faux-panad.ts") >"$log" 2>&1 &
+else
+  (cd "$state" && exec "$here/bin/panad") >"$log" 2>&1 &
+fi
+pid=$!
+
+for _ in $(seq 1 150); do
+  if grep -q '^panad: listening' "$log" 2>/dev/null; then break; fi
+  if ! kill -0 "$pid" 2>/dev/null; then break; fi
+  sleep 0.1
+done
+if ! grep -q '^panad: listening' "$log" 2>/dev/null; then
+  printf 'smoke: panad did not start\n' >&2
+  cat "$log" >&2
+  exit 1
+fi
+grep '^panad: model providers' "$log" || true
+
+printf 'model: %s\n' "$model"
+if ! created="$("$pana" session create --model "$model" --prompt "What is the capital of France? Answer in one word." 2>&1)"; then
+  printf 'smoke: session create failed: %s\n' "$created" >&2
+  printf 'smoke: is the provider key for %s in this environment?\n' "${model%%/*}" >&2
+  exit 1
+fi
+session="$(printf '%s' "$created" | field 'v.session.url')"
+thread="$(printf '%s' "$created" | field 'v.thread.id')"
+printf 'session: %s\nthread: %s\n' "$session" "$thread"
+
+outcome=""
+deadline=$((SECONDS + timeout))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  read="$("$pana" thread read "$thread")"
+  # A session message is the answer; a domain message is a failure notice (STA-02).
+  outcome="$(printf '%s' "$read" | field 'v.messages.some((m) => m.sender.kind === "session") ? "answered" : v.messages.some((m) => m.sender.kind === "domain") ? "failed" : ""')"
+  if [ -n "$outcome" ]; then break; fi
+  sleep 1
+done
+
+printf '\n--- thread %s ---\n' "$thread"
+"$pana" thread read "$thread" | field 'v.messages.map((m) => `${m.sender.url}:\n${m.body ?? m.display ?? ""}\n`).join("\n")'
+printf -- '---\n\n'
+grep '^panad: open ' "$log" | sed 's/^panad: open /PWA: /' || true
+
+case "$outcome" in
+  answered)
+    printf 'smoke: ok\n'
+    ;;
+  failed)
+    printf 'smoke: the session failed; see the notice above, or rerun with --keep\n' >&2
+    exit 1
+    ;;
+  *)
+    printf 'smoke: no answer after %ss\n' "$timeout" >&2
+    exit 1
+    ;;
+esac
