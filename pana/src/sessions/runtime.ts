@@ -29,6 +29,7 @@ import { indexSessionRun, type TranscriptEntry } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { configureDelivery, type DeliveredEvent, type DeliveryHooks } from "../threads/delivery.ts";
 import { postNotice } from "../threads/store.ts";
+import { publish, subscriberCount } from "../web/index.ts";
 import { nextDayStart, overDomainBudget, recordCost, usageCost } from "./budget.ts";
 import { MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND } from "./wake.ts";
 
@@ -277,8 +278,11 @@ export class SessionRuntime {
 	#onCommit(publication: CommitPublication): void {
 		const settled = new Map<ConversationId, SubmissionRecord[]>();
 		const usage = new Map<ConversationId, UsageState>();
+		const entries: EntryRecord[] = [];
 		for (const change of publication.changes) {
-			if (change.type === "submission") {
+			if (change.type === "entry") {
+				entries.push(change.value);
+			} else if (change.type === "submission") {
 				const value = change.value;
 				if (value.type !== "input" || value.entry === undefined) continue;
 				if (value.status !== "done" && value.status !== "unanswered") continue;
@@ -294,6 +298,34 @@ export class SessionRuntime {
 		}
 		for (const [conversationId, value] of usage) {
 			this.enqueue(() => this.#charge(conversationId, usageCost(value)), "cost update");
+		}
+		// WEB-06: an open Sessions view streams new transcript entries. With no window open there is
+		// nothing to tell, and a window that opens later loads the transcript route instead.
+		if (entries.length > 0 && subscriberCount(this.runtime) > 0) {
+			this.enqueue(() => this.#publishEntries(entries), "transcript event");
+		}
+	}
+
+	/** Stream entries to the PWA in the transcript route's shape, oldest first. */
+	async #publishEntries(entries: EntryRecord[]): Promise<void> {
+		const sessions = new Map<number, string | undefined>();
+		for (const entry of [...entries].sort((a, b) => a.id - b.id)) {
+			if (!sessions.has(entry.conversationId)) {
+				const row = await this.runtime.db.get<{ id: string }>("SELECT id FROM sessions WHERE conversation_id = ?", entry.conversationId);
+				sessions.set(entry.conversationId, row?.id);
+			}
+			const sessionId = sessions.get(entry.conversationId);
+			if (sessionId === undefined) continue;
+			await publish(this.runtime, {
+				kind: "session.entry",
+				sessionId,
+				entry: {
+					id: entry.id as number,
+					kind: entry.kind,
+					...(entry.data === undefined ? {} : { data: entry.data }),
+					...(entry.model === undefined ? {} : { model: entry.model }),
+				},
+			});
 		}
 	}
 

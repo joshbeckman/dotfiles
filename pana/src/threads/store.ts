@@ -23,6 +23,7 @@ import {
 	scheduleSubject,
 } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { announce } from "./announce.ts";
 import { deliveryHooks } from "./delivery.ts";
 
 export type ParticipantKind = "user" | "session" | "domain";
@@ -375,6 +376,8 @@ interface AppendOptions {
 	sender: ParticipantRecord;
 	body: string;
 	now: number;
+	/** Collects the URL of every recipient, for `announce` after the transaction commits. */
+	recipients?: string[];
 }
 
 /**
@@ -423,6 +426,7 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 			options.now,
 			requestId,
 		);
+		options.recipients?.push(recipient.url);
 		await hooks.onDelivered(
 			tx,
 			{
@@ -458,6 +462,7 @@ export async function createThread(runtime: Runtime, caller: Caller, input: Crea
 	const now = runtime.clock.now();
 	const explicitSubject = typeof input.subject === "string" && input.subject.trim().length > 0;
 
+	const recipients: string[] = [];
 	const result = await runtime.db.atomically(async (tx) => {
 		const sender = await ensureCaller(tx, runtime, now, caller);
 		const members = new Map<string, ParticipantRecord>([[sender.id, sender]]);
@@ -478,6 +483,7 @@ export async function createThread(runtime: Runtime, caller: Caller, input: Crea
 			sender,
 			body,
 			now,
+			recipients,
 		});
 		if (explicitSubject) {
 			await recordSubject(tx, { threadId, subject: input.subject as string, source: "manual", id: runtime.newId(), now });
@@ -486,6 +492,7 @@ export async function createThread(runtime: Runtime, caller: Caller, input: Crea
 		}
 		return { thread: await threadView(tx, runtime, threadId), message };
 	});
+	announce(runtime, "delivery", result, recipients);
 	// SUB-02: the model job runs in the background, after the create transaction commits.
 	scheduleSubject(runtime, result.thread.id);
 	return result;
@@ -501,8 +508,9 @@ export async function respond(runtime: Runtime, caller: Caller, threadId: string
 	const body = messageBody(input.body);
 	const cc = addressList(input.cc, "cc");
 	const now = runtime.clock.now();
+	const recipients: string[] = [];
 
-	return runtime.db.atomically(async (tx) => {
+	const result = await runtime.db.atomically(async (tx) => {
 		const thread = await tx.get<ThreadRecord>("SELECT * FROM threads WHERE id = ?", threadId);
 		if (!thread) throw ApiError.notFound(`thread ${threadId}`);
 
@@ -542,9 +550,11 @@ export async function respond(runtime: Runtime, caller: Caller, threadId: string
 			);
 		}
 
-		const message = await appendMessage(tx, runtime, { messageId, threadId, sender, body, now });
+		const message = await appendMessage(tx, runtime, { messageId, threadId, sender, body, now, recipients });
 		return { thread: await threadView(tx, runtime, threadId), message };
 	});
+	announce(runtime, "delivery", result, recipients);
+	return result;
 }
 
 /** Resolve who is reading: the caller, or a named participant the user is allowed to act for. */
@@ -745,8 +755,9 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 	const body = messageBody(input.body);
 	const addresses = addressList(input.to, "recipients");
 	const now = runtime.clock.now();
+	const delivered: string[] = [];
 
-	return runtime.db.atomically(async (tx) => {
+	const result = await runtime.db.atomically(async (tx) => {
 		const sender = await ensureDomain(tx, runtime, now);
 		const recipients = new Map<string, ParticipantRecord>();
 		for (const raw of addresses) {
@@ -799,8 +810,11 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 				recipient.id,
 				now,
 			);
+			delivered.push(recipient.url);
 		}
 
 		return { thread: await threadView(tx, runtime, threadId), message: await messageView(tx, runtime, messageId) };
 	});
+	announce(runtime, "notice", result, delivered);
+	return result;
 }
