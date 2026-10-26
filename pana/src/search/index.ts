@@ -19,6 +19,7 @@ export {
 } from "./indexing.ts";
 export {
 	DEFAULT_SEARCH_LIMIT,
+	flag,
 	listThreads,
 	matchExpression,
 	searchSessions,
@@ -26,6 +27,7 @@ export {
 	type SearchOptions,
 	type SessionHit,
 	type ThreadHit,
+	type ThreadSearchOptions,
 	type ThreadSummary,
 } from "./query.ts";
 export {

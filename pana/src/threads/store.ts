@@ -99,6 +99,13 @@ export interface ThreadView {
 	participants: ParticipantView[];
 }
 
+export interface ArchiveState {
+	thread: ThreadView;
+	/** True when the caller has this thread archived (REF-03). */
+	archived: boolean;
+	participant: PersonView;
+}
+
 export interface InboxRecipient {
 	id: string;
 	kind: ParticipantKind;
@@ -122,6 +129,8 @@ export interface InboxDelivery {
 	revised: boolean;
 	redacted: boolean;
 	display?: string;
+	/** The reader's unread messages in this thread (REF-05). */
+	unreadCount: number;
 }
 
 export interface ThreadResult {
@@ -427,6 +436,8 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 			requestId,
 		);
 		options.recipients?.push(recipient.url);
+		// REF-04: new mail shows the thread again for the participant who receives it.
+		await setThreadArchived(tx, options.threadId, recipient.id, false, options.now);
 		await hooks.onDelivered(
 			tx,
 			{
@@ -579,7 +590,11 @@ async function markThreadRead(tx: SqliteExecutor, readerId: string, threadId: st
 }
 
 /** THR-10: messages in order with current revisions, and the caller's deliveries marked read. */
-export async function readThread(runtime: Runtime, caller: Caller, threadId: string): Promise<{ thread: ThreadView; messages: MessageView[] }> {
+export async function readThread(
+	runtime: Runtime,
+	caller: Caller,
+	threadId: string,
+): Promise<{ thread: ThreadView; messages: MessageView[]; archived: boolean }> {
 	const now = runtime.clock.now();
 	return runtime.db.atomically(async (tx) => {
 		const thread = await threadView(tx, runtime, threadId);
@@ -595,8 +610,9 @@ export async function readThread(runtime: Runtime, caller: Caller, threadId: str
 			  ORDER BY m.seq`,
 			threadId,
 		);
+		const archived = await isThreadArchived(tx, threadId, reader.id);
 		await markThreadRead(tx, reader.id, threadId, now);
-		return { thread, messages: await messageViews(tx, runtime, rows, reader.id) };
+		return { thread, messages: await messageViews(tx, runtime, rows, reader.id), archived };
 	});
 }
 
@@ -662,6 +678,74 @@ export async function redactMessage(runtime: Runtime, caller: Caller, messageId:
 	return appendEvent(runtime, caller, messageId, "message.redacted", null);
 }
 
+// --- Archive and unread (REF-03, REF-04, REF-05) --------------------------------
+
+/**
+ * Hide or show one thread for one participant. Archiving is per participant: another participant
+ * of the same thread keeps seeing it (REF-03). Re-archiving updates the time; a delivery calls
+ * this with `false`, because new mail shows the thread again (REF-04).
+ */
+async function setThreadArchived(tx: SqliteExecutor, threadId: string, participantId: string, archived: boolean, now: number): Promise<void> {
+	if (!archived) {
+		await tx.run("DELETE FROM thread_archives WHERE thread_id = ? AND participant_id = ?", threadId, participantId);
+		return;
+	}
+	await tx.run(
+		`INSERT INTO thread_archives (thread_id, participant_id, archived_at) VALUES (?, ?, ?)
+		 ON CONFLICT (thread_id, participant_id) DO UPDATE SET archived_at = excluded.archived_at`,
+		threadId,
+		participantId,
+		now,
+	);
+}
+
+/** True when this participant has the thread archived. */
+export async function isThreadArchived(tx: SqliteExecutor, threadId: string, participantId: string): Promise<boolean> {
+	const row = await tx.get("SELECT 1 AS found FROM thread_archives WHERE thread_id = ? AND participant_id = ?", threadId, participantId);
+	return row !== undefined;
+}
+
+/** The participant's unread deliveries per thread, for one reader (REF-05). */
+async function unreadCounts(
+	tx: SqliteExecutor,
+	participantId: string,
+	threadIds: readonly string[],
+): Promise<Map<string, number>> {
+	const counts = new Map<string, number>();
+	for (const id of new Set(threadIds)) counts.set(id, 0);
+	if (counts.size === 0) return counts;
+	const placeholders = [...counts.keys()].map(() => "?").join(",");
+	const rows = await tx.all<{ thread_id: string; n: number }>(
+		`SELECT thread_id, COUNT(*) AS n FROM deliveries
+		  WHERE recipient_id = ? AND read_at IS NULL AND thread_id IN (${placeholders})
+		  GROUP BY thread_id`,
+		participantId,
+		...counts.keys(),
+	);
+	for (const row of rows) counts.set(row.thread_id, row.n);
+	return counts;
+}
+
+/**
+ * REF-03: archive a thread for one participant. The participant is the caller, or a named one
+ * the user may act for, the same rule the inbox uses.
+ */
+export async function archiveThread(runtime: Runtime, caller: Caller, threadId: string, options: { participant?: string; archived: boolean }): Promise<ArchiveState> {
+	const now = runtime.clock.now();
+	return runtime.db.atomically(async (tx) => {
+		const thread = await threadView(tx, runtime, threadId);
+		const participant = await readerFor(tx, runtime, caller, options.participant, now);
+		const member = await tx.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", threadId, participant.id);
+		if (!member) throw ApiError.forbidden(`${participant.url} is not a participant of thread ${threadId}`);
+		await setThreadArchived(tx, threadId, participant.id, options.archived, now);
+		return {
+			thread,
+			archived: options.archived,
+			participant: { id: participant.id, kind: participant.kind, url: participant.url },
+		};
+	});
+}
+
 // --- Inbox ---------------------------------------------------------------------
 
 interface InboxRow {
@@ -678,9 +762,20 @@ interface InboxRow {
 	body: string;
 }
 
+export interface InboxOptions {
+	/** List the threads this participant archived instead of the ones still showing (REF-07). */
+	archived?: boolean;
+}
+
 /** INB-01 and INB-03: one participant's deliveries, newest first. */
-export async function inbox(runtime: Runtime, caller: Caller, participant?: string): Promise<{ participant: PersonView; deliveries: InboxDelivery[] }> {
+export async function inbox(
+	runtime: Runtime,
+	caller: Caller,
+	participant?: string,
+	options: InboxOptions = {},
+): Promise<{ participant: PersonView; deliveries: InboxDelivery[] }> {
 	const now = runtime.clock.now();
+	const archivedFilter = options.archived ? "EXISTS" : "NOT EXISTS";
 	return runtime.db.atomically(async (tx) => {
 		const reader = await readerFor(tx, runtime, caller, participant, now);
 		const rows = await tx.all<InboxRow>(
@@ -694,10 +789,16 @@ export async function inbox(runtime: Runtime, caller: Caller, participant?: stri
 			   JOIN threads t ON t.id = d.thread_id
 			   JOIN participants p ON p.id = m.sender_id
 			  WHERE d.recipient_id = ?
+			    AND ${archivedFilter} (SELECT 1 FROM thread_archives a WHERE a.thread_id = d.thread_id AND a.participant_id = d.recipient_id)
 			  ORDER BY m.created_at DESC, m.seq DESC, d.id DESC`,
 			reader.id,
 		);
 		const events = await latestEvents(tx, rows.map((row) => row.message_id));
+		const unread = await unreadCounts(
+			tx,
+			reader.id,
+			rows.map((row) => row.thread_id),
+		);
 		const recipients = await tx.all<{ message_id: string; id: string; kind: ParticipantKind; url: string; read_at: number | null }>(
 			`SELECT d.message_id AS message_id, p.id AS id, p.kind AS kind, p.url AS url, d.read_at AS read_at
 			   FROM deliveries d
@@ -727,6 +828,7 @@ export async function inbox(runtime: Runtime, caller: Caller, participant?: stri
 				createdAt: row.created_at,
 				deliveredAt: row.delivered_at,
 				readAt: row.read_at,
+				unreadCount: unread.get(row.thread_id) ?? 0,
 				...applyEvent(row.body, events.get(row.message_id)),
 			})),
 		};
@@ -811,6 +913,8 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 				now,
 			);
 			delivered.push(recipient.url);
+			// REF-04: a notice is a message too, so it unarchives the thread for its recipient.
+			await setThreadArchived(tx, threadId, recipient.id, false, now);
 		}
 
 		return { thread: await threadView(tx, runtime, threadId), message: await messageView(tx, runtime, messageId) };

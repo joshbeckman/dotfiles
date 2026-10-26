@@ -25,6 +25,7 @@ const PANA_TABLES = [
 	"schedules",
 	"push_subscriptions",
 	"subjects",
+	"thread_archives",
 ];
 
 const opened: TestPanad[] = [];

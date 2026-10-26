@@ -5,7 +5,7 @@
 
 import { ApiError } from "../api/errors.ts";
 import type { Handlers } from "../api/types.ts";
-import { DEFAULT_SEARCH_LIMIT, listThreads, searchThreads } from "./query.ts";
+import { DEFAULT_SEARCH_LIMIT, flag, listThreads, searchThreads, type ThreadSearchOptions } from "./query.ts";
 import { regenerateSubject, SubjectError, subjectHistory } from "./subjects.ts";
 
 const MAX_SEARCH_LIMIT = 100;
@@ -14,8 +14,16 @@ export const handlers: Handlers = {
 	"threads.search": async (ctx) => {
 		const query = (ctx.query.get("query") ?? "").trim();
 		const limit = parseLimit(ctx.query.get("limit"));
-		if (!query) return { status: 200, body: { threads: await listThreads(ctx.runtime, { limit }) } };
-		return { status: 200, body: { threads: await searchThreads(ctx.runtime, query, { limit }) } };
+		// REF-03 and REF-05: archive state and unread counts belong to the caller, so the route
+		// asks for the caller's own view rather than the whole domain's.
+		const options: ThreadSearchOptions = {
+			limit,
+			participantId: ctx.caller.id,
+			archived: flag(ctx.query.get("archived")),
+			unread: flag(ctx.query.get("unread")),
+		};
+		if (!query) return { status: 200, body: { threads: await listThreads(ctx.runtime, options) } };
+		return { status: 200, body: { threads: await searchThreads(ctx.runtime, query, options) } };
 	},
 
 	"threads.subject": async (ctx) => {

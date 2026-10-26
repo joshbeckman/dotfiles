@@ -180,6 +180,22 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 4,
+		name: "thread archives",
+		// REF-03: archiving is per participant, not per thread, so it is a side table rather than a
+		// column on `threads`. A row means that one participant hid the thread from their own inbox
+		// and default thread list; a later delivery deletes it again (REF-04).
+		sql: `
+			CREATE TABLE thread_archives (
+				thread_id      TEXT NOT NULL REFERENCES threads(id),
+				participant_id TEXT NOT NULL REFERENCES participants(id),
+				archived_at    INTEGER NOT NULL,
+				PRIMARY KEY (thread_id, participant_id)
+			);
+			CREATE INDEX thread_archives_participant ON thread_archives(participant_id);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

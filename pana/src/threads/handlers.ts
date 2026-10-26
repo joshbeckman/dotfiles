@@ -3,7 +3,7 @@
 import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { loadFile, uploadFile } from "./files.ts";
-import { createThread, inbox, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
+import { archiveThread, createThread, inbox, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
 function bodyObject(ctx: RequestContext): Record<string, unknown> {
 	const body = ctx.body;
@@ -19,8 +19,8 @@ function participantQuery(ctx: RequestContext): string | undefined {
 	return value === null || value === "" ? undefined : value;
 }
 
-function markReadQuery(ctx: RequestContext): boolean {
-	const value = ctx.query.get("read");
+function truthyQuery(ctx: RequestContext, name: string): boolean {
+	const value = ctx.query.get(name);
 	return value === "1" || value === "true" || value === "yes";
 }
 
@@ -44,6 +44,29 @@ export const handlers: Handlers = {
 		body: await readThread(ctx.runtime, ctx.caller, ctx.params.id!),
 	}),
 
+	// REF-03: per-participant archive. The user may name a participant, as the inbox route does.
+	"threads.archive": async (ctx): Promise<HandlerResult> => {
+		const body = bodyObject(ctx);
+		return {
+			status: 200,
+			body: await archiveThread(ctx.runtime, ctx.caller, ctx.params.id!, {
+				participant: typeof body.participant === "string" ? body.participant : participantQuery(ctx),
+				archived: true,
+			}),
+		};
+	},
+
+	"threads.unarchive": async (ctx): Promise<HandlerResult> => {
+		const body = bodyObject(ctx);
+		return {
+			status: 200,
+			body: await archiveThread(ctx.runtime, ctx.caller, ctx.params.id!, {
+				participant: typeof body.participant === "string" ? body.participant : participantQuery(ctx),
+				archived: false,
+			}),
+		};
+	},
+
 	"threads.respond": async (ctx): Promise<HandlerResult> => {
 		const body = bodyObject(ctx);
 		return {
@@ -60,7 +83,7 @@ export const handlers: Handlers = {
 		status: 200,
 		body: await readMessage(ctx.runtime, ctx.caller, ctx.params.id!, {
 			participant: participantQuery(ctx),
-			markRead: markReadQuery(ctx),
+			markRead: truthyQuery(ctx, "read"),
 		}),
 	}),
 
@@ -88,7 +111,7 @@ export const handlers: Handlers = {
 
 	"inbox.list": async (ctx): Promise<HandlerResult> => ({
 		status: 200,
-		body: await inbox(ctx.runtime, ctx.caller, participantQuery(ctx)),
+		body: await inbox(ctx.runtime, ctx.caller, participantQuery(ctx), { archived: truthyQuery(ctx, "archived") }),
 	}),
 
 	"files.upload": async (ctx): Promise<HandlerResult> => {

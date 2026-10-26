@@ -67,13 +67,14 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | GET | `/sessions` | search (`query`, `state`, `parent`) |
 | GET | `/sessions/:id` | show |
 | GET | `/sessions/:id/transcript` | transcript entries |
-| POST | `/sessions/:id/stop`, `/resume`, `/compact` | control |
-| GET | `/inbox` | caller's inbox (`participant` lets a user view a session's inbox) |
+| POST | `/sessions/:id/stop`, `/resume`, `/compact`, `/archive` | control |
+| GET | `/inbox` | caller's inbox, with `unreadCount` (`participant` lets a user view a session's inbox) |
 | POST | `/threads` | create a thread |
-| GET | `/threads` | search (`query`) |
+| GET | `/threads` | search (`query`, `archived`, `unread`) |
 | GET | `/threads/:id` | read |
 | POST | `/threads/:id/messages` | respond |
 | POST | `/threads/:id/subject` | regenerate subject |
+| POST | `/threads/:id/archive`, `/unarchive` | archive for the caller |
 | GET | `/messages/:id` | read one message |
 | POST | `/messages/:id/read` | mark read |
 | POST | `/messages/:id/revisions`, `/redact` | edit, redact |

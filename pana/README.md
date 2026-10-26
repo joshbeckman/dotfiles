@@ -184,6 +184,7 @@ pana session search [--query TEXT] [--state STATE] [--parent SESSION]
 pana session stop SESSION
 pana session resume SESSION
 pana session compact SESSION
+pana session archive SESSION
 pana session inbox SESSION
 pana session inbox read SESSION MESSAGE
 ```
@@ -220,7 +221,9 @@ pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [-
 pana thread read THREAD
 pana thread read --message MESSAGE
 pana thread subject THREAD [--regenerate]
-pana thread search --query TEXT
+pana thread archive THREAD
+pana thread unarchive THREAD
+pana thread search [--query TEXT] [--archived] [--unread]
 ```
 
 ## Memory
@@ -258,10 +261,10 @@ pana schedule delete SCHEDULE
 
 The PWA has these sections:
 
-- **Inbox.** Messages to the user, newest first, with unread ones marked. Open the thread, draft, and reply.
+- **Inbox.** Messages to the user, newest first, with unread ones marked and counted. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
 - **Compose.** Start a session and its thread.
-- **Threads.** Browse and search. Edit or redact a message, with a warning.
-- **Sessions.** Live and past sessions with transcript, model, cost, lineage, and state. Stop, compact, reload.
+- **Threads.** Browse and search, including only unread or only archived threads, with each thread's unread count. Edit or redact a message, with a warning.
+- **Sessions.** Live and past sessions with the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Stop, compact, archive, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.
 

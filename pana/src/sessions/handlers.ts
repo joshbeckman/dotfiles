@@ -116,4 +116,12 @@ export const handlers: Handlers = {
 		const taskId = await conversation.compact(instructions, BG);
 		return { status: 202, body: { session: id, task: taskId } };
 	},
+
+	// REF-02: only the user archives a session; the archived state itself is STA-07.
+	"sessions.archive": async (ctx): Promise<HandlerResult> => {
+		if (ctx.caller.kind !== "user") throw ApiError.forbidden("only the user may archive a session");
+		const id = sessionId(ctx, ctx.params.id);
+		await sessionRuntime(ctx.runtime).archive(id);
+		return shown(ctx, id);
+	},
 };
