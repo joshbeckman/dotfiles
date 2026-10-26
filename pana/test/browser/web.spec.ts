@@ -848,4 +848,33 @@ describeBrowser("pana in a browser", () => {
 		expect(result.button).toContain("Notifications");
 		expect(result.manifest).toBe("/manifest.webmanifest");
 	});
+
+	it("UX-10 opening a session lands on its newest entry, with its header and controls pinned in view", async () => {
+		const long = "node -e \"console.log('line\\n'.repeat(400))\"";
+		await start([
+			{ toolCalls: [{ name: "bash", args: { command: long } }] },
+			{ toolCalls: [{ name: "bash", args: { command: long } }] },
+			{ text: "the newest entry" },
+		]);
+		const seeded = await seedSession("make it long");
+		await open();
+		const view = await evaluatePage<{ fromBottom: number; stickyTop: number; topbar: number; controls: boolean }>(`
+			location.hash = "#/sessions/${seeded.session.id}";
+			await until(() => !document.getElementById("session").hidden);
+			await until(() => document.getElementById("transcript").textContent.includes("the newest entry"));
+			await new Promise((r) => requestAnimationFrame(() => r()));
+			const root = document.scrollingElement;
+			const sticky = document.querySelector("[data-testid=session-sticky]").getBoundingClientRect();
+			const stop = document.querySelector("[data-testid=session-stop]").getBoundingClientRect();
+			return {
+				fromBottom: root.scrollHeight - root.scrollTop - root.clientHeight,
+				stickyTop: sticky.top,
+				topbar: document.querySelector(".topbar").getBoundingClientRect().bottom,
+				controls: stop.top >= 0 && stop.bottom <= innerHeight,
+			};
+		`);
+		expect(view.fromBottom).toBeLessThan(2);
+		expect(Math.abs(view.stickyTop - view.topbar)).toBeLessThan(4);
+		expect(view.controls).toBe(true);
+	});
 });

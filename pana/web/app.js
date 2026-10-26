@@ -282,8 +282,21 @@ function appendEntry(entry) {
 	// A live entry can also arrive in the transcript a reload just fetched.
 	if (entry.id !== undefined && transcript.querySelector(`[data-entry-id="${entry.id}"]`)) return;
 	transcript.querySelector(".hint")?.remove();
+	// Follow new entries only when the reader is already at the bottom, so reading back is undisturbed.
+	const following = nearBottom();
 	transcript.append(entryElement(entry));
-	transcript.lastElementChild?.scrollIntoView({ block: "nearest" });
+	if (following) scrollToLatest();
+}
+
+function nearBottom() {
+	const root = document.scrollingElement ?? document.documentElement;
+	return root.scrollHeight - root.scrollTop - root.clientHeight < 120;
+}
+
+/** Opening a session lands on its newest entries; the sticky header keeps its controls in view. */
+function scrollToLatest() {
+	const root = document.scrollingElement ?? document.documentElement;
+	root.scrollTop = root.scrollHeight;
 }
 
 // ---- Helpers --------------------------------------------------------------------------------
@@ -981,6 +994,7 @@ async function openSession(id) {
 	$("sessions-list").hidden = true;
 	$("session").hidden = false;
 	renderTranscript(asList(transcript, ["entries"]));
+	scrollToLatest();
 }
 
 function cost(usd) {
