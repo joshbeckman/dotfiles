@@ -1,8 +1,11 @@
 // SCALE-02: what the bench proves from the database after panad stops. Every check returns the
 // rows that break it, so a failure names its evidence.
 
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync as Database } from "node:sqlite";
 import { answerBody, needsReply } from "./model.ts";
+
+// Vitest's resolver drops the `node:` prefix of builtins it does not know, and `sqlite` is one.
+const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
 
 export interface CheckResult {
 	name: string;
@@ -32,7 +35,7 @@ export function checkDatabase(path: string, expected: ExpectedCounts = {}): Chec
 	}
 }
 
-function runChecks(db: DatabaseSync, expected: ExpectedCounts): CheckResult[] {
+function runChecks(db: Database, expected: ExpectedCounts): CheckResult[] {
 	const all = (sql: string, ...params: Array<string | number>) => db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
 	const count = (sql: string) => Number((db.prepare(sql).get() as { n: number }).n);
 	const out: CheckResult[] = [];

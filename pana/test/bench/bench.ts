@@ -464,13 +464,28 @@ type Call = <T>(method: string, path: string, body?: unknown, caller?: string) =
 async function settle(call: Call, expected: number, timeoutMs: number): Promise<void> {
 	const end = Date.now() + timeoutMs;
 	for (;;) {
-		const all = must(await call<{ sessions: unknown[] }>("GET", `/sessions?limit=${expected + 1}`), "session list");
 		const busy = must(await call<{ sessions: unknown[] }>("GET", "/sessions?state=running&limit=1"), "session list");
 		const waiting = must(await call<{ sessions: unknown[] }>("GET", "/sessions?state=waiting&limit=1"), "session list");
-		if (all.sessions.length >= expected && busy.sessions.length === 0 && waiting.sessions.length === 0) return;
-		if (Date.now() > end) throw new Error(`fan-out did not settle: ${all.sessions.length} of ${expected} sessions`);
+		const total = busy.sessions.length + waiting.sessions.length === 0 ? await countSessions(call) : 0;
+		if (total >= expected) return;
+		if (Date.now() > end) throw new Error(`sessions did not settle: ${total} of ${expected} sessions`);
 		await sleep(200);
 	}
+}
+
+/** Every session, a page at a time. Before SCALE-03 the route ignores the cursor. */
+async function countSessions(call: Call): Promise<number> {
+	let total = 0;
+	let cursor: string | undefined;
+	do {
+		const body = must(
+			await call<{ sessions: unknown[]; nextCursor?: string | null }>("GET", `/sessions?limit=500${cursor ? `&cursor=${cursor}` : ""}`),
+			"session list",
+		);
+		total += body.sessions.length;
+		cursor = body.nextCursor ?? undefined;
+	} while (cursor !== undefined);
+	return total;
 }
 
 function readLog(path: string): LoggedRequest[] {
@@ -497,9 +512,9 @@ interface Page {
 }
 
 async function listPhase(call: Call, sessionIds: readonly string[], options: BenchOptions, log: (line: string) => void): Promise<ListResult[]> {
-	const existing = must(await call<{ deliveries: unknown[] }>("GET", "/inbox?limit=1"), "inbox");
-	void existing;
-	const seed = Math.max(0, options.listThreads - (options.threads + options.sessions + options.fanout));
+	// Every session made so far started one thread, and so did the broadcast.
+	const made = options.sessions + options.threads + (options.broadcast > 0 ? 1 : 0) + options.fanout * treeSize(options.branch, options.spawnDepth);
+	const seed = Math.max(0, options.listThreads - made);
 	log(`lists: seeding ${seed} threads and 200 schedules`);
 	// A session posts to the user, so the inbox grows and no session wakes.
 	await pool(
