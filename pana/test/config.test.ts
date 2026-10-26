@@ -142,8 +142,8 @@ describe("config and state", () => {
 		expect(run.code).toBe(1);
 		expect(run.stderr).toContain(`pid ${process.pid}`);
 
-		// The first panad still serves.
-		expect((await t.client.get("/inbox")).status).toBe(501);
+		// The first panad still serves. `/sessions/:id/transcript` is WP3's and still unbuilt.
+		expect((await t.client.get(`/sessions/${t.runtime.newId()}/transcript`)).status).toBe(501);
 	});
 
 	it("CFG-05 a stale PID file from a dead panad does not block a start", async () => {

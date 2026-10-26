@@ -1,6 +1,24 @@
-// Memory (WP5). Not built yet.
+// Memory (WP5).
 //
-// TODO(WP5): implement MEM from SPEC.md. Keep this package's code in src/memory/ and its tests in
-// test/memory.test.ts. Register HTTP handlers in src/memory/handlers.ts; src/server/handlers.ts already
-// merges them into panad.
-export {};
+// `Memory` shells out to real git against `<state>/memory.git` and one worktree per writer under
+// `<state>/memory/worktrees`. The `/memory/*` routes in handlers.ts are the only way the CLI
+// (WP1) and the PWA (WP8) reach it.
+
+export { handlers, memoryFor, writerOf } from "./handlers.ts";
+export { runGit } from "./git.ts";
+export {
+	assertWriterId,
+	ensureMemoryRepo,
+	MAIN,
+	Memory,
+	normalizeMemoryPath,
+	type CommitResult,
+	type LogEntry,
+	type MemoryCommit,
+	type MemoryFile,
+	type MemoryOptions,
+	type MemoryWriter,
+	type SearchHit,
+	type SearchResult,
+	type Worktree,
+} from "./repo.ts";

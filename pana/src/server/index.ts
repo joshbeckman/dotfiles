@@ -12,6 +12,7 @@ import type { Handlers } from "../api/types.ts";
 import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
+import { ensureMemoryRepo } from "../memory/index.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
 import { defaultHandlers } from "./handlers.ts";
@@ -69,6 +70,14 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 				process.exit(1);
 			});
 		const report = options.onReport ?? ((error, what) => console.error(`panad: ${what}:`, error));
+
+		// MEM-01: memory.git exists as a bare repo with one empty commit on main before the first
+		// memory request. WP5 owns the implementation; this is its only startup hook.
+		await ensureMemoryRepo(paths.memoryGit, {
+			domain: config.domain,
+			worktreesDir: paths.memoryWorktrees,
+			now: () => clock.now(),
+		});
 
 		const { db, storage } = await openSharedDatabase(paths.sqlite, { onFatal });
 		const models = options.models ?? createModels();
