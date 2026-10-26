@@ -33,34 +33,21 @@ async function sessionId(runtime: Runtime, conversationId: number): Promise<stri
 	return row?.id;
 }
 
-interface ShellText {
-	exitCode: number;
-	stdout: string;
-}
-
-async function runText(env: ExecutionEnv, argv: string[], cwd: string, context: Context): Promise<ShellText | undefined> {
-	let stdout = "";
-	const result = await env.exec(
-		argv,
-		{
-			cwd,
-			onOutput: (text, _context, info) => {
-				if (info.stream === "stdout") stdout += text;
-			},
-		},
-		context,
-	);
-	if (!result.ok) return undefined;
-	return { exitCode: result.value.exitCode, stdout };
-}
-
-/** The root of the git work tree containing `cwd`, or undefined outside a repository. */
+/**
+ * The root of the git work tree containing `cwd`, or undefined outside a repository: the nearest
+ * directory, from `cwd` up, holding a `.git` directory or file (a linked worktree has a file).
+ *
+ * Rejected alternative: `git rev-parse --show-toplevel`. Sections render on every model request,
+ * and spawning git there cost panad 13% of its CPU under the bench (BENCH.md). The bash tool's
+ * clean environment sets no `GIT_DIR`, so the walk finds the root git would.
+ */
 async function gitRoot(env: ExecutionEnv | undefined, cwd: string, context: Context): Promise<string | undefined> {
 	if (!env) return undefined;
-	const result = await runText(env, ["git", "rev-parse", "--show-toplevel"], cwd, context);
-	if (!result || result.exitCode !== 0) return undefined;
-	const root = result.stdout.trim();
-	return root.length === 0 ? undefined : resolve(root);
+	for (let dir = cwd; ; dir = dirname(dir)) {
+		const info = await env.fileInfo(join(dir, ".git"), context);
+		if (info.ok) return dir;
+		if (dirname(dir) === dir) return undefined;
+	}
 }
 
 /** `AGENTS.md` from the repo root down to `cwd`, root first; only `cwd/AGENTS.md` outside a repo. */
