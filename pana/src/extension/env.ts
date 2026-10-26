@@ -7,7 +7,7 @@
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result, ExecutionError } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
-import { userInfo } from "node:os";
+import { homedir, userInfo } from "node:os";
 import type { Runtime } from "../server/runtime.ts";
 
 /** The only variables a pana session's commands see, besides git's own env-config pair. */
@@ -107,7 +107,8 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 		const runtime = getRuntime();
 		const row = await runtime.db.get<{ id: string }>("SELECT id FROM sessions WHERE conversation_id = ?", target.conversationId);
 		return new PanaExecutionEnv({
-			cwd: target.cwd ?? process.cwd(),
+			// REF-01: a session with no cwd of its own runs in the panad user's home, not panad's cwd.
+			cwd: target.cwd ?? homedir(),
 			sessionId: row?.id,
 			hooksDir: runtime.paths.hooks,
 			stateDir: runtime.paths.dir,

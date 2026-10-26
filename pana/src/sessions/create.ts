@@ -12,6 +12,7 @@ import type { Extension, ModelRef, ToolRegistration } from "@earendil-works/pi-d
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
@@ -231,7 +232,9 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 		cwd = await createWorktree(runtime, directory(cwdFlag, "cwd"), id);
 	} else {
 		const dir = cwdFlag ?? profile.cwd;
-		cwd = dir === undefined ? undefined : directory(dir, "cwd");
+		// REF-01: with neither a flag nor a profile, the session starts in the panad user's home
+		// directory. panad's own working directory belongs to whoever started the service.
+		cwd = directory(dir ?? homedir(), "cwd");
 	}
 
 	const now = runtime.clock.now();

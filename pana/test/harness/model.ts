@@ -7,6 +7,7 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxText,
+	fauxThinking,
 	fauxToolCall,
 	type FauxContentBlock,
 	type FauxProviderHandle,
@@ -29,8 +30,8 @@ export interface ToolCallSpec {
 }
 
 export type Turn =
-	| { text: string; usage?: TurnUsage }
-	| { toolCalls: ToolCallSpec[]; text?: string; usage?: TurnUsage }
+	| { text: string; thinking?: string; usage?: TurnUsage }
+	| { toolCalls: ToolCallSpec[]; text?: string; thinking?: string; usage?: TurnUsage }
 	| { fail: string; usage?: TurnUsage };
 
 export type Script = Turn[];
@@ -71,11 +72,15 @@ function toMessage(turn: Turn): AssistantMessage {
 	}
 	if ("toolCalls" in turn) {
 		const blocks: FauxContentBlock[] = [];
+		if (turn.thinking) blocks.push(fauxThinking(turn.thinking));
 		if (turn.text) blocks.push(fauxText(turn.text));
 		for (const call of turn.toolCalls) blocks.push(fauxToolCall(call.name, call.args ?? {}, call.id ? { id: call.id } : {}));
 		return fauxAssistantMessage(blocks, { stopReason: "toolUse" });
 	}
-	return fauxAssistantMessage(turn.text);
+	const blocks: FauxContentBlock[] = [];
+	if (turn.thinking) blocks.push(fauxThinking(turn.thinking));
+	blocks.push(fauxText(turn.text));
+	return fauxAssistantMessage(blocks);
 }
 
 function patch(event: AssistantMessageEvent, usage: Usage): AssistantMessageEvent {

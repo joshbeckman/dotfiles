@@ -6,7 +6,7 @@
 import { ApiError } from "../api/errors.ts";
 import { decodeCursor, decodeOffset, pageOf, parseLimit } from "../api/pagination.ts";
 import type { Handlers } from "../api/types.ts";
-import { DEFAULT_SEARCH_LIMIT, listThreads, searchThreads } from "./query.ts";
+import { DEFAULT_SEARCH_LIMIT, flag, listThreads, searchThreads, type ThreadSearchOptions } from "./query.ts";
 import { regenerateSubject, SubjectError, subjectHistory } from "./subjects.ts";
 
 export const handlers: Handlers = {
@@ -14,13 +14,21 @@ export const handlers: Handlers = {
 		const query = (ctx.query.get("query") ?? "").trim();
 		const limit = parseLimit(ctx.query.get("limit"), DEFAULT_SEARCH_LIMIT);
 		const cursor = ctx.query.get("cursor");
+		// REF-03 and REF-05: archive state and unread counts belong to the caller, so the route
+		// asks for the caller's own view rather than the whole domain's.
+		const options: ThreadSearchOptions = {
+			participantId: ctx.caller.id,
+			archived: flag(ctx.query.get("archived")),
+			unread: flag(ctx.query.get("unread")),
+		};
 		if (!query) {
 			const before = decodeCursor(cursor, ["string"])?.[0] as string | undefined;
-			const page = pageOf(await listThreads(ctx.runtime, { limit: limit + 1, before }), limit, (row) => [row.threadId]);
+			const rows = await listThreads(ctx.runtime, { ...options, limit: limit + 1, ...(before === undefined ? {} : { before }) });
+			const page = pageOf(rows, limit, (row) => [row.threadId]);
 			return { status: 200, body: { threads: page.items, nextCursor: page.nextCursor } };
 		}
 		const offset = decodeOffset(cursor);
-		const hits = await searchThreads(ctx.runtime, query, { limit: limit + 1, offset });
+		const hits = await searchThreads(ctx.runtime, query, { ...options, limit: limit + 1, offset });
 		const page = pageOf(hits, limit, () => [offset + limit]);
 		return { status: 200, body: { threads: page.items, nextCursor: page.nextCursor } };
 	},

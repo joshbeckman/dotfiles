@@ -9,6 +9,7 @@ import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { section, type PromptSection } from "@earendil-works/pi-durable";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Runtime } from "../server/runtime.ts";
@@ -94,7 +95,8 @@ async function readText(env: ExecutionEnv, path: string, context: Context): Prom
 /** One section: the project's AGENTS.md files, root first. */
 export function projectSection(): PromptSection {
 	return section("project", async (input, context) => {
-		const cwd = resolve(input.agent.cwd ?? process.cwd());
+		// REF-01: the same home default the session runtime uses.
+		const cwd = resolve(input.agent.cwd ?? homedir());
 		const files = await agentsFiles(input.env, cwd, context);
 		if (files.length === 0) return undefined;
 		const parts: string[] = [];

@@ -231,7 +231,9 @@ describe("list pagination", () => {
 		for (const loader of ["loadInbox", "searchThreads", "loadSessionList", "loadSchedules"]) {
 			const start = app.indexOf(`async function ${loader}(`);
 			const body = app.slice(start, app.indexOf("\n}\n", start));
-			expect(body, loader).toContain("pagePath(");
+			// The inbox fetches through refreshUnread, which also sets the nav badge (REF-06).
+			const fetcher = loader === "loadInbox" ? app.slice(app.indexOf("async function refreshUnread("), start) : body;
+			expect(fetcher, loader).toContain("pagePath(");
 			expect(body, loader).toContain("showMore(list, nextCursor(body)");
 		}
 	});

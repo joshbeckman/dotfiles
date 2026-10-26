@@ -8,8 +8,10 @@
 
 export {
 	addressList,
+	archiveThread,
 	createThread,
 	inbox,
+	isThreadArchived,
 	messageBody,
 	postNotice,
 	readMessage,
@@ -18,6 +20,7 @@ export {
 	respond,
 	reviseMessage,
 	type CreateThreadInput,
+	type ArchiveState,
 	type FileRecord,
 	type InboxDelivery,
 	type InboxRecipient,

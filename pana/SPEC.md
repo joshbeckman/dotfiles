@@ -67,13 +67,14 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | GET | `/sessions` | search (`query`, `state`, `parent`) |
 | GET | `/sessions/:id` | show |
 | GET | `/sessions/:id/transcript` | transcript entries |
-| POST | `/sessions/:id/stop`, `/resume`, `/compact` | control |
-| GET | `/inbox` | caller's inbox (`participant` lets a user view a session's inbox) |
+| POST | `/sessions/:id/stop`, `/resume`, `/compact`, `/archive` | control |
+| GET | `/inbox` | caller's inbox, with `unreadCount` (`participant` lets a user view a session's inbox) |
 | POST | `/threads` | create a thread |
-| GET | `/threads` | search (`query`) |
+| GET | `/threads` | search (`query`, `archived`, `unread`) |
 | GET | `/threads/:id` | read |
 | POST | `/threads/:id/messages` | respond |
 | POST | `/threads/:id/subject` | regenerate subject |
+| POST | `/threads/:id/archive`, `/unarchive` | archive for the caller |
 | GET | `/messages/:id` | read one message |
 | POST | `/messages/:id/read` | mark read |
 | POST | `/messages/:id/revisions`, `/redact` | edit, redact |
@@ -319,15 +320,15 @@ Each package was built against contracts and fakes. These items prove the packag
 
 ## WP11: Refinements from first use
 
-- [ ] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is.
-- [ ] **REF-02** `pana session archive SESSION` calls `POST /sessions/:id/archive`. Only the user may archive. An archived session follows STA-07. The PWA session view has an Archive button that asks for confirmation.
-- [ ] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default thread list only. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
-- [ ] **REF-04** A new message delivered to a participant unarchives the thread for that participant.
-- [ ] **REF-05** Inbox items and thread list items carry the caller's `unreadCount`. `GET /threads?unread=1` and `pana thread search --unread` return only threads with unread messages.
-- [ ] **REF-06** The PWA marks threads with unread messages and shows their count. The nav shows the inbox unread count. Both update live from `/events`, and opening a thread clears its count.
-- [ ] **REF-07** The PWA inbox and thread views have Archive and Unarchive buttons.
-- [ ] **REF-08** Every ID and `pana://` URL the PWA shows is a link to its view: sessions to the session view, threads to the thread, messages to the thread scrolled to the message, schedules to the schedule, files to the file, and the user to the inbox. That includes senders, participants, headers, and `pana://` URLs inside message bodies and transcripts.
-- [ ] **REF-09** The session view shows the complete transcript: thinking blocks (collapsed by default), every tool call with its full arguments, every tool result with its full output (collapsed when long), system and compaction entries, and per-turn usage.
+- [x] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is.
+- [x] **REF-02** `pana session archive SESSION` calls `POST /sessions/:id/archive`. Only the user may archive. An archived session follows STA-07. The PWA session view has an Archive button that asks for confirmation.
+- [x] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default thread list only. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
+- [x] **REF-04** A new message delivered to a participant unarchives the thread for that participant.
+- [x] **REF-05** Inbox items and thread list items carry the caller's `unreadCount`. `GET /threads?unread=1` and `pana thread search --unread` return only threads with unread messages.
+- [x] **REF-06** The PWA marks threads with unread messages and shows their count. The nav shows the inbox unread count. Both update live from `/events`, and opening a thread clears its count.
+- [x] **REF-07** The PWA inbox and thread views have Archive and Unarchive buttons.
+- [x] **REF-08** Every ID and `pana://` URL the PWA shows is a link to its view: sessions to the session view, threads to the thread, messages to the thread scrolled to the message, schedules to the schedule, files to the file, and the user to the inbox. That includes senders, participants, headers, and `pana://` URLs inside message bodies and transcripts.
+- [x] **REF-09** The session view shows the complete transcript: thinking blocks (collapsed by default), every tool call with its full arguments, every tool result with its full output (collapsed when long), system and compaction entries, and per-turn usage.
 
 ## WP12: Scale
 

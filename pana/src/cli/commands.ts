@@ -273,6 +273,14 @@ export const COMMANDS: readonly CommandSpec[] = [
 		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"), "session")}/compact` }),
 	},
 	{
+		path: ["session", "archive"],
+		usage: "pana session archive SESSION",
+		summary: "Archive a session for good; its threads become read-only",
+		flags: [],
+		positionals: [{ name: "SESSION", param: "id", required: true }],
+		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"), "session")}/archive` }),
+	},
+	{
 		path: ["session", "inbox"],
 		usage: "pana session inbox SESSION",
 		summary: "List a session's inbox",
@@ -366,12 +374,46 @@ export const COMMANDS: readonly CommandSpec[] = [
 		}),
 	},
 	{
+		path: ["thread", "archive"],
+		usage: "pana thread archive THREAD",
+		summary: "Hide a thread from your inbox and default thread list",
+		flags: [],
+		positionals: [{ name: "THREAD", param: "id", required: true }],
+		request: (params) => ({ method: "POST", path: `/threads/${segment(text(params, "id"), "thread")}/archive` }),
+	},
+	{
+		path: ["thread", "unarchive"],
+		usage: "pana thread unarchive THREAD",
+		summary: "Show an archived thread again",
+		flags: [],
+		positionals: [{ name: "THREAD", param: "id", required: true }],
+		request: (params) => ({ method: "POST", path: `/threads/${segment(text(params, "id"), "thread")}/unarchive` }),
+	},
+	{
 		path: ["thread", "search"],
-		usage: "pana thread search --query TEXT",
+		usage: "pana thread search [--query TEXT] [--archived] [--unread]",
 		summary: "Search thread subjects and bodies",
-		flags: [string("query", "--query TEXT", "What to search for", { required: true }), ...PAGE_FLAGS],
+		flags: [
+			string("query", "--query TEXT", "What to search for; omit to list threads"),
+			bool("archived", "--archived", "Only threads you archived"),
+			bool("unread", "--unread", "Only threads with unread messages"),
+			...PAGE_FLAGS,
+		],
 		positionals: [],
-		request: (params) => ({ method: "GET", path: "/threads", query: { query: text(params, "query"), ...pageQuery(params) } }),
+		validate: (params) =>
+			params.query === undefined && params.archived !== true && params.unread !== true
+				? "give --query TEXT, --archived, or --unread"
+				: undefined,
+		request: (params) => ({
+			method: "GET",
+			path: "/threads",
+			query: {
+				query: text(params, "query"),
+				archived: params.archived === true ? "1" : undefined,
+				unread: params.unread === true ? "1" : undefined,
+				...pageQuery(params),
+			},
+		}),
 	},
 	{
 		path: ["memory"],

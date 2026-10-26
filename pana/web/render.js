@@ -5,7 +5,7 @@
 // The functions take their inputs instead of reading globals, so tests can drive them with
 // whichever renderer bundle is loaded.
 
-import { appHref } from "./links.js";
+import { appHref, panaLinkSegments } from "./links.js";
 
 // DOMPurify strips an unknown scheme from href/src unless it is listed. Pana links are ours,
 // and they are rewritten to app routes before the HTML reaches the DOM.
@@ -58,6 +58,40 @@ export function rewriteLinks(root, domain) {
 		}
 		if (mapped.startsWith("/files/")) image.setAttribute("data-file-path", mapped);
 		else image.setAttribute("src", mapped);
+	}
+	return root;
+}
+
+/**
+ * Turn `pana://` URLs written as plain text into links to their views (REF-08). Markdown only
+ * makes an anchor when the author wrote link syntax, and a message body often just mentions a
+ * session URL. Text inside an existing anchor is left alone.
+ */
+export function linkifyTextNodes(root, domain) {
+	const walker = root.ownerDocument.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+	const nodes = [];
+	while (walker.nextNode()) nodes.push(walker.currentNode);
+	for (const node of nodes) {
+		if (node.parentElement?.closest("a")) continue;
+		const segments = panaLinkSegments(node.nodeValue ?? "", domain);
+		if (!segments.some((segment) => segment.href)) continue;
+		const fragment = root.ownerDocument.createDocumentFragment();
+		for (const segment of segments) {
+			if (!segment.href) {
+				fragment.append(root.ownerDocument.createTextNode(segment.text));
+				continue;
+			}
+			const anchor = root.ownerDocument.createElement("a");
+			anchor.textContent = segment.text;
+			if (segment.href.startsWith("/files/")) {
+				anchor.dataset.filePath = segment.href;
+				anchor.setAttribute("href", "#");
+			} else {
+				anchor.setAttribute("href", segment.href);
+			}
+			fragment.append(anchor);
+		}
+		node.replaceWith(fragment);
 	}
 	return root;
 }
@@ -131,6 +165,7 @@ export async function renderDiagrams(root, { ensureMermaid, DOMPurify, idPrefix 
 export async function renderMessage(target, text, options) {
 	target.innerHTML = markdownToHtml(text, options);
 	rewriteLinks(target, options.domain);
+	linkifyTextNodes(target, options.domain);
 	await hydrateFiles(target, options.fetchFile);
 	await renderDiagrams(target, options);
 	return target;
