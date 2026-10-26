@@ -214,9 +214,12 @@ export class Memory {
 		mkdirSync(worktreesDir, { recursive: true });
 		if (existsSync(path) && isDirectoryEmpty(path)) rmSync(path, { recursive: true, force: true });
 
-		const hasBranch = (await this.revParse(`refs/heads/${branch}`, gitDir)) !== undefined;
-		const add = () =>
-			runGit(["-C", gitDir, "worktree", "add", "--quiet", ...(hasBranch ? [path, branch] : ["-b", branch, path, MAIN])]);
+		// The branch is checked on every attempt: a failed `worktree add -b` can still have created it,
+		// and the retry must then check it out instead of creating it again.
+		const add = async () => {
+			const hasBranch = (await this.revParse(`refs/heads/${branch}`, gitDir)) !== undefined;
+			return runGit(["-C", gitDir, "worktree", "add", "--quiet", ...(hasBranch ? [path, branch] : ["-b", branch, path, MAIN])]);
+		};
 		let result = await add();
 		if (result.code !== 0) {
 			// A worktree whose directory was deleted stays registered and blocks `worktree add`.
