@@ -289,6 +289,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, compact, and reload controls.
 - [x] **WEB-07** A reply draft records the thread head when opened. On a 409, the app shows the new messages and keeps the draft.
 - [x] **WEB-08** Editing or redacting a message asks for confirmation and says that sessions keep what they already received.
+- [x] **WEB-09** The app icon is the woven braid (`web/favicon.svg`). `panad` serves PNG copies without the token: a 180 px `apple-touch-icon.png` for iOS home screens, 192 and 512 px icons, and a 512 px maskable icon. The shell links the touch icon, the manifest lists all of them, and push notifications use the 192 px icon.
 - [x] **PSH-01** `panad` makes VAPID keys on first start and serves the public key at `/push/key`.
 - [x] **PSH-02** The app subscribes after the user allows notifications and posts the subscription.
 - [x] **PSH-03** Each delivery to the user and each notice sends a push. Clicking it opens the thread.

@@ -80,6 +80,23 @@ function waitForLine(child: ReturnType<typeof spawn>, pattern: RegExp): Promise<
 }
 
 describe("PWA shell and static assets", () => {
+	it("WEB-09 the app icons load without the token as real PNGs, and the shell and manifest name them", async () => {
+		t = await startTestPanad();
+		const port = t.panad.tcpPort!;
+		for (const [path, size] of [["/apple-touch-icon.png", 180], ["/icon-192.png", 192], ["/icon-512.png", 512], ["/icon-maskable-512.png", 512]] as const) {
+			const res = await request({ host: "127.0.0.1", port }, "GET", path);
+			expect(res.status, path).toBe(200);
+			expect(res.headers["content-type"]).toBe("image/png");
+			const bytes = Buffer.from(res.raw as Uint8Array);
+			expect(bytes.subarray(1, 4).toString("ascii")).toBe("PNG");
+			expect(bytes.readUInt32BE(16), `${path} width`).toBe(size);
+		}
+		const page = String((await request({ host: "127.0.0.1", port }, "GET", "/")).raw);
+		expect(page).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
+		const manifest = JSON.parse(String((await request({ host: "127.0.0.1", port }, "GET", "/manifest.webmanifest")).raw));
+		expect(manifest.icons.map((icon: { src: string; purpose: string }) => `${icon.src} ${icon.purpose}`)).toContain("/icon-maskable-512.png maskable");
+	});
+
 	it("WEB-01 panad serves the PWA at / on TCP and prints a launch URL with the token in the fragment", async () => {
 		t = await startTestPanad();
 		const port = t.panad.tcpPort!;

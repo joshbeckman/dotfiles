@@ -18,7 +18,7 @@ self.addEventListener("push", (event) => {
 			body: payload.body || "",
 			tag: payload.tag || "pana",
 			data: { threadId: payload.threadId, url: payload.url },
-			icon: "/favicon.svg",
+			icon: "/icon-192.png",
 		}),
 	);
 });

@@ -33,6 +33,11 @@ const ASSETS: Record<string, StaticAsset> = {
 	"/sw.js": { file: "sw.js", contentType: "text/javascript; charset=utf-8" },
 	"/manifest.webmanifest": { file: "manifest.webmanifest", contentType: "application/manifest+json" },
 	"/favicon.svg": { file: "favicon.svg", contentType: "image/svg+xml" },
+	// iOS ignores SVG for home-screen icons and Chrome's install prompt wants PNGs.
+	"/apple-touch-icon.png": { file: "apple-touch-icon.png", contentType: "image/png" },
+	"/icon-192.png": { file: "icon-192.png", contentType: "image/png" },
+	"/icon-512.png": { file: "icon-512.png", contentType: "image/png" },
+	"/icon-maskable-512.png": { file: "icon-maskable-512.png", contentType: "image/png" },
 	// Chrome and Safari both ask for this path even when the markup names favicon.svg.
 	"/favicon.ico": { file: "favicon.svg", contentType: "image/svg+xml" },
 };
