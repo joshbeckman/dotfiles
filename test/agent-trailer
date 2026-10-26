@@ -4,7 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/bin"
+mkdir -p "$tmp/bin" "$tmp/.local/state/pana"
+printf '{"domain":"test.example","user":"tester"}\n' >"$tmp/.local/state/pana/config.json"
 cat >"$tmp/bin/git" <<'SH'
 #!/bin/sh
 [ "$*" = 'config user.email' ] || exit 1
@@ -55,5 +56,22 @@ cat >"$tmp/session.jsonl" <<'JSON'
 JSON
 check 'pi-test/second/model-two' PI_CODING_AGENT=1 PI_PACKAGE_DIR=/fixture/pi-test \
   PI_SESSION_ID=fixture-session PI_SESSION_FILE="$tmp/session.jsonl" -- --raw
+
+# pana sessions have no name, so the trailer is the session URL. A bare ULID is the
+# form PANA_SESSION takes, which is why the domain comes from pana's config.
+pana_session=01JB8ZQ4V0K3W9X2Y7Z5A6B8C9
+pana_url="pana://test.example/sessions/$pana_session"
+check "Co-authored-by: AI $pana_url" PANA_SESSION="$pana_session" --
+check "Co-authored-by: AI $pana_url <$pana_session@test.example>" PANA_SESSION="$pana_session" -- --email
+check "pana/session/$pana_session" PANA_SESSION="$pana_session" -- --raw
+# The URL form names its own domain, so it does not need pana's config.
+check "Co-authored-by: AI $pana_url" PANA_SESSION="$pana_url" PANA_STATE=/nonexistent --
+# pana wins over another harness in the environment: a session that runs pi still
+# speaks for the pana session that woke it.
+check "Co-authored-by: AI $pana_url" PANA_SESSION="$pana_session" "${runtime[@]}" --
+# Anything that is not a session URL or a ULID falls through to the usual
+# detection, so a mangled variable cannot claim every commit in a repository.
+check 'unknown/unknown/unknown' PANA_SESSION=not-a-session -- --raw
+check 'pi-test/vendor/model-one' PANA_SESSION=not-a-session "${runtime[@]}" -- --raw
 
 printf 'agent-trailer: %s checks passed\n' "$checks"
