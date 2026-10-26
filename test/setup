@@ -78,6 +78,9 @@ class SetupTest(unittest.TestCase):
             target = self.repo / '.config/systemd/user' / unit
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('[Unit]\n')
+        # panad is a service rather than a timer, and it is enabled without being
+        # started on a machine that has no pana config yet.
+        (self.repo / '.config/systemd/user/panad.service').write_text('[Unit]\n')
         for path in ('.agents/AGENTS.md', '.agents/pi/settings.json', '.agents/pi/keybindings.json'):
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -314,6 +317,29 @@ class SetupTest(unittest.TestCase):
         systemctl = [c['args'] for c in self.records() if c['command'] == 'systemctl']
         self.assertIn(['--user', 'daemon-reload'], systemctl)
         self.assertIn(['--user', 'enable', '--now', 'dotfiles-refresh.timer'], systemctl)
+
+    def test_linux_links_and_enables_panad_without_starting_it_unconfigured(self):
+        # panad restarts on failure, so starting it before pana has a config.json
+        # would be a restart loop rather than a working service.
+        result = self.run_setup(platform='linux-gnu')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        link = self.home / '.config/systemd/user/panad.service'
+        self.assertTrue(link.is_symlink(), 'panad.service was not linked')
+        self.assertEqual(os.readlink(link), str(self.repo / '.config/systemd/user/panad.service'))
+        systemctl = [c['args'] for c in self.records() if c['command'] == 'systemctl']
+        self.assertIn(['--user', 'enable', 'panad.service'], systemctl)
+        self.assertFalse([a for a in systemctl
+                          if a[-1] == 'panad.service' and any(w in a for w in ('start', 'restart'))],
+                         'panad was started before pana had a config')
+
+    def test_linux_restarts_a_configured_panad(self):
+        state = self.home / '.local/state/pana'
+        state.mkdir(parents=True)
+        (state / 'config.json').write_text('{"domain":"test.example","user":"tester"}')
+        result = self.run_setup(platform='linux-gnu')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        systemctl = [c['args'] for c in self.records() if c['command'] == 'systemctl']
+        self.assertIn(['--user', 'restart', 'panad.service'], systemctl)
 
     def test_mac_does_not_install_the_linux_timer(self):
         result = self.run_setup()

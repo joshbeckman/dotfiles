@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# panad-service: run panad under launchd or a systemd user unit.
+#
+# A script rather than a long ProgramArguments or ExecStart so that a service run,
+# a manual run, and a test all take one path. launchd and systemd hand a job a
+# minimal environment: panad needs node on PATH, and it needs provider credentials
+# that only `s` can decrypt.
+
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: panad-service [-h|--help]
+
+Start panad with the login shell's PATH and the provider credentials that `s`
+(https://github.com/tobi/s) injects. Library/LaunchAgents/org.joshbeckman.panad.plist
+and .config/systemd/user/panad.service both run this, so a manual run reproduces
+the service.
+
+Environment:
+  PANA_SECRETS        credential names to inject, space or comma separated.
+                      Defaults to the provider keys present in the store.
+  PANA_S_KEY_COMMAND  command that prints the `s` store password. Defaults to the
+                      OS secret store, since a service job has no TTY to ask.
+  PANAD               panad executable to run. Defaults to pana/bin/panad in this
+                      checkout.
+USAGE
+}
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+esac
+
+# launchd hands jobs a minimal PATH, and node, `s`, and panad's own tools live
+# where only an interactive shell looks. The login shell's PATH adds
+# machine-specific toolchains without naming them in this public repo; the marker
+# keeps a shell greeting out of the captured value. Same reasoning as
+# bin/dotfiles-refresh, which has to survive the identical environment.
+login_path="$("${SHELL:-/bin/zsh}" -lic 'printf "\n__PATH__=%s\n" "$PATH"' </dev/null 2>/dev/null | sed -n 's/^__PATH__=//p' | tail -1 || true)"
+PATH="$HOME/bin:${login_path:+$login_path:}/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+# dfm links ~/bin/<name> back into this checkout, so a manual run can arrive
+# through a symlink that has nothing to do with where the repo lives.
+self="$0"
+if [ -L "$self" ]; then
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *) self="$(dirname "$self")/$link" ;;
+  esac
+fi
+dotfiles="$(cd "$(dirname "$self")/.." && pwd)"
+panad="${PANAD:-$dotfiles/pana/bin/panad}"
+
+if [ ! -x "$panad" ]; then
+  printf 'panad-service: %s is not executable; is the dotfiles checkout present?\n' "$panad" >&2
+  exit 1
+fi
+
+# `s KEY -- cmd` asks a TTY for the store password when S_KEY and S_KEY_COMMAND
+# are both unset, and a job with no terminal cannot answer: under launchd it fails
+# with "reading password from TTY: Device not configured". S_KEY_COMMAND reads the
+# password from the OS secret store on every run instead, so no secret lands in
+# this script, the plist, the unit, or any file pana owns.
+if [ -z "${S_KEY:-}" ] && [ -z "${S_KEY_COMMAND:-}" ]; then
+  case "$(uname -s)" in
+    Darwin) store_command='security find-generic-password -s s-secrets -w' ;;
+    *)
+      # Linux has no Keychain; libsecret is the equivalent store, and its absence
+      # just means the credentials are injected by hand or not at all.
+      if command -v secret-tool >/dev/null 2>&1; then
+        store_command='secret-tool lookup service s-secrets'
+      fi
+      ;;
+  esac
+  if [ -n "${store_command:-}" ]; then
+    S_KEY_COMMAND="$store_command"
+    export S_KEY_COMMAND
+  fi
+fi
+
+# Name the credentials pana needs instead of injecting the whole store: a
+# session's bash tool inherits panad's environment, and a GitHub token or a push
+# key has no business there (ISO-04).
+default_secrets='ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY AI_GATEWAY_API_KEY OPENROUTER_API_KEY'
+wanted="${PANA_SECRETS-$default_secrets}"
+wanted="${wanted//,/ }"
+
+secrets=()
+if command -v s >/dev/null 2>&1; then
+  # `s list` fails when the store password cannot be fetched. panad still serves
+  # threads, the PWA, and the CLI then; only model runs fail, and a restart loop
+  # would hide that.
+  stored="$(s list 2>/dev/null || true)"
+  for name in $wanted; do
+    case "$name" in
+      '' | *[!A-Za-z0-9_]*) continue ;;
+    esac
+    if printf '%s\n' "$stored" | grep -Eq "^[[:space:]]*$name[[:space:]]"; then
+      secrets+=("$name")
+    fi
+  done
+fi
+
+# Injecting a name the store cannot decrypt makes s exit before panad starts, and
+# launchd would restart that forever without the daemon ever serving. Probe one
+# name first: failing to decrypt is worth a log line, not a service that is down.
+if [ ${#secrets[@]} -gt 0 ]; then
+  if s "${secrets[0]}" -- /usr/bin/true >/dev/null 2>&1; then
+    printf 'panad-service: starting %s with %s from s\n' "$panad" "${secrets[*]}" >&2
+    exec s "${secrets[@]}" -- "$panad" "$@"
+  fi
+  printf 'panad-service: s could not decrypt %s; starting %s with no provider credentials\n' "${secrets[*]}" "$panad" >&2
+elif command -v s >/dev/null 2>&1; then
+  printf 'panad-service: no stored provider credentials among "%s"; starting %s without them\n' "$wanted" "$panad" >&2
+fi
+exec "$panad" "$@"

@@ -58,7 +58,7 @@ A session has no name. Its URL is its identity, its attribution, and its address
 - State lives under `~/.local/state/pana/`: `pana.sqlite`, `files/`, and `memory.git`.
 - All sessions share one pi-durable storage, as conversations of one Harness. pi-durable tables use the `pi_` prefix. Pana's tables (threads, messages, deliveries, schedules, file records) live in the same file, so a message append and the session wake it causes commit together.
 - `panad` binds HTTP to loopback. Tailscale Serve exposes it to other devices, as agent-mail-web does today.
-- `panad` runs under launchd on macOS and a systemd user unit on Linux.
+- `panad` runs under launchd on macOS and a systemd user unit on Linux. Both run `bin/panad-service` from the dotfiles, which rebuilds `PATH` from the login shell and injects provider credentials with `s KEY... -- panad`. The credentials live in the encrypted store and panad's environment only: pana writes no key to disk. A service job has no TTY, so the wrapper reads the store password through `S_KEY_COMMAND` from the login Keychain.
 - Runtime is Node, because pi-durable is TypeScript.
 
 ### Isolation from pi
