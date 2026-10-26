@@ -59,6 +59,10 @@ interface Group {
 	savepoints: number;
 	/** pi-durable commits (released savepoints) that have joined this transaction. */
 	joined: number;
+	/** Savepoints opened and not yet released or rolled back. */
+	open: number;
+	/** Called when `open` drops to zero. */
+	drained: Array<() => void>;
 }
 
 export class PanaDatabase implements SqliteDatabase {
@@ -126,20 +130,29 @@ export class PanaDatabase implements SqliteDatabase {
 			return this.#inner.transaction((tx) => callback(this.#guarded(tx)));
 		}
 		const name = `pana_sp_${group.savepoints++}`;
-		await this.exec(`SAVEPOINT ${name}`);
-		let result: T;
+		// A background pi-durable commit can join while `fn` is finishing. The group stays open until
+		// every savepoint is released; otherwise its later statements would run outside the
+		// transaction, after COMMIT, and fail with "no such savepoint".
+		group.open++;
 		try {
-			result = await callback(this);
-		} catch (error) {
-			if (!this.#dead) {
-				await group.tx.exec(`ROLLBACK TO ${name}`);
-				await group.tx.exec(`RELEASE ${name}`);
+			await this.exec(`SAVEPOINT ${name}`);
+			let result: T;
+			try {
+				result = await callback(this);
+			} catch (error) {
+				if (!this.#dead) {
+					await group.tx.exec(`ROLLBACK TO ${name}`);
+					await group.tx.exec(`RELEASE ${name}`);
+				}
+				throw error;
 			}
-			throw error;
+			await this.exec(`RELEASE ${name}`);
+			group.joined++;
+			return result;
+		} finally {
+			group.open--;
+			if (group.open === 0) for (const resolve of group.drained.splice(0)) resolve();
 		}
-		await this.exec(`RELEASE ${name}`);
-		group.joined++;
-		return result;
 	}
 
 	/** Wrap an ordinary transaction handle so a crash injected elsewhere stops it too. */
@@ -181,15 +194,23 @@ export class PanaDatabase implements SqliteDatabase {
 		let result: T;
 		try {
 			result = await this.#inner.transaction(async (tx) => {
-				const group: Group = { tx, index: 0, savepoints: 0, joined: 0 };
+				const group: Group = { tx, index: 0, savepoints: 0, joined: 0, open: 0, drained: [] };
 				this.#group = group;
 				try {
 					let value: T | undefined;
+					let failure: { error: unknown } | undefined;
 					try {
 						value = await fn(this);
 					} catch (error) {
+						failure = { error };
+					}
+					if (!this.#dead) {
+						while (group.open > 0) await new Promise<void>((resolve) => group.drained.push(resolve));
+					}
+					if (failure) {
+						const { error } = failure;
 						if (error instanceof SimulatedCrash || this.#dead || group.joined === 0) throw error;
-						deferred = { error };
+						deferred = failure;
 					}
 					this.#check("COMMIT");
 					mustCommit = group.joined > 0;
