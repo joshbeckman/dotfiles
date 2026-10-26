@@ -876,6 +876,10 @@ describeBrowser("pana in a browser", () => {
 		expect(view.fromBottom).toBeLessThan(2);
 		expect(Math.abs(view.stickyTop - view.topbar)).toBeLessThan(4);
 		expect(view.controls).toBe(true);
+
+		// The header shows the session's pana:// URL, as a thread's header does.
+		const url = await evaluatePage<string>(`return document.querySelector("[data-testid=session-url] a")?.textContent ?? ""`);
+		expect(url).toBe(`pana://test.example/sessions/${seeded.session.id}`);
 	});
 
 	it("UX-13 New on the Threads page opens the composer, and the nav has no Compose item", async () => {

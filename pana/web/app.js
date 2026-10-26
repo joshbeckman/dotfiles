@@ -1142,6 +1142,14 @@ async function openSession(id) {
 		else details.append(document.createTextNode(String(part)));
 	}
 	meta.append(" ", details);
+	// Like a thread's header, the session's header shows its canonical pana:// URL.
+	if (state.session.url) {
+		const url = document.createElement("span");
+		url.className = "hint";
+		url.dataset.testid = "session-url";
+		url.append(refLink(state.session.url, "session"));
+		meta.append(" ", url);
+	}
 	const archive = $("session-archive");
 	if (archive) {
 		archive.hidden = state.session.state === "archived";
