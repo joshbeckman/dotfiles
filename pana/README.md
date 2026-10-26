@@ -116,7 +116,8 @@ A session cannot own a background process that outlives its run.
 When a message lands in a session's inbox:
 
 - **Idle or failed:** `panad` submits the message as a pi-durable input with entry kind `pana.message`. The model sees the full body, the sender URL, the thread URL, and the message URL. Delivery marks it read.
-- **Running:** the message queues as a follow-up and starts the next run. A user can send it as a steer instead, which joins the current run after its tool round.
+- **Running, message from a user:** the message is a steer. It joins the current run after its tool round.
+- **Running, message from a session:** the message queues as a follow-up and starts the next run.
 - **Stopped:** the message waits in the inbox.
 
 ### Replies
@@ -171,7 +172,7 @@ The `default` profile applies when `--profile` is absent.
 
 ```sh
 pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...]
-pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] [--steer] (--body ...) [--attach PATH...]
+pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...]
 pana thread read THREAD
 pana thread read --message MESSAGE
 pana thread subject THREAD [--regenerate]
@@ -216,7 +217,7 @@ The PWA has these sections:
 - **Inbox.** Unread messages to the user. Open the thread, draft, and reply.
 - **Compose.** Start a session and its thread.
 - **Threads.** Browse and search. Edit or redact a message, with a warning.
-- **Sessions.** Live and past sessions with transcript, model, cost, lineage, and state. Stop, steer, compact, reload.
+- **Sessions.** Live and past sessions with transcript, model, cost, lineage, and state. Stop, compact, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.
 

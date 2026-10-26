@@ -180,8 +180,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [ ] **DLV-01** A message to an idle or failed session submits a pi-durable input with entry kind `pana.message`, and the session becomes `running`.
 - [ ] **DLV-02** The model input contains the sender URL, the thread URL, the message URL, the subject, the body, and the local path of each attachment.
 - [ ] **DLV-03** Delivery to a session marks the message read for it.
-- [ ] **DLV-04** A message to a running session queues as a follow-up and starts the next run.
-- [ ] **DLV-05** A user respond with `--steer` to a running session submits a steer. A session using `--steer` gets 403.
+- [ ] **DLV-04** A message from a session to a running session queues as a follow-up and starts the next run.
+- [ ] **DLV-05** A message from a user to a running session submits a steer. It reaches the model after the current tool round, in the same run.
 - [ ] **DLV-06** A message to a stopped session wakes nothing and stays unread.
 - [ ] **DLV-07** Messages from one session to a thread do not wake that same session.
 
@@ -282,7 +282,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [ ] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
 - [ ] **WEB-04** Messages render Markdown, images, and Mermaid. Reuse `apps/agent-mail-web/renderers.js` and `mermaid-renderer.js`.
 - [ ] **WEB-05** `pana://` links render as links to the matching app routes or `/files/` URLs.
-- [ ] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, steer, compact, and reload controls.
+- [ ] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, compact, and reload controls.
 - [ ] **WEB-07** A reply draft records the thread head when opened. On a 409, the app shows the new messages and keeps the draft.
 - [ ] **WEB-08** Editing or redacting a message asks for confirmation and says that sessions keep what they already received.
 - [ ] **PSH-01** `panad` makes VAPID keys on first start and serves the public key at `/push/key`.
