@@ -13,6 +13,7 @@ import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harnes
 import { appendAndWake, seedThread, type Appended, type Fixture } from "./harness/wake-fixture.ts";
 
 const PANA_TABLES = [
+	"domain_costs",
 	"participants",
 	"sessions",
 	"threads",

@@ -14,6 +14,7 @@ import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry, installGitHooks } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
+import { startSessions } from "../sessions/runtime.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
 import { defaultHandlers } from "./handlers.ts";
@@ -118,8 +119,12 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		// The hook directory must exist before any session's bash runs (HOK-01).
 		installGitHooks(paths.hooks, config.domain);
 
+		// WP3: the delivery hook and the run listener must be in place before any wake or run.
+		const sessions = startSessions(runtime, report);
+		cleanup.unshift(() => sessions.close());
 		await sweepWakes(db, runtime.wake, (error, wake) => report(error, `wake for delivery ${wake.deliveryId}`));
 		harness.resume();
+		sessions.recover();
 
 		const webToken = readWebToken(dir);
 		const appOptions = {

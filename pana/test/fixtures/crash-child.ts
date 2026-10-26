@@ -22,7 +22,7 @@ const model = createScriptedModel([{ text: "ok" }]);
 const harness = await Harness.open(storage, { models: model.models, registry: createRegistry() }, ctx);
 const newId = monotonicUlidFactory();
 const fixture = await seedThread(db, harness, newId, Date.now(), { domain: "test.example", user: "tester" });
-const runtime = { db, harness, url: () => "pana://test.example/x" } as unknown as Runtime;
+const runtime = { db, harness, config: { domain: "test.example" }, url: () => "pana://test.example/x" } as unknown as Runtime;
 
 const statements: string[] = [];
 const kill = mode === "count" ? undefined : Number(mode);

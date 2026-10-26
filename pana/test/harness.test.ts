@@ -48,10 +48,10 @@ describe("test harness", () => {
 		expect(t.runtime.clock).toBe(t.clock);
 		expect(t.clock.now()).toBe(FAKE_EPOCH);
 
-		// The socket client reaches panad: an unbuilt route (WP3's transcript) answers with the contract's error shape.
-		const res = await t.client.get(`/sessions/${t.runtime.newId()}/transcript`);
+		// The socket client reaches panad: an unbuilt route (WP8's push key) answers with the contract's error shape.
+		const res = await t.client.get("/push/key");
 		expect(res.status).toBe(501);
-		expect(res.body).toMatchObject({ error: { code: "not_implemented", route: "sessions.transcript" } });
+		expect(res.body).toMatchObject({ error: { code: "not_implemented", route: "push.key" } });
 
 		// The faux model answers through the Harness.
 		const root = await t.runtime.harness.root(ctx, { agent: { model: FAUX_MODEL } });

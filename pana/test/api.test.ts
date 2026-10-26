@@ -42,9 +42,9 @@ describe("API contract", () => {
 		expect(stale.status).toBe(409);
 		expect(stale.body).toEqual({ error: { code: "stale", message: "thread moved", newer: ["01JB0000000000000000000001"] } });
 
-		const unbuilt = await t.client.post("/sessions", {});
+		const unbuilt = await t.client.get("/push/key");
 		expect(unbuilt.status).toBe(501);
-		expect(unbuilt.body).toEqual({ error: { code: "not_implemented", message: "sessions.create is not implemented yet", route: "sessions.create", wp: "WP3" } });
+		expect(unbuilt.body).toEqual({ error: { code: "not_implemented", message: "push.key is not implemented yet", route: "push.key", wp: "WP8" } });
 
 		const missing = await t.client.get("/nope");
 		expect(missing.status).toBe(404);

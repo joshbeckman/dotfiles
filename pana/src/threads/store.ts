@@ -729,6 +729,12 @@ export interface NoticeInput {
 	body?: unknown;
 	/** Recipients. Users only; a named session is ignored (NTC-01). */
 	to?: unknown;
+	/**
+	 * Post in this existing thread instead of a new one, as STA-02 needs for a failed run. The
+	 * notice goes to the thread's users and to `to`; the domain does not join the thread, so later
+	 * messages never deliver to it.
+	 */
+	thread?: string;
 }
 
 /**
@@ -747,15 +753,28 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 			const resolved = await participantFor(tx, runtime, now, raw);
 			if (resolved.kind === "user") recipients.set(resolved.id, resolved);
 		}
+		const existing = input.thread;
+		if (existing !== undefined) {
+			const thread = await tx.get<ThreadRecord>("SELECT * FROM threads WHERE id = ?", existing);
+			if (!thread) throw ApiError.notFound(`thread ${existing}`);
+			const users = await tx.all<ParticipantRecord>(
+				`SELECT p.* FROM thread_participants tp JOIN participants p ON p.id = tp.participant_id
+				  WHERE tp.thread_id = ? AND p.kind = 'user' ORDER BY tp.joined_at, p.id`,
+				existing,
+			);
+			for (const user of users) recipients.set(user.id, user);
+		}
 		if (recipients.size === 0) {
 			const user = await ensureUser(tx, runtime, now, runtime.config.user);
 			recipients.set(user.id, user);
 		}
 
-		const threadId = runtime.newId();
-		await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, NULL, ?, ?)", threadId, sender.id, now);
-		for (const member of [sender, ...recipients.values()]) {
-			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
+		const threadId = existing ?? runtime.newId();
+		if (existing === undefined) {
+			await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, NULL, ?, ?)", threadId, sender.id, now);
+			for (const member of [sender, ...recipients.values()]) {
+				await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
+			}
 		}
 
 		const messageId = runtime.newId();
@@ -770,7 +789,7 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 			now,
 		);
 		await indexMessage(tx, { id: messageId, threadId, body });
-		await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
+		if (existing === undefined) await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
 		for (const recipient of recipients.values()) {
 			await tx.run(
 				"INSERT INTO deliveries (id, message_id, thread_id, recipient_id, created_at) VALUES (?, ?, ?, ?, ?)",

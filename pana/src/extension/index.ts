@@ -4,6 +4,7 @@
 import { createRegistry, defineExtension, type Extension, type Registry } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { Runtime } from "../server/runtime.ts";
+import { createSessionHooks } from "../sessions/reply.ts";
 import { createPanaSections } from "./prompt.ts";
 import { createPanaTools } from "./tools.ts";
 
@@ -35,6 +36,9 @@ export function createPanaExtension(getRuntime: () => Runtime): Extension {
 		name: PANA_EXTENSION_NAME,
 		tools: createPanaTools(getRuntime),
 		sections: createPanaSections(getRuntime),
+		// WP3: the auto-posted reply runs where the pana tools do, so a session's extension
+		// selection cannot drop one without the other.
+		hooks: createSessionHooks(getRuntime),
 	});
 }
 
