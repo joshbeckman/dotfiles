@@ -71,7 +71,13 @@ export async function main(argv: string[]): Promise<number> {
 		return 2;
 	}
 	const started = Date.now();
-	const result = await runBench({ ...options, log: (line) => process.stderr.write(`bench: ${line} (${((Date.now() - started) / 1000).toFixed(1)} s)\n`) });
+	let result;
+	try {
+		result = await runBench({ ...options, log: (line) => process.stderr.write(`bench: ${line} (${((Date.now() - started) / 1000).toFixed(1)} s)\n`) });
+	} catch (error) {
+		process.stderr.write(`bench: failed: ${error instanceof Error ? error.message : String(error)}\n`);
+		return 1;
+	}
 	process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : formatReport(result));
 	return result.ok ? 0 : 1;
 }

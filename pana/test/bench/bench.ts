@@ -286,8 +286,17 @@ interface Created {
 /** Run the bench. Resolves with the result; panad is stopped and, unless `keep`, its state removed. */
 export async function runBench(partial: Partial<BenchOptions> = {}): Promise<BenchResult> {
 	const options: BenchOptions = { ...DEFAULTS, ...partial };
-	const log = options.log ?? (() => {});
 	const state = mkdtempSync(join(tmpdir(), "pana-bench-"));
+	try {
+		return await benchIn(state, options);
+	} catch (error) {
+		if (!options.keep) rmSync(state, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+async function benchIn(state: string, options: BenchOptions): Promise<BenchResult> {
+	const log = options.log ?? (() => {});
 	writeFileSync(
 		join(state, "config.json"),
 		JSON.stringify({
