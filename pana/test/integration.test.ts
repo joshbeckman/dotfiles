@@ -3,7 +3,7 @@
 
 import { createRequire } from "node:module";
 import { request as httpRequest, type IncomingMessage } from "node:http";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -317,5 +317,21 @@ describe("INT-03 push, notices, and the live transcript", () => {
 		} finally {
 			stream.close();
 		}
+	});
+});
+
+describe("INT-06 docs", () => {
+	it("INT-06 README's Run it section covers config.json, panad, the service, the CLI, and the PWA, with a model panad can run", async () => {
+		const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+		const start = readme.indexOf("## Run it");
+		expect(start).toBeGreaterThan(-1);
+		const section = readme.slice(start, readme.indexOf("\n## ", start + 1));
+		for (const needle of ["config.json", "pana/bin/panad", "launchctl bootstrap", "panad.service", "pana session create", "launch URL", "tailscale serve", "scripts/smoke"]) {
+			expect(section).toContain(needle);
+		}
+		const config = JSON.parse(/```json\n([\s\S]*?)```/.exec(section)![1]!) as { defaultModel: string };
+		expect(hasModel(await createProviderModels({ FIREWORKS_API_KEY: "fw-test" }), config.defaultModel)).toBe(true);
+		const service = readFileSync(new URL("../../bin/panad-service", import.meta.url), "utf8");
+		expect(/default_secrets='([^']*)'/.exec(service)![1]!.split(" ")).toContain("FIREWORKS_API_KEY");
 	});
 });
