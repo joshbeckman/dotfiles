@@ -99,16 +99,16 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP1: Server and CLI
 
-- [ ] **SRV-01** `panad` starts, listens on both transports, and logs one JSONL line per request to `<state>/panad.log` with route, caller, status, and duration. Bodies are never logged.
-- [ ] **SRV-02** On SIGTERM, `panad` stops accepting requests, closes the Harness, and exits 0. Runs in progress resume at the next start.
-- [ ] **SRV-03** After a crash mid-run, the next start calls `harness.resume()` and the run finishes.
-- [ ] **CLI-01** `pana` talks only to the socket. If `panad` is not running, it exits 1 with `panad is not running`.
-- [ ] **CLI-02** `pana` sends `Pana-Caller` from `PANA_SESSION` when set.
-- [ ] **CLI-03** Output is text when stdout is a TTY and JSON otherwise. `--json` forces JSON.
-- [ ] **CLI-04** `--body TEXT`, `--body-file PATH`, and `--body -` (stdin) are mutually exclusive. Two of them, or none where a body is required, exit 2.
-- [ ] **CLI-05** Exit codes follow API-02.
-- [ ] **CLI-06** `pana --help` and `pana <noun> --help` list every command in the README.
-- [ ] **CLI-07** Unknown commands and flags exit 2 with usage.
+- [x] **SRV-01** `panad` starts, listens on both transports, and logs one JSONL line per request to `<state>/panad.log` with route, caller, status, and duration. Bodies are never logged.
+- [x] **SRV-02** On SIGTERM, `panad` stops accepting requests, closes the Harness, and exits 0. Runs in progress resume at the next start.
+- [x] **SRV-03** After a crash mid-run, the next start calls `harness.resume()` and the run finishes.
+- [x] **CLI-01** `pana` talks only to the socket. If `panad` is not running, it exits 1 with `panad is not running`.
+- [x] **CLI-02** `pana` sends `Pana-Caller` from `PANA_SESSION` when set.
+- [x] **CLI-03** Output is text when stdout is a TTY and JSON otherwise. `--json` forces JSON.
+- [x] **CLI-04** `--body TEXT`, `--body-file PATH`, and `--body -` (stdin) are mutually exclusive. Two of them, or none where a body is required, exit 2.
+- [x] **CLI-05** Exit codes follow API-02.
+- [x] **CLI-06** `pana --help` and `pana <noun> --help` list every command in the README.
+- [x] **CLI-07** Unknown commands and flags exit 2 with usage.
 
 ---
 
