@@ -52,8 +52,8 @@
 			<section class="view" id="view-compose" data-testid="compose" hidden>
 				<h2>Compose</h2>
 				<form id="compose-form">
-					<label for="compose-to">To</label>
-					<input id="compose-to" name="to" placeholder="joshbeckman, 01J… (comma separated)" />
+					<label for="compose-to">Also to</label>
+					<input id="compose-to" name="to" placeholder="optional: joshbeckman, 01J… (comma separated)" />
 					<label for="compose-subject">Subject</label>
 					<input id="compose-subject" name="subject" placeholder="optional" />
 					<label for="compose-body">Message</label>
@@ -103,7 +103,7 @@
 				<h2>Sessions</h2>
 				<form id="sessions-search" class="search">
 					<label for="sessions-query">Search</label>
-					<input id="sessions-query" data-testid="sessions-query" placeholder="state, model, or id" />
+					<input id="sessions-query" data-testid="sessions-query" placeholder="transcript text" />
 					<button type="submit">Search</button>
 				</form>
 				<div id="sessions-list" data-testid="sessions-list" class="list"></div>
@@ -151,9 +151,11 @@
 						<option value="session">session</option>
 						<option value="thread">thread</option>
 					</select>
-					<label for="schedule-when">Cron</label>
-					<input id="schedule-when" data-testid="schedule-when" placeholder="0 9 * * 1-5" />
-					<label for="schedule-prompt">Prompt</label>
+					<label for="schedule-when">Cron or time</label>
+					<input id="schedule-when" data-testid="schedule-when" placeholder="0 9 * * 1-5, or 2026-10-25T18:26:14Z" />
+					<label for="schedule-to">To (thread schedules)</label>
+					<input id="schedule-to" data-testid="schedule-to" placeholder="joshbeckman, 01J… (comma separated)" />
+					<label for="schedule-prompt">Prompt or message</label>
 					<textarea id="schedule-prompt" data-testid="schedule-prompt" rows="4" required></textarea>
 					<button type="submit" id="schedule-create" data-testid="schedule-create">Create</button>
 				</form>

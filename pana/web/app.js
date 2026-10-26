@@ -11,6 +11,7 @@ import {
 	tokenFromInput,
 } from "./links.js";
 import { subscribeToPush } from "./push.js";
+import { commitView, entryView, inboxRow, memoryHitView, messageView, scheduleBody, scheduleWhen, threadRow } from "./views.js";
 import { escapeHtml, hydrateFiles, renderDiagrams, renderMessage, rewriteLinks } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
@@ -86,17 +87,6 @@ async function api(method, path, body) {
 		throw error;
 	}
 	return data;
-}
-
-async function apiText(path) {
-	const response = await raw(path);
-	const text = await response.text();
-	if (!response.ok) {
-		const error = new Error(`GET ${path} failed (${response.status})`);
-		error.status = response.status;
-		throw error;
-	}
-	return text;
 }
 
 async function fetchFile(path) {
@@ -175,7 +165,13 @@ function handleEvent(event) {
 		else void loadTranscript();
 		return;
 	}
-	if ((event.kind === "delivery" || event.kind === "notice") && state.section === "inbox") void loadInbox();
+	if (event.kind !== "delivery" && event.kind !== "notice") return;
+	if (state.section === "inbox") void loadInbox();
+	// Show new mail in the open thread, but only while no reply is drafted: reopening moves the
+	// draft head, and a draft in progress must keep its head so a stale send gets WEB-07's 409.
+	if (state.section === "threads" && event.threadId === state.thread?.id && !$("thread").hidden && !$("reply-body").value.trim()) {
+		void openThread(state.thread.id).catch(fail);
+	}
 }
 
 function handleChunk(chunk) {
@@ -238,6 +234,9 @@ function stopEvents() {
 
 function appendEntry(entry) {
 	const transcript = $("transcript");
+	// A live entry can also arrive in the transcript a reload just fetched.
+	if (entry.id !== undefined && transcript.querySelector(`[data-entry-id="${entry.id}"]`)) return;
+	transcript.querySelector(".hint")?.remove();
 	transcript.append(entryElement(entry));
 	transcript.lastElementChild?.scrollIntoView({ block: "nearest" });
 }
@@ -305,24 +304,19 @@ async function loadInbox() {
 	const body = await api("GET", "/inbox");
 	const list = $("inbox-list");
 	list.replaceChildren();
-	const items = asList(body, ["items", "deliveries", "inbox", "messages"]);
+	const items = asList(body, ["deliveries"]);
 	if (items.length === 0) return empty(list, "No messages yet. Compose one to start a thread.");
 	for (const delivery of items) {
-		const message = delivery.message ?? delivery;
-		learnDomain(delivery.senderUrl ?? message.senderUrl ?? delivery.thread?.url);
-		const threadId = delivery.threadId ?? delivery.thread_id ?? delivery.thread?.id;
-		const messageId = delivery.messageId ?? delivery.message_id ?? message.id ?? delivery.id;
-		const subject = delivery.subject ?? delivery.thread?.subject ?? message.subject ?? "(no subject)";
-		const sender = delivery.senderUrl ?? message.senderUrl ?? delivery.sender ?? "unknown sender";
-		const read = Boolean(delivery.read ?? delivery.readAt ?? delivery.read_at);
+		const row = inboxRow(delivery);
+		learnDomain(row.sender);
 		list.append(
 			item(
-				subject,
-				[sender, when(delivery.createdAt ?? delivery.created_at ?? message.createdAt), read ? undefined : "unread"],
+				row.subject,
+				[row.sender, when(row.at), row.read ? undefined : "unread"],
 				() => {
-					if (threadId) location.hash = `#/threads/${threadId}${messageId ? `?message=${messageId}` : ""}`;
+					location.hash = `#/threads/${row.threadId}?message=${row.messageId}`;
 				},
-				{ unread: !read, testid: "inbox-item", threadId, id: messageId },
+				{ unread: !row.read, testid: "inbox-item", threadId: row.threadId, id: row.messageId },
 			),
 		);
 	}
@@ -337,7 +331,6 @@ async function submitCompose(event) {
 		.map((value) => value.trim())
 		.filter(Boolean);
 	const body = $("compose-body").value;
-	if (to.length === 0) return status("Name at least one recipient.", true);
 	if (!body.trim()) return status("Write a message first.", true);
 	const subject = $("compose-subject").value.trim();
 	try {
@@ -346,8 +339,8 @@ async function submitCompose(event) {
 			...(to.length > 0 ? { to } : {}),
 			...(subject ? { subject } : {}),
 		});
-		const threadId = created?.thread?.id ?? created?.threadId;
-		const sessionId = created?.session?.id ?? created?.sessionId;
+		const threadId = created?.thread?.id;
+		const sessionId = created?.session?.id;
 		$("compose-to").value = "";
 		$("compose-subject").value = "";
 		$("compose-body").value = "";
@@ -366,14 +359,19 @@ async function searchThreads(event) {
 	const body = await api("GET", `/threads?query=${encodeURIComponent(query)}`);
 	const list = $("threads-list");
 	list.replaceChildren();
-	const threads = asList(body, ["threads", "items", "results"]);
+	const threads = asList(body, ["threads"]);
 	if (threads.length === 0) return empty(list, query ? `No threads match “${query}”.` : "No threads yet.");
-	for (const thread of threads) {
-		learnDomain(thread.url ?? thread.thread?.url);
+	const seen = new Set();
+	for (const hit of threads) {
+		const thread = threadRow(hit);
+		// A search returns one hit per matching message; list each thread once.
+		if (seen.has(thread.id)) continue;
+		seen.add(thread.id);
+		learnDomain(thread.url);
 		list.append(
 			item(
-				thread.subject ?? thread.id,
-				[thread.senderUrl ?? thread.createdBy, when(thread.updatedAt ?? thread.createdAt), thread.state],
+				thread.subject,
+				[thread.snippet, when(thread.at)],
 				() => {
 					location.hash = `#/threads/${thread.id}`;
 				},
@@ -381,17 +379,6 @@ async function searchThreads(event) {
 			),
 		);
 	}
-}
-
-function messageView(message) {
-	return {
-		id: message?.id,
-		sender: message?.senderUrl ?? message?.sender ?? message?.from ?? "",
-		at: message?.createdAt ?? message?.created_at ?? message?.at,
-		body: message?.body ?? "",
-		revised: Boolean(message?.revised ?? message?.edited),
-		redacted: Boolean(message?.redacted),
-	};
 }
 
 async function messageElement(message, { threadId, focus }) {
@@ -459,10 +446,10 @@ async function messageElement(message, { threadId, focus }) {
 
 async function openThread(id, focusMessage) {
 	const body = await api("GET", `/threads/${id}`);
-	const thread = body?.thread ?? body;
+	const thread = body.thread;
+	const messages = body.messages ?? [];
 	state.thread = thread;
-	const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-	learnDomain(thread?.url ?? messages[0]?.senderUrl);
+	learnDomain(thread?.url);
 
 	const draft = newDraft({ id, messages });
 	const stored = sessionStorage.getItem(`pana-draft:${id}`);
@@ -520,14 +507,9 @@ async function submitReply(event) {
  */
 async function showStale(error, draft) {
 	const body = await api("GET", `/threads/${draft.threadId}`);
-	const thread = body?.thread ?? body;
-	const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-	const newerIds = new Set(
-		[
-			...(Array.isArray(error?.body?.error?.newer) ? error.body.error.newer : []),
-			...(Array.isArray(error?.body?.error?.messageIds) ? error.body.error.messageIds : []),
-		].map(String),
-	);
+	const thread = body.thread;
+	const messages = body.messages ?? [];
+	const newerIds = new Set((Array.isArray(error?.body?.error?.newer) ? error.body.error.newer : []).map(String));
 	const headIndex = messages.findIndex((message) => message.id === draft.after);
 	const newer = headIndex === -1 ? messages.filter((message) => newerIds.has(message.id)) : messages.slice(headIndex + 1);
 	const container = $("stale-new");
@@ -602,13 +584,13 @@ async function loadSessionList(query = "") {
 	const body = await api("GET", `/sessions?query=${encodeURIComponent(query)}`);
 	const list = document.querySelector("#sessions-list");
 	list.replaceChildren();
-	const sessions = asList(body, ["sessions", "items", "results"]);
+	const sessions = asList(body, ["sessions"]);
 	if (sessions.length === 0) return empty(list, query ? `No sessions match “${query}”.` : "No sessions yet.");
 	for (const session of sessions) {
 		learnDomain(session.url);
 		const row = item(
 			session.id,
-			[session.state, session.model, when(session.updatedAt ?? session.createdAt), session.costUsd !== undefined ? `$${session.costUsd}` : undefined],
+			[session.state, session.model, when(session.updatedAt), cost(session.costUsd), session.snippet],
 			() => {
 				location.hash = `#/sessions/${session.id}`;
 			},
@@ -621,8 +603,7 @@ async function loadSessionList(query = "") {
 
 async function openSession(id) {
 	const [body, transcript] = await Promise.all([api("GET", `/sessions/${id}`), api("GET", `/sessions/${id}/transcript`)]);
-	const session = body?.session ?? body;
-	state.session = { ...session, id: session?.id ?? id };
+	state.session = body.session;
 	$("session-title").textContent = state.session.id;
 	const meta = $("session-meta");
 	meta.replaceChildren(badge(state.session.state ?? "unknown"));
@@ -631,14 +612,18 @@ async function openSession(id) {
 		state.session.model,
 		state.session.cwd,
 		state.session.parent ? `parent ${state.session.parent}` : undefined,
-		state.session.costUsd !== undefined ? `$${state.session.costUsd}` : undefined,
+		cost(state.session.costUsd),
 	]
 		.filter(Boolean)
 		.join(" · ");
 	meta.append(" ", details);
 	$("sessions-list").hidden = true;
 	$("session").hidden = false;
-	renderTranscript(asList(transcript, ["entries", "transcript", "items"]));
+	renderTranscript(asList(transcript, ["entries"]));
+}
+
+function cost(usd) {
+	return typeof usd === "number" ? `$${usd.toFixed(4)}` : undefined;
 }
 
 function renderTranscript(entries) {
@@ -649,15 +634,20 @@ function renderTranscript(entries) {
 }
 
 function entryElement(entry) {
+	const view = entryView(entry);
 	const div = document.createElement("div");
 	div.className = "entry";
 	div.dataset.testid = "entry";
-	div.dataset.role = String(entry.role ?? entry.kind ?? "assistant");
+	div.dataset.role = String(view.role);
+	div.dataset.kind = String(view.kind);
+	if (view.id !== undefined) div.dataset.entryId = String(view.id);
 	const meta = document.createElement("span");
 	meta.className = "entry-meta";
-	meta.textContent = [entry.role ?? entry.kind, when(entry.at ?? entry.createdAt)].filter(Boolean).join(" · ");
+	meta.textContent = [view.role, view.kind !== view.role ? view.kind : undefined, view.id !== undefined ? `#${view.id}` : undefined]
+		.filter(Boolean)
+		.join(" · ");
 	const text = document.createElement("div");
-	text.textContent = String(entry.text ?? entry.body ?? entry.content ?? "");
+	text.textContent = view.text;
 	div.append(meta, text);
 	return div;
 }
@@ -665,7 +655,7 @@ function entryElement(entry) {
 async function loadTranscript() {
 	if (!state.session) return;
 	const transcript = await api("GET", `/sessions/${state.session.id}/transcript`);
-	renderTranscript(asList(transcript, ["entries", "transcript", "items"]));
+	renderTranscript(asList(transcript, ["entries"]));
 }
 
 async function sessionAction(action) {
@@ -683,22 +673,20 @@ async function sessionAction(action) {
 // ---- Memory ---------------------------------------------------------------------------------
 
 async function loadMemory() {
-	const worktree = await api("GET", "/memory/worktree");
-	const path = worktree?.path ?? worktree?.worktree ?? worktree?.dir ?? "";
-	$("memory-worktree").textContent = path ? `Worktree: ${path}` : "No memory worktree yet.";
-	const files = asList(worktree, ["files"]);
+	const [worktree, listing] = await Promise.all([api("GET", "/memory/worktree"), api("GET", "/memory/files")]);
+	$("memory-worktree").textContent = worktree?.path ? `Worktree: ${worktree.path}` : "No memory worktree yet.";
+	const files = asList(listing, ["files"]);
 	const list = $("memory-files");
 	list.replaceChildren();
 	if (files.length === 0) {
-		empty(list, "No files listed.");
+		empty(list, "Memory is empty.");
 	} else {
 		for (const file of files) {
-			const filePath = file.path ?? file.name ?? String(file);
-			const row = item(filePath, [file.size !== undefined ? `${file.size} B` : undefined], () => void openMemoryFile(filePath), {
+			const row = item(file.path, [`${file.size} B`], () => void openMemoryFile(file.path), {
 				testid: "memory-file-item",
-				id: filePath,
+				id: file.path,
 			});
-			row.dataset.path = filePath;
+			row.dataset.path = file.path;
 			list.append(row);
 		}
 	}
@@ -709,31 +697,27 @@ async function loadMemoryLog() {
 	const body = await api("GET", "/memory/log");
 	const list = $("memory-log");
 	list.replaceChildren();
-	const commits = asList(body, ["commits", "log", "entries"]);
+	const commits = asList(body, ["commits"]);
 	if (commits.length === 0) return empty(list, "No memory commits yet.");
-	for (const commit of commits) {
-		list.append(
-			item(commit.subject ?? commit.message ?? commit.sha ?? String(commit), [commit.sha, when(commit.at ?? commit.createdAt)], () => {}, {
-				testid: "memory-commit",
-			}),
-		);
+	for (const raw of commits) {
+		const commit = commitView(raw);
+		list.append(item(commit.message, [commit.author, commit.short, when(Date.parse(commit.at))], () => {}, { testid: "memory-commit", id: commit.hash }));
 	}
 }
 
 async function searchMemory(event) {
 	event?.preventDefault();
 	const query = $("memory-query").value.trim();
+	if (!query) return status("Type words to search.", true);
 	const body = await api("GET", `/memory/search?query=${encodeURIComponent(query)}`);
 	const list = $("memory-results");
 	list.replaceChildren();
-	const results = asList(body, ["results", "matches", "items"]);
-	if (results.length === 0) return empty(list, query ? `Nothing matches “${query}”.` : "Type words to search.");
+	const results = asList(body, ["results"]);
+	if (results.length === 0) return empty(list, `Nothing matches “${query}”.`);
 	for (const result of results) {
-		const filePath = result.path ?? result.file ?? result.id ?? "";
-		const row = item(filePath || String(result), [result.snippet ?? result.line ?? result.text], () => void openMemoryFile(filePath), {
-			testid: "memory-result",
-		});
-		row.dataset.path = filePath;
+		const hit = memoryHitView(result);
+		const row = item(hit.path, [hit.text], () => void openMemoryFile(hit.path), { testid: "memory-result" });
+		row.dataset.path = hit.path;
 		list.append(row);
 	}
 }
@@ -747,14 +731,8 @@ let openMemoryPath = "";
 async function openMemoryFile(path) {
 	if (!path) return;
 	openMemoryPath = path;
-	const text = await apiText(`/memory/files/${memoryPath(path)}`);
-	let content = text;
-	try {
-		const parsed = JSON.parse(text);
-		content = parsed.content ?? parsed.body ?? text;
-	} catch {
-		// Raw file contents.
-	}
+	const file = await api("GET", `/memory/files/${memoryPath(path)}`);
+	const content = file.content;
 	$("memory-file").textContent = content;
 	$("memory-file").hidden = false;
 	$("memory-edit").value = content;
@@ -767,7 +745,7 @@ async function saveMemory() {
 	try {
 		await api("POST", `/memory/files/${memoryPath(openMemoryPath)}`, { content: $("memory-edit").value });
 		$("memory-file").textContent = $("memory-edit").value;
-		status("Saved. Commit it when the memory looks right.");
+		status("Saved and committed to main.");
 		await loadMemory();
 	} catch (error) {
 		fail(error);
@@ -777,8 +755,7 @@ async function saveMemory() {
 async function createWorktree() {
 	try {
 		const created = await api("POST", "/memory/worktree", {});
-		const path = created?.path ?? created?.worktree ?? created?.dir;
-		if (path) $("memory-worktree").textContent = `Worktree: ${path}`;
+		if (created?.path) $("memory-worktree").textContent = `Worktree: ${created.path}`;
 		status("Memory worktree ready.");
 		await loadMemory();
 	} catch (error) {
@@ -794,7 +771,7 @@ async function loadSchedules() {
 	const body = await api("GET", "/schedules");
 	const list = $("schedules-list");
 	list.replaceChildren();
-	const schedules = asList(body, ["schedules", "items"]);
+	const schedules = asList(body, ["schedules"]);
 	if (schedules.length === 0) return empty(list, "No schedules yet.");
 	for (const schedule of schedules) {
 		const row = document.createElement("div");
@@ -803,7 +780,7 @@ async function loadSchedules() {
 		row.dataset.id = schedule.id;
 		const title = document.createElement("span");
 		title.className = "title";
-		title.textContent = `${schedule.kind ?? "session"} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state ?? "active"}`;
+		title.textContent = `${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`;
 		const meta = document.createElement("span");
 		meta.className = "meta";
 		const payload = schedule.payload ?? {};
@@ -829,9 +806,10 @@ async function loadSchedules() {
 
 function startScheduleEdit(schedule) {
 	editingSchedule = schedule;
-	$("schedule-kind").value = schedule.kind ?? "session";
-	$("schedule-when").value = schedule.cron ?? "";
-	$("schedule-prompt").value = schedule.payload?.prompt ?? schedule.payload?.body ?? "";
+	$("schedule-kind").value = schedule.kind;
+	$("schedule-when").value = scheduleWhen(schedule);
+	$("schedule-prompt").value = String(schedule.payload?.prompt ?? schedule.payload?.body ?? "");
+	$("schedule-to").value = Array.isArray(schedule.payload?.to) ? schedule.payload.to.join(", ") : "";
 	$("schedule-create").textContent = "Update";
 	status(`Editing ${schedule.id}.`);
 	$("schedule-prompt").focus();
@@ -839,9 +817,11 @@ function startScheduleEdit(schedule) {
 
 async function createSchedule(event) {
 	event.preventDefault();
-	const prompt = $("schedule-prompt").value.trim();
-	if (!prompt) return status("Write a prompt first.", true);
-	const body = { kind: $("schedule-kind").value, cron: $("schedule-when").value.trim(), payload: { prompt } };
+	const text = $("schedule-prompt").value.trim();
+	if (!text) return status("Write a prompt first.", true);
+	const form = { kind: $("schedule-kind").value, when: $("schedule-when").value, text, to: $("schedule-to").value };
+	if (!editingSchedule && !form.when.trim()) return status("Give a cron expression or a time.", true);
+	const body = scheduleBody(form, editingSchedule);
 	try {
 		if (editingSchedule) await api("POST", `/schedules/${editingSchedule.id}`, body);
 		else await api("POST", "/schedules", body);
@@ -849,6 +829,7 @@ async function createSchedule(event) {
 		$("schedule-create").textContent = "Create";
 		$("schedule-prompt").value = "";
 		$("schedule-when").value = "";
+		$("schedule-to").value = "";
 		status("Schedule saved.");
 		await loadSchedules();
 	} catch (error) {
