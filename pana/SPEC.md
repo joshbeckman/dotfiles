@@ -37,7 +37,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 - [ ] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
 - [ ] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
-- [ ] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (5), `budget.domainDailyUsd` (50), `files.maxBytes` (26214400), `http.port` (8766).
+- [ ] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766).
 - [ ] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
 - [ ] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
