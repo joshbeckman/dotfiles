@@ -168,6 +168,10 @@ async function startChild(state: string, options: BenchOptions): Promise<Child> 
 		socket,
 		stop: async () => {
 			if (child.exitCode !== null) return;
+			if (process.env.PANA_BENCH_STDERR) {
+				child.kill("SIGUSR2");
+				await sleep(1000);
+			}
 			const exited = new Promise((resolve) => child.once("exit", resolve));
 			child.kill("SIGTERM");
 			await exited;
@@ -292,6 +296,8 @@ export async function runBench(partial: Partial<BenchOptions> = {}): Promise<Ben
 			defaultModel: BENCH_MODEL,
 			spawnDepth: options.spawnDepth,
 			budget: { sessionUsd: 1e9, domainDailyUsd: 1e9 },
+			// Any free port, so the bench runs beside a real panad on the default one.
+			http: { port: 0 },
 		}),
 	);
 
@@ -473,13 +479,13 @@ async function settle(call: Call, expected: number, timeoutMs: number): Promise<
 	}
 }
 
-/** Every session, a page at a time. Before SCALE-03 the route ignores the cursor. */
+/** Every session, a page at a time. Before SCALE-03 the route had no cursor and no maximum limit. */
 async function countSessions(call: Call): Promise<number> {
 	let total = 0;
 	let cursor: string | undefined;
 	do {
 		const body = must(
-			await call<{ sessions: unknown[]; nextCursor?: string | null }>("GET", `/sessions?limit=500${cursor ? `&cursor=${cursor}` : ""}`),
+			await call<{ sessions: unknown[]; nextCursor?: string | null }>("GET", `/sessions?limit=1000000${cursor ? `&cursor=${cursor}` : ""}`),
 			"session list",
 		);
 		total += body.sessions.length;
