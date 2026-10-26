@@ -17,7 +17,6 @@ export {
 	redactMessage,
 	respond,
 	reviseMessage,
-	subjectFrom,
 	type CreateThreadInput,
 	type FileRecord,
 	type InboxDelivery,

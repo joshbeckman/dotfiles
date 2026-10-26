@@ -14,6 +14,14 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import { wakeRequestId } from "../db/outbox.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
+import {
+	applyInitialSubject,
+	indexMessage,
+	recordSubject,
+	reindexRevision,
+	removeRedacted,
+	scheduleSubject,
+} from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { deliveryHooks } from "./delivery.ts";
 
@@ -173,12 +181,6 @@ export function messageBody(value: unknown): string {
 		throw ApiError.badRequest("invalid_body", "a message needs a non-empty body");
 	}
 	return value;
-}
-
-/** The first line of the body, trimmed to 80 characters, unless a subject was given. */
-export function subjectFrom(body: string, subject?: unknown): string {
-	if (typeof subject === "string" && subject.trim().length > 0) return subject.trim();
-	return (body.split("\n")[0] ?? "").trim().slice(0, 80);
 }
 
 /** A `--after` value: a bare message ULID or a message URL. Missing is a 400 (THR-03). */
@@ -391,6 +393,7 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 		options.body,
 		options.now,
 	);
+	await indexMessage(tx, { id: options.messageId, threadId: options.threadId, body: options.body });
 
 	const recipients = await tx.all<DeliveryRecipientRow>(
 		`SELECT tp.participant_id AS id, p.kind AS kind, p.url AS url,
@@ -453,8 +456,9 @@ export async function createThread(runtime: Runtime, caller: Caller, input: Crea
 	const body = messageBody(input.body);
 	const addresses = addressList(input.to, "recipients");
 	const now = runtime.clock.now();
+	const explicitSubject = typeof input.subject === "string" && input.subject.trim().length > 0;
 
-	return runtime.db.atomically(async (tx) => {
+	const result = await runtime.db.atomically(async (tx) => {
 		const sender = await ensureCaller(tx, runtime, now, caller);
 		const members = new Map<string, ParticipantRecord>([[sender.id, sender]]);
 		for (const raw of addresses) {
@@ -463,13 +467,7 @@ export async function createThread(runtime: Runtime, caller: Caller, input: Crea
 		}
 
 		const threadId = runtime.newId();
-		await tx.run(
-			"INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, ?, ?, ?)",
-			threadId,
-			subjectFrom(body, input.subject),
-			sender.id,
-			now,
-		);
+		await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, NULL, ?, ?)", threadId, sender.id, now);
 		for (const member of members.values()) {
 			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
 		}
@@ -481,8 +479,16 @@ export async function createThread(runtime: Runtime, caller: Caller, input: Crea
 			body,
 			now,
 		});
+		if (explicitSubject) {
+			await recordSubject(tx, { threadId, subject: input.subject as string, source: "manual", id: runtime.newId(), now });
+		} else {
+			await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
+		}
 		return { thread: await threadView(tx, runtime, threadId), message };
 	});
+	// SUB-02: the model job runs in the background, after the create transaction commits.
+	scheduleSubject(runtime, result.thread.id);
+	return result;
 }
 
 /**
@@ -626,6 +632,11 @@ async function appendEvent(runtime: Runtime, caller: Caller, messageId: string, 
 			reader.id,
 			now,
 		);
+		if (kind === "message.revised") {
+			await reindexRevision(tx, { id: messageId, threadId: row.thread_id, body: body ?? row.body });
+		} else {
+			await removeRedacted(tx, messageId);
+		}
 		return { message: (await messageViews(tx, runtime, [row], reader.id))[0]! };
 	});
 }
@@ -742,13 +753,7 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 		}
 
 		const threadId = runtime.newId();
-		await tx.run(
-			"INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, ?, ?, ?)",
-			threadId,
-			subjectFrom(body),
-			sender.id,
-			now,
-		);
+		await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, NULL, ?, ?)", threadId, sender.id, now);
 		for (const member of [sender, ...recipients.values()]) {
 			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
 		}
@@ -764,6 +769,8 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 			body,
 			now,
 		);
+		await indexMessage(tx, { id: messageId, threadId, body });
+		await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
 		for (const recipient of recipients.values()) {
 			await tx.run(
 				"INSERT INTO deliveries (id, message_id, thread_id, recipient_id, created_at) VALUES (?, ?, ?, ?, ?)",

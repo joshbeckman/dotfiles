@@ -50,6 +50,19 @@ interface ReadBody {
 	messages: MessageBody[];
 }
 
+interface SearchBody {
+	threads: Array<{
+		threadId: string;
+		threadUrl: string;
+		subject: string | null;
+		messageId?: string;
+		messageUrl?: string;
+		snippet: string;
+		matched: "subject" | "message";
+		createdAt: number;
+	}>;
+}
+
 interface InboxBody {
 	participant: Person;
 	deliveries: Array<{
@@ -337,6 +350,41 @@ describe("threads", () => {
 		const unread = await t.runtime.db.all<{ read_at: number | null }>("SELECT read_at FROM deliveries WHERE recipient_id = ? AND thread_id = ?", a, created.thread.id);
 		expect(unread).toHaveLength(2);
 		expect(unread.every((row) => typeof row.read_at === "number")).toBe(true);
+	});
+
+	it("SRC-01 a created thread gets a first-line subject, its messages search, and revisions and redactions follow", async () => {
+		const t = await start();
+		const a = await seedSession(t);
+		const created = await createThread(t, [a], "Launch notes\nwith a second line");
+		expect(created.thread.subject).toBe("Launch notes");
+		const written = await t.runtime.db.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", created.thread.id);
+		expect(written?.subject).toBe("Launch notes");
+
+		const bySubject = await t.client.get<SearchBody>("/threads?query=Launch");
+		expect(bySubject.status).toBe(200);
+		const subjectHit = bySubject.body.threads.find((thread) => thread.matched === "subject");
+		expect(subjectHit).toMatchObject({ threadId: created.thread.id, subject: "Launch notes" });
+		expect(bySubject.body.threads.every((thread) => thread.threadId === created.thread.id)).toBe(true);
+
+		const byBody = await t.client.get<SearchBody>("/threads?query=second");
+		const hit = byBody.body.threads.find((thread) => thread.messageId === created.message.id);
+		expect(hit).toMatchObject({ threadId: created.thread.id, matched: "message", messageId: created.message.id });
+		expect(hit?.snippet).toContain("second");
+
+		const reply = await t.client.post<ThreadBody>("/threads/" + created.thread.id + "/messages", { after: created.message.id, body: "apollo project kickoff" });
+		expect(reply.status).toBe(200);
+		const replied = await t.client.get<SearchBody>("/threads?query=apollo");
+		expect(replied.body.threads.map((thread) => thread.messageId)).toEqual([reply.body.message.id]);
+
+		await t.client.post("/messages/" + reply.body.message.id + "/revisions", { body: "zephyr project kickoff" });
+		expect((await t.client.get<SearchBody>("/threads?query=apollo")).body.threads).toEqual([]);
+		expect((await t.client.get<SearchBody>("/threads?query=zephyr")).body.threads.map((thread) => thread.messageId)).toEqual([
+			reply.body.message.id,
+		]);
+
+		await t.client.post("/messages/" + reply.body.message.id + "/redact", {});
+		expect((await t.client.get<SearchBody>("/threads?query=zephyr")).body.threads).toEqual([]);
+		expect((await t.client.get<SearchBody>("/threads?query=nothing-matches-this")).body.threads).toEqual([]);
 	});
 });
 
