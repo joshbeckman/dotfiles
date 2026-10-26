@@ -18,6 +18,7 @@ export const PANA_ENV_NAMES = [
 	"LANG",
 	"TERM",
 	"PANA_SESSION",
+	"PANA_STATE",
 	"GIT_CONFIG_COUNT",
 	"GIT_CONFIG_KEY_0",
 	"GIT_CONFIG_VALUE_0",
@@ -29,6 +30,11 @@ export interface PanaEnvOptions {
 	sessionId?: string;
 	/** Pana's hook directory, set as `core.hooksPath` through `GIT_CONFIG_*` (HOK-01). */
 	hooksDir: string;
+	/**
+	 * panad's state directory, exported as `PANA_STATE` so `pana` inside `bash` reaches this
+	 * panad's socket even when it does not run on the default state directory.
+	 */
+	stateDir?: string;
 	/** Overrides `HOME`, for a host whose session home differs from panad's. Default: panad's `HOME`. */
 	home?: string;
 }
@@ -46,6 +52,7 @@ export function panaShellEnv(options: PanaEnvOptions): Record<string, string> {
 		GIT_CONFIG_VALUE_0: options.hooksDir,
 	};
 	if (options.sessionId) env.PANA_SESSION = options.sessionId;
+	if (options.stateDir) env.PANA_STATE = options.stateDir;
 	return env;
 }
 
@@ -103,6 +110,7 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 			cwd: target.cwd ?? process.cwd(),
 			sessionId: row?.id,
 			hooksDir: runtime.paths.hooks,
+			stateDir: runtime.paths.dir,
 		});
 	};
 }

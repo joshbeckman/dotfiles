@@ -133,7 +133,7 @@ describe("extension isolation", () => {
 		}
 	});
 
-	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, and GIT_CONFIG_*", async () => {
+	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_STATE, and GIT_CONFIG_*", async () => {
 		const seeded = await start({ capture: true });
 		const first = seeded.sessions[0]!;
 		const conversation = await conversationOf(t!, first.conversationId);
@@ -150,6 +150,7 @@ describe("extension isolation", () => {
 
 		expect(env.TERM).toBe("dumb");
 		expect(env.PANA_SESSION).toBe(first.id);
+		expect(env.PANA_STATE).toBe(t!.runtime.paths.dir);
 		expect(env.GIT_CONFIG_COUNT).toBe("1");
 		expect(env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
 		expect(env.GIT_CONFIG_VALUE_0).toBe(t!.runtime.paths.hooks);
