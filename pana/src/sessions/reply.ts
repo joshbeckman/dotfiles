@@ -60,15 +60,21 @@ export async function autoReply(runtime: Runtime, answer: AssistantMessage, api:
 	const starterId = live?.run?.inputs[0];
 	if (starterId === undefined) return;
 
-	const starter = await db.get<DeliveryRow>(
-		`SELECT d.id, d.message_id, d.thread_id, m.seq, d.wake_submission_id, '' AS sender_url
-		   FROM deliveries d JOIN messages m ON m.id = d.message_id
+	const starter = await db.get<DeliveryRow & { sender_kind: string }>(
+		`SELECT d.id, d.message_id, d.thread_id, m.seq, d.wake_submission_id, '' AS sender_url, p.kind AS sender_kind
+		   FROM deliveries d JOIN messages m ON m.id = d.message_id JOIN participants p ON p.id = m.sender_id
 		  WHERE d.recipient_id = ? AND d.wake_submission_id = ?`,
 		session.id,
 		starterId,
 	);
 	if (!starter) return;
 	const threadId = starter.thread_id;
+
+	// RPL-06: a follow-up from another session gets no automatic reply. Two sessions that
+	// auto-replied to each other woke each other forever; a session that has something to say
+	// back uses pana_reply. The thread's first message is the prompt that created the session,
+	// so a delegated session still answers its creator.
+	if (starter.sender_kind === "session" && starter.seq !== 1) return;
 
 	// RPL-04: the session already posted to this thread during the run.
 	const own = await db.get("SELECT 1 FROM messages WHERE thread_id = ? AND sender_id = ? AND seq > ? LIMIT 1", threadId, session.id, starter.seq);

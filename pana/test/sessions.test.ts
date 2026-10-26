@@ -619,7 +619,8 @@ describe("replies", () => {
 		await settled(res.session.id);
 
 		const thread = await messages(res.thread.id);
-		expect(thread.map((m) => m.body)).toEqual(["go", "the plan changed", "fresh answer"]);
+		// The next run was started by another session's message, so RPL-06 posts nothing for it.
+		expect(thread.map((m) => m.body)).toEqual(["go", "the plan changed"]);
 
 		const list = await entries(res.session.id);
 		const stale = list.findIndex((e) => e.kind === "pi.assistant" && JSON.stringify(e.model).includes("stale answer"));
@@ -648,6 +649,20 @@ describe("replies", () => {
 		const res = await create({ prompt: "go" });
 		await settled(res.session.id);
 		expect(await messages(res.thread.id)).toHaveLength(1);
+	});
+
+	it("RPL-06 a follow-up from another session gets no automatic reply, so two sessions cannot echo each other", async () => {
+		await start({ script: [{ text: "root" }, { text: "child answer" }, { text: "Signing off." }] });
+		const root = await create({ prompt: "root" });
+		await settled(root.session.id);
+		// The child's first message is its creating prompt, so its answer still posts.
+		const child = await create({ prompt: "child" }, root.session.id);
+		await settled(child.session.id);
+		await settled(root.session.id);
+		const thread = await messages(child.thread.id);
+		expect(thread.map((m) => m.body)).toEqual(["child", "child answer"]);
+		// The root woke on the child's answer and said "Signing off.", which was not posted.
+		expect(t!.model.calls()).toBe(3);
 	});
 });
 

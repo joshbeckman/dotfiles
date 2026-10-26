@@ -195,6 +195,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **RPL-03** If the thread moved during the run, the reply is not posted. The next run's input lists the new messages and says the previous reply was not posted.
 - [x] **RPL-04** If the session already posted to the triggering thread during the run, there is no auto-post.
 - [x] **RPL-05** An empty final answer posts nothing.
+- [x] **RPL-06** A run started by another session's follow-up posts nothing automatically. Only a run started by a user's message, or by the thread's first message (the prompt that created the session), auto-posts. A session that needs to answer another session uses `pana_reply`.
 
 ### Limits
 

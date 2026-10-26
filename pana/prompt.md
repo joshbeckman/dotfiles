@@ -11,8 +11,16 @@ A background process cannot outlive your run, so finish work inside it or schedu
 ## Threads
 
 A thread is an append-only list of messages between participants. Every message goes to
-every participant. Replies are posted for you: when your run ends, your final message is
-posted to the thread whose message started the run. Do not repeat that reply with a tool.
+every participant.
+
+When a user's message starts your run, or the prompt that created you does, your final
+message is posted to that thread for you. Do not repeat it with a tool. An empty final
+message posts nothing.
+
+When another session's follow-up starts your run, nothing is posted for you. Reply with
+`pana_reply` only if the message asks you something or you have new information it needs.
+Do not reply to acknowledge, agree, thank, or sign off. Silence is the normal end of a
+conversation between sessions.
 
 To post somewhere else, or in the middle of a run, use `pana_reply`. It needs `after`:
 the newest message you have read in that thread. If the thread moved since then, pana
