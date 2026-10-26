@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-tests:
+    name: repo tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim tmux coreutils
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y neovim tmux sqlite3 ruby
+      - name: Run test/
+        run: bin/run-tests --jobs 4
+        env:
+          RUN_TESTS_LOGS: ${{ runner.temp }}/test-logs
+      - name: Keep test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/test-logs
+
+  pana:
+    name: pana (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # A job-level `if` cannot read the checkout, so the steps ask instead; this
+      # keeps the workflow valid on branches without pana.
+      - id: present
+        run: |
+          if [ -f pana/package.json ]; then echo "pana=true" >>"$GITHUB_OUTPUT"; else echo "pana=false" >>"$GITHUB_OUTPUT"; fi
+      - if: steps.present.outputs.pana == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pana/package-lock.json
+      - if: steps.present.outputs.pana == 'true'
+        working-directory: pana
+        run: npm ci
+      - if: steps.present.outputs.pana == 'true'
+        working-directory: pana
+        run: npx tsc --noEmit
+      - if: steps.present.outputs.pana == 'true'
+        working-directory: pana
+        run: npm test

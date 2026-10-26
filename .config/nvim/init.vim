@@ -14,7 +14,8 @@ else
     set background=light
     let $BAT_THEME = 'gruvbox-light'
 endif
-colorscheme solarized
+" The colorscheme is a plugin; a machine without it, such as CI, keeps the default.
+silent! colorscheme solarized
 
 " Use tab and shift-tab to cycle through tabs
 nnoremap <Tab> :tabn<CR>
