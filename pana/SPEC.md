@@ -206,33 +206,33 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Isolation
 
-- [ ] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
-- [ ] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
-- [ ] **ISO-03** `bash` runs with exactly `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
-- [ ] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
+- [x] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
+- [x] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
+- [x] **ISO-03** `bash` runs with exactly `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
+- [x] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
 
 ### System prompt
 
-- [ ] **PRM-01** Sections render in order: project `AGENTS.md` files, `pana/prompt.md`, profile instructions.
-- [ ] **PRM-02** Project section: every `AGENTS.md` from the git root of `cwd` down to `cwd`, root first. Outside a git repo, only `cwd/AGENTS.md`.
-- [ ] **PRM-03** The pana section includes the session's URL, the memory worktree path, and the memory commands.
-- [ ] **PRM-04** Rendering the prompt twice for the same session gives identical text.
+- [x] **PRM-01** Sections render in order: project `AGENTS.md` files, `pana/prompt.md`, profile instructions.
+- [x] **PRM-02** Project section: every `AGENTS.md` from the git root of `cwd` down to `cwd`, root first. Outside a git repo, only `cwd/AGENTS.md`.
+- [x] **PRM-03** The pana section includes the session's URL, the memory worktree path, and the memory commands.
+- [x] **PRM-04** Rendering the prompt twice for the same session gives identical text.
 
 ### Tools
 
-- [ ] **TOL-01** Tools: `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`.
-- [ ] **TOL-02** Each tool calls the same API route as its CLI command, with the session as caller. For every tool, a test runs the tool and the CLI command with equal inputs and compares results.
-- [ ] **TOL-03** A tool error carries the CLI exit code in `structuredOutput.exitCode`.
-- [ ] **TOL-04** `pana_reply` requires `after`, as THR-03 does.
+- [x] **TOL-01** Tools: `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`.
+- [x] **TOL-02** Each tool calls the same API route as its CLI command, with the session as caller. For every tool, a test runs the tool and the CLI command with equal inputs and compares results.
+- [x] **TOL-03** A tool error carries the CLI exit code in `structuredOutput.exitCode`.
+- [x] **TOL-04** `pana_reply` requires `after`, as THR-03 does.
 
 ### Git hooks
 
-- [ ] **HOK-01** `bash` sets `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0=core.hooksPath`, and `GIT_CONFIG_VALUE_0=<state>/hooks`.
-- [ ] **HOK-02** A commit made through `bash` carries exactly one `Co-authored-by: AI pana://<domain>/sessions/<ulid> <<ulid>@<domain>>`.
-- [ ] **HOK-03** `git commit --amend` and a second commit do not duplicate the trailer.
-- [ ] **HOK-04** Every standard hook name in `<state>/hooks` runs the repo's own hook of that name, looked up from local `core.hooksPath`, then global `core.hooksPath`, then `$(git rev-parse --git-path hooks)`. Its exit code is preserved.
-- [ ] **HOK-05** A repo with a failing `pre-commit` still blocks the commit.
-- [ ] **HOK-06** Commits made outside pana are unchanged.
+- [x] **HOK-01** `bash` sets `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0=core.hooksPath`, and `GIT_CONFIG_VALUE_0=<state>/hooks`.
+- [x] **HOK-02** A commit made through `bash` carries exactly one `Co-authored-by: AI pana://<domain>/sessions/<ulid> <<ulid>@<domain>>`.
+- [x] **HOK-03** `git commit --amend` and a second commit do not duplicate the trailer.
+- [x] **HOK-04** Every standard hook name in `<state>/hooks` runs the repo's own hook of that name, looked up from local `core.hooksPath`, then global `core.hooksPath`, then `$(git rev-parse --git-path hooks)`. Its exit code is preserved.
+- [x] **HOK-05** A repo with a failing `pre-commit` still blocks the commit.
+- [x] **HOK-06** Commits made outside pana are unchanged.
 
 ---
 

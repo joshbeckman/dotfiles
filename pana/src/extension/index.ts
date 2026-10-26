@@ -1,7 +1,47 @@
-// The pana pi-durable extension (WP4): system prompt sections, pana tools, isolation, git hooks.
-// Not built yet.
-//
-// TODO(WP4): implement ISO, PRM, TOL, HOK from SPEC.md. `startPanad` takes a `registry` option;
-// WP4 should export a `createPanaRegistry(runtime)` here that installs CodingTools and `pana`,
-// and make it the default in src/server/index.ts.
-export {};
+// The pana pi-durable extension (WP4): system prompt sections, pana tools, the clean session
+// environment, and the git hook directory. `createPanaRegistry` is what panad installs.
+
+import { createRegistry, defineExtension, type Extension, type Registry } from "@earendil-works/pi-durable";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
+import type { Runtime } from "../server/runtime.ts";
+import { createPanaSections } from "./prompt.ts";
+import { createPanaTools } from "./tools.ts";
+
+export { createPanaEnv, PanaExecutionEnv, panaShellEnv, PANA_ENV_NAMES } from "./env.ts";
+export { HOOK_DOMAIN_FILE, HOOK_RUNNER, STANDARD_HOOKS, commitTrailer, installGitHooks } from "./hooks.ts";
+export {
+	CommandUsageError,
+	PANA_COMMANDS,
+	commandForTool,
+	isCommandName,
+	runPanaCli,
+	runPanaCommand,
+	type CommandOutcome,
+	type CommandParams,
+	type PanaCommandName,
+	type PanaToolName,
+} from "./commands.ts";
+export { agentsFiles, fillPrompt, promptTemplate, PROMPT_PATH } from "./prompt.ts";
+
+export const PANA_EXTENSION_NAME = "pana";
+export const CODING_EXTENSION_NAME = "coding-tools";
+
+/**
+ * The `pana` extension: the six pana tools and the two prompt sections (ISO-01, TOL-01).
+ * It carries nothing from `~/.pi/agent`; the registry installs it beside `CodingTools` only.
+ */
+export function createPanaExtension(getRuntime: () => Runtime): Extension {
+	return defineExtension({
+		name: PANA_EXTENSION_NAME,
+		tools: createPanaTools(getRuntime),
+		sections: createPanaSections(getRuntime),
+	});
+}
+
+/** panad's registry: `CodingTools` first, then `pana`, and nothing else (ISO-01). */
+export function createPanaRegistry(getRuntime: () => Runtime): Registry {
+	const registry = createRegistry();
+	registry.install(CodingTools);
+	registry.install(createPanaExtension(getRuntime));
+	return registry;
+}
