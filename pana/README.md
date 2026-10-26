@@ -116,7 +116,7 @@ A session cannot own a background process that outlives its run.
 When a message lands in a session's inbox:
 
 - **Idle or failed:** `panad` submits the message as a pi-durable input with entry kind `pana.message`. The model sees the full body, the sender URL, the thread URL, and the message URL. Delivery marks it read.
-- **Running, message from a user:** the message is a steer. It joins the current run after its tool round.
+- **Running, message from a user:** the message is a steer. It joins the current run after its tool round, or starts the next run if the current one ends first.
 - **Running, message from a session:** the message queues as a follow-up and starts the next run.
 - **Stopped:** the message waits in the inbox.
 

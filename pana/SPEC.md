@@ -181,7 +181,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [ ] **DLV-02** The model input contains the sender URL, the thread URL, the message URL, the subject, the body, and the local path of each attachment.
 - [ ] **DLV-03** Delivery to a session marks the message read for it.
 - [ ] **DLV-04** A message from a session to a running session queues as a follow-up and starts the next run.
-- [ ] **DLV-05** A message from a user to a running session submits a steer. It reaches the model after the current tool round, in the same run.
+- [ ] **DLV-05** A message from a user to a running session submits a steer. It reaches the model after the current tool round. If the run ends first, it starts the next run.
 - [ ] **DLV-06** A message to a stopped session wakes nothing and stays unread.
 - [ ] **DLV-07** Messages from one session to a thread do not wake that same session.
 
