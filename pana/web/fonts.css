@@ -1,0 +1,62 @@
+/* Self-hosted IBM Plex, so the app renders the same in every container. The
+   app previously named these families and relied on the fonts installed on the
+   machine (the font-ibm-plex-sans-condensed cask). A Safari web app added to the
+   Dock is a separate container and did not resolve them, so headings and body
+   text fell back to system fonts there while Safari rendered Plex.
+
+   url() only, deliberately: a `local()` source would reintroduce the dependency
+   this exists to remove, and would let Safari and the Dock app disagree about
+   which file is rendering.
+
+   Berkeley Mono is commercial and cannot be bundled, so it stays a first-choice
+   family name in the stacks and falls through to IBM Plex Mono. */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/plex-sans-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/plex-sans-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/plex-sans-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans Condensed";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/plex-sans-condensed-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Sans Condensed";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/plex-sans-condensed-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/plex-mono-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/plex-mono-700.woff2") format("woff2");
+}

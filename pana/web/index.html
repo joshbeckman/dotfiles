@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+		<title>pana</title>
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<meta name="theme-color" content="#002fa7" />
+		<link rel="stylesheet" href="/fonts.css" />
+		<link rel="stylesheet" href="/style.css" />
+		<script type="module" src="/app.js"></script>
+	</head>
+	<body>
+		<header class="topbar">
+			<h1>pana</h1>
+			<nav id="nav" aria-label="Sections">
+				<a data-section="inbox" href="#/inbox">Inbox</a>
+				<a data-section="compose" href="#/compose">Compose</a>
+				<a data-section="threads" href="#/threads">Threads</a>
+				<a data-section="sessions" href="#/sessions">Sessions</a>
+				<a data-section="memory" href="#/memory">Memory</a>
+				<a data-section="schedules" href="#/schedules">Schedules</a>
+			</nav>
+			<button id="enable-push" data-testid="enable-push" type="button">Notifications</button>
+		</header>
+
+		<p id="status" role="status"></p>
+
+		<main>
+			<section id="authorize" data-testid="authorize" aria-labelledby="authorize-title" hidden>
+				<h2 id="authorize-title">Authorize this app</h2>
+				<p>
+					An installed app has its own storage, so it cannot see the token a browser tab was given. Paste the
+					launch URL that <code>panad</code> printed (or the value of <code>web-token</code>) once to authorize
+					this window.
+				</p>
+				<form id="authorize-form">
+					<label for="authorize-input">Launch URL or token</label>
+					<input id="authorize-input" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8766/#…" />
+					<button type="submit">Authorize</button>
+				</form>
+				<p id="authorize-status" role="status"></p>
+			</section>
+
+			<section class="view" id="view-inbox" data-testid="inbox">
+				<h2>Inbox</h2>
+				<p class="hint">Messages delivered to you, newest first.</p>
+				<div id="inbox-list" data-testid="inbox-list" class="list"></div>
+			</section>
+
+			<section class="view" id="view-compose" data-testid="compose" hidden>
+				<h2>Compose</h2>
+				<form id="compose-form">
+					<label for="compose-to">To</label>
+					<input id="compose-to" name="to" placeholder="joshbeckman, 01J… (comma separated)" />
+					<label for="compose-subject">Subject</label>
+					<input id="compose-subject" name="subject" placeholder="optional" />
+					<label for="compose-body">Message</label>
+					<textarea id="compose-body" name="body" rows="10" required></textarea>
+					<p class="hint">Starts a session and its thread. Markdown is rendered; attach files from the CLI with <code>--attach</code>.</p>
+					<button type="submit" data-testid="compose-send">Send</button>
+				</form>
+			</section>
+
+			<section class="view" id="view-threads" data-testid="threads" hidden>
+				<h2>Threads</h2>
+				<form id="threads-search" class="search">
+					<label for="threads-query">Search</label>
+					<input id="threads-query" data-testid="threads-query" placeholder="subject or body" />
+					<button type="submit">Search</button>
+				</form>
+				<div id="threads-list" data-testid="threads-list" class="list"></div>
+
+				<article id="thread" data-testid="thread" hidden>
+					<h2 id="thread-subject"></h2>
+					<p id="thread-participants" class="hint"></p>
+					<div id="thread-messages" data-testid="messages" class="messages"></div>
+
+					<div id="stale" data-testid="stale" class="notice" hidden>
+						<strong>The thread moved.</strong> These messages arrived after your draft's head. Your draft is kept.
+						<div id="stale-new" data-testid="stale-new"></div>
+					</div>
+
+					<form id="reply-form">
+						<p class="hint">
+							Draft head: <code id="draft-head" data-testid="draft-head"></code>
+						</p>
+						<label for="reply-body">Reply</label>
+						<textarea id="reply-body" data-testid="reply-body" rows="6" required></textarea>
+						<button type="submit" data-testid="reply-send">Reply</button>
+					</form>
+
+					<div id="confirm" data-testid="confirm" class="confirm" hidden>
+						<p id="confirm-text"></p>
+						<button type="button" id="confirm-yes" data-testid="confirm-yes">Yes, continue</button>
+						<button type="button" id="confirm-no" data-testid="confirm-no">Cancel</button>
+					</div>
+				</article>
+			</section>
+
+			<section class="view" id="view-sessions" data-testid="sessions" hidden>
+				<h2>Sessions</h2>
+				<form id="sessions-search" class="search">
+					<label for="sessions-query">Search</label>
+					<input id="sessions-query" data-testid="sessions-query" placeholder="state, model, or id" />
+					<button type="submit">Search</button>
+				</form>
+				<div id="sessions-list" data-testid="sessions-list" class="list"></div>
+
+				<article id="session" data-testid="session" hidden>
+					<h2 id="session-title"></h2>
+					<p id="session-meta" class="hint"></p>
+					<div class="actions">
+						<button type="button" data-action="stop" data-testid="session-stop">Stop</button>
+						<button type="button" data-action="compact" data-testid="session-compact">Compact</button>
+						<button type="button" data-action="reload" data-testid="session-reload">Reload</button>
+					</div>
+					<div id="transcript" data-testid="transcript" class="transcript"></div>
+				</article>
+			</section>
+
+			<section class="view" id="view-memory" data-testid="memory" hidden>
+				<h2>Memory</h2>
+				<p id="memory-worktree" data-testid="memory-worktree" class="hint"></p>
+				<div class="actions">
+					<button type="button" data-action="create-worktree" data-testid="memory-create">New worktree</button>
+				</div>
+				<form id="memory-search" class="search">
+					<label for="memory-query">Search</label>
+					<input id="memory-query" data-testid="memory-query" placeholder="words to find" />
+					<button type="submit">Search</button>
+				</form>
+				<div id="memory-results" data-testid="memory-results" class="list"></div>
+				<h3>Files</h3>
+				<div id="memory-files" data-testid="memory-files" class="list"></div>
+				<pre id="memory-file" data-testid="memory-file" class="file-body" hidden></pre>
+				<textarea id="memory-edit" data-testid="memory-edit" rows="10" hidden></textarea>
+				<button type="button" data-action="save-memory" data-testid="memory-save" hidden>Save</button>
+				<h3>Log</h3>
+				<div id="memory-log" data-testid="memory-log" class="list"></div>
+			</section>
+
+			<section class="view" id="view-schedules" data-testid="schedules" hidden>
+				<h2>Schedules</h2>
+				<div id="schedules-list" data-testid="schedules-list" class="list"></div>
+				<h3>New schedule</h3>
+				<form id="schedule-form">
+					<label for="schedule-kind">Kind</label>
+					<select id="schedule-kind" data-testid="schedule-kind">
+						<option value="session">session</option>
+						<option value="thread">thread</option>
+					</select>
+					<label for="schedule-when">Cron</label>
+					<input id="schedule-when" data-testid="schedule-when" placeholder="0 9 * * 1-5" />
+					<label for="schedule-prompt">Prompt</label>
+					<textarea id="schedule-prompt" data-testid="schedule-prompt" rows="4" required></textarea>
+					<button type="submit" id="schedule-create" data-testid="schedule-create">Create</button>
+				</form>
+			</section>
+		</main>
+	</body>
+</html>

@@ -12,7 +12,9 @@ import type { Handlers } from "../api/types.ts";
 import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
+import { initPush } from "../push/index.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
+import { launchUrl, loopbackOrigin } from "../web/static.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
 import { defaultHandlers } from "./handlers.ts";
 import { acquirePidLock } from "./lock.ts";
@@ -101,6 +103,9 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			wake: (options.wake ?? defaultWakeSubmitter)(getRuntime),
 		};
 
+		// PSH-01: the VAPID pair exists before the first push, not on the first request.
+		initPush(runtime);
+
 		await sweepWakes(db, runtime.wake, (error, wake) => report(error, `wake for delivery ${wake.deliveryId}`));
 		harness.resume();
 
@@ -187,6 +192,11 @@ export async function main(_argv: string[]): Promise<number> {
 	}
 	const tcp = panad.tcpPort === undefined ? "" : ` and http://127.0.0.1:${panad.tcpPort}`;
 	console.error(`panad: listening on ${panad.socketPath}${tcp}`);
+	// WEB-01: open this URL to authorize a window. The token sits in the fragment, so it is
+	// never sent to the server or written to an access log.
+	if (panad.tcpPort !== undefined) {
+		console.error(`panad: open ${launchUrl(loopbackOrigin(panad.tcpPort), panad.webToken)}`);
+	}
 	return new Promise((resolve) => {
 		const stop = () => {
 			panad.close().then(

@@ -223,6 +223,8 @@ The PWA has these sections:
 
 A reply draft records the thread head when it opens. If the thread moves before send, the PWA shows the new messages and keeps the draft.
 
+`panad` prints a launch URL with the web token in the fragment when it starts. Treat that URL as private: anyone who has it can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
+
 A new message to the user triggers a Web Push notification that opens its thread. `panad` holds the VAPID keys and the push subscriptions. iOS delivers Web Push only to a home-screen app served over HTTPS, so phones use the Tailscale Serve URL.
 
 Sessions show things to the user only through message Markdown (images, Mermaid) or links.

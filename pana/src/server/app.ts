@@ -7,6 +7,7 @@ import { ApiError } from "../api/errors.ts";
 import { matchRoute, pathExists } from "../api/routes.ts";
 import type { Caller, Handlers, HandlerResult, RequestContext, Transport } from "../api/types.ts";
 import { parseRef, RefError } from "../ids/index.ts";
+import { isStaticAssetPath } from "../web/static.ts";
 import type { Runtime } from "./runtime.ts";
 
 /** Hosts TCP accepts besides the Tailscale names (API-05). */
@@ -49,7 +50,11 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 	let caller: Caller | undefined;
 	try {
 		const rawBody = await readBody(req);
-		caller = await resolveCaller(options, transport, req);
+		// The app shell loads in a browser, which cannot attach the bearer token to a page load,
+		// so the shell assets are the one public part of the TCP surface. Everything else,
+		// including unknown paths, keeps API-04's token check.
+		const publicShell = transport === "tcp" && method === "GET" && isStaticAssetPath(url.pathname);
+		caller = await resolveCaller(options, transport, req, publicShell);
 		const body = parseJsonBody(req, rawBody);
 		const match = matchRoute(method, url.pathname);
 		if (!match) {
@@ -105,7 +110,7 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
  * caller is always the configured user. Socket: `Pana-Caller` names a known session, or the
  * caller is the configured user.
  */
-async function resolveCaller(options: AppOptions, transport: Transport, req: IncomingMessage): Promise<Caller> {
+async function resolveCaller(options: AppOptions, transport: Transport, req: IncomingMessage, publicShell = false): Promise<Caller> {
 	const { config, userUrl } = options.runtime;
 	const user: Caller = { kind: "user", id: config.user, url: userUrl };
 
@@ -115,7 +120,7 @@ async function resolveCaller(options: AppOptions, transport: Transport, req: Inc
 		if (!host || !allowed.has(host)) {
 			throw new ApiError(403, "forbidden_host", `Host ${req.headers.host ?? "(none)"} is not allowed`);
 		}
-		if (!tokenMatches(req.headers.authorization, options.webToken)) {
+		if (!publicShell && !tokenMatches(req.headers.authorization, options.webToken)) {
 			throw ApiError.unauthorized("missing or wrong bearer token");
 		}
 		return user;

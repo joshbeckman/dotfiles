@@ -1,6 +1,15 @@
-// The PWA (WP8). Not built yet.
-//
-// TODO(WP8): implement WEB from SPEC.md. Keep this package's code in src/web/ and its tests in
-// test/web.test.ts. Register HTTP handlers in src/web/handlers.ts; src/server/handlers.ts already
-// merges them into panad.
-export {};
+// The PWA and its live channel (WP8). The browser code lives in `pana/web/`; this package
+// serves it, and `publish` is the entry point other packages use for SSE and Web Push.
+
+export {
+	isStaticAssetPath,
+	launchUrl,
+	loadAsset,
+	loopbackOrigin,
+	staticAsset,
+	WEB_ROOT,
+	type LoadedAsset,
+	type StaticAsset,
+} from "./static.ts";
+export { publish, subscriberCount, subscribeEvents, type WebEvent } from "./events.ts";
+export { handlers } from "./handlers.ts";
