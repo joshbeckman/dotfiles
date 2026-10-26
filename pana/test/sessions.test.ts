@@ -280,7 +280,9 @@ describe("session create", () => {
 	});
 
 	it("SES-05 a session created by a session records its parent, at the parent's depth plus one", async () => {
-		await start({ script: [{ text: "parent ok" }, { text: "child ok" }, { text: "parent ack" }] });
+		// The parent's empty answer to the child's reply posts nothing (RPL-05), so the child is not
+		// woken again with no scripted turn left, and both settle idle whatever the timing.
+		await start({ script: [{ text: "parent ok" }, { text: "child ok" }, { text: "" }] });
 		const parent = await create({ prompt: "be a parent" });
 		await settled(parent.session.id);
 
@@ -647,7 +649,8 @@ describe("replies", () => {
 
 describe("limits", () => {
 	it("LIM-01 a session at spawnDepth gets 402 from session create", async () => {
-		await start({ config: { spawnDepth: 1 }, script: [{ text: "root" }, { text: "child" }, { text: "root ack" }] });
+		// As in SES-05, an empty ack ends the exchange so the child stays idle.
+		await start({ config: { spawnDepth: 1 }, script: [{ text: "root" }, { text: "child" }, { text: "" }] });
 		const root = await create({ prompt: "root" });
 		await settled(root.session.id);
 		const child = await create({ prompt: "child" }, root.session.id);
