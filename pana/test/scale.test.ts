@@ -195,6 +195,29 @@ describe("list pagination", () => {
 		}
 	});
 
+	it("SCALE-03 the archived and unread filters page, and the inbox counts unread deliveries past its page", async () => {
+		await seed();
+		const all = (await walk("/threads", "threads", 4)).ids;
+		// Archive every third thread, and read one other, as the user.
+		const archived = all.filter((_, i) => i % 3 === 0);
+		for (const id of archived) expect((await t!.client.post(`/threads/${id}/archive`, {})).status).toBe(200);
+		const read = all.find((id) => !archived.includes(id))!;
+		expect((await t!.client.get(`/threads/${read}`)).status).toBe(200);
+
+		const shown = await walk("/threads", "threads", 4);
+		expect(shown.ids).toEqual(all.filter((id) => !archived.includes(id)));
+		expect((await walk("/threads?archived=1", "threads", 4)).ids).toEqual(archived);
+		const unread = await walk("/threads?unread=1", "threads", 4);
+		expect(unread.ids).not.toContain(read);
+		expect(unread.ids.every((id) => shown.ids.includes(id))).toBe(true);
+
+		const inbox = await t!.client.get<{ deliveries: Array<{ readAt: number | null }>; unreadTotal: number }>("/inbox?limit=2");
+		expect(inbox.body.deliveries).toHaveLength(2);
+		const everything = await t!.client.get<{ deliveries: Array<{ readAt: number | null }> }>("/inbox?limit=500");
+		expect(inbox.body.unreadTotal).toBe(everything.body.deliveries.filter((d) => d.readAt === null).length);
+		expect(inbox.body.unreadTotal).toBeGreaterThan(2);
+	});
+
 	it("SCALE-03 the list commands take --limit and --cursor and print nextCursor", async () => {
 		await seed();
 		const endpoint = { endpoint: { socketPath: t!.panad.socketPath } };

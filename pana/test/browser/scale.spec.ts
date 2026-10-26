@@ -20,7 +20,7 @@ afterEach(async () => {
 });
 
 describeBrowser("pana lists in a browser", () => {
-	it("SCALE-03 the inbox, threads, and schedules load more with a button", async () => {
+	it("SCALE-03 the inbox, threads, and schedules load more with a button, and the unread badge counts past the page", async () => {
 		t = await startTestPanad({ config: { timezone: "UTC" } });
 		for (let i = 0; i < 53; i++) await postNotice(t.runtime, { body: `Notice ${i}` });
 		for (let i = 0; i < 52; i++) {
@@ -41,12 +41,15 @@ describeBrowser("pana lists in a browser", () => {
 				await until(() => items() === total);
 				out[hash] = [first, items(), document.querySelector("#" + list + " [data-more]") === null];
 			}
+			// REF-06's badge counts every unread delivery, not only the first page's.
+			out.badge = [Number(document.getElementById("nav-inbox-count").textContent), 0, true];
 			return out;
 		`);
 		expect(counts).toEqual({
 			"#/inbox": [50, 53, true],
 			"#/threads": [50, 53, true],
 			"#/schedules": [50, 52, true],
+			badge: [53, 0, true],
 		});
 	});
 });
