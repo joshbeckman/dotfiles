@@ -35,26 +35,26 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 ### Config and state
 
-- [ ] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
-- [ ] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
-- [ ] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766).
-- [ ] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
-- [ ] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
+- [x] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
+- [x] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
+- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766).
+- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
+- [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
 ### IDs and URLs
 
-- [ ] **ID-01** New IDs are monotonic ULIDs. Two IDs made in the same millisecond sort in creation order.
-- [ ] **ID-02** `parseRef` accepts a bare ULID, a bare username, or a `pana://` URL, and returns `{kind, id}` for `session`, `user`, `thread`, `message`, `file`, `schedule`.
-- [ ] **ID-03** In an address list, a 26-character uppercase Crockford string is a session. Any other bare string is a username.
-- [ ] **ID-04** A URL with a domain other than the configured one is rejected with code `foreign_domain`.
-- [ ] **ID-05** `formatUrl` and `parseRef` round-trip every kind, including `threads/<id>?message=<id>`.
+- [x] **ID-01** New IDs are monotonic ULIDs. Two IDs made in the same millisecond sort in creation order.
+- [x] **ID-02** `parseRef` accepts a bare ULID, a bare username, or a `pana://` URL, and returns `{kind, id}` for `session`, `user`, `thread`, `message`, `file`, `schedule`.
+- [x] **ID-03** In an address list, a 26-character uppercase Crockford string is a session. Any other bare string is a username.
+- [x] **ID-04** A URL with a domain other than the configured one is rejected with code `foreign_domain`.
+- [x] **ID-05** `formatUrl` and `parseRef` round-trip every kind, including `threads/<id>?message=<id>`.
 
 ### Schema
 
-- [ ] **DB-01** pi-durable and pana share one `pana.sqlite` through one adapter. pi-durable tables use the `pi_` prefix.
-- [ ] **DB-02** Pana tables: `participants`, `sessions`, `threads`, `thread_participants`, `messages`, `message_events`, `deliveries`, `files`, `schedules`, `push_subscriptions`, `subjects`, plus FTS5 tables `messages_fts` and `sessions_fts`.
-- [ ] **DB-03** Migrations run at startup, are numbered, and are idempotent. A database newer than the code refuses to open with code 1.
-- [ ] **DB-04** A message insert, its deliveries, and the pi-durable submission that wakes a recipient session commit in one transaction. A crash injected between any two statements leaves none of them.
+- [x] **DB-01** pi-durable and pana share one `pana.sqlite` through one adapter. pi-durable tables use the `pi_` prefix.
+- [x] **DB-02** Pana tables: `participants`, `sessions`, `threads`, `thread_participants`, `messages`, `message_events`, `deliveries`, `files`, `schedules`, `push_subscriptions`, `subjects`, plus FTS5 tables `messages_fts` and `sessions_fts`.
+- [x] **DB-03** Migrations run at startup, are numbered, and are idempotent. A database newer than the code refuses to open with code 1.
+- [x] **DB-04** A message insert, its deliveries, and the pi-durable submission that wakes a recipient session commit in one transaction. A crash injected between any two statements leaves none of them.
 
 ### API contract
 
@@ -83,17 +83,17 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | GET, POST | `/push/key`, `/push/subscriptions` | Web Push |
 | GET | `/events` | server-sent events for the PWA |
 
-- [ ] **API-01** Errors return `{"error": {"code", "message", ...details}}`.
-- [ ] **API-02** Status codes map to CLI exit codes: 400 → 2, 404 → 4, 409 → 3, 402 → 5, any other non-2xx → 1.
-- [ ] **API-03** On the socket, the caller is the session named by the `Pana-Caller` header, or the configured user when the header is absent. An unknown session in `Pana-Caller` returns 400.
-- [ ] **API-04** On TCP, every request needs `Authorization: Bearer <web-token>`. A missing or wrong token returns 403. The caller is always the configured user.
-- [ ] **API-05** TCP accepts `Host` values of `127.0.0.1`, `localhost`, and the machine's Tailscale name. Any other `Host` returns 403.
+- [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`.
+- [x] **API-02** Status codes map to CLI exit codes: 400 → 2, 404 → 4, 409 → 3, 402 → 5, any other non-2xx → 1.
+- [x] **API-03** On the socket, the caller is the session named by the `Pana-Caller` header, or the configured user when the header is absent. An unknown session in `Pana-Caller` returns 400.
+- [x] **API-04** On TCP, every request needs `Authorization: Bearer <web-token>`. A missing or wrong token returns 403. The caller is always the configured user.
+- [x] **API-05** TCP accepts `Host` values of `127.0.0.1`, `localhost`, and the machine's Tailscale name. Any other `Host` returns 403.
 
 ### Test harness
 
-- [ ] **TST-01** `startTestPanad({script})` returns a running `panad` on a temp directory with a fake clock, a faux model, and a socket client.
-- [ ] **TST-02** A faux model script can return text, tool calls, failures, and usage with cost, per turn.
-- [ ] **TST-03** `clock.advance(ms)` fires due pi-durable sleeps and pana schedules.
+- [x] **TST-01** `startTestPanad({script})` returns a running `panad` on a temp directory with a fake clock, a faux model, and a socket client.
+- [x] **TST-02** A faux model script can return text, tool calls, failures, and usage with cost, per turn.
+- [x] **TST-03** `clock.advance(ms)` fires due pi-durable sleeps and pana schedules.
 
 ---
 
