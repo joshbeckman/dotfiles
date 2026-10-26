@@ -332,14 +332,24 @@ result="$(find "$run_dir/trials" -name result.json -print -quit)"
 ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "timeout_not_started" && r["termination_reason"] == "suite_timeout"' "$result"
 
 command -v node >/dev/null || { echo 'node is required to test evaluation-boundary.ts' >&2; exit 1; }
-node --help | grep -q -- '--experimental-strip-types' || { echo 'Node type stripping is required to test evaluation-boundary.ts' >&2; exit 1; }
+# Probe the behavior: newer Node strips types without a flag and may not list the old one in
+# --help, so neither the flag nor its absence is a reliable answer.
+printf 'const n: number = 1;\nconsole.log(n)\n' >"$tmp/probe.ts"
+strip_types=''
+if ! node "$tmp/probe.ts" >/dev/null 2>&1; then
+  node --experimental-strip-types "$tmp/probe.ts" >/dev/null 2>&1 || {
+    echo 'Node with TypeScript type stripping is required to test evaluation-boundary.ts' >&2
+    exit 1
+  }
+  strip_types=--experimental-strip-types
+fi
 mkdir "$tmp/boundary"
     printf x >"$tmp/boundary/file.txt"
     ln -s /etc/passwd "$tmp/boundary/link.txt"
     mkdir -p "$tmp/config/skills/example" "$tmp/explicit-skill"
     printf skill >"$tmp/config/skills/example/SKILL.md"
     printf explicit >"$tmp/explicit-skill/SKILL.md"
-    PI_EVAL_ROOT="$tmp/boundary" PI_EVAL_CONFIG_ROOT="$tmp/config" PI_EVAL_SKILL_ROOTS="[\"$tmp/explicit-skill\"]" PI_EVAL_ALLOWED_COMMANDS='["ruby check.rb"]' PI_EVAL_COMMAND_TIMEOUT=7 EVAL_ROOT="$root" node --experimental-strip-types <<'NODE'
+    PI_EVAL_ROOT="$tmp/boundary" PI_EVAL_CONFIG_ROOT="$tmp/config" PI_EVAL_SKILL_ROOTS="[\"$tmp/explicit-skill\"]" PI_EVAL_ALLOWED_COMMANDS='["ruby check.rb"]' PI_EVAL_COMMAND_TIMEOUT=7 EVAL_ROOT="$root" node ${strip_types:+"$strip_types"} <<'NODE'
 const {pathToFileURL} = require("node:url");
 (async () => {
     let handler;

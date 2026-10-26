@@ -127,16 +127,22 @@ for i in 1 2 3 4 5 6 7 8; do
   after_fault "$mid" "a mirror killed mid-flight ($i)"
 done
 
-python3 - "$db" <<'PY' &
-import sqlite3, sys, time
+python3 - "$db" "$tmp/release-lock" <<'PY' &
+import os, sqlite3, sys, time
 db = sqlite3.connect(sys.argv[1], isolation_level=None)
 db.execute("begin exclusive")
-time.sleep(7)
+# Hold until the sender has finished, so a slow host cannot release the lock before the
+# mirror reaches it and pass the send off as a mystery. The cap only keeps a hung sender
+# from holding the whole test open.
+deadline = time.monotonic() + 120
+while not os.path.exists(sys.argv[2]) and time.monotonic() < deadline:
+    time.sleep(0.05)
 db.execute("rollback")
 PY
 locker=$!
 sleep 0.5
 locked="$(as $alice cmd send --to $bob --subject Locked -m 'locked database' 2>"$tmp/err" | tail -1)"
+: >"$tmp/release-lock"
 wait "$locker"
 grep -Fq "mirroring $locked into the SQLite store failed" "$tmp/err" || fail "a mirror past the busy timeout was silent"
 after_fault "$locked" "a database locked past the busy timeout"
@@ -478,6 +484,9 @@ script, state, db, pads, humans, stuck, bob = sys.argv[1:]
 loader = importlib.machinery.SourceFileLoader("migrate", script)
 sys.dont_write_bytecode = True
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("migrate", loader))
+# dataclass asks sys.modules for the defining module on Python 3.12 and older; without the
+# entry it raises AttributeError instead of building the class.
+sys.modules["migrate"] = m
 loader.exec_module(m)
 state = Path(state)
 first = state / "mirror-failures.d" / "20261022T000000Z-1-1-first"

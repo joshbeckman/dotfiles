@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: detect suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pana: ${{ steps.pana.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+      # A job-level `if` cannot read the checkout, so this job reads it once and the pana
+      # jobs ask it. Skipping the whole job, rather than its steps, keeps a branch without
+      # pana from queueing on the scarce macOS runners at all.
+      - id: pana
+        run: |
+          if [ -f pana/package.json ]; then echo "present=true" >>"$GITHUB_OUTPUT"; else echo "present=false" >>"$GITHUB_OUTPUT"; fi
+
+  repo-tests:
+    name: repo tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install neovim tmux coreutils ripgrep
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y neovim tmux sqlite3 ruby ripgrep
+      # Pi is npm-only, and test/pi-extensions runs the real CLI rather than a stub.
+      - name: Install Pi
+        run: npm install -g @earendil-works/pi-coding-agent
+      - name: Run test/
+        run: bin/run-tests --jobs 4
+        env:
+          RUN_TESTS_LOGS: ${{ runner.temp }}/test-logs
+      - name: Keep test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/test-logs
+
+  pana:
+    name: pana (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.pana == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pana/package-lock.json
+      - working-directory: pana
+        run: npm ci
+      - working-directory: pana
+        run: npx tsc --noEmit
+      - working-directory: pana
+        run: npm test

@@ -91,7 +91,7 @@ class RefreshTest(unittest.TestCase):
                       (self.state() / 'refresh.log').read_text())
 
     def test_a_stale_lock_is_taken_over(self):
-        dead = subprocess.Popen(['/bin/true'])
+        dead = subprocess.Popen(['true'])
         dead.wait()
         self.state().mkdir(parents=True)
         (self.state() / 'refresh.lock').write_text('%d\n' % dead.pid)

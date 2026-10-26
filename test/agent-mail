@@ -275,25 +275,25 @@ alias_archived="$(AGENT_HUMAN_MAIL_ROOT="$tmp/alias" "$command" archive "$physic
 
 if [[ -n "$real_nvim" ]]; then
     AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-        --cmd 'let mapleader=" "' --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' \
+        --cmd 'let mapleader=" "' --cmd "set runtimepath+=$root/.config/nvim,$root/.config/nvim/after" --cmd 'filetype plugin on' \
         --cmd 'runtime plugin/netrwPlugin.vim' "+execute 'Explore ' . fnameescape('$inbox')" \
         "+if exists(':AgentMailCompose') != 2 | cquit 1 | endif" \
         "+let m=maparg(' c','n',0,1) | if get(m,'buffer',0) != 1 || get(m,'rhs','') !~# 'AgentMailCompose' | cquit 1 | endif" +quit
 
     env -u AGENT_MAIL_ROOT AGENT_SCRATCH_ROOT="$tmp/shared" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$tmp/shared/default-agent/inbox/new/$default_id.md" \
+        --cmd "set runtimepath+=$root/.config/nvim,$root/.config/nvim/after" --cmd 'filetype plugin on' "$tmp/shared/default-agent/inbox/new/$default_id.md" \
         "+if exists(':AgentMailArchive') != 2 | cquit 1 | endif" +quit
 
     check_nvim_command() {
         local file="$1" name="$2" expected="$3" mail_root="${4:-$tmp/mail}"
         AGENT_MAIL_ROOT="$mail_root" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-            --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
+            --cmd "set runtimepath+=$root/.config/nvim,$root/.config/nvim/after" --cmd 'filetype plugin on' "$file" \
             "+if exists(':$name') != $expected | cquit 1 | endif" +quit
     }
     check_nvim_mapping() {
         local file="$1" lhs="$2" command="$3"
         AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-            --cmd 'let mapleader=" "' --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$file" \
+            --cmd 'let mapleader=" "' --cmd "set runtimepath+=$root/.config/nvim,$root/.config/nvim/after" --cmd 'filetype plugin on' "$file" \
             "+let m=maparg('$lhs','n',0,1) | if get(m,'buffer',0) != 1 || get(m,'rhs','') !~# '$command' | cquit 1 | endif" +quit
     }
     check_nvim_command "$message" AgentMailReply 2
@@ -317,7 +317,7 @@ if [[ -n "$real_nvim" ]]; then
     check_nvim_command "$archived" AgentMailReply 2 "$tmp/mail-link"
 
     AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' "$archived" \
+        --cmd "set runtimepath+=$root/.config/nvim,$root/.config/nvim/after" --cmd 'filetype plugin on' "$archived" \
         '+AgentMailReply' "+if exists(':AgentMailSend') != 2 | cquit 1 | endif" '+qa!'
 
     nvim_message="$inbox/new/nvim-archive.md"
@@ -336,7 +336,7 @@ if search('nvim-archive.md') != 0 | cquit 1 | endif
 qa!
 EOF
     AGENT_MAIL_ROOT="$tmp/mail" AGENT_HUMAN_MAIL_ROOT="$tmp/humans" "$real_nvim" --headless -u NONE \
-        --cmd "set runtimepath+=$root/.config/nvim" --cmd 'filetype plugin on' --cmd 'runtime plugin/netrwPlugin.vim' \
+        --cmd "set runtimepath+=$root/.config/nvim,$root/.config/nvim/after" --cmd 'filetype plugin on' --cmd 'runtime plugin/netrwPlugin.vim' \
         -S "$nvim_archive_script"
     [[ -f "$inbox/cur/nvim-archive.md" ]]
 fi

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Run the repository's test scripts and summarize them.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: bin/run-tests [--timeout SECONDS] [--jobs N] [--skip NAME]... [NAME...]
+
+Run every executable in test/ (or only the NAMEs given), each with a scratch
+HOME and a time limit, and print one line per test plus a summary. Exit 0 only
+when every test that ran passed.
+
+  --timeout SECONDS  per-test limit (default 300)
+  --jobs N           tests to run at once (default 4)
+  --skip NAME        leave a test out; repeatable
+
+A test file can opt out of a platform with a line near its top:
+  # CI-skip: linux   (or macos) with a reason after the platform
+
+Output from each test is kept under $RUN_TESTS_LOGS (default: a temp dir) and
+printed for failures.
+USAGE
+}
+
+timeout=300
+jobs=4
+skips=()
+names=()
+while (($#)); do
+  case "$1" in
+    --timeout) timeout="$2"; shift 2 ;;
+    --jobs) jobs="$2"; shift 2 ;;
+    --skip) skips+=("$2"); shift 2 ;;
+    -h | --help) usage; exit 0 ;;
+    -*) printf 'run-tests: unknown option %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) names+=("$1"); shift ;;
+  esac
+done
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "$(uname -s)" in
+  Darwin) platform=macos ;;
+  Linux) platform=linux ;;
+  *) platform=other ;;
+esac
+logs="${RUN_TESTS_LOGS:-$(mktemp -d)}"
+mkdir -p "$logs"
+
+if ((${#names[@]} == 0)); then
+  for path in "$root"/test/*; do
+    [[ -f "$path" && -x "$path" ]] && names+=("$(basename "$path")")
+  done
+fi
+
+# Python's subprocess runs without a shell, so `timeout` comes from coreutils or
+# its Homebrew `gtimeout` name; with neither, the limit is skipped and said so.
+timeout_cmd=""
+if command -v timeout >/dev/null 2>&1; then timeout_cmd=timeout
+elif command -v gtimeout >/dev/null 2>&1; then timeout_cmd=gtimeout
+else printf 'run-tests: no timeout(1); running without a per-test limit\n' >&2
+fi
+
+run_one() {
+  local name="$1" path="$root/test/$1" home status start
+  home="$(mktemp -d)"
+  start=$SECONDS
+  set +e
+  # A scratch HOME keeps tests away from the real agent state, mail store, and
+  # dotfiles links; git still needs an identity to commit in temp repos.
+  env HOME="$home" XDG_STATE_HOME="$home/.local/state" XDG_CONFIG_HOME="$home/.config" \
+    GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@example.invalid \
+    GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@example.invalid \
+    ${timeout_cmd:+$timeout_cmd "$timeout"} "$path" >"$logs/$name.log" 2>&1 </dev/null
+  status=$?
+  set -e
+  rm -rf "$home"
+  printf '%s %s %s\n' "$status" "$((SECONDS - start))" "$name" >"$logs/$name.status"
+}
+
+selected=()
+for name in "${names[@]}"; do
+  path="$root/test/$name"
+  [[ -f "$path" ]] || { printf 'run-tests: no test named %s\n' "$name" >&2; exit 2; }
+  for skip in "${skips[@]+"${skips[@]}"}"; do
+    [[ "$skip" == "$name" ]] && { printf 'SKIP  %s (--skip)\n' "$name"; continue 2; }
+  done
+  marker="$(head -n 15 "$path" | grep -m 1 "^# CI-skip: $platform" || true)"
+  if [[ -n "$marker" ]]; then
+    printf 'SKIP  %s (%s)\n' "$name" "${marker#\# CI-skip: }"
+    continue
+  fi
+  selected+=("$name")
+done
+
+# xargs -P rather than `wait -n`: macOS ships bash 3.2, which lacks it.
+export -f run_one
+export root logs timeout timeout_cmd
+if ((${#selected[@]} > 0)); then
+  printf '%s\n' "${selected[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one "$1"' _ {}
+fi
+
+failed=()
+passed=0
+for name in "${selected[@]+"${selected[@]}"}"; do
+  read -r status secs _ <"$logs/$name.status"
+  if [[ "$status" == 0 ]]; then
+    printf 'PASS  %-32s %4ss\n' "$name" "$secs"
+    passed=$((passed + 1))
+  else
+    note=""
+    [[ "$status" == 124 ]] && note=" (timed out after ${timeout}s)"
+    printf 'FAIL  %-32s %4ss  exit %s%s\n' "$name" "$secs" "$status" "$note"
+    failed+=("$name")
+  fi
+done
+
+for name in "${failed[@]+"${failed[@]}"}"; do
+  printf '\n===== %s (last 40 lines) =====\n' "$name"
+  tail -n 40 "$logs/$name.log"
+done
+printf '\n%d passed, %d failed; logs in %s\n' "$passed" "${#failed[@]}" "$logs"
+((${#failed[@]} == 0))
