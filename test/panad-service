@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Exercise bin/panad-service without starting a real daemon.
+#
+# The service is the only place pana touches provider credentials, so the two
+# things worth proving here are that the credentials arrive by `s` injection (not
+# by anything written to disk) and that a store that cannot be unlocked leaves a
+# running daemon with a log line rather than a job that fails to start for ever.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+home="$tmp/home"
+mkdir -p "$home/bin" "$home/.local/state/pana"
+printf '{"domain":"test.example","user":"tester"}\n' >"$home/.local/state/pana/config.json"
+
+checks=0
+pass() { checks=$((checks + 1)); }
+fail() {
+  printf 'FAIL: %s\n' "$1" >&2
+  exit 1
+}
+
+cat >"$home/bin/s" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$S_LOG"
+printf 'S_KEY_COMMAND=%s\n' "${S_KEY_COMMAND:-}" >>"$S_LOG"
+[ -z "${S_KEY:-}" ] || printf 'S_KEY=set\n' >>"$S_LOG"
+if [ "${1:-}" = list ]; then
+  printf '  ANTHROPIC_API_KEY    [REDACTED]\n'
+  printf '  GITHUB_TOKEN         [REDACTED]\n'
+  exit 0
+fi
+if [ "${FAKE_S_MODE:-ok}" = fail ]; then
+  echo 'error: S_KEY command failed (exit 1)' >&2
+  exit 1
+fi
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+ANTHROPIC_API_KEY="$FAKE_SECRET" exec "$@"
+SH
+
+cat >"$home/bin/panad-stub" <<'SH'
+#!/bin/sh
+printf 'panad args=[%s]\n' "$*" >>"$PANAD_LOG"
+printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY:+present}" >>"$PANAD_LOG"
+SH
+
+cat >"$home/bin/uname" <<'SH'
+#!/bin/sh
+printf '%s\n' "${FAKE_UNAME:-Darwin}"
+SH
+chmod +x "$home/bin/"*
+
+run() {
+  env -i HOME="$home" PATH="$home/bin:/usr/bin:/bin" SHELL="${SHELL_UNDER_TEST:-/bin/bash}" \
+    PANAD="$home/bin/panad-stub" PANAD_LOG="$tmp/panad.log" S_LOG="$tmp/s.log" \
+    FAKE_SECRET='fixture-secret-value' "${@}"
+}
+
+# 1. A stored provider key is injected by s, and nothing else from the store is:
+#    a session's bash tool inherits panad's environment, so a GitHub token must
+#    not ride along.
+rm -f "$tmp/panad.log" "$tmp/s.log"
+run bash "$root/bin/panad-service" one two 2>>"$tmp/service.err"
+grep -qx 'ANTHROPIC_API_KEY=present' "$tmp/panad.log" || fail 'panad did not receive ANTHROPIC_API_KEY'
+grep -qx 'panad args=\[one two\]' "$tmp/panad.log" || fail 'arguments were not passed through'
+grep -q 'ANTHROPIC_API_KEY -- .*/panad-stub one two' "$tmp/s.log" || fail "unexpected s invocation: $(cat "$tmp/s.log")"
+grep -q 'GITHUB_TOKEN' "$tmp/s.log" && fail 's injected a credential pana did not ask for'
+grep -qx 'S_KEY_COMMAND=security find-generic-password -s s-secrets -w' "$tmp/s.log" ||
+  fail 'the store password did not come from the login Keychain'
+grep -qx 'S_KEY=set' "$tmp/s.log" && fail 'the store password was passed as a value'
+pass
+
+# 2. The secret reaches panad through the environment only: no file the wrapper
+#    touches may hold it.
+if grep -rlF 'fixture-secret-value' "$home" "$root/bin/panad-service" >/dev/null 2>&1; then
+  fail 'a credential value was written to disk'
+fi
+pass
+
+# 3. Linux reads the same password from libsecret instead of the Keychain. A host
+#    with neither still starts panad; the credentials are then absent, not fatal.
+rm -f "$tmp/s.log"
+run FAKE_UNAME=Linux bash "$root/bin/panad-service" 2>>"$tmp/service.err"
+grep -qx 'S_KEY_COMMAND=' "$tmp/s.log" || fail 'a Linux host without secret-tool invented a password source'
+printf '#!/bin/sh\nprintf "fixture-password\\n"\n' >"$home/bin/secret-tool"
+chmod +x "$home/bin/secret-tool"
+rm -f "$tmp/s.log"
+run FAKE_UNAME=Linux bash "$root/bin/panad-service" 2>>"$tmp/service.err"
+grep -qx 'S_KEY_COMMAND=secret-tool lookup service s-secrets' "$tmp/s.log" ||
+  fail 'Linux did not use secret-tool for the store password'
+pass
+
+# 4. A store that cannot be unlocked still starts panad, and says why. Exiting
+#    instead would leave launchd restarting a daemon that never serves.
+rm -f "$tmp/panad.log"
+warning="$(run FAKE_S_MODE=fail bash "$root/bin/panad-service" 2>&1 >/dev/null)"
+grep -qx 'ANTHROPIC_API_KEY=' "$tmp/panad.log" || fail 'panad did not start without credentials'
+printf '%s\n' "$warning" | grep -q 'could not decrypt' || fail "no warning about the store: $warning"
+pass
+
+# 5. A missing checkout is named, not reported as a bare exec failure.
+set +e
+missing="$(run PANAD="$tmp/nothing-here" bash "$root/bin/panad-service" 2>&1)"
+status=$?
+set -e
+[ "$status" -eq 1 ] || fail "missing panad exited $status instead of 1"
+printf '%s\n' "$missing" | grep -q 'is not executable' || fail "missing panad was not named: $missing"
+pass
+
+# 6. A machine pana is not set up on exits cleanly without starting panad, so the
+#    service manager leaves it down instead of restarting it for ever.
+rm -f "$tmp/panad.log"
+mv "$home/.local/state/pana/config.json" "$tmp/config.json"
+set +e
+unset_out="$(run bash "$root/bin/panad-service" 2>&1)"
+status=$?
+set -e
+mv "$tmp/config.json" "$home/.local/state/pana/config.json"
+[ "$status" -eq 0 ] || fail "an unconfigured machine exited $status instead of 0"
+[ ! -f "$tmp/panad.log" ] || fail 'panad started without a config.json'
+printf '%s\n' "$unset_out" | grep -q 'not set up on this machine' || fail "no reason given: $unset_out"
+pass
+
+printf 'panad-service: %s checks passed\n' "$checks"

@@ -1,0 +1,10 @@
+#!/usr/bin/env node
+// bench: drive a throwaway panad with a faux model at scale and check what it did (SCALE-01,
+// SCALE-02). The bench lives in test/bench/; `--help` lists the options. It is not part of
+// `npm test`.
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const mod = await import(pathToFileURL(join(here, "..", "test", "bench", "main.ts")).href);
+process.exit(await mod.main(process.argv.slice(2)));

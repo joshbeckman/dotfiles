@@ -111,4 +111,44 @@ $historical
 $trailer
 "
 
+# GW-01: a pana session's bash tool has none of the harness variables the stub
+# above fakes, so the wrapper tests use the real generator. That is also how gw and
+# gsw detect a caller at all: attribution is one script's job, not three.
+rm -f "$tmp/bin/agent-trailer"
+ln -s "$root/bin/agent-trailer" "$tmp/bin/agent-trailer"
+mkdir -p "$tmp/home/.local/state/pana"
+printf '{"domain":"test.example","user":"tester"}\n' >"$tmp/home/.local/state/pana/config.json"
+pana_session=01JB8ZQ4V0K3W9X2Y7Z5A6B8C9
+pana_trailer="Co-authored-by: AI pana://test.example/sessions/$pana_session"
+
+# Run the way a pana session's bash tool runs: clean of both the old harness
+# variables and the agent name, which panad never passes to a session.
+run_pana() {
+  env -u AGENT_NAME -u AGENT_HANDLE -u AGENT_REALM -u PI_MODEL -u PI_PROVIDER \
+    -u PI_CODING_AGENT -u PI_PACKAGE_DIR -u PI_SESSION_ID -u PI_SESSION_FILE \
+    -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CURSOR_AGENT -u CODEX_HOME \
+    -u CODEX_SANDBOX -u AIDER_MODEL -u PANA_STATE \
+    HOME="$tmp/home" PANA_SESSION="$pana_session" "$@"
+}
+
+run_pana "$root/bin/gw" issue comment 1 --body $'Pana first.\n\nPana second.'
+assert_capture "$pana_trailer
+
+> Pana first.
+>
+> Pana second.
+"
+
+run_pana "$root/bin/gw" issue create --title Test --body 'Pana artifact.'
+assert_capture "Pana artifact.
+
+$pana_trailer
+"
+
+run_pana "$root/bin/gsw" pr edit 1 --body 'Updated under pana.'
+assert_capture "Updated under pana.
+
+$pana_trailer
+"
+
 echo 'agent attribution wrapper tests passed'

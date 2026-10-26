@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.joshbeckman.panad</string>
+	<!-- The wrapper re-exports PATH and injects the provider credentials with `s`,
+	     because neither belongs in a file this public repo tracks. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/joshbeckman/dotfiles/bin/panad-service</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- launchd's own PATH is /usr/bin:/bin:/usr/sbin:/sbin, which has no node.
+		     The wrapper re-exports this too, so a manual run and a service run
+		     behave identically; duplicated deliberately rather than relied upon. -->
+		<key>PATH</key>
+		<string>/Users/joshbeckman/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Users/joshbeckman</string>
+	<!-- The server's own JSONL request log is <state>/panad.log; this captures
+	     startup errors and whatever panad writes to stdout. -->
+	<key>StandardOutPath</key>
+	<string>/Users/joshbeckman/Library/Logs/panad.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/joshbeckman/Library/Logs/panad.log</string>
+	<!-- Aqua for the login session, which is where the Keychain that holds the
+	     `s` store password is unlocked. Standard rather than Background: panad is
+	     the thing the PWA and the CLI wait on. -->
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Standard</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Restart after a crash or a failed start, but stay down after a clean
+	     SIGTERM exit so a deliberate stop is not undone. ThrottleInterval keeps a
+	     startup failure from becoming a restart loop. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+</dict>
+</plist>

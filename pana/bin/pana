@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+// Entry stub for the pana CLI. WP1 builds the command framework behind src/cli.
+// It defers to src/cli/main so the real implementation lands without touching this file.
+import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const entry = pathToFileURL(join(here, "..", "src", "cli", "index.ts")).href;
+
+const mod = await import(entry);
+const exit = await mod.main(process.argv.slice(2));
+process.exit(typeof exit === "number" ? exit : 0);

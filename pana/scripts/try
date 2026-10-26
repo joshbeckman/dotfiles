@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# try: run panad from this checkout on a scratch state directory, with the model keys pi
+# already has, so pana can be tried before it is installed as a service.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: pana/scripts/try [--fresh] [-h|--help]
+
+Start panad in the foreground on PANA_STATE (default ~/tmp/pana-try). On first run it
+writes config.json there. The anthropic, openai, and fireworks keys come from pi's
+~/.pi/agent/auth.json (PI_AUTH overrides) and reach only the panad process.
+
+Options:
+  --fresh   delete PANA_STATE first
+
+In another terminal:
+  export PANA_STATE=~/tmp/pana-try
+  alias pana=<this checkout>/pana/bin/pana
+USAGE
+}
+
+fresh=0
+for arg in "$@"; do
+  case "$arg" in
+    --fresh) fresh=1 ;;
+    -h | --help) usage; exit 0 ;;
+    *) echo "try: unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+state="${PANA_STATE:-$HOME/tmp/pana-try}"
+auth="${PI_AUTH:-$HOME/.pi/agent/auth.json}"
+export PANA_STATE="$state"
+
+[[ -f "$auth" ]] || { echo "try: no pi auth file at $auth" >&2; exit 1; }
+((fresh)) && rm -rf "$state"
+mkdir -p "$state"
+
+if [[ ! -f "$state/config.json" ]]; then
+  # The realm names this machine for the old agent tools; the hostname is the fallback.
+  host="$(head -n1 "$HOME/.config/agent-realm" 2>/dev/null || hostname -s)"
+  domain="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-').joshbeckman.org"
+  cat >"$state/config.json" <<EOF
+{
+  "domain": "$domain",
+  "user": "$(git config github.user || id -un)",
+  "defaultModel": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017"
+}
+EOF
+fi
+
+# Keys are read into this process's environment and never printed. Only API-key entries
+# are used; an OAuth entry in pi's file has no key panad can use.
+read_keys=$(cat <<'PY'
+import json, sys
+names = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "fireworks": "FIREWORKS_API_KEY"}
+auth = json.load(open(sys.argv[1]))
+for provider, name in names.items():
+    entry = auth.get(provider)
+    if isinstance(entry, dict) and entry.get("type") == "api_key" and entry.get("key"):
+        print(f"{name}={entry['key']}")
+PY
+)
+keys="$(python3 -c "$read_keys" "$auth")"
+while IFS='=' read -r name value; do
+  [[ -n "$name" ]] && export "$name=$value"
+done <<<"$keys"
+unset keys
+
+cat >&2 <<EOF
+try: state $state
+try: in another terminal:
+  export PANA_STATE=$state
+  alias pana=$here/bin/pana
+EOF
+cd "$here/.."
+exec "$here/bin/panad"

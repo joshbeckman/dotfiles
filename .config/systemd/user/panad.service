@@ -1,0 +1,15 @@
+[Unit]
+Description=pana session daemon
+
+[Service]
+Type=simple
+# The wrapper rebuilds PATH from the login shell, where node lives, and injects
+# the provider credentials with `s`, because a user unit has neither.
+ExecStart=%h/dotfiles/bin/panad-service
+# Same rule as the Mac's launchd job: restart after a crash or a failed start,
+# but stay down after a clean SIGTERM stop.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

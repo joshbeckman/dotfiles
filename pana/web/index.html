@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+		<title>pana</title>
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<meta name="theme-color" content="#002fa7" />
+		<link rel="stylesheet" href="/fonts.css" />
+		<link rel="stylesheet" href="/style.css" />
+		<script type="module" src="/app.js"></script>
+	</head>
+	<body>
+		<header class="topbar">
+			<h1><img class="brand-mark" src="/favicon.svg" alt="" width="28" height="28" />pana</h1>
+			<nav id="nav" aria-label="Sections">
+				<a data-section="inbox" href="#/inbox">Inbox<span id="nav-inbox-count" data-testid="nav-unread" hidden></span></a>
+				<a data-section="threads" href="#/threads">Threads</a>
+				<a data-section="sessions" href="#/sessions">Sessions</a>
+				<a data-section="memory" href="#/memory">Memory</a>
+				<a data-section="schedules" href="#/schedules">Schedules</a>
+			</nav>
+			<div class="topbar-tools">
+				<button id="enable-push" data-testid="enable-push" class="quiet" type="button">Notifications</button>
+				<button id="show-help" data-testid="show-help" class="quiet" type="button" aria-label="Keyboard shortcuts">?</button>
+			</div>
+		</header>
+
+		<p id="status" role="status" data-testid="status"></p>
+
+		<main>
+			<section id="authorize" class="panel" data-testid="authorize" aria-labelledby="authorize-title" hidden>
+				<h2 id="authorize-title">Authorize this app</h2>
+				<p>
+					An installed app has its own storage, so it cannot see the token a browser tab was given. Paste the
+					launch URL that <code>panad</code> printed (or the value of <code>web-token</code>) once to authorize
+					this window.
+				</p>
+				<form id="authorize-form">
+					<div class="field">
+						<label for="authorize-input">Launch URL or token</label>
+						<input id="authorize-input" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8766/#…" />
+					</div>
+					<div class="form-actions"><button type="submit" class="primary">Authorize</button></div>
+				</form>
+				<p id="authorize-status" role="status"></p>
+			</section>
+
+			<section class="view" id="view-inbox" data-testid="inbox">
+				<header class="view-header">
+					<h2>Inbox</h2>
+					<label class="check"><input id="inbox-archived" data-testid="inbox-archived" type="checkbox" /> Archived</label>
+				</header>
+				<p class="hint">Threads you are in, latest activity first.</p>
+				<div id="inbox-list" data-testid="inbox-list" class="list" role="list"></div>
+			</section>
+
+			<section class="view" id="view-compose" data-testid="compose" hidden>
+				<header class="view-header"><a href="#/threads" class="back">Back</a><h2>New thread</h2></header>
+				<form id="compose-form" class="panel">
+					<div class="field">
+						<label for="compose-to">Also to</label>
+						<input id="compose-to" name="to" placeholder="optional: joshbeckman, 01J… (comma separated)" />
+					</div>
+					<div class="field">
+						<label for="compose-subject">Subject</label>
+						<input id="compose-subject" name="subject" placeholder="optional" />
+					</div>
+					<div class="field">
+						<label for="compose-body">Message</label>
+						<textarea id="compose-body" name="body" rows="10" required></textarea>
+					</div>
+					<div class="form-actions">
+						<p class="hint">Starts a session and its thread. Markdown is rendered; attach files from the CLI with <code>--attach</code>.</p>
+						<span class="chord" data-chord></span>
+						<button type="submit" class="primary" data-testid="compose-send">Send</button>
+					</div>
+				</form>
+			</section>
+
+			<section class="view" id="view-threads" data-testid="threads" hidden>
+				<div id="threads-browse">
+					<header class="view-header">
+						<h2>Threads</h2>
+						<div class="header-actions">
+							<a class="button primary" href="#/compose" data-testid="threads-new">New</a>
+						</div>
+					</header>
+					<form id="threads-search" class="search">
+						<label for="threads-query" class="visually-hidden">Search threads</label>
+						<input id="threads-query" data-testid="threads-query" type="search" placeholder="Search subjects and bodies" />
+						<label class="check"><input id="threads-archived" data-testid="threads-archived" type="checkbox" /> Archived</label>
+						<label class="check"><input id="threads-unread" data-testid="threads-unread" type="checkbox" /> Unread</label>
+						<button type="submit">Search</button>
+					</form>
+					<div id="threads-list" data-testid="threads-list" class="list" role="list"></div>
+				</div>
+
+				<article id="thread" data-testid="thread" hidden>
+					<header class="view-header thread-header">
+						<a href="#/threads" class="back" data-testid="back">Back</a>
+						<h2 id="thread-subject" tabindex="-1"></h2>
+						<div class="header-actions">
+							<button type="button" id="thread-archive" class="quiet" data-testid="thread-archive">Archive</button>
+						</div>
+					</header>
+					<p class="meta-line">
+						<span id="thread-participants" data-testid="thread-participants" class="people"></span>
+						<span id="thread-url" data-testid="thread-url" class="hint"></span>
+					</p>
+					<div id="thread-messages" data-testid="messages" class="messages"></div>
+
+					<div id="stale" data-testid="stale" class="notice" hidden>
+						<strong>The thread moved.</strong> These messages arrived after your draft's head. Your draft is kept.
+						<div id="stale-new" data-testid="stale-new"></div>
+					</div>
+
+					<div id="thread-working" data-testid="thread-working" class="working" role="status" aria-live="polite" hidden></div>
+
+					<form id="reply-form" class="panel composer">
+						<div class="field">
+							<label for="reply-body">Reply</label>
+							<textarea id="reply-body" data-testid="reply-body" rows="5" required></textarea>
+						</div>
+						<div class="form-actions">
+							<p class="hint">After <code id="draft-head" data-testid="draft-head"></code></p>
+							<span class="chord" data-chord></span>
+							<button type="submit" class="primary" data-testid="reply-send">Reply</button>
+						</div>
+					</form>
+				</article>
+
+				<!-- Edit and redact confirmation. It moves into the message it acts on (UX-07). -->
+				<div id="confirm-home" hidden>
+					<form id="confirm" data-testid="confirm" class="confirm" hidden>
+						<p id="confirm-text"></p>
+						<div id="edit-field" class="field" hidden>
+							<label for="edit-body">New body</label>
+							<textarea id="edit-body" data-testid="edit-body" rows="6"></textarea>
+						</div>
+						<div class="form-actions">
+							<span class="chord" data-chord></span>
+							<button type="button" id="confirm-no" data-testid="confirm-no">Cancel</button>
+							<button type="submit" id="confirm-yes" class="danger" data-testid="confirm-yes">Yes, continue</button>
+						</div>
+					</form>
+				</div>
+			</section>
+
+			<section class="view" id="view-sessions" data-testid="sessions" hidden>
+				<div id="sessions-browse">
+					<header class="view-header"><h2>Sessions</h2></header>
+					<form id="sessions-search" class="search">
+						<label for="sessions-query" class="visually-hidden">Search sessions</label>
+						<input id="sessions-query" data-testid="sessions-query" type="search" placeholder="Search transcripts" />
+						<button type="submit">Search</button>
+					</form>
+					<div id="sessions-list" data-testid="sessions-list" class="list" role="list"></div>
+				</div>
+
+				<article id="session" data-testid="session" hidden>
+					<div class="session-sticky" data-testid="session-sticky">
+					<header class="view-header thread-header">
+						<a href="#/sessions" class="back">Back</a>
+						<h2 id="session-title"></h2>
+						<div class="header-actions">
+							<button type="button" class="quiet" data-action="stop" data-testid="session-stop">Stop</button>
+							<button type="button" class="quiet" data-action="compact" data-testid="session-compact">Compact</button>
+							<button type="button" class="quiet" data-action="reload" data-testid="session-reload">Reload</button>
+							<button type="button" class="quiet" data-action="archive-session" id="session-archive" data-testid="session-archive">Archive</button>
+						</div>
+					</header>
+					<p id="session-meta" class="meta-line"></p>
+					<div id="session-confirm" data-testid="session-confirm" class="confirm" hidden>
+						<p id="session-confirm-text"></p>
+						<div class="form-actions">
+							<button type="button" id="session-confirm-no" data-testid="session-confirm-no">Cancel</button>
+							<button type="button" id="session-confirm-yes" class="danger" data-testid="session-confirm-yes">Yes, archive</button>
+						</div>
+					</div>
+					</div>
+					<div id="transcript" data-testid="transcript" class="transcript"></div>
+					<div id="transcript-live" data-testid="transcript-live" class="transcript-live" aria-live="polite" hidden></div>
+				</article>
+			</section>
+
+			<section class="view" id="view-memory" data-testid="memory" hidden>
+				<header class="view-header">
+					<h2>Memory</h2>
+					<div class="header-actions">
+						<button type="button" class="quiet" data-action="create-worktree" data-testid="memory-create">New worktree</button>
+					</div>
+				</header>
+				<p id="memory-worktree" data-testid="memory-worktree" class="hint"></p>
+				<form id="memory-search" class="search">
+					<label for="memory-query" class="visually-hidden">Search memory</label>
+					<input id="memory-query" data-testid="memory-query" type="search" placeholder="Search memory on main" />
+					<button type="submit">Search</button>
+				</form>
+				<div id="memory-results" data-testid="memory-results" class="list" role="list"></div>
+				<div class="columns">
+					<section class="column" aria-labelledby="memory-files-title">
+						<h3 id="memory-files-title">Files</h3>
+						<div id="memory-files" data-testid="memory-files" class="list" role="list"></div>
+					</section>
+					<section id="memory-open" class="column panel" aria-labelledby="memory-path" hidden>
+						<h3 id="memory-path"></h3>
+						<pre id="memory-file" data-testid="memory-file" class="file-body" hidden></pre>
+						<form id="memory-edit-form">
+							<div class="field">
+								<label for="memory-edit">Edit</label>
+								<textarea id="memory-edit" data-testid="memory-edit" rows="10"></textarea>
+							</div>
+							<div class="form-actions">
+								<p class="hint">Saving commits to main as you.</p>
+								<span class="chord" data-chord></span>
+								<button type="submit" class="primary" id="memory-save" data-testid="memory-save">Save</button>
+							</div>
+						</form>
+					</section>
+				</div>
+				<h3>Log</h3>
+				<div id="memory-log" data-testid="memory-log" class="list" role="list"></div>
+			</section>
+
+			<section class="view" id="view-schedules" data-testid="schedules" hidden>
+				<header class="view-header"><h2>Schedules</h2></header>
+				<div id="schedules-list" data-testid="schedules-list" class="list" role="list"></div>
+				<form id="schedule-form" class="panel">
+					<h3 id="schedule-form-title">New schedule</h3>
+					<div class="field-row">
+						<div class="field">
+							<label for="schedule-kind">Kind</label>
+							<select id="schedule-kind" data-testid="schedule-kind">
+								<option value="session">session</option>
+								<option value="thread">thread</option>
+							</select>
+						</div>
+						<div class="field grow">
+							<label for="schedule-when">Cron or time</label>
+							<input id="schedule-when" data-testid="schedule-when" placeholder="0 9 * * 1-5, or 2026-10-25T18:26:14Z" />
+						</div>
+					</div>
+					<div class="field">
+						<label for="schedule-to">To (thread schedules)</label>
+						<input id="schedule-to" data-testid="schedule-to" placeholder="joshbeckman, 01J… (comma separated)" />
+					</div>
+					<div class="field">
+						<label for="schedule-prompt">Prompt or message</label>
+						<textarea id="schedule-prompt" data-testid="schedule-prompt" rows="4" required></textarea>
+					</div>
+					<div class="form-actions">
+						<span class="chord" data-chord></span>
+						<button type="button" id="schedule-cancel" data-testid="schedule-cancel" hidden>Cancel</button>
+						<button type="submit" class="primary" id="schedule-create" data-testid="schedule-create">Create</button>
+					</div>
+				</form>
+			</section>
+		</main>
+
+		<div id="help" data-testid="help" class="overlay" role="dialog" aria-modal="true" aria-labelledby="help-title" hidden>
+			<div class="overlay-card">
+				<header class="view-header">
+					<h2 id="help-title">Keyboard</h2>
+					<button type="button" id="help-close" class="quiet" data-testid="help-close">Close</button>
+				</header>
+				<table id="help-keys" data-testid="help-keys"></table>
+			</div>
+		</div>
+	</body>
+</html>
