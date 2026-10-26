@@ -246,7 +246,9 @@ class AgentFindTest(unittest.TestCase):
         self.assertEqual(json.loads(self.run_cli('--json', 'absent-word').stdout), [])
         self.assertEqual(self.run_cli('absent-word').returncode, 1)
         self.assertNotEqual(self.run_cli('--json', '[').returncode, 0)
-        self.assertEqual(json.loads(self.run_cli('--json', '--', '--glob').stdout), [])
+        result = self.run_cli('--json', '--', '--glob')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
         self.assertNotEqual(self.run_cli('persimmon', '--limit', '0').returncode, 0)
         self.assertEqual(json.loads(self.run_cli('--agent', 'missing', '--json').stdout), [])
 
