@@ -47,8 +47,6 @@ export interface LiveTool {
 export interface LiveView {
 	/** Runtime-clock milliseconds when this view was built, so a window can correct for clock skew. */
 	at: number;
-	/** Runtime-clock milliseconds when the run started. */
-	startedAt?: number;
 	/** The partial answer of the generation in progress. */
 	generation?: { attempt: number; blocks: LiveBlock[]; retryAt?: number; retryError?: string };
 	tools: LiveTool[];
@@ -154,7 +152,6 @@ export async function liveView(runtime: Runtime, conversationId: ConversationId,
 	const compacting = (value.compactions ?? []).some((compaction) => compaction.blocking);
 	if (value.run === undefined && generation === undefined && slots.length === 0 && !compacting) return null;
 
-	const startedAt = value.run ? (await runtime.harness.getTask(value.run.taskId, ctx))?.startedAt : undefined;
 	const tools: LiveTool[] = [];
 	const assistants = new Map<number, Map<string, unknown>>();
 	for (const slot of slots) {
@@ -172,7 +169,6 @@ export async function liveView(runtime: Runtime, conversationId: ConversationId,
 	}
 
 	const view: LiveView = { at: runtime.clock.now(), tools, compacting, activity: "working" };
-	if (startedAt !== undefined) view.startedAt = startedAt;
 	if (generation) {
 		const message = generation.message as { content?: unknown } | undefined;
 		view.generation = { attempt: generation.attempt, blocks: liveBlocks(message?.content) };
@@ -230,7 +226,7 @@ function liveBlocks(content: unknown): LiveBlock[] {
 }
 
 /** UX-12: the few words the thread's working chip shows, and when that activity started. */
-export function activityOf(view: Pick<LiveView, "generation" | "tools" | "compacting" | "startedAt">): { activity: string; since?: number } {
+export function activityOf(view: Pick<LiveView, "generation" | "tools" | "compacting">): { activity: string; since?: number } {
 	const running = view.tools.filter((tool) => tool.status === "running" && tool.parentCallId === undefined);
 	if (running.length > 0) {
 		const first = running[0]!;

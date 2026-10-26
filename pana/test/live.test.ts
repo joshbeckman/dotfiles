@@ -165,7 +165,7 @@ describe("UX-12 live work in progress", () => {
 	});
 
 	it("UX-12 the activity names the running tool, and the chip label carries its elapsed time", () => {
-		const base = { compacting: false, startedAt: 1_000 };
+		const base = { compacting: false };
 		expect(activityOf({ ...base, tools: [{ callId: "a", name: "bash", status: "running", startedAt: 5_000 }] })).toEqual({ activity: "running bash", since: 5_000 });
 		expect(
 			activityOf({
