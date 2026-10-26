@@ -8,7 +8,7 @@ The README says what pana is. This file says how to check that it works. If they
 
 - **Language.** TypeScript on Node 22+. pi-durable is TypeScript, so pana is too.
 - **Layout.** All code lives in `pana/`. `pana/bin/pana` and `pana/bin/panad` are the entry points. `bin/pana` in the dotfiles is a symlink to `pana/bin/pana`.
-- **Tests.** Vitest. Every test runs `panad` in-process against a temp state directory, a fake clock (pi-durable's `now` and `setTimer`), and pi-ai's faux provider with scripted responses. No test calls a real model or touches `~/.local/state/pana`.
+- **Tests.** Vitest. Most tests run `panad` in-process against a temp state directory, a fake clock (pi-durable's `now` and `setTimer`), and pi-ai's faux provider with scripted responses. The end-to-end and smoke tests (INT-04, INT-05) run the real `panad` entry point as a child process with the same scripted faux model. No test calls a real model or touches `~/.local/state/pana`.
 - **IDs.** Item IDs (`API-03`) are stable. Add new items at the end of a section. Never renumber.
 - **Domain in examples.** `test.example`.
 
@@ -26,6 +26,7 @@ The README says what pana is. This file says how to check that it works. If they
 | WP7 | Subjects and search | WP2 |
 | WP8 | PWA and Web Push | WP1 |
 | WP9 | Service units, install, `gw`/`gsw` attribution | WP1 |
+| WP10 | Integration: providers, push, the PWA on real handlers, end-to-end and smoke tests | WP0–WP9 |
 
 WP0 goes first, built by one agent. It fixes every shared contract: schema, API routes, error shapes, and test helpers. After WP0 merges, WP1, WP2, WP4, WP5, and WP7 can run in parallel. Each builds against the WP0 contracts and fakes what it needs from the others.
 
@@ -79,6 +80,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/files` | upload |
 | GET | `/files/:id/:name` | download |
 | GET, POST | `/memory/worktree`, `/memory/search`, `/memory/commit`, `/memory/log`, `/memory/files/*` | memory |
+| GET | `/memory/files` | list the files on `main` |
 | GET, POST, DELETE | `/schedules`, `/schedules/:id` | scheduling |
 | GET, POST | `/push/key`, `/push/subscriptions` | Web Push |
 | GET | `/events` | server-sent events for the PWA |
@@ -208,7 +210,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 - [x] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
 - [x] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
-- [x] **ISO-03** `bash` runs with exactly `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
+- [x] **ISO-03** `bash` runs with exactly `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
 - [x] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
 
 ### System prompt
@@ -299,3 +301,16 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **SVC-03** The service injects provider credentials with `s KEY... -- panad`. Pana never writes them to disk.
 - [x] **SVC-04** `Brewfile` lists any new formula pana needs.
 - [x] **GW-01** `gw` and `gsw` attribute posts when `PANA_SESSION` is set, using the session URL in the trailer.
+
+---
+
+## WP10: Integration
+
+Each package was built against contracts and fakes. These items prove the packages work together.
+
+- [x] **INT-01** `panad` registers every pi-ai provider whose credentials are in its environment. Model IDs are `provider/model-id`. `config.defaultModel` is the model of a session with no model or profile model. A model from an unregistered provider is a 400 that names the provider.
+- [x] **INT-02** The PWA reads the real handler shapes in every view, and `npm run test:web` runs its flows against a real test `panad` with the faux model. Editing a schedule keeps its time: the form shows an `--at` time, and an update with neither `cron` nor `at` keeps the stored time.
+- [x] **INT-03** Every delivery to the user and every notice publishes a Web Push and an `/events` event after its transaction commits. A failed push does not roll back the message. pi-durable commits stream the session transcript through `/events`.
+- [x] **INT-04** One test drives only `pana/bin/pana` against a real `panad` child process with a scripted faux model: `session create`, a `bash` call that runs `pana memory` and `pana memory commit` and makes a git commit, the answer in `thread read`, a second wake from `thread respond --after`, the session URL in `memory log`, and the commit trailer.
+- [x] **INT-05** `pana/scripts/smoke` starts a throwaway `panad` with the provider keys in its environment, creates a session from the CLI, and prints the thread and the PWA launch URL. `PANA_SMOKE_FAUX=1` runs it with the faux model, and `--keep` leaves `panad` running.
+- [x] **INT-06** README has a "Run it" section: `config.json`, `panad` directly and as a service, the CLI, and the PWA. README and this spec match what the build does.

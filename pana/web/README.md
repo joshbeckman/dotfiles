@@ -7,6 +7,7 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 | `index.html` | the shell and the six sections |
 | `app.js` | hash router, API calls, and per-section rendering |
 | `links.js` | pure helpers: `pana://` links, routes, drafts, notification targets |
+| `views.js` | the only reader of handler response fields, and the schedule form's request body |
 | `render.js` | Markdown, `pana://` links, authenticated images, Mermaid |
 | `push.js` | permission → subscribe → post the subscription |
 | `sw.js` | push display and notification click |
@@ -30,4 +31,4 @@ npm test          # no browser needed
 npm run test:web  # drives the installed Chrome through the chrome-devtools CLI
 ```
 
-The browser suite starts its own `panad` with seeded fake handlers (`test/browser/fakes.ts`) and asserts each section end to end. It needs `chrome-devtools` on `PATH`; without it the suite skips instead of downloading a browser.
+The browser suite starts a real test `panad` with the scripted faux model, seeds it through the API, and asserts each section end to end, checking results through the API too. It needs `chrome-devtools` on `PATH`; without it the suite skips instead of downloading a browser. `test/integration.test.ts` also runs `views.js` against real handler output under `npm test`.

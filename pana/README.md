@@ -12,6 +12,49 @@ pana session create --prompt "what is the capital of france"
 # the session's answer is posted to that thread
 ```
 
+## Run it
+
+Write `~/.local/state/pana/config.json`. Only `domain` and `user` are required; [SPEC.md](SPEC.md) CFG-03 lists the rest.
+
+```json
+{
+  "domain": "lantern.joshbeckman.org",
+  "user": "joshbeckman",
+  "defaultModel": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017"
+}
+```
+
+Start `panad` with a provider key in its environment. It prints the providers it registered and a launch URL for the PWA.
+
+```sh
+s FIREWORKS_API_KEY -- pana/bin/panad
+# panad: listening on ~/.local/state/pana/panad.sock and http://127.0.0.1:8766
+# panad: model providers: fireworks
+# panad: open http://127.0.0.1:8766/#<web-token>
+```
+
+As a service, load the launchd job on macOS. On Linux, `setup` enables `panad.service`. Both run `bin/panad-service`, which injects the provider keys from `s`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux.
+
+```sh
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.plist
+```
+
+Use the CLI. `PANA_STATE` selects another state directory.
+
+```sh
+pana session create --prompt "What is the capital of France? Answer in one word."
+pana thread read THREAD
+pana thread respond --thread THREAD --after MESSAGE --body "Thanks"
+```
+
+Open the launch URL in a browser to authorize the PWA. For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
+
+```sh
+tailscale serve --bg 8766
+```
+
+`pana/scripts/smoke` checks a real model end to end on a throwaway state directory: `s FIREWORKS_API_KEY -- pana/scripts/smoke`. Add `--keep` to leave that `panad` running for a look in the PWA.
+
 ## Goals
 
 - One place to see every session, thread, and memory edit on a domain.
@@ -57,7 +100,8 @@ A session has no name. Its URL is its identity, its attribution, and its address
 - `panad` is the only process that opens `pana.sqlite`. pi-durable has no cross-process locking, so the CLI never opens the file directly.
 - State lives under `~/.local/state/pana/`: `pana.sqlite`, `files/`, and `memory.git`.
 - All sessions share one pi-durable storage, as conversations of one Harness. pi-durable tables use the `pi_` prefix. Pana's tables (threads, messages, deliveries, schedules, file records) live in the same file, so a message append and the session wake it causes commit together.
-- `panad` binds HTTP to loopback. Tailscale Serve exposes it to other devices, as agent-mail-web does today.
+- `panad` binds HTTP to loopback. Tailscale Serve exposes it to other devices, as agent-mail-web does today. `panad` reads its tailnet name from `tailscale status` at start and accepts requests for it.
+- `panad` registers a model provider for each pi-ai provider whose API key is in its environment, such as `FIREWORKS_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`. A model ID is `provider/model-id`, e.g. `fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017`.
 - `panad` runs under launchd on macOS and a systemd user unit on Linux. Both run `bin/panad-service` from the dotfiles, which rebuilds `PATH` from the login shell and injects provider credentials with `s KEY... -- panad`. The credentials live in the encrypted store and panad's environment only: pana writes no key to disk. A service job has no TTY, so the wrapper reads the store password through `S_KEY_COMMAND` from the login Keychain.
 - Runtime is Node, because pi-durable is TypeScript.
 
@@ -67,7 +111,7 @@ Pana runs beside the current pi setup and shares nothing with it.
 
 - `panad` builds its own pi-durable registry with two extensions: `CodingTools` (`read`, `write`, `edit`, `bash`) from pi-durable, and `pana`, which adds the pana tools and system prompt sections.
 - Sessions load no pi-coding-agent extensions, skills, prompt templates, MCP servers, or `~/.pi/agent/AGENTS.md`.
-- The `bash` tool runs commands with a clean environment: `PATH`, `HOME`, and `PANA_SESSION`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
+- The `bash` tool runs commands with a clean environment: `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables that set pana's hook directory. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
 ### System prompt
@@ -214,7 +258,7 @@ pana schedule delete SCHEDULE
 
 The PWA has these sections:
 
-- **Inbox.** Unread messages to the user. Open the thread, draft, and reply.
+- **Inbox.** Messages to the user, newest first, with unread ones marked. Open the thread, draft, and reply.
 - **Compose.** Start a session and its thread.
 - **Threads.** Browse and search. Edit or redact a message, with a warning.
 - **Sessions.** Live and past sessions with transcript, model, cost, lineage, and state. Stop, compact, reload.
@@ -225,7 +269,7 @@ A reply draft records the thread head when it opens. If the thread moves before 
 
 `panad` prints a launch URL with the web token in the fragment when it starts. Treat that URL as private: anyone who has it can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
 
-A new message to the user triggers a Web Push notification that opens its thread. `panad` holds the VAPID keys and the push subscriptions. iOS delivers Web Push only to a home-screen app served over HTTPS, so phones use the Tailscale Serve URL.
+A new message or notice to the user triggers a Web Push notification that opens its thread. Open windows get the same events, and the live session transcript, over `/events`. `panad` holds the VAPID keys and the push subscriptions. iOS delivers Web Push only to a home-screen app served over HTTPS, so phones use the Tailscale Serve URL.
 
 Sessions show things to the user only through message Markdown (images, Mermaid) or links.
 
