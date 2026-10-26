@@ -618,10 +618,12 @@ def transcript_holders(session_file):
     session_id = str(session_file).rsplit('_', 1)[-1].split('.')[0].encode()
     reference = str(session_file).encode()
     holders = []
-    if not Path('/proc').is_dir():
+    if sys.platform == 'darwin' or not Path('/proc').is_dir():
         import subprocess
-        # macOS has no /proc; refuse the wake if ps cannot establish that the
-        # transcript is free, rather than risk starting a second Pi on it.
+        # macOS has no /proc; a Linux container can lack it too, so the host and the probe
+        # both decide. Host first, so the test seam that fakes sys.platform reaches this
+        # branch on any host. Refuse the wake if ps cannot establish that the transcript
+        # is free, rather than risk starting a second Pi on it.
         listing = subprocess.run(['ps', '-ww', '-axo', 'pid=,args='], capture_output=True,
                                  text=True, check=True)
         for line in listing.stdout.splitlines():
