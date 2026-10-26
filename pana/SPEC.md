@@ -116,42 +116,42 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Threads
 
-- [ ] **THR-01** `thread create --to A,B` creates a thread whose participants are the caller, A, and B.
-- [ ] **THR-02** Every message goes to every participant except its sender, as one delivery row each.
-- [ ] **THR-03** `thread respond` without `--after` exits 2.
-- [ ] **THR-04** `thread respond --after M` where M is the thread's newest message appends the message.
-- [ ] **THR-05** `thread respond --after M` where M is older than the newest message returns 409 with the IDs of the newer messages, and appends nothing.
-- [ ] **THR-06** `--after` naming a message in another thread returns 400.
-- [ ] **THR-07** Two concurrent responds with the same `--after` produce exactly one append and one 409.
-- [ ] **THR-08** `--cc C` adds C as a participant. C receives this message and later ones, not earlier ones.
-- [ ] **THR-09** A caller who is not a participant cannot respond (403), except the user, who may respond to any thread and becomes a participant.
-- [ ] **THR-10** `thread read` returns messages in order with sender URLs, timestamps, and current revisions, and marks them read for the caller.
+- [x] **THR-01** `thread create --to A,B` creates a thread whose participants are the caller, A, and B.
+- [x] **THR-02** Every message goes to every participant except its sender, as one delivery row each.
+- [x] **THR-03** `thread respond` without `--after` exits 2.
+- [x] **THR-04** `thread respond --after M` where M is the thread's newest message appends the message.
+- [x] **THR-05** `thread respond --after M` where M is older than the newest message returns 409 with the IDs of the newer messages, and appends nothing.
+- [x] **THR-06** `--after` naming a message in another thread returns 400.
+- [x] **THR-07** Two concurrent responds with the same `--after` produce exactly one append and one 409.
+- [x] **THR-08** `--cc C` adds C as a participant. C receives this message and later ones, not earlier ones.
+- [x] **THR-09** A caller who is not a participant cannot respond (403), except the user, who may respond to any thread and becomes a participant.
+- [x] **THR-10** `thread read` returns messages in order with sender URLs, timestamps, and current revisions, and marks them read for the caller.
 
 ### Edits and redactions
 
-- [ ] **EDT-01** Only the user may revise or redact. A session gets 403.
-- [ ] **EDT-02** A revision appends a `message.revised` event. Reads show the newest body and a `revised` flag. The original stays in `message_events`.
-- [ ] **EDT-03** A redaction appends `message.redacted`. Reads show `[redacted]` and no body.
-- [ ] **EDT-04** No code path issues `UPDATE` or `DELETE` on `messages`. A test greps the source.
-- [ ] **EDT-05** Revisions and redactions do not create deliveries and do not wake sessions.
+- [x] **EDT-01** Only the user may revise or redact. A session gets 403.
+- [x] **EDT-02** A revision appends a `message.revised` event. Reads show the newest body and a `revised` flag. The original stays in `message_events`.
+- [x] **EDT-03** A redaction appends `message.redacted`. Reads show `[redacted]` and no body.
+- [x] **EDT-04** No code path issues `UPDATE` or `DELETE` on `messages`. A test greps the source.
+- [x] **EDT-05** Revisions and redactions do not create deliveries and do not wake sessions.
 
 ### Inbox
 
-- [ ] **INB-01** `session inbox S` lists S's deliveries with message ID, thread ID, subject, sender, recipients, time, and read state, newest first.
-- [ ] **INB-02** `session inbox read S M` returns the full message and marks it read for S.
-- [ ] **INB-03** `GET /inbox` with no `participant` returns the caller's inbox. A session may not read another session's inbox (403). The user may read any.
+- [x] **INB-01** `session inbox S` lists S's deliveries with message ID, thread ID, subject, sender, recipients, time, and read state, newest first.
+- [x] **INB-02** `session inbox read S M` returns the full message and marks it read for S.
+- [x] **INB-03** `GET /inbox` with no `participant` returns the caller's inbox. A session may not read another session's inbox (403). The user may read any.
 
 ### Notices
 
-- [ ] **NTC-01** `panad` posts notices as the domain URL `pana://<domain>`. A notice delivers to users only and never wakes a session.
+- [x] **NTC-01** `panad` posts notices as the domain URL `pana://<domain>`. A notice delivers to users only and never wakes a session.
 
 ### Files
 
-- [ ] **FIL-01** `--attach PATH` copies the file to `files/<ulid>/<basename>` and records path, size, media type, and uploader.
-- [ ] **FIL-02** The CLI appends a Markdown reference per attachment: `![name](url)` for images, `[name](url)` otherwise.
-- [ ] **FIL-03** A file over `files.maxBytes` returns 400 and copies nothing.
-- [ ] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
-- [ ] **FIL-05** File bytes are never stored in SQLite.
+- [x] **FIL-01** `--attach PATH` copies the file to `files/<ulid>/<basename>` and records path, size, media type, and uploader.
+- [x] **FIL-02** The CLI appends a Markdown reference per attachment: `![name](url)` for images, `[name](url)` otherwise.
+- [x] **FIL-03** A file over `files.maxBytes` returns 400 and copies nothing.
+- [x] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
+- [x] **FIL-05** File bytes are never stored in SQLite.
 
 ---
 
