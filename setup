@@ -208,14 +208,14 @@ __setup_linux(){
                         __setup_unsupported;;
         esac
 
-        # The refresh schedule. On macOS this is a launchd job that dfm links from
-        # Library/LaunchAgents; here it is a user timer, linked the same way so that
-        # editing the unit in the repo is what the machine runs. Linking is not
-        # enough on its own, so enable it, and say so rather than failing when there
-        # is no user bus to enable it on: a container, or WSL without systemd, still
-        # has every other part of setup to do.
+        # The refresh schedule and panad. On macOS these are launchd jobs that dfm
+        # links from Library/LaunchAgents; here they are user units, linked the same
+        # way so that editing the unit in the repo is what the machine runs. Linking
+        # is not enough on its own, so enable them, and say so rather than failing
+        # when there is no user bus to enable them on: a container, or WSL without
+        # systemd, still has every other part of setup to do.
         echo '  ======  installing the dotfiles refresh schedule'
-        for unit in dotfiles-refresh.service dotfiles-refresh.timer agent-mail-verify.service agent-mail-verify.timer; do
+        for unit in dotfiles-refresh.service dotfiles-refresh.timer agent-mail-verify.service agent-mail-verify.timer panad.service; do
                 unit_source="$DOTFILES_DIR/.config/systemd/user/$unit"
                 [ -f "$unit_source" ] || continue
                 symlink_agent_config "$unit_source" "$HOME/.config/systemd/user/$unit"
@@ -225,8 +225,18 @@ __setup_linux(){
                 for timer in dotfiles-refresh.timer agent-mail-verify.timer; do
                         systemctl --user enable --now "$timer" || echo "could not enable $timer; continuing"
                 done
+                # panad is a long-running service rather than a timer, and it needs a
+                # config.json before it can start. Enabling is what survives the next
+                # login; starting it here is only safe on a machine pana is set up for,
+                # because Restart=on-failure would turn a missing config into a loop.
+                if [ -f "$HOME/.config/systemd/user/panad.service" ]; then
+                        systemctl --user enable panad.service || echo 'could not enable panad.service; continuing'
+                        if [ -f "${XDG_STATE_HOME:-$HOME/.local/state}/pana/config.json" ]; then
+                                systemctl --user restart panad.service || echo 'could not start panad.service; continuing'
+                        fi
+                fi
         else
-                echo '  ======  no user systemd bus here; enable dotfiles-refresh.timer and agent-mail-verify.timer by hand'
+                echo '  ======  no user systemd bus here; enable dotfiles-refresh.timer and agent-mail-verify.timer by hand, and panad.service too'
         fi
         echo '  ======  installed the dotfiles refresh schedule'
 }

@@ -294,8 +294,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP9: Service and integration
 
-- [ ] **SVC-01** `Library/LaunchAgents/org.joshbeckman.panad.plist` runs `panad` at login and restarts it on exit.
-- [ ] **SVC-02** `.config/systemd/user/panad.service` does the same on Linux, and `setup` enables it.
-- [ ] **SVC-03** The service injects provider credentials with `s KEY... -- panad`. Pana never writes them to disk.
-- [ ] **SVC-04** `Brewfile` lists any new formula pana needs.
-- [ ] **GW-01** `gw` and `gsw` attribute posts when `PANA_SESSION` is set, using the session URL in the trailer.
+- [x] **SVC-01** `Library/LaunchAgents/org.joshbeckman.panad.plist` runs `panad` at login and restarts it on exit.
+- [x] **SVC-02** `.config/systemd/user/panad.service` does the same on Linux, and `setup` enables it.
+- [x] **SVC-03** The service injects provider credentials with `s KEY... -- panad`. Pana never writes them to disk.
+- [x] **SVC-04** `Brewfile` lists any new formula pana needs.
+- [x] **GW-01** `gw` and `gsw` attribute posts when `PANA_SESSION` is set, using the session URL in the trailer.

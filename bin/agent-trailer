@@ -125,7 +125,55 @@ pi_version() {
   return 1
 }
 
-if [ -n "${PI_MODEL:-}" ] || [ -n "${PI_CODING_AGENT:-}" ]; then
+# pana is the harness that runs long-lived sessions in place of pi (see
+# pana/README.md). A pana session has no name: its URL is its identity, its
+# attribution, and its address. PANA_SESSION is the only signal available, because
+# a session's bash tool runs with a clean environment (ISO-03) that has none of
+# the harness variables above. It holds a bare ULID, so the domain comes from
+# pana's own config.
+pana_url=""
+pana_id=""
+pana_domain=""
+pana_session() {
+  _session="${PANA_SESSION:-}"
+  [ -n "$_session" ] || return 1
+  case "$_session" in
+    pana://*)
+      # Already a URL: the server accepts either form in Pana-Caller, so accept
+      # either here rather than rejecting a session that names itself fully.
+      _rest="${_session#pana://}"
+      _domain="${_rest%%/*}"
+      _id="${_rest##*/}"
+      case "$_id" in *[!0-9ABCDEFGHJKMNPQRSTVWXYZ]*) return 1 ;; esac
+      [ ${#_id} -eq 26 ] || return 1
+      pana_url="pana://$_domain/sessions/$_id"
+      ;;
+    *)
+      _id="$_session"
+      # A bare ULID is a session and nothing else is: an unset or mangled value
+      # should not turn every commit in the repository into a pana trailer.
+      case "$_id" in *[!0-9ABCDEFGHJKMNPQRSTVWXYZ]*) return 1 ;; esac
+      [ ${#_id} -eq 26 ] || return 1
+      _config="${PANA_STATE:-$HOME/.local/state/pana}/config.json"
+      _domain="$(sed -n 's/.*"domain"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_config" 2>/dev/null | head -1)"
+      case "$_domain" in
+        '' | *[!A-Za-z0-9.-]*) return 1 ;;
+      esac
+      pana_url="pana://$_domain/sessions/$_id"
+      ;;
+  esac
+  pana_id="$_id"
+  pana_domain="$_domain"
+}
+
+if [ -n "${PANA_SESSION:-}" ] && pana_session; then
+  harness=pana
+  provider=session
+  model="$pana_id"
+  # The URL replaces a session name; --name stays available for a human who wants
+  # plain prose attribution anyway.
+  [ -n "${name:-}" ] || name="$pana_url"
+elif [ -n "${PI_MODEL:-}" ] || [ -n "${PI_CODING_AGENT:-}" ]; then
   harness=pi
   provider="${PI_PROVIDER:-unknown}"
   model="${PI_MODEL:-unknown}"
@@ -176,21 +224,31 @@ who="AI"
 
 suffix=""
 if [ "$with_email" -eq 1 ]; then
-  # The +<handle> subaddress names the specific agent in the one field GitHub
-  # parses, matches the @+<handle> mention convention, and still routes to
-  # Josh's real mailbox. A generic +pi could not distinguish agents; a separate
-  # per-agent account could not resolve to a mailbox anyone reads.
-  tag=pi
-  if [ -n "$name" ]; then
-    slug="$(agent_handle)"
-    [ -n "$slug" ] && tag="$slug"
+  if [ -n "$pana_id" ]; then
+    # Matches the commit trailer in pana/README.md: the URL names the writer and
+    # the mailbox form is the one field GitHub parses for coauthor credit.
+    suffix=" <$pana_id@$pana_domain>"
+  else
+    # The +<handle> subaddress names the specific agent in the one field GitHub
+    # parses, matches the @+<handle> mention convention, and still routes to
+    # Josh's real mailbox. A generic +pi could not distinguish agents; a separate
+    # per-agent account could not resolve to a mailbox anyone reads.
+    tag=pi
+    if [ -n "$name" ]; then
+      slug="$(agent_handle)"
+      [ -n "$slug" ] && tag="$slug"
+    fi
+    email="$(git config user.email 2>/dev/null || true)"
+    case "$email" in
+      *@*) email="${email%@*}+$tag@${email##*@}" ;;
+      *) email="josh+$tag@joshbeckman.org" ;;
+    esac
+    suffix=" <$email>"
   fi
-  email="$(git config user.email 2>/dev/null || true)"
-  case "$email" in
-    *@*) email="${email%@*}+$tag@${email##*@}" ;;
-    *) email="josh+$tag@joshbeckman.org" ;;
-  esac
-  suffix=" <$email>"
+elif [ -n "$pana_id" ]; then
+  # The URL already names the session; a handle on the end would be a second,
+  # guessed identity for a session that deliberately has none.
+  :
 elif [ -n "$name" ]; then
   # Prose trailers put the handle where commits put the email, so one grep
   # pattern (+<handle>) covers commits and comments. Deliberately NOT wrapped in

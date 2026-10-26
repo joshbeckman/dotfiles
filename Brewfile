@@ -13,6 +13,8 @@ brew "gh"
 brew "git"
 brew "git-delta"
 brew "neovim"
+# pana's panad runs on Node 22.18 or newer.
+brew "node"
 brew "pandoc"
 brew "perl"
 brew "python"
