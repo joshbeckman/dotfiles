@@ -110,7 +110,7 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 		tool(
 			getRuntime,
 			"pana_memory_commit",
-			"Commit your memory worktree to `main`. A conflict exits 3 and leaves your commit on your writer branch.",
+			"Commit your memory worktree to `main`. Exit 3 means a conflict: the commit stays on your writer branch. Rebase onto main, fix the files, continue the rebase, then commit again.",
 			Type.Object({ message: Type.String({ description: "Commit message" }) }),
 		),
 	];

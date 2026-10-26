@@ -36,8 +36,10 @@ your scratchpad: write what the next session should know.
 - Your worktree: `{{memory_path}}`
 - `pana memory` prints your worktree path, creating it if needed.
 - `pana memory search TEXT` searches `main`.
-- `pana memory commit -m MSG` commits your worktree onto `main`. A conflict exits 3 and
-  leaves your commit on your writer branch; rebase and retry.
+- `pana memory commit -m MSG` commits your worktree onto `main`.
+  If it exits 3, memory moved under you. The commit stays on your writer branch, and
+  retrying will not help. Resolve it in your worktree: `git rebase main`, fix the files,
+  `git add` them, `git rebase --continue`, then run `pana memory commit` again.
 - `pana memory log [PATH]` shows who wrote what.
 
 Edits go through your worktree, then `pana_memory_commit`. Commits are attributed to your
