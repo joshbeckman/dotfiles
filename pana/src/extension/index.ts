@@ -5,6 +5,7 @@ import { createRegistry, defineExtension, type Extension, type Registry } from "
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { Runtime } from "../server/runtime.ts";
 import { createSessionHooks } from "../sessions/reply.ts";
+import { bashTimeoutWrap } from "./bash.ts";
 import { createPanaSections } from "./prompt.ts";
 import { createPanaTools } from "./tools.ts";
 
@@ -44,6 +45,8 @@ export function createPanaExtension(getRuntime: () => Runtime): Extension {
 		// WP3: the auto-posted reply runs where the pana tools do, so a session's extension
 		// selection cannot drop one without the other.
 		hooks: createSessionHooks(getRuntime),
+		// ISO-05: the time limit decorates CodingTools' `bash`, so the registry keeps its two extensions.
+		wraps: [bashTimeoutWrap(getRuntime)],
 	});
 }
 

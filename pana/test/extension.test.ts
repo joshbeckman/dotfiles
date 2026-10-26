@@ -180,6 +180,61 @@ describe("extension isolation", () => {
 	});
 });
 
+describe("bash time limit", () => {
+	it("ISO-05 a bash call without a timeout gets the configured default, and hitting it kills the whole process group", async () => {
+		t = await startTestPanad({ script: [], config: { tools: { bashTimeoutSec: 1 } } });
+		expect(t.runtime.config.tools.bashTimeoutSec).toBe(1);
+		fixture = await seedThread(t.runtime.db, t.runtime.harness, t.runtime.newId, t.clock.now(), { domain: TEST_DOMAIN, user: TEST_USER, count: 1 });
+		const conversation = await conversationOf(t, session().conversationId);
+		await conversation.configure({ model: FAUX_MODEL, cwd: tempDir("pana-cwd-") }, ctx);
+
+		// A grep under `bash -c` is the case that hung a session: the inner shell and its
+		// background child must die with the outer shell, not only the shell pi-durable started.
+		const pids = tempDir("pana-pids-");
+		const command = `bash -c 'sleep 30 & echo $! > "${pids}/child"; echo $$ > "${pids}/inner"; wait'`;
+		t.model.append([{ toolCalls: [{ name: "bash", args: { command } }] }, { text: "done" }]);
+		const started = Date.now();
+		const settled = await (await conversation.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+		expect(settled.status).toBe("done");
+		expect(Date.now() - started).toBeLessThan(15_000);
+
+		const page = await conversation.entries({ order: "ascending" }, 1000, undefined, ctx);
+		const result = page.items.find((entry) => entry.kind === "pi.tool-result")!;
+		const message = result.model![0] as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+		expect(message.isError).toBe(true);
+		const text = message.content.map((block) => block.text ?? "").join("\n");
+		expect(text).toContain("timed out after 1 seconds");
+		expect(text).toContain("never all of HOME");
+
+		for (const name of ["inner", "child"]) {
+			const pid = Number(readFileSync(join(pids, name), "utf8").trim());
+			expect(pid).toBeGreaterThan(0);
+			await expect.poll(() => alive(pid), { timeout: 5000 }).toBe(false);
+		}
+
+		// The model is told: the prompt names the limit and asks for scoped searches.
+		const prompt = promptText(await contextOf(t, session().conversationId));
+		expect(prompt).toContain("time limit: 1 seconds");
+		expect(prompt).toContain("Never search all");
+	});
+
+	it("ISO-05 the default limit is 600 seconds, and a call's own timeout wins", async () => {
+		t = await startTestPanad({ script: [] });
+		expect(t.runtime.config.tools.bashTimeoutSec).toBe(600);
+		fixture = await seedThread(t.runtime.db, t.runtime.harness, t.runtime.newId, t.clock.now(), { domain: TEST_DOMAIN, user: TEST_USER, count: 1 });
+		const conversation = await conversationOf(t, session().conversationId);
+		await conversation.configure({ model: FAUX_MODEL, cwd: tempDir("pana-cwd-") }, ctx);
+		t.model.append([{ toolCalls: [{ name: "bash", args: { command: "sleep 30", timeout: 1 } }] }, { text: "done" }]);
+		const settled = await (await conversation.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+		expect(settled.status).toBe("done");
+		const page = await conversation.entries({ order: "ascending" }, 1000, undefined, ctx);
+		const result = page.items.find((entry) => entry.kind === "pi.tool-result")!;
+		const text = JSON.stringify(result.model);
+		expect(text).toContain("Command timed out after 1 seconds");
+		expect(text).not.toContain("default limit");
+	});
+});
+
 describe("system prompt", () => {
 	it("PRM-01 sections render in order: project AGENTS.md files, pana/prompt.md, profile instructions", async () => {
 		const repo = makeRepo();
@@ -389,6 +444,15 @@ describe("pana tools", () => {
 		expect(schema.required).toContain("after");
 	});
 });
+
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function parseEnv(output: string): Record<string, string> {
 	const env: Record<string, string> = {};

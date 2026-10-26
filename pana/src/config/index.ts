@@ -28,6 +28,11 @@ export interface HttpConfig {
 	port: number;
 }
 
+export interface ToolsConfig {
+	/** The time limit of a `bash` call that names none of its own (ISO-05). */
+	bashTimeoutSec: number;
+}
+
 export interface Config {
 	domain: string;
 	user: string;
@@ -38,6 +43,7 @@ export interface Config {
 	budget: Budget;
 	files: FileLimits;
 	http: HttpConfig;
+	tools: ToolsConfig;
 }
 
 export const DEFAULTS = {
@@ -45,6 +51,7 @@ export const DEFAULTS = {
 	budget: { sessionUsd: 100, domainDailyUsd: 500 },
 	files: { maxBytes: 26214400 },
 	http: { port: 8766 },
+	tools: { bashTimeoutSec: 600 },
 } as const;
 
 /** The state directory, from `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
@@ -92,6 +99,7 @@ export function loadConfig(dir = stateDir()): Config {
 	const budget = (obj.budget ?? {}) as Record<string, unknown>;
 	const files = (obj.files ?? {}) as Record<string, unknown>;
 	const http = (obj.http ?? {}) as Record<string, unknown>;
+	const tools = (obj.tools ?? {}) as Record<string, unknown>;
 
 	return {
 		domain: obj.domain,
@@ -111,7 +119,19 @@ export function loadConfig(dir = stateDir()): Config {
 		http: {
 			port: typeof http.port === "number" ? http.port : DEFAULTS.http.port,
 		},
+		tools: {
+			bashTimeoutSec: positive(tools.bashTimeoutSec, "tools.bashTimeoutSec") ?? DEFAULTS.tools.bashTimeoutSec,
+		},
 	};
+}
+
+/** A positive number, or undefined when absent. Zero or a negative limit would kill every call. */
+function positive(value: unknown, key: string): number | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		throw new ConfigError(`config.json ${key} must be a positive number of seconds`, 2);
+	}
+	return value;
 }
 
 export interface StatePaths {

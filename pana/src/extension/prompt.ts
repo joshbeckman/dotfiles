@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULTS } from "../config/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 /** `pana/prompt.md`, loaded only by pana. */
@@ -22,11 +23,12 @@ export function promptTemplate(): string {
 	return readFileSync(PROMPT_PATH, "utf8");
 }
 
-export function fillPrompt(template: string, values: { sessionUrl: string; memoryPath: string; domain: string }): string {
+export function fillPrompt(template: string, values: { sessionUrl: string; memoryPath: string; domain: string; bashTimeoutSec?: number }): string {
 	return template
 		.replaceAll("{{session_url}}", values.sessionUrl)
 		.replaceAll("{{memory_path}}", values.memoryPath)
-		.replaceAll("{{domain}}", values.domain);
+		.replaceAll("{{domain}}", values.domain)
+		.replaceAll("{{bash_timeout}}", String(values.bashTimeoutSec ?? DEFAULTS.tools.bashTimeoutSec));
 }
 
 async function sessionId(runtime: Runtime, conversationId: number): Promise<string | undefined> {
@@ -119,6 +121,7 @@ export function panaSection(getRuntime: () => Runtime): PromptSection {
 			sessionUrl: runtime.url({ kind: "session", id }),
 			memoryPath: join(runtime.paths.memoryWorktrees, id),
 			domain: runtime.config.domain,
+			bashTimeoutSec: runtime.config.tools.bashTimeoutSec,
 		});
 	});
 }

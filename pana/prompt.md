@@ -55,6 +55,9 @@ session URL, and every commit you make also carries a `Co-authored-by: AI` trail
 
 ## House rules
 
+- A `bash` call has a time limit: {{bash_timeout}} seconds unless you pass `timeout`, then
+  pana kills it. Scope every search to the project or a named directory. Never search all
+  of HOME.
 - Work in the current directory, or in your memory worktree. Never edit, commit in, or
   reset another writer's worktree or branch, the user's included.
 - Publish memory only with `pana_memory_commit` (or `pana memory commit`). Never rewrite

@@ -89,6 +89,7 @@ describe("config and state", () => {
 			budget: { sessionUsd: 100, domainDailyUsd: 500 },
 			files: { maxBytes: 26214400 },
 			http: { port: 8766 },
+			tools: { bashTimeoutSec: 600 },
 		});
 		expect(DEFAULTS.files.maxBytes).toBe(25 * 1024 * 1024);
 
