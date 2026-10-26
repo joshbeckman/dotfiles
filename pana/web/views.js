@@ -7,10 +7,14 @@ export function inboxRow(delivery) {
 	return {
 		threadId: delivery.threadId,
 		messageId: delivery.messageId,
+		messageUrl: delivery.messageUrl,
+		threadUrl: delivery.threadUrl,
 		subject: delivery.subject ?? "(no subject)",
 		sender: delivery.sender?.url ?? "",
 		at: delivery.createdAt,
 		read: delivery.readAt !== null && delivery.readAt !== undefined,
+		// REF-05: the reader's unread count for the message's thread.
+		unreadCount: count(delivery.unreadCount),
 	};
 }
 
@@ -22,6 +26,9 @@ export function threadRow(thread) {
 		subject: thread.subject ?? "(no subject)",
 		snippet: thread.snippet,
 		at: thread.createdAt,
+		// REF-05 and REF-03.
+		unreadCount: count(thread.unreadCount),
+		archived: Boolean(thread.archived),
 	};
 }
 
@@ -29,12 +36,20 @@ export function threadRow(thread) {
 export function messageView(message) {
 	return {
 		id: message.id,
+		url: message.url,
+		threadId: message.threadId,
+		threadUrl: message.threadUrl,
 		sender: message.sender?.url ?? "",
 		at: message.createdAt,
 		body: message.body ?? "",
 		revised: Boolean(message.revised),
 		redacted: Boolean(message.redacted),
 	};
+}
+
+function count(value) {
+	const n = Number(value);
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 /** The text of one pi-ai message content: a string or a list of blocks. */
@@ -44,18 +59,98 @@ function contentText(content) {
 	const parts = [];
 	for (const block of content) {
 		if (block?.type === "text" && typeof block.text === "string") parts.push(block.text);
+		else if (block?.type === "thinking" && typeof block.thinking === "string") parts.push(block.thinking);
 		else if (block?.type === "toolCall") parts.push(`→ ${block.name} ${JSON.stringify(block.arguments ?? {})}`);
 	}
 	return parts.join("\n");
 }
 
-/** One entry of `GET /sessions/:id/transcript`, or the `entry` of a `session.entry` event. */
+/** The blocks of one message's content, in order. */
+function contentBlocks(content) {
+	if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
+	if (!Array.isArray(content)) return [];
+	const blocks = [];
+	for (const block of content) {
+		if (block?.type === "text" && typeof block.text === "string") blocks.push({ type: "text", text: block.text });
+		else if (block?.type === "thinking" && typeof block.thinking === "string") {
+			blocks.push({ type: "thinking", text: block.thinking });
+		} else if (block?.type === "toolCall") {
+			blocks.push({
+				type: "tool-call",
+				name: String(block.name ?? ""),
+				callId: block.id,
+				// The full arguments, not a summary: REF-09 shows them verbatim.
+				arguments: block.arguments ?? {},
+			});
+		} else if (block?.type === "image") {
+			blocks.push({ type: "image", mediaType: String(block.mimeType ?? "") });
+		}
+	}
+	return blocks;
+}
+
+/** The usage of the turn an entry recorded, when the model reported one. */
+function turnUsage(model) {
+	for (const message of model) {
+		if (message?.role !== "assistant" || typeof message.usage !== "object" || message.usage === null) continue;
+		const usage = message.usage;
+		return {
+			input: Number(usage.input ?? 0),
+			output: Number(usage.output ?? 0),
+			costUsd: Number(usage.cost?.total ?? 0),
+		};
+	}
+	return undefined;
+}
+
+/** The rendered text of one block, for a flat reading of the transcript. */
+function blockText(block) {
+	if (block.type === "tool-call") return `→ ${block.name} ${JSON.stringify(block.arguments ?? {})}`;
+	if (block.type === "tool-result") return block.output;
+	if (typeof block.text === "string") return block.text;
+	return "";
+}
+
+const ENTRY_LABELS = {
+	"pi.system": "system",
+	"pi.compaction": "compaction",
+	"pi.reset": "reset",
+	"pi.tool-result": "tool result",
+	"pana.message": "message",
+	"pana.note": "note",
+};
+
+/**
+ * One entry of `GET /sessions/:id/transcript`, or the `entry` of a `session.entry` event.
+ * REF-09: thinking blocks, tool calls with their full arguments, tool results with their full
+ * output, system and compaction entries, and per-turn usage all come through as `blocks`.
+ */
 export function entryView(entry) {
 	const model = Array.isArray(entry.model) ? entry.model : [];
-	const role = model[0]?.role ?? entry.kind;
-	let text = model.map((message) => contentText(message.content)).filter(Boolean).join("\n");
-	if (!text && entry.data !== undefined) text = JSON.stringify(entry.data);
-	return { id: entry.id, kind: entry.kind, role, text };
+	const kind = String(entry.kind ?? "");
+	const role = model[0]?.role ?? kind;
+	const blocks = [];
+	for (const message of model) {
+		if (message?.role === "toolResult") {
+			blocks.push({
+				type: "tool-result",
+				name: String(message.toolName ?? ""),
+				callId: message.toolCallId,
+				output: contentText(message.content),
+				isError: Boolean(message.isError),
+			});
+			continue;
+		}
+		blocks.push(...contentBlocks(message?.content));
+	}
+	if (blocks.length === 0 && entry.data !== undefined && entry.data !== null) {
+		blocks.push({ type: "json", text: JSON.stringify(entry.data, null, 2) });
+	}
+	const text = blocks.map(blockText).filter(Boolean).join("\n");
+	const usage = turnUsage(model);
+	const view = { id: entry.id, kind, role, label: ENTRY_LABELS[kind] ?? kind, text, blocks };
+	if (usage) view.usage = usage;
+	return view;
 }
 
 /** One commit of `GET /memory/log`. */

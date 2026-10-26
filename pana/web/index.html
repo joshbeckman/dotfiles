@@ -15,7 +15,7 @@
 		<header class="topbar">
 			<h1>pana</h1>
 			<nav id="nav" aria-label="Sections">
-				<a data-section="inbox" href="#/inbox">Inbox</a>
+				<a data-section="inbox" href="#/inbox">Inbox<span id="nav-inbox-count" data-testid="nav-unread" hidden></span></a>
 				<a data-section="compose" href="#/compose">Compose</a>
 				<a data-section="threads" href="#/threads">Threads</a>
 				<a data-section="sessions" href="#/sessions">Sessions</a>
@@ -46,6 +46,7 @@
 			<section class="view" id="view-inbox" data-testid="inbox">
 				<h2>Inbox</h2>
 				<p class="hint">Messages delivered to you, newest first.</p>
+				<label class="inline"><input id="inbox-archived" data-testid="inbox-archived" type="checkbox" /> Archived</label>
 				<div id="inbox-list" data-testid="inbox-list" class="list"></div>
 			</section>
 
@@ -68,13 +69,19 @@
 				<form id="threads-search" class="search">
 					<label for="threads-query">Search</label>
 					<input id="threads-query" data-testid="threads-query" placeholder="subject or body" />
+					<label class="inline"><input id="threads-archived" data-testid="threads-archived" type="checkbox" /> Archived</label>
+					<label class="inline"><input id="threads-unread" data-testid="threads-unread" type="checkbox" /> Unread</label>
 					<button type="submit">Search</button>
 				</form>
 				<div id="threads-list" data-testid="threads-list" class="list"></div>
 
 				<article id="thread" data-testid="thread" hidden>
 					<h2 id="thread-subject"></h2>
+					<p id="thread-url" data-testid="thread-url" class="hint"></p>
 					<p id="thread-participants" class="hint"></p>
+					<div class="actions">
+						<button type="button" id="thread-archive" data-testid="thread-archive">Archive</button>
+					</div>
 					<div id="thread-messages" data-testid="messages" class="messages"></div>
 
 					<div id="stale" data-testid="stale" class="notice" hidden>
@@ -114,7 +121,13 @@
 					<div class="actions">
 						<button type="button" data-action="stop" data-testid="session-stop">Stop</button>
 						<button type="button" data-action="compact" data-testid="session-compact">Compact</button>
+						<button type="button" data-action="archive-session" data-testid="session-archive">Archive</button>
 						<button type="button" data-action="reload" data-testid="session-reload">Reload</button>
+					</div>
+					<div id="session-confirm" data-testid="session-confirm" class="confirm" hidden>
+						<p id="session-confirm-text"></p>
+						<button type="button" id="session-confirm-yes" data-testid="session-confirm-yes">Yes, archive</button>
+						<button type="button" id="session-confirm-no" data-testid="session-confirm-no">Cancel</button>
 					</div>
 					<div id="transcript" data-testid="transcript" class="transcript"></div>
 				</article>

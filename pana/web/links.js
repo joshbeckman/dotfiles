@@ -64,13 +64,67 @@ export function appHref(href, domain) {
 			return id ? `#/sessions/${encodeURIComponent(id)}` : "#/sessions";
 		case "files":
 			return id ? `/files/${encodeURIComponent(id)}/${rest.map(encodeURIComponent).join("/")}` : undefined;
+		// REF-08: a user link opens the inbox, which is where the user reads mail.
 		case "users":
-			return id ? `#/threads?query=${encodeURIComponent(id)}` : "#/threads";
+			return "#/inbox";
 		case "schedules":
 			return id ? `#/schedules?focus=${encodeURIComponent(id)}` : "#/schedules";
 		default:
 			return undefined;
 	}
+}
+
+/**
+ * The app route for a bare ID of a known kind (REF-08). A message needs its thread, so it is
+ * not accepted here; a `pana://` message URL goes through `appHref`.
+ */
+export function idHref(id, kind) {
+	const value = String(id ?? "");
+	if (!value) return undefined;
+	switch (kind) {
+		case "session":
+			return `#/sessions/${encodeURIComponent(value)}`;
+		case "thread":
+			return `#/threads/${encodeURIComponent(value)}`;
+		case "user":
+			return "#/inbox";
+		case "schedule":
+			return `#/schedules?focus=${encodeURIComponent(value)}`;
+		default:
+			return undefined;
+	}
+}
+
+/** A `pana://` URL inside free text, without the punctuation that usually follows one. */
+const PANA_IN_TEXT = /pana:\/\/[^\s<>"'`)\]]+/g;
+
+/**
+ * Split text into plain and linked segments, so a `pana://` URL inside a message body, a
+ * transcript, or a tool result is a link to its view (REF-08). A URL on a foreign domain stays
+ * text, because the app has no route for it.
+ */
+export function panaLinkSegments(text, domain) {
+	const source = String(text ?? "");
+	const segments = [];
+	let last = 0;
+	for (const match of source.matchAll(PANA_IN_TEXT)) {
+		let url = match[0];
+		// Trailing sentence punctuation belongs to the prose, not to the URL.
+		const tail = /[.,;:!?]+$/.exec(url);
+		if (tail) url = url.slice(0, -tail[0].length);
+		const href = appHref(url, domain);
+		const at = match.index ?? 0;
+		if (at > last) segments.push({ text: source.slice(last, at) });
+		if (!href) {
+			segments.push({ text: url });
+		} else {
+			segments.push({ text: url, href });
+		}
+		if (tail) segments.push({ text: tail[0] });
+		last = at + match[0].length;
+	}
+	if (last < source.length) segments.push({ text: source.slice(last) });
+	return segments;
 }
 
 /** Parse a location hash into a section, an id, and query parameters. */
@@ -102,5 +156,9 @@ export function notificationTarget(payload) {
 /** WEB-08 copy: a revision changes what readers see; sessions keep what they already received. */
 export const CONFIRM_EDIT =
 	"Editing changes what readers see. Sessions keep what they already received, so they may still act on the old text.";
+/** REF-02 copy: archiving a session is not undone from the app. */
+export const CONFIRM_ARCHIVE_SESSION =
+	"Archiving is permanent: the session, and every thread it belongs to, becomes read-only.";
+
 export const CONFIRM_REDACT =
 	"Redacting removes the body for everyone reading now. Sessions keep what they already received, so a session may still act on the old text.";

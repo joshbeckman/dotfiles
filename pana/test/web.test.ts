@@ -176,7 +176,8 @@ describe("PWA shell and static assets", () => {
 		expect(appHref(`pana://${domain}/threads/T1?message=M1`, domain)).toBe("#/threads/T1?message=M1");
 		expect(appHref(`pana://${domain}/sessions/S1`, domain)).toBe("#/sessions/S1");
 		expect(appHref(`pana://${domain}/files/F1/two words.png`, domain)).toBe("/files/F1/two%20words.png");
-		expect(appHref(`pana://${domain}/users/joshbeckman`, domain)).toBe("#/threads?query=joshbeckman");
+		// REF-08: a user link opens the inbox, not a thread search.
+		expect(appHref(`pana://${domain}/users/joshbeckman`, domain)).toBe("#/inbox");
 		expect(appHref(`pana://${domain}/schedules/X1`, domain)).toBe("#/schedules?focus=X1");
 		expect(appHref(`pana://${domain}`, domain)).toBe("/");
 		expect(appHref(`pana://other.example/threads/T1`, domain)).toBeUndefined();

@@ -478,6 +478,352 @@ describeBrowser("pana in a browser", () => {
 		expect((await messages(seeded.thread.id))[1]).toMatchObject({ redacted: true });
 	});
 
+	it("REF-06 REF-07 unread counts mark threads and the inbox, follow /events, and the archive buttons hide and restore a thread", async () => {
+		await start([{ text: "Paris." }]);
+		const seeded = await seedSession("What is the capital of France?");
+		// A stopped session queues mail without waking, so an append below is only a delivery.
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		await open();
+
+		const marked = await evaluatePage<{ nav: string; hidden: boolean; unread: boolean; count: string }>(`
+			await until(() => !document.getElementById("nav-inbox-count").hidden);
+			location.hash = "#/threads";
+			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
+			const row = document.querySelector("#threads-list .item");
+			return {
+				nav: document.getElementById("nav-inbox-count").textContent,
+				hidden: document.getElementById("nav-inbox-count").hidden,
+				unread: row.classList.contains("unread"),
+				count: row.querySelector(".meta").textContent,
+			};
+		`);
+		expect(marked.hidden).toBe(false);
+		expect(marked.nav).toBe("1");
+		expect(marked.unread).toBe(true);
+		expect(marked.count).toContain("1 unread");
+
+		// REF-07: archive from the thread list, and the list and the nav count both drop it.
+		const archived = await evaluatePage<{ items: number; navHidden: boolean }>(`
+			document.querySelector("#threads-list [data-testid=thread-archive]").click();
+			await until(() => document.querySelectorAll("#threads-list .row").length === 0);
+			await until(() => document.getElementById("nav-inbox-count").hidden);
+			return { items: document.querySelectorAll("#threads-list .item").length, navHidden: document.getElementById("nav-inbox-count").hidden };
+		`);
+		expect(archived.items).toBe(0);
+		expect(archived.navHidden).toBe(true);
+		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toEqual([]);
+
+		// The inbox hides it too, and its row has an Archive button.
+		const inboxHidden = await evaluatePage<number>(`
+			location.hash = "#/inbox";
+			await until(() => document.getElementById("inbox-list").textContent.includes("No messages yet"));
+			return document.querySelectorAll("#inbox-list .item").length;
+		`);
+		expect(inboxHidden).toBe(0);
+		expect(await t!.client.get<{ deliveries: unknown[] }>("/inbox")).toMatchObject({ body: { deliveries: [] } });
+
+		// REF-07: the archived filter lists it, and Unarchive restores it.
+		const restored = await evaluatePage<{ href: string; after: number; nav: string }>(`
+			location.hash = "#/threads";
+			await until(() => !document.getElementById("threads-list").hidden);
+			document.getElementById("threads-archived").checked = true;
+			document.getElementById("threads-search").requestSubmit();
+			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
+			document.querySelector("#threads-list [data-testid=thread-unarchive]").click();
+			await until(() => document.getElementById("nav-inbox-count").textContent === "1");
+			document.getElementById("threads-archived").checked = false;
+			document.getElementById("threads-search").requestSubmit();
+			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
+			return {
+				href: document.querySelector("#threads-list .item .title").textContent,
+				after: document.querySelectorAll("#threads-list .item").length,
+				nav: document.getElementById("nav-inbox-count").textContent,
+			};
+		`);
+		expect(restored.after).toBe(1);
+		expect(restored.nav).toBe("1");
+
+		// REF-06: opening the thread clears its unread count, and a new delivery brings it back
+		// from `/events` without a reload.
+		const cleared = await evaluatePage<{ navHidden: boolean; live: string }>(`
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			await until(() => document.getElementById("nav-inbox-count").hidden);
+			const navHidden = document.getElementById("nav-inbox-count").hidden;
+			location.hash = "#/inbox";
+			await until(() => !document.getElementById("view-inbox").hidden);
+			return { navHidden, live: document.getElementById("nav-inbox-count").textContent };
+		`);
+		expect(cleared.navHidden).toBe(true);
+		expect(cleared.live).toBe("0");
+
+		const head = (await messages(seeded.thread.id)).at(-1)!.id;
+		const sent = await t!.client.post(`/threads/${seeded.thread.id}/messages`, { after: head, body: "a live delivery" }, { caller: seeded.session.id });
+		expect(sent.status).toBe(200);
+		const live = await evaluatePage<{ nav: string; items: number; count: string }>(`
+			await until(() => document.getElementById("nav-inbox-count").textContent === "1");
+			await until(() => document.querySelectorAll("#inbox-list .item").length >= 2);
+			return {
+				nav: document.getElementById("nav-inbox-count").textContent,
+				items: document.querySelectorAll("#inbox-list .item").length,
+				count: document.querySelector("#inbox-list .item .meta").textContent,
+			};
+		`);
+		expect(live.nav).toBe("1");
+		expect(live.items).toBeGreaterThanOrEqual(2);
+		expect(live.count).toContain("1 unread");
+
+		// REF-07: the inbox row's Archive button removes it.
+		const inboxArchived = await evaluatePage<number>(`
+			document.querySelector("#inbox-list [data-testid=inbox-archive]").click();
+			await until(() => document.getElementById("inbox-list").textContent.includes("No messages yet"));
+			return document.querySelectorAll("#inbox-list .item").length;
+		`);
+		expect(inboxArchived).toBe(0);
+
+		// REF-07: the inbox view's archived filter offers Unarchive.
+		const inboxRestored = await evaluatePage<{ unarchive: number; items: number }>(`
+			const box = document.getElementById("inbox-archived");
+			box.checked = true;
+			box.dispatchEvent(new Event("change"));
+			await until(() => document.querySelectorAll("#inbox-list [data-testid=inbox-unarchive]").length >= 1);
+			const unarchive = document.querySelectorAll("#inbox-list [data-testid=inbox-unarchive]").length;
+			document.querySelector("#inbox-list [data-testid=inbox-unarchive]").click();
+			await until(() => document.getElementById("inbox-list").textContent.includes("No archived threads"));
+			box.checked = false;
+			box.dispatchEvent(new Event("change"));
+			await until(() => document.querySelectorAll("#inbox-list .item").length >= 2);
+			return { unarchive, items: document.querySelectorAll("#inbox-list .item").length };
+		`);
+		expect(inboxRestored.unarchive).toBeGreaterThanOrEqual(1);
+		expect(inboxRestored.items).toBeGreaterThanOrEqual(2);
+		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toHaveLength(2);
+		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toEqual([]);
+	});
+
+	it("REF-02 the session view archives only after a confirmation", async () => {
+		await start([{ text: "Ready when you are." }]);
+		const seeded = await seedSession("archive me");
+		await open();
+		const asked = await evaluatePage<{ text: string; hidden: boolean }>(`
+			location.hash = "#/sessions/${seeded.session.id}";
+			await until(() => !document.getElementById("session").hidden);
+			document.querySelector("[data-testid=session-archive]").click();
+			await until(() => !document.getElementById("session-confirm").hidden);
+			return { text: document.getElementById("session-confirm-text").textContent, hidden: document.getElementById("session-confirm").hidden };
+		`);
+		expect(asked.hidden).toBe(false);
+		expect(asked.text).toContain("read-only");
+		expect((await t!.client.get<{ session: { state: string } }>(`/sessions/${seeded.session.id}`)).body.session.state).not.toBe("archived");
+
+		await evaluatePage(`
+			document.getElementById("session-confirm-no").click();
+			await until(() => document.getElementById("session-confirm").hidden);
+			return true;
+		`);
+		expect((await t!.client.get<{ session: { state: string } }>(`/sessions/${seeded.session.id}`)).body.session.state).not.toBe("archived");
+
+		await evaluatePage(`
+			document.querySelector("[data-testid=session-archive]").click();
+			await until(() => !document.getElementById("session-confirm").hidden);
+			document.getElementById("session-confirm-yes").click();
+			await until(() => document.getElementById("session-meta").textContent.includes("archived"));
+			return true;
+		`);
+		expect((await t!.client.get<{ session: { state: string } }>(`/sessions/${seeded.session.id}`)).body.session.state).toBe("archived");
+	});
+
+	it("REF-08 every ID and pana:// URL in the app is a link to its view", async () => {
+		await start([{ text: "Paris." }]);
+		const seeded = await seedSession("What is the capital of France?");
+		const upload = await t!.client.request<{ file: { url: string } }>("POST", "/files?name=note.txt", {
+			bytes: Buffer.from("a file\n"),
+			headers: { "content-type": "text/plain" },
+		});
+		expect(upload.status).toBe(201);
+		const linked = [
+			`A session link: ${seeded.session.url}`,
+			`A thread link: pana://${TEST_DOMAIN}/threads/${seeded.thread.id}`,
+			`A message link: pana://${TEST_DOMAIN}/threads/${seeded.thread.id}?message=${seeded.message.id}`,
+			`A file link: ${upload.body.file.url}`,
+			`A user link: pana://${TEST_DOMAIN}/users/tester`,
+		].join("\n\n");
+		const notice = await postNotice(t!.runtime, { body: linked });
+		const at = new Date(FAKE_EPOCH + 3_600_000).toISOString();
+		await t!.client.post("/schedules", { kind: "session", at, payload: { prompt: "later" } });
+		const schedule = (await t!.client.get<{ schedules: Array<{ id: string }> }>("/schedules")).body.schedules[0]!;
+		await open();
+
+		const inbox = await evaluatePage<{ session: string; domains: string[]; count: number }>(`
+			await until(() => document.querySelectorAll("#inbox-list .item").length >= 2);
+			const rows = [...document.querySelectorAll("#inbox-list .item")];
+			const forSession = rows.find((el) => el.dataset.thread === ${JSON.stringify(seeded.thread.id)});
+			const forNotice = rows.find((el) => el.dataset.thread === ${JSON.stringify(notice.thread.id)});
+			return {
+				session: forSession.querySelector("[data-testid=ref-link]").getAttribute("href"),
+				domains: [...forNotice.querySelectorAll("[data-testid=ref-link]")].map((a) => a.getAttribute("href")),
+				count: document.querySelectorAll("#inbox-list [data-testid=ref-link]").length,
+			};
+		`);
+		// REF-08: a session sender links to its session view, and the domain sender to the app root.
+		expect(inbox.session).toBe(`#/sessions/${seeded.session.id}`);
+		expect(inbox.domains).toEqual(["/"]);
+		expect(inbox.count).toBeGreaterThanOrEqual(2);
+
+		const thread = await evaluatePage<{
+			url: string;
+			participants: string[];
+			senders: string[];
+			message: string;
+			body: string[];
+			files: string[];
+		}>(`
+			location.hash = "#/threads/${notice.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length === 1);
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message] .body a").length >= 4);
+			const body = [...document.querySelectorAll("#thread-messages [data-testid=message] .body a")]
+				.filter((a) => !a.dataset.filePath)
+				.map((a) => a.getAttribute("href"));
+			return {
+				url: document.querySelector("#thread-url a").getAttribute("href"),
+				participants: [...document.querySelectorAll("#thread-participants a")].map((a) => a.getAttribute("href")),
+				senders: [...document.querySelectorAll("[data-testid=message-sender]")].map((a) => a.getAttribute("href")),
+				message: document.querySelector("[data-testid=message-link]").getAttribute("href"),
+				body,
+				files: [...document.querySelectorAll("#thread-messages [data-file-path]")].map((el) => el.getAttribute("data-file-path")),
+			};
+		`);
+		expect(thread.url).toBe(`#/threads/${notice.thread.id}`);
+		expect(thread.participants).toEqual(["/", "#/inbox"]);
+		expect(thread.senders).toEqual(["/"]);
+		expect(thread.message).toBe(`#/threads/${notice.thread.id}?message=${notice.message.id}`);
+		expect(thread.body).toEqual(
+			expect.arrayContaining([
+				`#/sessions/${seeded.session.id}`,
+				`#/threads/${seeded.thread.id}`,
+				`#/threads/${seeded.thread.id}?message=${seeded.message.id}`,
+				"#/inbox",
+			]),
+		);
+		expect(thread.files).toEqual([`/files/${upload.body.file.url.split("/")[4]}/note.txt`]);
+
+		// A message header link opens the thread scrolled to that message.
+		const focused = await evaluatePage<{ focus: boolean; hash: string }>(`
+			document.querySelector("[data-testid=message-link]").click();
+			await until(() => document.querySelector("#thread-messages [data-testid=message].focus"));
+			return { focus: Boolean(document.querySelector("#thread-messages [data-testid=message].focus")), hash: location.hash };
+		`);
+		expect(focused.focus).toBe(true);
+		expect(focused.hash).toContain(`#/threads/${notice.thread.id}?message=${notice.message.id}`);
+
+		// Sessions: the list and the session view link their IDs, and the parent is a link.
+		const sessions = await evaluatePage<{ list: string[]; title: string; meta: string }>(`
+			location.hash = "#/sessions";
+			await until(() => document.querySelectorAll("#sessions-list .item").length === 1);
+			const list = [...document.querySelectorAll("#sessions-list [data-testid=ref-link]")].map((a) => a.getAttribute("href"));
+			[...document.querySelectorAll("#sessions-list .item")][0].click();
+			await until(() => !document.getElementById("session").hidden);
+			return {
+				list,
+				title: document.querySelector("#session-title a").getAttribute("href"),
+				meta: document.getElementById("session-meta").textContent,
+			};
+		`);
+		expect(sessions.list).toContain(`#/sessions/${seeded.session.id}`);
+		expect(sessions.title).toBe(`#/sessions/${seeded.session.id}`);
+
+		// Schedules: the ID links to the schedule view, which focuses that row.
+		const schedules = await evaluatePage<{ href: string; focus: boolean }>(`
+			location.hash = "#/schedules";
+			await until(() => !document.getElementById("view-schedules").hidden);
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 1);
+			const link = document.querySelector("#schedules-list [data-testid=ref-link]");
+			const href = link.getAttribute("href");
+			link.click();
+			await until(() => document.querySelector("#schedules-list .item.focus"));
+			return { href, focus: Boolean(document.querySelector("#schedules-list .item.focus")) };
+		`);
+		expect(schedules.href).toBe(`#/schedules?focus=${schedule.id}`);
+		expect(schedules.focus).toBe(true);
+
+		// Transcript: the pana URLs inside a pana.message entry are links.
+		const transcript = await evaluatePage<string[]>(`
+			location.hash = "#/sessions/${seeded.session.id}";
+			await until(() => !document.getElementById("session").hidden);
+			await until(() => document.querySelectorAll("#transcript [data-testid=ref-link]").length >= 3);
+			return [...document.querySelectorAll("#transcript [data-testid=ref-link]")].map((a) => a.getAttribute("href"));
+		`);
+		expect(transcript).toEqual(
+			expect.arrayContaining([`#/inbox`, `#/threads/${seeded.thread.id}`, `#/threads/${seeded.thread.id}?message=${seeded.message.id}`]),
+		);
+	});
+
+	it("REF-09 the session view shows thinking, tool calls, tool results, system and compaction entries, and usage", async () => {
+		await start(
+			[
+				{
+					thinking: "Check the disk before answering.",
+					toolCalls: [{ name: "bash", args: { command: "node -e \"console.log('z'.repeat(2600))\"" } }],
+					usage: { input: 11, output: 6, costUsd: 0.0025 },
+				},
+				{ text: "the long answer", usage: { input: 30, output: 4, costUsd: 0.001 } },
+				// Compaction asks the model for a summary.
+				{ text: "a compacted summary" },
+			],
+			{ compaction: { keepRecentTokens: 1 } },
+		);
+		const seeded = await seedSession("look first");
+		await open();
+		await evaluatePage(`
+			location.hash = "#/sessions/${seeded.session.id}";
+			await until(() => !document.getElementById("session").hidden);
+			await until(() => document.querySelector("[data-testid=entry-thinking]"));
+			return true;
+		`);
+		const rendered = await evaluatePage<{
+			thinkingOpen: boolean;
+			thinking: string;
+			callArgs: string;
+			resultOpen: boolean;
+			result: string;
+			kinds: string[];
+			meta: string;
+		}>(`
+			await until(() => document.querySelector("[data-testid=entry-tool-result]"));
+			const thinking = document.querySelector("[data-testid=entry-thinking]");
+			const call = document.querySelector("[data-testid=entry-tool-call]");
+			const result = document.querySelector("[data-testid=entry-tool-result]");
+			return {
+				thinkingOpen: thinking.open,
+				thinking: thinking.textContent,
+				callArgs: call.querySelector("pre").textContent,
+				resultOpen: result.open,
+				result: result.querySelector("pre").textContent.length,
+				kinds: [...document.querySelectorAll("#transcript [data-testid=entry]")].map((el) => el.dataset.kind),
+				meta: [...document.querySelectorAll("#transcript [data-testid=entry-meta]")].map((el) => el.textContent).join(" | "),
+			};
+		`);
+		expect(rendered.thinkingOpen).toBe(false);
+		expect(rendered.thinking).toContain("Check the disk before answering.");
+		expect(rendered.callArgs).toContain("repeat(2600)");
+		// A long tool result is collapsed, with its output still in the DOM.
+		expect(rendered.resultOpen).toBe(false);
+		expect(rendered.result).toBeGreaterThan(2000);
+		expect(rendered.kinds).toEqual(expect.arrayContaining(["pana.message", "pi.system", "pi.assistant", "pi.tool-result"]));
+		expect(rendered.meta).toContain("in 11 · out 6");
+
+		// Compaction writes an entry the session view shows.
+		await evaluatePage(`
+			document.querySelector("[data-testid=session-compact]").click();
+			await until(() => [...document.querySelectorAll("#transcript [data-testid=entry]")].some((el) => el.dataset.kind === "pi.compaction"), 20000);
+			return true;
+		`);
+		expect((await t!.client.get<{ entries: Array<{ kind: string }> }>(`/sessions/${seeded.session.id}/transcript`)).body.entries.map((e) => e.kind)).toContain(
+			"pi.compaction",
+		);
+	});
+
 	it("PSH-02 the shell registers a service worker and offers notifications", async () => {
 		await start();
 		await open();

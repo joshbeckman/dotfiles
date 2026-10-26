@@ -2,11 +2,14 @@
 // and a renderer per section. The server owns auth (API-04); this file only carries the token.
 
 import {
+	CONFIRM_ARCHIVE_SESSION,
 	CONFIRM_EDIT,
 	CONFIRM_REDACT,
 	TOKEN_KEY,
 	appHref,
+	idHref,
 	newDraft,
+	panaLinkSegments,
 	routeFromHash,
 	tokenFromInput,
 } from "./links.js";
@@ -166,6 +169,9 @@ function handleEvent(event) {
 		return;
 	}
 	if (event.kind !== "delivery" && event.kind !== "notice") return;
+	// REF-06: the inbox list and the nav count both follow `/events`, even when another
+	// section is open.
+	void refreshUnread().catch(() => {});
 	if (state.section === "inbox") void loadInbox();
 	// Show new mail in the open thread, but only while no reply is drafted: reopening moves the
 	// draft head, and a draft in progress must keep its head so a stale send gets WEB-07's 409.
@@ -253,28 +259,72 @@ function asList(body, keys) {
 function item(title, meta, onClick, extra = {}) {
 	const button = document.createElement("button");
 	button.type = "button";
-	button.className = `item${extra.unread ? " unread" : ""}`;
+	button.className = `item${extra.unread ? " unread" : ""}${extra.archived ? " archived" : ""}`;
 	if (extra.testid) button.dataset.testid = extra.testid;
 	if (extra.threadId) button.dataset.thread = extra.threadId;
 	if (extra.sessionId) button.dataset.session = extra.sessionId;
 	if (extra.id) button.dataset.id = extra.id;
 	const titleEl = document.createElement("span");
 	titleEl.className = "title";
-	titleEl.textContent = title;
+	if (typeof title === "string") titleEl.textContent = title;
+	else titleEl.append(title);
 	button.append(titleEl);
 	if (meta) {
 		const metaEl = document.createElement("span");
 		metaEl.className = "meta";
 		for (const part of meta) {
 			if (part === undefined || part === null || part === "") continue;
-			const span = document.createElement("span");
-			span.textContent = String(part);
-			metaEl.append(span);
+			if (part instanceof Node) metaEl.append(part);
+			else {
+				const span = document.createElement("span");
+				span.textContent = String(part);
+				metaEl.append(span);
+			}
 		}
 		button.append(metaEl);
 	}
 	button.addEventListener("click", onClick);
-	return button;
+	if (!extra.actions) return button;
+	// REF-07: row actions sit beside the row, because a button may not contain a button.
+	const row = document.createElement("div");
+	row.className = "row";
+	row.dataset.thread = extra.threadId ?? "";
+	row.append(button, ...extra.actions);
+	return row;
+}
+
+/** A link to an ID's own view (REF-08), or plain text when the ID has no view here. */
+function refLink(value, kind, label) {
+	const text = String(value ?? "");
+	if (!text) return document.createTextNode("");
+	const href = text.startsWith("pana://") ? appHref(text, state.domain) : idHref(text, kind);
+	if (!href) return document.createTextNode(label ?? text);
+	const anchor = document.createElement("a");
+	anchor.href = href;
+	anchor.textContent = label ?? text;
+	anchor.dataset.testid = "ref-link";
+	if (/^https?:/i.test(href)) {
+		anchor.target = "_blank";
+		anchor.rel = "noopener noreferrer";
+	}
+	return anchor;
+}
+
+/** Text with every `pana://` URL inside it turned into a link to its view (REF-08). */
+function linkified(text) {
+	const fragment = document.createDocumentFragment();
+	for (const segment of panaLinkSegments(text, state.domain)) {
+		if (!segment.href) {
+			fragment.append(document.createTextNode(segment.text));
+			continue;
+		}
+		const anchor = document.createElement("a");
+		anchor.href = segment.href;
+		anchor.textContent = segment.text;
+		anchor.dataset.testid = "ref-link";
+		fragment.append(anchor);
+	}
+	return fragment;
 }
 
 function when(value) {
@@ -300,25 +350,78 @@ function badge(text) {
 
 // ---- Inbox ----------------------------------------------------------------------------------
 
+/** REF-06: the nav badge is the caller's unread delivery count across every thread. */
+async function refreshUnread(archived = false) {
+	const body = await api("GET", `/inbox${archived ? "?archived=1" : ""}`);
+	const items = asList(body, ["deliveries"]);
+	const unread = items.filter((delivery) => delivery.readAt === null || delivery.readAt === undefined).length;
+	const badge = $("nav-inbox-count");
+	// The archived view is not the inbox, so it never rewrites the badge.
+	if (badge && !archived) {
+		badge.textContent = String(unread);
+		badge.hidden = unread === 0;
+	}
+	return { items, unread };
+}
+
 async function loadInbox() {
-	const body = await api("GET", "/inbox");
+	// REF-07: the same view shows the archived threads, so Unarchive has a home in the inbox.
+	const showArchived = Boolean($("inbox-archived")?.checked);
+	const { items } = await refreshUnread(showArchived);
 	const list = $("inbox-list");
 	list.replaceChildren();
-	const items = asList(body, ["deliveries"]);
-	if (items.length === 0) return empty(list, "No messages yet. Compose one to start a thread.");
+	if (items.length === 0) {
+		return empty(list, showArchived ? "No archived threads." : "No messages yet. Compose one to start a thread.");
+	}
 	for (const delivery of items) {
 		const row = inboxRow(delivery);
 		learnDomain(row.sender);
+		const archive = showArchived
+			? rowAction("inbox-unarchive", "Unarchive", () => void archiveThread(row.threadId, false))
+			: rowAction("inbox-archive", "Archive", () => void archiveThread(row.threadId, true));
 		list.append(
 			item(
 				row.subject,
-				[row.sender, when(row.at), row.read ? undefined : "unread"],
+				[
+					refLink(row.sender, "user"),
+					when(row.at),
+					row.unreadCount > 0 ? `${row.unreadCount} unread` : undefined,
+					row.read ? undefined : "unread",
+				],
 				() => {
 					location.hash = `#/threads/${row.threadId}?message=${row.messageId}`;
 				},
-				{ unread: !row.read, testid: "inbox-item", threadId: row.threadId, id: row.messageId },
+				{ unread: !row.read, testid: "inbox-item", threadId: row.threadId, id: row.messageId, actions: [archive] },
 			),
 		);
+	}
+}
+
+function rowAction(testid, label, onClick) {
+	const button = document.createElement("button");
+	button.type = "button";
+	button.className = "row-action";
+	button.dataset.testid = testid;
+	button.dataset.action = testid;
+	button.textContent = label;
+	button.addEventListener("click", (event) => {
+		event.stopPropagation();
+		onClick();
+	});
+	return button;
+}
+
+/** REF-07: archive or unarchive one thread, then refresh whatever list is showing. */
+async function archiveThread(threadId, archived) {
+	try {
+		await api("POST", `/threads/${threadId}/${archived ? "archive" : "unarchive"}`, {});
+		status(archived ? "Archived." : "Unarchived.");
+		if (state.section === "threads" && state.thread?.id === threadId) await openThread(threadId);
+		await refreshUnread().catch(() => {});
+		if (state.section === "inbox") await loadInbox();
+		else if (state.section === "threads") await searchThreads();
+	} catch (error) {
+		fail(error);
 	}
 }
 
@@ -356,7 +459,12 @@ async function submitCompose(event) {
 async function searchThreads(event) {
 	event?.preventDefault();
 	const query = $("threads-query").value.trim();
-	const body = await api("GET", `/threads?query=${encodeURIComponent(query)}`);
+	const params = new URLSearchParams();
+	if (query) params.set("query", query);
+	if ($("threads-archived")?.checked) params.set("archived", "1");
+	if ($("threads-unread")?.checked) params.set("unread", "1");
+	const suffix = params.toString();
+	const body = await api("GET", `/threads${suffix ? `?${suffix}` : ""}`);
 	const list = $("threads-list");
 	list.replaceChildren();
 	const threads = asList(body, ["threads"]);
@@ -368,14 +476,22 @@ async function searchThreads(event) {
 		if (seen.has(thread.id)) continue;
 		seen.add(thread.id);
 		learnDomain(thread.url);
+		const archive = rowAction(thread.archived ? "thread-unarchive" : "thread-archive", thread.archived ? "Unarchive" : "Archive", () =>
+			void archiveThread(thread.id, !thread.archived),
+		);
 		list.append(
 			item(
 				thread.subject,
-				[thread.snippet, when(thread.at)],
+				[
+					thread.snippet,
+					when(thread.at),
+					thread.unreadCount > 0 ? `${thread.unreadCount} unread` : undefined,
+					thread.archived ? "archived" : undefined,
+				],
 				() => {
 					location.hash = `#/threads/${thread.id}`;
 				},
-				{ testid: "thread-item", threadId: thread.id },
+				{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, actions: [archive] },
 			),
 		);
 	}
@@ -391,11 +507,13 @@ async function messageElement(message, { threadId, focus }) {
 	article.dataset.sender = view.sender;
 
 	const header = document.createElement("header");
-	const sender = document.createElement("span");
-	sender.textContent = view.sender || "unknown sender";
+	const sender = view.sender ? refLink(view.sender, "user") : document.createTextNode("unknown sender");
+	if (sender instanceof HTMLElement) sender.dataset.testid = "message-sender";
 	const time = document.createElement("span");
 	time.textContent = when(view.at);
-	header.append(sender, time);
+	const messageLink = refLink(view.url ?? `${view.threadId}`, "thread", `#${String(view.id ?? "").slice(-6)}`);
+	if (messageLink instanceof HTMLElement) messageLink.dataset.testid = "message-link";
+	header.append(sender, time, messageLink);
 	if (view.revised) {
 		const edited = document.createElement("span");
 		edited.className = "badge";
@@ -463,7 +581,21 @@ async function openThread(id, focusMessage) {
 	state.confirm = null;
 
 	$("thread-subject").textContent = thread?.subject ?? "(no subject)";
-	$("thread-participants").textContent = (thread?.participants ?? []).map((p) => p.url ?? p).join(", ");
+	const threadUrl = $("thread-url");
+	threadUrl.replaceChildren(refLink(thread?.url ?? id, "thread"));
+	// REF-08: participants are links to their own views.
+	const participants = $("thread-participants");
+	participants.replaceChildren();
+	for (const [index, participant] of (thread?.participants ?? []).entries()) {
+		if (index > 0) participants.append(document.createTextNode(", "));
+		const url = typeof participant === "object" ? participant.url : participant;
+		participants.append(refLink(url, "user"));
+	}
+	// REF-07: one toggle, labelled for the thread's state for this reader.
+	const archiveButton = $("thread-archive");
+	archiveButton.dataset.archived = String(Boolean(body.archived));
+	archiveButton.textContent = body.archived ? "Unarchive" : "Archive";
+	archiveButton.dataset.testid = body.archived ? "thread-unarchive" : "thread-archive";
 	const container = $("thread-messages");
 	container.replaceChildren();
 	for (const message of messages) {
@@ -475,8 +607,11 @@ async function openThread(id, focusMessage) {
 	$("thread").hidden = false;
 	$("thread-subject").focus?.();
 	if (focusMessage) {
+		container.querySelector(".focus")?.scrollIntoView?.({ block: "center" });
 		await api("POST", `/messages/${focusMessage}/read`).catch(() => {});
 	}
+	// REF-06: reading the thread clears its unread count.
+	await refreshUnread().catch(() => {});
 }
 
 async function submitReply(event) {
@@ -589,8 +724,15 @@ async function loadSessionList(query = "") {
 	for (const session of sessions) {
 		learnDomain(session.url);
 		const row = item(
-			session.id,
-			[session.state, session.model, when(session.updatedAt), cost(session.costUsd), session.snippet],
+			refLink(session.url ?? session.id, "session", session.id),
+			[
+				session.state,
+				session.model,
+				session.parent ? refLink(session.parentUrl ?? session.parent, "session", `parent ${session.parent}`) : undefined,
+				when(session.updatedAt),
+				cost(session.costUsd),
+				session.snippet,
+			],
 			() => {
 				location.hash = `#/sessions/${session.id}`;
 			},
@@ -604,19 +746,29 @@ async function loadSessionList(query = "") {
 async function openSession(id) {
 	const [body, transcript] = await Promise.all([api("GET", `/sessions/${id}`), api("GET", `/sessions/${id}/transcript`)]);
 	state.session = body.session;
-	$("session-title").textContent = state.session.id;
+	// REF-08: the session's own ID is a link to the session view, and the parent is a link to its.
+	const title = $("session-title");
+	title.replaceChildren(refLink(state.session.url ?? state.session.id, "session", state.session.id));
 	const meta = $("session-meta");
 	meta.replaceChildren(badge(state.session.state ?? "unknown"));
 	const details = document.createElement("span");
-	details.textContent = [
+	for (const part of [
 		state.session.model,
 		state.session.cwd,
-		state.session.parent ? `parent ${state.session.parent}` : undefined,
+		state.session.parent ? refLink(state.session.parentUrl ?? state.session.parent, "session", `parent ${state.session.parent}`) : undefined,
 		cost(state.session.costUsd),
-	]
-		.filter(Boolean)
-		.join(" · ");
+	]) {
+		if (part === undefined || part === null || part === "") continue;
+		if (details.childNodes.length > 0) details.append(" · ");
+		if (part instanceof Node) details.append(part);
+		else details.append(document.createTextNode(String(part)));
+	}
 	meta.append(" ", details);
+	const archive = $("session-archive");
+	if (archive) {
+		archive.hidden = state.session.state === "archived";
+		archive.dataset.id = state.session.id;
+	}
 	$("sessions-list").hidden = true;
 	$("session").hidden = false;
 	renderTranscript(asList(transcript, ["entries"]));
@@ -633,6 +785,9 @@ function renderTranscript(entries) {
 	if (entries.length === 0) empty(container, "No transcript yet.");
 }
 
+/** A tool result's output is collapsed only when it is long (REF-09). */
+const LONG_OUTPUT = 2000;
+
 function entryElement(entry) {
 	const view = entryView(entry);
 	const div = document.createElement("div");
@@ -643,13 +798,75 @@ function entryElement(entry) {
 	if (view.id !== undefined) div.dataset.entryId = String(view.id);
 	const meta = document.createElement("span");
 	meta.className = "entry-meta";
-	meta.textContent = [view.role, view.kind !== view.role ? view.kind : undefined, view.id !== undefined ? `#${view.id}` : undefined]
+	meta.dataset.testid = "entry-meta";
+	meta.textContent = [
+		view.role,
+		view.label && view.label !== view.role ? view.label : undefined,
+		view.id !== undefined ? `#${view.id}` : undefined,
+		view.usage ? `in ${view.usage.input} · out ${view.usage.output}` : undefined,
+		view.usage && view.usage.costUsd > 0 ? cost(view.usage.costUsd) : undefined,
+	]
 		.filter(Boolean)
 		.join(" · ");
-	const text = document.createElement("div");
-	text.textContent = view.text;
-	div.append(meta, text);
+	const body = document.createElement("div");
+	body.className = "entry-body";
+	for (const block of view.blocks ?? []) body.append(blockElement(block));
+	div.append(meta, body);
 	return div;
+}
+
+function blockElement(block) {
+	if (block.type === "thinking") {
+		// REF-09: thinking is collapsed by default.
+		return details("details-thinking", "Thinking", block.text, { testid: "entry-thinking" });
+	}
+	if (block.type === "tool-call") {
+		const wrap = document.createElement("div");
+		wrap.className = "tool-call";
+		wrap.dataset.testid = "entry-tool-call";
+		wrap.dataset.tool = block.name;
+		const name = document.createElement("span");
+		name.className = "tool-name";
+		name.textContent = `→ ${block.name}`;
+		const args = document.createElement("pre");
+		args.className = "tool-args";
+		args.textContent = JSON.stringify(block.arguments ?? {}, null, 2);
+		wrap.append(name, args);
+		return wrap;
+	}
+	if (block.type === "tool-result") {
+		const result = details("details-tool-result", `Result: ${block.name || "tool"}`, block.output, {
+			testid: "entry-tool-result",
+			open: block.output.length <= LONG_OUTPUT,
+		});
+		result.dataset.tool = block.name ?? "";
+		if (block.isError) result.classList.add("error");
+		return result;
+	}
+	if (block.type === "image") {
+		const span = document.createElement("span");
+		span.className = "block-image";
+		span.textContent = `[image ${block.mediaType}]`;
+		return span;
+	}
+	const pre = document.createElement("pre");
+	pre.className = `block-${block.type}`;
+	pre.append(linkified(block.text ?? ""));
+	return pre;
+}
+
+/** A collapsible block: `open` follows the block's own rule, never the caller's. */
+function details(className, summaryText, text, { testid, open = false } = {}) {
+	const node = document.createElement("details");
+	node.className = className;
+	if (open) node.open = true;
+	if (testid) node.dataset.testid = testid;
+	const summary = document.createElement("summary");
+	summary.textContent = summaryText;
+	const pre = document.createElement("pre");
+	pre.append(linkified(text ?? ""));
+	node.append(summary, pre);
+	return node;
 }
 
 async function loadTranscript() {
@@ -663,11 +880,26 @@ async function sessionAction(action) {
 	if (!session) return;
 	try {
 		await api("POST", `/sessions/${session.id}/${action}`, {});
-		status(`${action === "stop" ? "Stopped" : "Compacted"} ${session.id}.`);
+		status(`${action === "stop" ? "Stopped" : action === "archive" ? "Archived" : "Compacted"} ${session.id}.`);
 		await openSession(session.id);
 	} catch (error) {
 		fail(error);
 	}
+}
+
+/** REF-02: archiving a session is permanent, so it asks first. */
+function askArchiveSession() {
+	const session = state.session;
+	if (!session) return;
+	$("session-confirm-text").textContent = CONFIRM_ARCHIVE_SESSION;
+	$("session-confirm").hidden = false;
+	$("session-confirm-yes").dataset.id = session.id;
+	$("session-confirm-yes").focus();
+}
+
+async function confirmArchiveSession() {
+	$("session-confirm").hidden = true;
+	await sessionAction("archive");
 }
 
 // ---- Memory ---------------------------------------------------------------------------------
@@ -767,7 +999,7 @@ async function createWorktree() {
 
 let editingSchedule;
 
-async function loadSchedules() {
+async function loadSchedules(focus) {
 	const body = await api("GET", "/schedules");
 	const list = $("schedules-list");
 	list.replaceChildren();
@@ -784,9 +1016,12 @@ async function loadSchedules() {
 		const meta = document.createElement("span");
 		meta.className = "meta";
 		const payload = schedule.payload ?? {};
-		meta.textContent = [schedule.id, payload.prompt ?? payload.body ?? payload.subject, `next ${when(schedule.nextAt)}`]
-			.filter(Boolean)
-			.join(" · ");
+		// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
+		meta.append(refLink(schedule.url ?? schedule.id, "schedule", schedule.id));
+		for (const part of [payload.prompt ?? payload.body ?? payload.subject, `next ${when(schedule.nextAt)}`]) {
+			if (part === undefined || part === null || part === "") continue;
+			meta.append(" · ", document.createTextNode(String(part)));
+		}
 		const edit = document.createElement("button");
 		edit.type = "button";
 		edit.textContent = "Edit";
@@ -801,6 +1036,13 @@ async function loadSchedules() {
 		remove.addEventListener("click", () => void deleteSchedule(schedule.id));
 		row.append(title, meta, edit, remove);
 		list.append(row);
+	}
+	if (focus) {
+		const row = [...document.querySelectorAll("#schedules-list .item")].find((el) => el.dataset.id === focus);
+		if (row) {
+			row.classList.add("focus");
+			row.scrollIntoView({ block: "center" });
+		}
 	}
 }
 
@@ -965,7 +1207,7 @@ async function route() {
 				await loadMemory();
 				break;
 			case "schedules":
-				await loadSchedules();
+				await loadSchedules(query.get("focus") ?? undefined);
 				break;
 		}
 	} catch (error) {
@@ -1011,12 +1253,26 @@ $("reply-body").addEventListener("input", () => {
 });
 $("confirm-yes").addEventListener("click", () => void confirmAction());
 $("confirm-no").addEventListener("click", cancelAction);
+$("thread-archive").addEventListener("click", () => {
+	const thread = state.thread;
+	if (!thread) return;
+	const button = $("thread-archive");
+	void archiveThread(thread.id, button.dataset.archived !== "true");
+});
+$("session-confirm-yes").addEventListener("click", () => void confirmArchiveSession());
+$("session-confirm-no").addEventListener("click", () => {
+	$("session-confirm").hidden = true;
+});
+$("threads-archived").addEventListener("change", () => void searchThreads());
+$("inbox-archived").addEventListener("change", () => void loadInbox());
+$("threads-unread").addEventListener("change", () => void searchThreads());
 $("memory-search").addEventListener("submit", (event) => void searchMemory(event));
 $("schedule-form").addEventListener("submit", (event) => void createSchedule(event));
 $("enable-push").addEventListener("click", () => void enablePush());
 document.addEventListener("click", (event) => {
 	const action = event.target?.closest?.("[data-action]")?.dataset.action;
 	if (action === "stop" || action === "compact") void sessionAction(action);
+	if (action === "archive-session") askArchiveSession();
 	if (action === "reload") {
 		if (state.session) void openSession(state.session.id);
 		else void loadSessionList();
