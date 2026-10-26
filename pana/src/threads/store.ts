@@ -24,6 +24,7 @@ import {
 	scheduleSubject,
 } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { sessionStates, workingSessions, type SessionState, type WorkingSession } from "../sessions/state.ts";
 import { announce } from "./announce.ts";
 import { deliveryHooks } from "./delivery.ts";
 
@@ -71,6 +72,8 @@ export interface PersonView {
 export interface ParticipantView extends PersonView {
 	joinedAt: number;
 	joinedMessageId: string | null;
+	/** A session's current state; absent for the user and the domain (UX-09). */
+	state?: SessionState;
 }
 
 export interface MessageView {
@@ -590,14 +593,19 @@ async function markThreadRead(tx: SqliteExecutor, readerId: string, threadId: st
 	);
 }
 
-/** THR-10: messages in order with current revisions, and the caller's deliveries marked read. */
+/**
+ * THR-10: messages in order with current revisions, and the caller's deliveries marked read.
+ * UX-09: each session participant carries its current state, so an opened thread shows who is
+ * working before any event arrives. The state is read after the transaction, because it needs
+ * the harness inspection that tells a sleeping run from a busy one (STA-03).
+ */
 export async function readThread(
 	runtime: Runtime,
 	caller: Caller,
 	threadId: string,
 ): Promise<{ thread: ThreadView; messages: MessageView[]; archived: boolean }> {
 	const now = runtime.clock.now();
-	return runtime.db.atomically(async (tx) => {
+	const read = await runtime.db.atomically(async (tx) => {
 		const thread = await threadView(tx, runtime, threadId);
 		const reader = await ensureCaller(tx, runtime, now, caller);
 		if (caller.kind !== "user") {
@@ -615,6 +623,12 @@ export async function readThread(
 		await markThreadRead(tx, reader.id, threadId, now);
 		return { thread, messages: await messageViews(tx, runtime, rows, reader.id), archived };
 	});
+	const sessions = read.thread.participants.filter((participant) => participant.kind === "session");
+	const states = await sessionStates(runtime.db, runtime, sessions.map((participant) => participant.id));
+	const participants = read.thread.participants.map((participant) =>
+		participant.kind === "session" && states.has(participant.id) ? { ...participant, state: states.get(participant.id)! } : participant,
+	);
+	return { ...read, thread: { ...read.thread, participants } };
 }
 
 // --- Messages ------------------------------------------------------------------
@@ -884,6 +898,8 @@ export interface InboxThread {
 	/** The reader's unread messages in this thread (REF-05). */
 	unreadCount: number;
 	archived: boolean;
+	/** Session participants that are working right now (UX-09). */
+	working: WorkingSession[];
 }
 
 export const SNIPPET_LENGTH = 140;
@@ -974,6 +990,7 @@ export async function inboxThreads(
 			participantsOf.set(member.thread_id, list);
 		}
 		const unread = await unreadCounts(tx, reader.id, threadIds);
+		const working = await workingSessions(tx, threadIds);
 		const unreadTotal = (await tx.get<{ n: number }>(
 			`SELECT COUNT(*) AS n FROM deliveries d
 			  WHERE d.recipient_id = ? AND d.read_at IS NULL
@@ -1001,6 +1018,7 @@ export async function inboxThreads(
 					},
 					unreadCount: unread.get(row.thread_id) ?? 0,
 					archived: Boolean(options.archived),
+					working: working.get(row.thread_id) ?? [],
 				};
 			}),
 			unreadTotal,

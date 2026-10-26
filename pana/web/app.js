@@ -21,6 +21,7 @@ import {
 	commitView,
 	entryView,
 	inboxThreadRow,
+	isWorking,
 	memoryHitView,
 	messageView,
 	participantColor,
@@ -29,6 +30,7 @@ import {
 	scheduleWhen,
 	shortTime,
 	threadRow,
+	workingParticipants,
 } from "./views.js";
 import { renderMessage } from "./render.js";
 
@@ -58,6 +60,8 @@ const state = {
 	domainReady: undefined,
 	/** The list a detail view returns to with Back (UX-08). */
 	lastList: "#/inbox",
+	/** threadId -> sessionId -> working session (UX-09), from responses and `session.state`. */
+	working: new Map(),
 	push: undefined,
 	workerError: "",
 };
@@ -191,6 +195,11 @@ function handleEvent(event) {
 	if (event.kind === "hello") {
 		if (typeof event.domain === "string") state.domain = event.domain;
 		state.domainResolved?.();
+		return;
+	}
+	// UX-09: who is working changes in the open thread and in the lists, without a reload.
+	if (event.kind === "session.state" && typeof event.sessionId === "string") {
+		applyStateEvent(event);
 		return;
 	}
 	if (event.kind?.startsWith("session.") && event.sessionId && event.sessionId === state.session?.id) {
@@ -421,6 +430,90 @@ function unreadBadge(count) {
 	return node;
 }
 
+// ---- Working sessions (UX-09) ------------------------------------------------------------------
+
+/** threadId -> sessionId -> the session that is working in that thread. */
+function workingMap(threadId) {
+	let map = state.working.get(threadId);
+	if (!map) {
+		map = new Map();
+		state.working.set(threadId, map);
+	}
+	return map;
+}
+
+/** Take a thread's working set from a response, so a reload drops a session that stopped. */
+function rememberWorking(threadId, working) {
+	const map = workingMap(threadId);
+	map.clear();
+	for (const session of working ?? []) map.set(session.sessionId, session);
+	return map;
+}
+
+/** A list row's small working mark. It stays in the row and hides when nothing works. */
+function workingMark() {
+	const mark = span("", "working-mark");
+	mark.dataset.testid = "working-mark";
+	mark.dataset.color = "blue";
+	mark.title = "A session is working";
+	mark.hidden = true;
+	return mark;
+}
+
+/** Redraw one row's mark from the thread's working set, in the first working session's color. */
+function syncWorkingMark(row, threadId = row.dataset.thread) {
+	const mark = row.querySelector("[data-testid=working-mark]");
+	if (!mark || !threadId) return;
+	const working = [...workingMap(threadId).values()];
+	mark.hidden = working.length === 0;
+	if (working.length === 0) return;
+	mark.dataset.color = participantColor({ url: working[0].url, kind: "session" });
+	mark.title = `${working.map((session) => refLabel(session.url)).join(", ")} working`;
+}
+
+/** A window heard one session change state (UX-09). */
+function applyStateEvent(event) {
+	const next = String(event.state ?? "");
+	const sessionId = String(event.sessionId);
+	for (const threadId of Array.isArray(event.threadIds) ? event.threadIds.map(String) : []) {
+		const map = workingMap(threadId);
+		if (isWorking(next)) map.set(sessionId, { sessionId, url: String(event.url ?? ""), state: next });
+		else map.delete(sessionId);
+		workingChanged(threadId);
+	}
+}
+
+function workingChanged(threadId) {
+	for (const row of document.querySelectorAll(`[data-thread="${CSS.escape(threadId)}"]`)) syncWorkingMark(row, threadId);
+	if (state.thread?.id === threadId) renderThreadWorking();
+}
+
+/** The bottom of a thread, just above the reply box: the sessions working now, in their colors. */
+function renderThreadWorking() {
+	const node = $("thread-working");
+	const threadId = state.thread?.id;
+	const working = threadId ? [...workingMap(threadId).values()] : [];
+	node.replaceChildren();
+	if (working.length === 0) {
+		node.hidden = true;
+		return;
+	}
+	node.append(span("Working", "working-label"));
+	for (const session of working) node.append(workingChip(session));
+	node.hidden = false;
+}
+
+function workingChip(session) {
+	const chip = span("", "working-chip");
+	chip.dataset.testid = "working-session";
+	chip.dataset.session = session.sessionId;
+	chip.dataset.color = participantColor({ url: session.url, kind: "session" });
+	chip.title = `${refLabel(session.url)} is ${session.state}`;
+	chip.append(span("", "working-dot"));
+	chip.append(refLink(session.url, "session", refLabel(session.url)));
+	return chip;
+}
+
 // ---- Inbox (UX-03) --------------------------------------------------------------------------
 
 // Live events can start several loads at once, and their answers can arrive out of order. Only
@@ -494,6 +587,10 @@ function inboxItem(row, showArchived) {
 			actions: [archive],
 		},
 	);
+	// UX-09: a row marks the thread while one of its sessions works.
+	rememberWorking(row.threadId, row.working);
+	node.querySelector(".title")?.append(workingMark());
+	syncWorkingMark(node);
 	return node;
 }
 
@@ -583,16 +680,19 @@ async function searchThreads(event, cursor) {
 		const aside = document.createElement("div");
 		aside.className = "item-aside";
 		aside.append(timeEl(thread.at));
-		list.append(
-			item(
-				thread.subject,
-				[thread.unreadCount > 0 ? unreadBadge(thread.unreadCount) : undefined, thread.archived ? badge("archived") : undefined, thread.snippet],
-				() => {
-					location.hash = `#/threads/${thread.id}`;
-				},
-				{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, aside, actions: [archive] },
-			),
+		const row = item(
+			thread.subject,
+			[thread.unreadCount > 0 ? unreadBadge(thread.unreadCount) : undefined, thread.archived ? badge("archived") : undefined, thread.snippet],
+			() => {
+				location.hash = `#/threads/${thread.id}`;
+			},
+			{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, aside, actions: [archive] },
 		);
+		// UX-09: a row marks the thread while one of its sessions works.
+		rememberWorking(thread.id, thread.working);
+		row.querySelector(".title")?.append(workingMark());
+		syncWorkingMark(row);
+		list.append(row);
 	}
 	showMore(list, nextCursor(body), (next) => searchThreads(undefined, next).catch(fail));
 }
@@ -698,6 +798,11 @@ async function openThread(id, focusMessage) {
 	for (const participant of thread?.participants ?? []) {
 		participants.append(personLink(typeof participant === "object" ? participant : { url: participant }));
 	}
+	// UX-09: the response says who is working now, so an opened thread is right before any event.
+	const working = workingMap(id);
+	working.clear();
+	for (const session of workingParticipants(thread)) working.set(session.sessionId, session);
+	renderThreadWorking();
 	// REF-07: one toggle, labelled for the thread's state for this reader.
 	const archiveButton = $("thread-archive");
 	archiveButton.dataset.archived = String(Boolean(body.archived));

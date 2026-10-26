@@ -49,6 +49,11 @@ export interface ScriptedModel {
 	remaining(): number;
 	/** Model requests made so far. */
 	calls(): number;
+	/**
+	 * Hold every model call from now on until the returned function releases them. The call still
+	 * returns its stream immediately, so a page can see the session working while the run waits.
+	 */
+	gate(): () => void;
 }
 
 function toUsage(spec: TurnUsage | undefined): Usage | undefined {
@@ -103,16 +108,20 @@ export function createScriptedModel(script: Script = []): ScriptedModel {
 	load(script, false);
 
 	const inner = faux.provider;
+	let held: Promise<void> | undefined;
+
 	const wrap = <F extends (...args: never[]) => ReturnType<typeof inner.streamSimple>>(stream: F): F =>
 		((...args: Parameters<F>) => {
 			const usage = usages[consumed++];
-			const source = stream(...args);
-			if (!usage) return source;
+			const gate = held;
+			if (!usage && !gate) return stream(...args);
 			const outer = createAssistantMessageEventStream();
 			void (async () => {
-				for await (const event of source) outer.push(patch(event, usage));
+				if (gate) await gate;
+				const source = stream(...args);
+				for await (const event of source) outer.push(usage ? patch(event, usage) : event);
 				const result = await source.result();
-				outer.end({ ...result, usage });
+				outer.end(usage ? { ...result, usage } : result);
 			})();
 			return outer;
 		}) as F;
@@ -133,5 +142,15 @@ export function createScriptedModel(script: Script = []): ScriptedModel {
 		append: (turns) => load(turns, true),
 		remaining: () => faux.getPendingResponseCount(),
 		calls: () => faux.state.callCount,
+		gate: () => {
+			let release: () => void = () => {};
+			held = new Promise<void>((resolve) => {
+				release = () => {
+					held = undefined;
+					resolve();
+				};
+			});
+			return release;
+		},
 	};
 }

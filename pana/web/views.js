@@ -33,7 +33,34 @@ export function inboxThreadRow(thread) {
 		at: latest.createdAt,
 		unreadCount: count(thread.unreadCount),
 		archived: Boolean(thread.archived),
+		working: workingOf(thread),
 	};
+}
+
+/**
+ * UX-09: `running` and `waiting` are the states that mean a session is working. `waiting` is not
+ * stored; a sleeping run reports it (STA-03).
+ */
+export function isWorking(state) {
+	return state === "running" || state === "waiting";
+}
+
+/** The working sessions of a list row or a thread, in the order the server named them (UX-09). */
+export function workingOf(value) {
+	const list = Array.isArray(value?.working) ? value.working : [];
+	return list.filter((session) => isWorking(session?.state ?? "running")).map((session) => ({
+		sessionId: String(session.sessionId ?? session.id ?? ""),
+		url: String(session.url ?? ""),
+		state: String(session.state ?? "running"),
+	}));
+}
+
+/** A thread's session participants that are working now, for the indicator above the reply box (UX-09). */
+export function workingParticipants(thread) {
+	const participants = Array.isArray(thread?.participants) ? thread.participants : [];
+	return participants
+		.filter((participant) => participant?.kind === "session" && isWorking(participant.state))
+		.map((participant) => ({ sessionId: String(participant.id ?? ""), url: String(participant.url ?? ""), state: String(participant.state) }));
 }
 
 function person(value) {
@@ -116,6 +143,7 @@ export function threadRow(thread) {
 		// REF-05 and REF-03.
 		unreadCount: count(thread.unreadCount),
 		archived: Boolean(thread.archived),
+		working: workingOf(thread),
 	};
 }
 

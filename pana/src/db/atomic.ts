@@ -71,6 +71,8 @@ export class PanaDatabase implements SqliteDatabase {
 	#group: Group | undefined;
 	#queue: Promise<unknown> = Promise.resolve();
 	#dead: SimulatedCrash | undefined;
+	/** Callbacks waiting for the transaction in flight to commit (see `afterCommit`). */
+	#afterCommit: Array<() => void> | undefined;
 	/** Test hook: inject faults inside `atomically`. */
 	faults: FaultInjector | undefined;
 
@@ -186,8 +188,25 @@ export class PanaDatabase implements SqliteDatabase {
 		return this.atomically(fn);
 	}
 
+	/**
+	 * Run `callback` once the transaction in flight commits, or at once when none is open. A
+	 * callback is dropped when that transaction rolls back, so a subscriber never hears about a
+	 * change a rollback took away (UX-09 publishes `session.state` this way). Callbacks run in the
+	 * order they were registered, after COMMIT and before `atomically` resolves.
+	 */
+	afterCommit(callback: () => void): void {
+		if (!this.#afterCommit) {
+			runAfterCommit([callback]);
+			return;
+		}
+		this.#afterCommit.push(callback);
+	}
+
 	async #atomically<T>(fn: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
 		if (this.#dead) throw this.#dead;
+		const after: Array<() => void> = [];
+		this.#afterCommit = after;
+		let committed = false;
 		let deferred: { error: unknown } | undefined;
 		// Set once the callback returned and the adapter is about to COMMIT with joined pi-durable work.
 		let mustCommit = false;
@@ -219,9 +238,13 @@ export class PanaDatabase implements SqliteDatabase {
 					this.#group = undefined;
 				}
 			});
+			committed = true;
 		} catch (error) {
 			if (mustCommit) this.#onFatal(error);
 			throw error;
+		} finally {
+			this.#afterCommit = undefined;
+			if (committed) runAfterCommit(after);
 		}
 		if (deferred) throw deferred.error;
 		return result;
@@ -230,5 +253,19 @@ export class PanaDatabase implements SqliteDatabase {
 	async close(): Promise<void> {
 		await this.#queue.catch(() => {});
 		await this.#inner.close();
+	}
+}
+
+/**
+ * Run post-commit callbacks in order. One that throws must not break the commit that already
+ * happened or the callbacks after it, so each failure is reported and dropped.
+ */
+function runAfterCommit(callbacks: ReadonlyArray<() => void>): void {
+	for (const callback of callbacks) {
+		try {
+			callback();
+		} catch (error) {
+			console.error("panad: post-commit callback failed:", error instanceof Error ? error.message : error);
+		}
 	}
 }

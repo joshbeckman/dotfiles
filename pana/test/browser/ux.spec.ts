@@ -6,7 +6,7 @@ import { sessionRuntime } from "../../src/sessions/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { INPUT_KEYMAP, KEYMAP } from "../../web/keys.js";
-import { PALETTE } from "../../web/views.js";
+import { PALETTE, participantColor, refLabel } from "../../web/views.js";
 import type { TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage, resizePage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
@@ -562,5 +562,87 @@ describeBrowser("pana usability in a browser", () => {
 		`);
 		expect(help.actions).toEqual([...KEYMAP, ...INPUT_KEYMAP].map((binding) => binding.action));
 		expect(help.hidden).toBe(true);
+	});
+	it("UX-09 a working session shows live in its thread and its rows, then clears when the reply lands", async () => {
+		const { t } = await start();
+		const threadId = seeded!.capital.threadId;
+		const sessionId = seeded!.capital.sessionId;
+		const sessionUrl = seeded!.capital.sessionUrl;
+		const color = participantColor({ url: sessionUrl, kind: "session" });
+
+		// The session is idle, so the inbox row carries no mark.
+		await evaluatePage(`await until(() => document.querySelectorAll("#inbox-list [data-thread]").length >= 3); return true;`);
+		expect(
+			await evaluatePage<boolean>(`return document.querySelector('[data-thread="${threadId}"] [data-testid=working-mark]')?.hidden ?? true;`),
+		).toBe(true);
+
+		// A held model call keeps the session working while the page watches. The user's own
+		// message delivers nothing back to the user, so only a `session.state` event can mark
+		// the row: this is the live path, not a reload.
+		const release = t.model.gate();
+		const wake = await t.client.post(`/threads/${threadId}/messages`, { after: seeded!.capital.messageIds.at(-1), body: "And Lyon?" });
+		expect(wake.status, JSON.stringify(wake.body)).toBe(200);
+		await settle(
+			t,
+			() =>
+				evaluatePage<boolean>(`const mark = document.querySelector('[data-thread="${threadId}"] [data-testid=working-mark]'); return Boolean(mark && !mark.hidden);`),
+			"the inbox working mark",
+		);
+		const mark = await evaluatePage<{ color: string; animated: string }>(`
+			const mark = document.querySelector('[data-thread="${threadId}"] [data-testid=working-mark]');
+			return { color: mark.dataset.color, animated: getComputedStyle(mark).animationName };
+		`);
+		expect(mark.color).toBe(color);
+		expect(mark.animated).toBe("pana-working");
+
+		// The open thread shows the session just above the reply box, in its own color, pulsing.
+		await evaluatePage(`
+			location.hash = "#/threads/${threadId}";
+			await until(() => window.__pana.state.threadId === "${threadId}" && !document.getElementById("thread").hidden);
+			return true;
+		`);
+		await settle(
+			t,
+			() =>
+				evaluatePage<boolean>(
+					`const node = document.getElementById("thread-working"); return Boolean(node && !node.hidden && node.querySelector("[data-testid=working-session]"));`,
+				),
+			"the thread working indicator",
+		);
+		const chip = await evaluatePage<{ sessions: string[]; color: string; text: string; animated: string; background: string; above: boolean }>(`
+			const node = document.getElementById("thread-working");
+			const chip = node.querySelector("[data-testid=working-session]");
+			const dot = chip.querySelector(".working-dot");
+			return {
+				sessions: [...node.querySelectorAll("[data-testid=working-session]")].map((el) => el.dataset.session),
+				color: chip.dataset.color,
+				text: chip.textContent,
+				animated: getComputedStyle(dot).animationName,
+				background: getComputedStyle(dot).backgroundColor,
+				above: node.getBoundingClientRect().bottom <= document.getElementById("reply-form").getBoundingClientRect().top + 1,
+			};
+		`);
+		expect(chip.sessions).toEqual([sessionId]);
+		expect(chip.color).toBe(color);
+		expect(chip.text).toContain(refLabel(sessionUrl));
+		expect(chip.animated).toBe("pana-working");
+		expect(chip.background).toBe(rgb(PALETTE[color as keyof typeof PALETTE]));
+		expect(chip.above).toBe(true);
+
+		// The reply lands: the indicator disappears without a reload.
+		release();
+		await t.clock.advance(60_000);
+		await settle(t, () => evaluatePage<boolean>(`return document.getElementById("thread-working").hidden;`), "the indicator to clear");
+		expect(await evaluatePage<number>(`return document.querySelectorAll("#thread-working [data-testid=working-session]").length;`)).toBe(0);
+		// The reply itself is in the thread, and the row's mark is gone too.
+		await settle(
+			t,
+			() => evaluatePage<boolean>(`return document.querySelectorAll("#thread-messages [data-testid=message]").length >= 3;`),
+			"the reply to land",
+		);
+		await evaluatePage(`location.hash = "#/inbox"; await until(() => document.querySelectorAll("#inbox-list [data-thread]").length >= 3); return true;`);
+		expect(
+			await evaluatePage<boolean>(`return document.querySelector('[data-thread="${threadId}"] [data-testid=working-mark]')?.hidden ?? true;`),
+		).toBe(true);
 	});
 });

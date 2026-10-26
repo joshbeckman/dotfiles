@@ -39,6 +39,15 @@ export interface PersonRef {
 	url: string;
 	kind: string;
 }
+/** UX-09: a session that is working in a thread. */
+export interface WorkingSessionRef {
+	sessionId: string;
+	url: string;
+	state: string;
+}
+export function isWorking(state: string): boolean;
+export function workingOf(value: any): WorkingSessionRef[];
+export function workingParticipants(thread: any): WorkingSessionRef[];
 export function inboxThreadRow(thread: any): {
 	threadId: string;
 	threadUrl?: string;
@@ -51,6 +60,7 @@ export function inboxThreadRow(thread: any): {
 	at: number;
 	unreadCount: number;
 	archived: boolean;
+	working: WorkingSessionRef[];
 };
 export const PALETTE: Record<"blue" | "orange" | "purple" | "green" | "red" | "yellow" | "black", string>;
 export const SESSION_COLORS: string[];
@@ -65,6 +75,7 @@ export function threadRow(thread: any): {
 	at: number;
 	unreadCount: number;
 	archived: boolean;
+	working: WorkingSessionRef[];
 };
 export function messageView(message: any): {
 	id: string;

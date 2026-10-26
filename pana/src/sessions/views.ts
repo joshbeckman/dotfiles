@@ -5,7 +5,7 @@
 // knows that, so it is read from `harness.inspect()` at request time.
 
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { UsageDoc, type ConversationId, type HarnessInspection, type UsageState } from "@earendil-works/pi-durable";
+import { UsageDoc, type ConversationId, type UsageState } from "@earendil-works/pi-durable";
 import type { SqliteValue } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
 import { decodeCursor, decodeOffset, pageOf, type Page } from "../api/pagination.ts";
@@ -13,6 +13,9 @@ import { searchSessions } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { usageCost } from "./budget.ts";
 import { SESSION_STATES, type SessionRow, type SessionState } from "./runtime.ts";
+// UX-09 keeps the `waiting` rule next to the state writer that publishes it.
+import { waitingConversations } from "./state.ts";
+export { waitingConversations };
 
 export interface SessionView {
 	id: string;
@@ -33,17 +36,6 @@ export interface SessionView {
 
 export interface SessionDetail extends SessionView {
 	usage: UsageState;
-}
-
-/** Conversations whose work is asleep or waiting on a child task (STA-03). */
-export function waitingConversations(inspection: HarnessInspection): Set<number> {
-	const out = new Set<number>();
-	for (const task of inspection.tasks) {
-		const sleeping = task.state.kind === "sleeping";
-		const onChild = task.record.kind === "pi.tool" && task.state.kind === "waiting";
-		if (sleeping || onChild) out.add(task.record.conversationId);
-	}
-	return out;
 }
 
 export function sessionView(runtime: Runtime, row: SessionRow, waiting: Set<number>): SessionView {

@@ -17,5 +17,14 @@ export {
 	type SessionState,
 } from "./runtime.ts";
 export { findSessions, showSession, transcript, type SessionDetail, type SessionView } from "./views.ts";
+export {
+	setSessionState,
+	sessionStates,
+	waitingConversations,
+	workingSessions,
+	type SessionStateEvent,
+	type SessionStateWrite,
+	type WorkingSession,
+} from "./state.ts";
 export { defaultWakeSubmitter, MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND, renderMessage, sessionConversation } from "./wake.ts";
 export { domainCostToday, localDay, nextDayStart, usageCost } from "./budget.ts";

@@ -31,10 +31,16 @@ import { configureDelivery, type DeliveredEvent, type DeliveryHooks } from "../t
 import { postNotice } from "../threads/store.ts";
 import { publish, subscriberCount } from "../web/index.ts";
 import { nextDayStart, overDomainBudget, recordCost, usageCost } from "./budget.ts";
+import { setSessionState } from "./state.ts";
 import { MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND } from "./wake.ts";
 
 export type SessionState = "running" | "waiting" | "idle" | "failed" | "stopped" | "archived";
 export const SESSION_STATES: readonly SessionState[] = ["running", "waiting", "idle", "failed", "stopped", "archived"];
+
+/** The stored states a settled run or a recovery may replace. `stopped` and `archived` hold. */
+const LIVE_STATES: readonly SessionState[] = ["running", "idle", "failed"];
+/** Every stored state a session can leave, which is all of them but `archived` (STA-07). */
+const UNARCHIVED_STATES: readonly SessionState[] = [...LIVE_STATES, "stopped"];
 
 export interface SessionRow {
 	id: string;
@@ -228,9 +234,7 @@ export class SessionRuntime {
 		const session = await db.get<SessionRow>("SELECT * FROM sessions WHERE id = ?", sessionId);
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") throw ApiError.stale(`session ${sessionId} is archived`, { session: sessionId });
-		await db.write((tx) =>
-			tx.run("UPDATE sessions SET state = 'stopped', updated_at = ? WHERE id = ? AND state <> 'archived'", this.runtime.clock.now(), sessionId),
-		);
+		await db.write((tx) => setSessionState(tx, this.runtime, { sessionId, state: "stopped", from: UNARCHIVED_STATES }));
 		if (session.conversation_id === null) return;
 		const conversation = await harness.conversation(session.conversation_id as ConversationId, ctx);
 		if (!conversation) return;
@@ -259,9 +263,7 @@ export class SessionRuntime {
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") throw ApiError.stale(`session ${sessionId} is archived`, { session: sessionId });
 		if (session.state === "stopped") {
-			await db.write((tx) =>
-				tx.run("UPDATE sessions SET state = 'idle', updated_at = ? WHERE id = ? AND state = 'stopped'", this.runtime.clock.now(), sessionId),
-			);
+			await db.write((tx) => setSessionState(tx, this.runtime, { sessionId, state: "idle", from: ["stopped"] }));
 		}
 		if (await overDomainBudget(db, this.runtime)) {
 			this.#armRollover();
@@ -277,7 +279,7 @@ export class SessionRuntime {
 		if (session.state === "archived") return;
 		await this.stop(sessionId);
 		await this.runtime.db.write((tx) =>
-			tx.run("UPDATE sessions SET state = 'archived', updated_at = ? WHERE id = ?", this.runtime.clock.now(), sessionId),
+			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
 		);
 	}
 
@@ -354,10 +356,7 @@ export class SessionRuntime {
 
 		const changed = await db.write(async (tx) => {
 			await indexSessionRun(tx, { sessionId: session.id, entries: transcriptText(entries) });
-			const before = await tx.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", session.id);
-			if (before?.state === "stopped" || before?.state === "archived") return false;
-			await tx.run("UPDATE sessions SET state = ?, updated_at = ? WHERE id = ?", next, this.runtime.clock.now(), session.id);
-			return true;
+			return setSessionState(tx, this.runtime, { sessionId: session.id, state: next, from: LIVE_STATES });
 		});
 
 		if (failure && changed) {
@@ -390,7 +389,7 @@ export class SessionRuntime {
 			return;
 		}
 		await db.write((tx) =>
-			tx.run("UPDATE sessions SET state = 'idle', updated_at = ? WHERE id = ? AND state = 'running'", this.runtime.clock.now(), session.id),
+			setSessionState(tx, this.runtime, { sessionId: session.id, state: "idle", from: ["running"] }),
 		);
 	}
 
@@ -458,7 +457,7 @@ export async function wakeDelivery(tx: SqliteExecutor, runtime: Runtime, wake: P
 	const submissionId = await runtime.wake(wake);
 	const now = runtime.clock.now();
 	await tx.run("UPDATE deliveries SET wake_submission_id = ?, read_at = COALESCE(read_at, ?) WHERE id = ?", submissionId, now, wake.deliveryId);
-	await tx.run("UPDATE sessions SET state = 'running', updated_at = ? WHERE id = ? AND state IN ('idle', 'failed')", now, wake.recipientId);
+	await setSessionState(tx, runtime, { sessionId: wake.recipientId, state: "running", from: ["idle", "failed"] });
 }
 
 /** The thread of the delivery a submission carried, if it was a pana message. */

@@ -21,6 +21,7 @@ import type { Runtime } from "../server/runtime.ts";
 import { addressList, createThread, messageBody, type ThreadResult } from "../threads/store.ts";
 import { overDomainBudget } from "./budget.ts";
 import type { SessionRow } from "./runtime.ts";
+import { setSessionState } from "./state.ts";
 
 const run = promisify(execFile);
 
@@ -276,7 +277,8 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	try {
 		thread = await createThread(runtime, caller, { to: [id, ...to], body: prompt, subject });
 	} catch (error) {
-		await runtime.db.write((tx) => tx.run("UPDATE sessions SET state = 'archived', updated_at = ? WHERE id = ?", now, id));
+		// UX-09: the failed create is seen by a window through the same helper as every other state.
+		await runtime.db.write((tx) => setSessionState(tx, runtime, { sessionId: id, state: "archived" }));
 		throw error;
 	}
 	const session = await runtime.db.get<SessionRow>("SELECT * FROM sessions WHERE id = ?", id);

@@ -1,15 +1,18 @@
 // WP13: PWA usability. The browser checks live in test/browser/ux.spec.ts; this file covers the
-// server's thread inbox (UX-03) and the PWA modules whose logic is pure (UX-01, UX-02, UX-06,
-// UX-08).
+// server's thread inbox (UX-03), the working indicators (UX-09), and the PWA modules whose logic
+// is pure (UX-01, UX-02, UX-06, UX-08).
 
 import { readFileSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPanaCli } from "../src/cli/commands.ts";
+import { sessionRuntime, setSessionState, type SessionStateEvent } from "../src/sessions/index.ts";
 import { snippetOf } from "../src/threads/index.ts";
+import { subscribeEvents } from "../src/web/events.ts";
 import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection } from "../web/keys.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
-import { inboxThreadRow, PALETTE, participantColor, refLabel, SESSION_COLORS } from "../web/views.js";
+import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, SESSION_COLORS, threadRow, workingOf } from "../web/views.js";
 
 interface Person {
 	id: string;
@@ -490,5 +493,196 @@ describe("UX-01 notifications name the real cause", () => {
 		expect(result.endpoint).toBe("https://push.example/fresh");
 		expect(posted).toEqual([{ endpoint: "https://push.example/fresh" }]);
 		expect(urlBase64ToUint8Array(KEY)).toHaveLength(65);
+	});
+});
+
+// --- UX-09 working indicators ---------------------------------------------------------------
+
+interface WorkingRef {
+	sessionId: string;
+	url: string;
+	state: string;
+}
+
+interface InboxThreadRow {
+	threadId: string;
+	working: WorkingRef[];
+}
+
+interface ThreadReadBody {
+	thread: {
+		id: string;
+		participants: Array<{ id: string; kind: string; url: string; state?: string }>;
+	};
+	messages: unknown[];
+	archived: boolean;
+}
+
+/** A session needs a model; the scripted faux provider is the only one a test registers. */
+const MODEL = { defaultModel: "faux/faux-1", timezone: "UTC" };
+
+/** An in-process `/events` subscriber: every frame the hub writes, parsed. */
+function stateEvents(t: TestPanad): SessionStateEvent[] {
+	const seen: SessionStateEvent[] = [];
+	const res = {
+		write(chunk: string) {
+			for (const frame of chunk.split("\n\n")) {
+				const line = frame.split("\n").find((row) => row.startsWith("data:"));
+				if (!line) continue;
+				const event = JSON.parse(line.slice(5).trim()) as SessionStateEvent;
+				if (event.kind === "session.state") seen.push(event);
+			}
+			return true;
+		},
+		on() {
+			return this;
+		},
+	} as unknown as ServerResponse;
+	subscribeEvents(t.runtime, res);
+	return seen;
+}
+
+async function shownState(id: string): Promise<string> {
+	return (await t!.client.get<{ session: { state: string } }>(`/sessions/${id}`)).body.session.state;
+}
+
+async function settled(id: string, state = "idle"): Promise<void> {
+	const end = Date.now() + 10_000;
+	for (;;) {
+		await t!.clock.settle();
+		await sessionRuntime(t!.runtime).idle();
+		if ((await shownState(id)) === state) return;
+		if (Date.now() > end) throw new Error(`session ${id} never became ${state}`);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
+async function until(check: () => Promise<boolean>, what: string): Promise<void> {
+	const end = Date.now() + 10_000;
+	for (;;) {
+		await t!.clock.settle();
+		await sessionRuntime(t!.runtime).idle();
+		if (await check()) return;
+		if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
+async function readThread(id: string): Promise<ThreadReadBody> {
+	const res = await t!.client.get<ThreadReadBody>(`/threads/${id}`);
+	expect(res.status, JSON.stringify(res.body)).toBe(200);
+	return res.body;
+}
+
+describe("UX-09 working indicators", () => {
+	it("UX-09 every session state change publishes exactly one session.state event, after the write commits", async () => {
+		t = await startTestPanad({ script: [{ text: "one" }, { text: "two" }], config: MODEL });
+		const events = stateEvents(t);
+		const created = await post<{ session: { id: string; url: string }; thread: { id: string } }>("/sessions", { prompt: "go" });
+		const sessionId = created.session.id;
+		await settled(sessionId);
+
+		// The wake sets running inside the append transaction; settlement sets idle.
+		expect(events.map((event) => event.state)).toEqual(["running", "idle"]);
+		for (const event of events) {
+			expect(event).toMatchObject({ kind: "session.state", sessionId, url: created.session.url });
+			expect(event.threadIds).toEqual([created.thread.id]);
+		}
+
+		// Stop, resume, and archive each publish one event per state they store. Archive stores two.
+		await post(`/sessions/${sessionId}/stop`, {});
+		await post(`/sessions/${sessionId}/resume`, {});
+		await post(`/sessions/${sessionId}/archive`, {});
+		expect(events.map((event) => event.state)).toEqual(["running", "idle", "stopped", "idle", "stopped", "archived"]);
+
+		// A write that stores the state the row already holds changes nothing, so nothing is published.
+		const count = events.length;
+		const runtime = t.runtime;
+		await runtime.db.write((tx) => setSessionState(tx, runtime, { sessionId, state: "archived" }));
+		expect(events).toHaveLength(count);
+
+		// A rolled-back transaction publishes nothing: the window never sees a state that a
+		// rollback took away.
+		await expect(
+			runtime.db.atomically(async (tx) => {
+				await setSessionState(tx, runtime, { sessionId, state: "running" });
+				throw new Error("rollback");
+			}),
+		).rejects.toThrow("rollback");
+		expect(events).toHaveLength(count);
+		expect(await shownState(sessionId)).toBe("archived");
+	});
+
+	it("UX-09 GET /threads/:id returns each session participant's current state, including waiting", async () => {
+		t = await startTestPanad({
+			script: [{ fail: "overloaded" }, { text: "back" }],
+			settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 60_000 } },
+			config: MODEL,
+		});
+		const release = t.model.gate();
+		const created = await post<{ session: { id: string }; thread: { id: string } }>("/sessions", { prompt: "go" });
+		const sessionId = created.session.id;
+
+		const running = await readThread(created.thread.id);
+		const runningSession = running.thread.participants.find((participant) => participant.id === sessionId)!;
+		expect(runningSession.state).toBe("running");
+		// The user is not a session, so it carries no state.
+		const user = running.thread.participants.find((participant) => participant.kind === "user")!;
+		expect(user.state).toBeUndefined();
+
+		// The failing turn retries on a timer, so the stored `running` reports `waiting`.
+		release();
+		await until(async () => (await readThread(created.thread.id)).thread.participants.find((p) => p.id === sessionId)?.state === "waiting", "waiting");
+		await t.clock.advance(120_000);
+		await settled(sessionId);
+		const idle = await readThread(created.thread.id);
+		expect(idle.thread.participants.find((participant) => participant.id === sessionId)!.state).toBe("idle");
+	});
+
+	it("UX-09 inbox and thread-list rows carry the working sessions of their threads", async () => {
+		t = await startTestPanad({ script: [{ text: "the answer" }], config: MODEL });
+		const release = t.model.gate();
+		const created = await post<{ session: { id: string; url: string }; thread: { id: string } }>("/sessions", { prompt: "go" });
+		const sessionId = created.session.id;
+
+		const inbox = (await t.client.get<{ threads: InboxThreadRow[] }>("/inbox?view=threads")).body.threads;
+		expect(inbox[0]!.working).toEqual([{ sessionId, url: created.session.url, state: "running" }]);
+		const list = (await t.client.get<{ threads: InboxThreadRow[] }>("/threads")).body.threads;
+		expect(list[0]!.working).toEqual([{ sessionId, url: created.session.url, state: "running" }]);
+		const search = (await t.client.get<{ threads: InboxThreadRow[] }>("/threads?query=go")).body.threads;
+		expect(search[0]!.working).toEqual([{ sessionId, url: created.session.url, state: "running" }]);
+
+		// The PWA maps the field onto its rows and marks them.
+		expect(inboxThreadRow(inbox[0]!).working).toEqual([{ sessionId, url: created.session.url, state: "running" }]);
+		expect(threadRow(list[0]!).working).toEqual([{ sessionId, url: created.session.url, state: "running" }]);
+
+		release();
+		await settled(sessionId);
+		const after = (await t.client.get<{ threads: InboxThreadRow[] }>("/inbox?view=threads")).body.threads;
+		expect(after[0]!.working).toEqual([]);
+	});
+
+	it("UX-09 running and waiting are working, and a list row keeps only working sessions", () => {
+		expect(isWorking("running")).toBe(true);
+		expect(isWorking("waiting")).toBe(true);
+		for (const state of ["idle", "failed", "stopped", "archived", ""]) expect(isWorking(state)).toBe(false);
+
+		const row = inboxThreadRow({
+			threadId: "T",
+			latest: {},
+			working: [
+				{ sessionId: "S1", url: "pana://a.example/sessions/S1", state: "running" },
+				{ sessionId: "S2", url: "pana://a.example/sessions/S2", state: "idle" },
+			],
+		});
+		expect(row.working).toEqual([{ sessionId: "S1", url: "pana://a.example/sessions/S1", state: "running" }]);
+		expect(workingOf({})).toEqual([]);
+	});
+
+	it("UX-09 the stylesheet animates the working dot and honors reduced motion", () => {
+		const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
+		expect(css).toContain("@keyframes pana-working");
+		expect(css).toMatch(/\.working-dot,[\s\S]*?animation: pana-working/);
+		expect(css).toContain("@media (prefers-reduced-motion: reduce)");
 	});
 });

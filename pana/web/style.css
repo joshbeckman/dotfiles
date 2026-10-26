@@ -673,6 +673,62 @@ button.quiet:hover,
 .composer {
 	background: var(--c-bg-alt);
 }
+
+/* UX-09: a working session, at the bottom of a thread and as a list row's mark. The dot pulses
+   so the state reads without a label; reduced motion keeps the color and drops the animation. */
+.working {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--s1) var(--s3);
+	margin: var(--s3) 0 var(--s2);
+	font-size: 0.8rem;
+	color: var(--c-text-alt);
+}
+.working-label {
+	font-family: var(--font-condensed);
+	font-size: 0.7rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.working-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+}
+.working-chip a {
+	color: var(--who, var(--c-text));
+}
+.working-dot,
+.working-mark {
+	flex: none;
+	width: 0.55rem;
+	height: 0.55rem;
+	border-radius: 50%;
+	background: var(--who, var(--c-link));
+	animation: pana-working 1.2s ease-in-out infinite;
+}
+.working-mark[hidden] {
+	display: none;
+}
+@keyframes pana-working {
+	0%,
+	100% {
+		opacity: 0.25;
+		transform: scale(0.75);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.working-dot,
+	.working-mark {
+		animation: none;
+		opacity: 1;
+	}
+}
 .composer textarea {
 	background: var(--c-bg);
 }
