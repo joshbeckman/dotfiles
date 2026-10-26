@@ -46,7 +46,9 @@ s FIREWORKS_API_KEY -- pana/bin/panad
 # panad: open http://localhost:8766/#<web-token>
 ```
 
-As a service, load the launchd job on macOS. On Linux, `setup` enables `panad.service`. Both run `bin/panad-service`, which injects the provider keys from `s`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux.
+Install pana's dependencies once with `cd pana && npm ci`.
+
+As a service, load the launchd job on macOS. The service starts `panad` only once `config.json` and `pana/node_modules` exist; until then it exits cleanly and stays down, so merging this onto a machine that is not set up for pana changes nothing. After setting it up, restart the job with `launchctl kickstart -k "gui/$(id -u)/org.joshbeckman.panad"` (or `systemctl --user restart panad`). On Linux, `setup` enables `panad.service`. Both run `bin/panad-service`, which injects the provider keys from `s`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux.
 
 ```sh
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.plist

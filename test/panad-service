@@ -110,4 +110,18 @@ set -e
 printf '%s\n' "$missing" | grep -q 'is not executable' || fail "missing panad was not named: $missing"
 pass
 
+# 6. A machine pana is not set up on exits cleanly without starting panad, so the
+#    service manager leaves it down instead of restarting it for ever.
+rm -f "$tmp/panad.log"
+mv "$home/.local/state/pana/config.json" "$tmp/config.json"
+set +e
+unset_out="$(run bash "$root/bin/panad-service" 2>&1)"
+status=$?
+set -e
+mv "$tmp/config.json" "$home/.local/state/pana/config.json"
+[ "$status" -eq 0 ] || fail "an unconfigured machine exited $status instead of 0"
+[ ! -f "$tmp/panad.log" ] || fail 'panad started without a config.json'
+printf '%s\n' "$unset_out" | grep -q 'not set up on this machine' || fail "no reason given: $unset_out"
+pass
+
 printf 'panad-service: %s checks passed\n' "$checks"

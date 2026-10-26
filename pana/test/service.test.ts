@@ -5,7 +5,7 @@
 // network: panad and `s` are stubs, and every HOME is a temp directory.
 
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,6 +127,9 @@ describe("WP9 service units", () => {
 		writeExecutable(join(home, "bin", "s"), FAKE_S);
 		writeExecutable(join(home, "bin", "panad-stub"), FAKE_PANAD);
 		writeExecutable(join(home, "bin", "uname"), "#!/bin/sh\nprintf 'Darwin\\n'\n");
+		// The wrapper starts panad only on a machine pana is set up for.
+		mkdirSync(join(home, ".local", "state", "pana"), { recursive: true });
+		writeFileSync(join(home, ".local", "state", "pana", "config.json"), '{"domain":"test.example","user":"tester"}\n');
 
 		await exec("/bin/bash", [join(repo, "bin", "panad-service"), "one"], {
 			env: {
@@ -152,7 +155,7 @@ describe("WP9 service units", () => {
 
 		// Nothing pana can write holds the credential: it exists only in panad's
 		// environment for as long as the process runs.
-		expect(existsSync(join(home, ".local", "state", "pana"))).toBe(false);
+		expect(readdirSync(join(home, ".local", "state", "pana"))).toEqual(["config.json"]);
 		for (const file of ["bin/panad-service", "Library/LaunchAgents/org.joshbeckman.panad.plist", ".config/systemd/user/panad.service"]) {
 			expect(read(file)).not.toMatch(/S_KEY=\S|_API_KEY=\S/);
 		}
