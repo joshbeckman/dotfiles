@@ -569,3 +569,44 @@ describe("pana CLI routes", () => {
 		});
 	});
 });
+
+describe("pana CLI references", () => {
+	it("ID-02 every command accepts a pana:// URL wherever it accepts a bare ID", async () => {
+		const seen: Array<Record<string, string>> = [];
+		const record: Handler = (request) => {
+			seen.push({ ...request.params, ...Object.fromEntries(request.query) });
+			return { status: 200, body: {} };
+		};
+		const t = await start({
+			handlers: {
+				"threads.read": record,
+				"messages.show": record,
+				"threads.subject": record,
+				"sessions.show": record,
+				"schedules.delete": record,
+				"inbox.list": record,
+			},
+		});
+		const thread = "01JB0000000000000000000001";
+		const message = "01JB0000000000000000000002";
+		const session = "01JB0000000000000000000003";
+		const base = `pana://${TEST_DOMAIN}`;
+		const env = { env: { PANA_STATE: t.dir } };
+
+		for (const argv of [
+			["thread", "read", `${base}/threads/${thread}`],
+			["thread", "read", `${base}/threads/${thread}?message=${message}`],
+			["thread", "read", "--message", `${base}/threads/${thread}?message=${message}`],
+			["thread", "subject", `${base}/threads/${thread}`],
+			["session", "show", `${base}/sessions/${session}`],
+			["schedule", "delete", `${base}/schedules/${session}`],
+			["session", "inbox", `${base}/sessions/${session}`],
+		]) {
+			expect((await run(argv, t, env)).code).toBe(0);
+		}
+		expect(seen.map((s) => s.id ?? s.participant)).toEqual([thread, thread, message, thread, session, session, session]);
+
+		const wrongKind = await run(["session", "show", `${base}/threads/${thread}`], t, env);
+		expect(wrongKind.code).toBe(2);
+	});
+});

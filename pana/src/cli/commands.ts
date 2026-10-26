@@ -9,6 +9,7 @@
 import { request, type ApiResponse, type Endpoint } from "../api/client.ts";
 import { statusToExitCode } from "../api/errors.ts";
 import type { Method } from "../api/routes.ts";
+import { parseRef } from "../ids/index.ts";
 import { appendAttachmentMarkdown } from "../threads/files.ts";
 import { CommandUsageError, parseArgv, resolveFlags, resolvePositionals, type Flags } from "./args.ts";
 
@@ -125,8 +126,25 @@ function bodyWithAttachments(params: CommandParams): string {
 	return appendAttachmentMarkdown(text(params, "body") ?? "", files(params));
 }
 
-function segment(value: string | undefined): string {
-	return encodeURIComponent(value ?? "");
+type RefKind = "session" | "thread" | "message" | "schedule";
+
+/** A path segment from a bare ID or a pana:// URL, so every command accepts both. */
+function segment(value: string | undefined, kind: RefKind): string {
+	return encodeURIComponent(idOf(value, kind) ?? "");
+}
+
+function idOf(value: string | undefined, kind: RefKind): string | undefined {
+	if (value === undefined || !value.trim().startsWith("pana://")) return value;
+	let ref;
+	try {
+		ref = parseRef(value);
+	} catch (error) {
+		throw new CommandUsageError(error instanceof Error ? error.message : String(error));
+	}
+	// A message URL is threads/<thread>?message=<message>; a thread argument wants the thread part.
+	if (kind === "thread" && ref.kind === "message") return ref.thread;
+	if (ref.kind !== kind) throw new CommandUsageError(`expected a ${kind} URL, got a ${ref.kind} URL: ${value}`);
+	return ref.id;
 }
 
 /** Keep only the keys a request actually carries, so absent flags stay out of the JSON. */
@@ -196,7 +214,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Show one session",
 		flags: [],
 		positionals: [{ name: "SESSION", param: "id", required: true }],
-		request: (params) => ({ method: "GET", path: `/sessions/${segment(text(params, "id"))}` }),
+		request: (params) => ({ method: "GET", path: `/sessions/${segment(text(params, "id"), "session")}` }),
 	},
 	{
 		path: ["session", "search"],
@@ -224,7 +242,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Abort the current run and stop the session",
 		flags: [],
 		positionals: [{ name: "SESSION", param: "id", required: true }],
-		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"))}/stop` }),
+		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"), "session")}/stop` }),
 	},
 	{
 		path: ["session", "resume"],
@@ -232,7 +250,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Resume a stopped session and deliver its queued mail",
 		flags: [],
 		positionals: [{ name: "SESSION", param: "id", required: true }],
-		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"))}/resume` }),
+		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"), "session")}/resume` }),
 	},
 	{
 		path: ["session", "compact"],
@@ -240,7 +258,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Compact a session's transcript",
 		flags: [],
 		positionals: [{ name: "SESSION", param: "id", required: true }],
-		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"))}/compact` }),
+		request: (params) => ({ method: "POST", path: `/sessions/${segment(text(params, "id"), "session")}/compact` }),
 	},
 	{
 		path: ["session", "inbox"],
@@ -248,7 +266,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "List a session's inbox",
 		flags: [],
 		positionals: [{ name: "SESSION", param: "session", required: true }],
-		request: (params) => ({ method: "GET", path: "/inbox", query: { participant: text(params, "session") } }),
+		request: (params) => ({ method: "GET", path: "/inbox", query: { participant: idOf(text(params, "session"), "session") } }),
 	},
 	{
 		path: ["session", "inbox", "read"],
@@ -261,7 +279,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		],
 		request: (params) => ({
 			method: "POST",
-			path: `/messages/${segment(text(params, "message"))}/read`,
+			path: `/messages/${segment(text(params, "message"), "message")}/read`,
 			body: { participant: text(params, "session") },
 		}),
 	},
@@ -294,7 +312,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		needsBody: true,
 		request: (params) => ({
 			method: "POST",
-			path: `/threads/${segment(text(params, "thread"))}/messages`,
+			path: `/threads/${segment(text(params, "thread"), "thread")}/messages`,
 			body: compact({
 				after: text(params, "after"),
 				body: bodyWithAttachments(params),
@@ -316,8 +334,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 				: undefined,
 		request: (params) =>
 			params.message !== undefined
-				? { method: "GET", path: `/messages/${segment(text(params, "message"))}` }
-				: { method: "GET", path: `/threads/${segment(text(params, "thread"))}` },
+				? { method: "GET", path: `/messages/${segment(text(params, "message"), "message")}` }
+				: { method: "GET", path: `/threads/${segment(text(params, "thread"), "thread")}` },
 	},
 	{
 		path: ["thread", "subject"],
@@ -327,7 +345,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		positionals: [{ name: "THREAD", param: "id", required: true }],
 		request: (params) => ({
 			method: "POST",
-			path: `/threads/${segment(text(params, "id"))}/subject`,
+			path: `/threads/${segment(text(params, "id"), "thread")}/subject`,
 			body: { regenerate: params.regenerate === true },
 		}),
 	},
@@ -453,7 +471,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Delete a schedule",
 		flags: [],
 		positionals: [{ name: "SCHEDULE", param: "id", required: true }],
-		request: (params) => ({ method: "DELETE", path: `/schedules/${segment(text(params, "id"))}` }),
+		request: (params) => ({ method: "DELETE", path: `/schedules/${segment(text(params, "id"), "schedule")}` }),
 	},
 ];
 
