@@ -16,6 +16,7 @@ import { currentLive, type LiveView } from "./live.ts";
 import { SESSION_STATES, type SessionRow, type SessionState } from "./runtime.ts";
 // UX-09 keeps the `waiting` rule next to the state writer that publishes it.
 import { waitingConversations } from "./state.ts";
+import { directoryBytes, scratchPath } from "../scratch/index.ts";
 export { waitingConversations };
 
 export interface SessionView {
@@ -39,6 +40,8 @@ export interface SessionDetail extends SessionView {
 	usage: UsageState;
 	/** UX-12: the work in progress, so a window that opens mid-run shows it before any event. */
 	live: LiveView | null;
+	/** SCR-07: `bytes` is null when the directory does not exist. */
+	scratch: { path: string; bytes: number | null };
 }
 
 export function sessionView(runtime: Runtime, row: SessionRow, waiting: Set<number>): SessionView {
@@ -78,7 +81,8 @@ export async function showSession(runtime: Runtime, id: string): Promise<Session
 			: await runtime.harness.snapshot(UsageDoc, row.conversation_id as ConversationId, ctx);
 	const plain: UsageState = usage ? (JSON.parse(JSON.stringify(usage)) as UsageState) : { models: {}, tools: {} };
 	const live = await currentLive(runtime, row.conversation_id);
-	return { ...view, costUsd: usageCost(plain), usage: plain, live };
+	const path = scratchPath(runtime, id);
+	return { ...view, costUsd: usageCost(plain), usage: plain, live, scratch: { path, bytes: await directoryBytes(path) } };
 }
 
 export interface SearchSessionsInput {

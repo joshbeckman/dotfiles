@@ -5,6 +5,7 @@
 // checked here, against real handler output.
 
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPanaCommand } from "../src/cli/commands.ts";
@@ -90,20 +91,21 @@ async function seededThread(): Promise<{ threadId: string; sessionId: string; he
 }
 
 describe("REF-01 the default working directory", () => {
-	it("REF-01 a session with no --cwd and no profile cwd runs in the panad user's HOME", async () => {
+	it("REF-01 SCR-02 a session with no --cwd and no profile cwd runs in its scratch, not HOME or panad's cwd", async () => {
 		await start();
 		const res = await t!.client.post<SessionBody>("/sessions", { prompt: "where am I?" });
 		expect(res.status, JSON.stringify(res.body)).toBe(201);
-		expect(res.body.session.cwd).toBe(homedir());
-		// The transcript test can run from anywhere; HOME is not it.
-		expect(homedir()).not.toBe(process.cwd());
+		const scratch = join(t!.runtime.paths.scratch, res.body.session.id);
+		expect(res.body.session.cwd).toBe(scratch);
+		expect(scratch).not.toBe(homedir());
+		expect(scratch).not.toBe(process.cwd());
 
 		// The bash environment a session runs commands in follows the same cwd.
 		const env = await createPanaEnv(() => t!.runtime)({
 			conversationId: res.body.session.conversationId!,
 			...(res.body.session.cwd === null ? {} : { cwd: res.body.session.cwd }),
 		});
-		expect(env.cwd).toBe(homedir());
+		expect(env.cwd).toBe(scratch);
 	});
 
 	it("REF-01 an explicit --cwd and a profile cwd still win over HOME", async () => {

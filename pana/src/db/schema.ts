@@ -209,6 +209,15 @@ export const MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX deliveries_recipient_unread ON deliveries(recipient_id, thread_id) WHERE read_at IS NULL;
 		`,
 	},
+	{
+		version: 6,
+		name: "scratch removals",
+		// SCR-06: the pana prompt section tells a session when the sweep removed its scratch.
+		sql: `
+			ALTER TABLE sessions ADD COLUMN scratch_removed_at INTEGER;
+			ALTER TABLE sessions ADD COLUMN scratch_removed_bytes INTEGER;
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

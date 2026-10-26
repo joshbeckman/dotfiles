@@ -12,7 +12,6 @@ import type { Extension, ModelRef, ToolRegistration } from "@earendil-works/pi-d
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
@@ -22,6 +21,7 @@ import { addressList, createThread, messageBody, type ThreadResult } from "../th
 import { overDomainBudget } from "./budget.ts";
 import type { SessionRow } from "./runtime.ts";
 import { setSessionState } from "./state.ts";
+import { ensureScratch } from "../scratch/index.ts";
 
 const run = promisify(execFile);
 
@@ -235,9 +235,10 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 		cwd = await createWorktree(runtime, directory(cwdFlag, "cwd"), id);
 	} else {
 		const dir = cwdFlag ?? profile.cwd;
-		// REF-01: with neither a flag nor a profile, the session starts in the panad user's home
-		// directory. panad's own working directory belongs to whoever started the service.
-		cwd = directory(dir ?? homedir(), "cwd");
+		// SCR-02: with neither a flag nor a profile, the session starts in its own scratch, which
+		// the sweep cleans up; HOME collected every session's stray files. panad's own working
+		// directory belongs to whoever started the service.
+		cwd = dir === undefined ? ensureScratch(runtime, id) : directory(dir, "cwd");
 	}
 
 	const now = runtime.clock.now();

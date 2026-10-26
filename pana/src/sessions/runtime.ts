@@ -35,6 +35,7 @@ import { nextDayStart, overDomainBudget, recordCost, usageCost } from "./budget.
 import { LiveFeed } from "./live.ts";
 import { setSessionState } from "./state.ts";
 import { MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND } from "./wake.ts";
+import { removeArchivedScratch } from "../scratch/index.ts";
 
 export type SessionState = "running" | "waiting" | "idle" | "failed" | "stopped" | "archived";
 export const SESSION_STATES: readonly SessionState[] = ["running", "waiting", "idle", "failed", "stopped", "archived"];
@@ -57,6 +58,8 @@ export interface SessionRow {
 	created_at: number;
 	updated_at: number;
 	cost_usd: number;
+	scratch_removed_at?: number | null;
+	scratch_removed_bytes?: number | null;
 }
 
 type Report = (error: unknown, what: string) => void;
@@ -287,6 +290,7 @@ export class SessionRuntime {
 		await this.runtime.db.write((tx) =>
 			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
 		);
+		await removeArchivedScratch(this.runtime, sessionId);
 	}
 
 	// --- Commits -------------------------------------------------------------------

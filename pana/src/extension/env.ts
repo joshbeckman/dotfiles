@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { memoryFor } from "../memory/handlers.ts";
+import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 /** The only variables a pana session's commands see, besides git's own env-config pair. */
@@ -23,6 +24,7 @@ export const PANA_ENV_NAMES = [
 	"TERM",
 	"PANA_SESSION",
 	"PANA_STATE",
+	"PANA_SCRATCH",
 	"GIT_CONFIG_COUNT",
 	"GIT_CONFIG_KEY_0",
 	"GIT_CONFIG_VALUE_0",
@@ -39,6 +41,8 @@ export interface PanaEnvOptions {
 	 * panad's socket even when it does not run on the default state directory.
 	 */
 	stateDir?: string;
+	/** The session's scratch directory, exported as `PANA_SCRATCH` (SCR-01). */
+	scratchDir?: string;
 	/** Overrides `HOME`, for a host whose session home differs from panad's. Default: panad's `HOME`. */
 	home?: string;
 }
@@ -61,6 +65,7 @@ export function panaShellEnv(options: PanaEnvOptions): Record<string, string> {
 	};
 	if (options.sessionId) env.PANA_SESSION = options.sessionId;
 	if (options.stateDir) env.PANA_STATE = options.stateDir;
+	if (options.scratchDir) env.PANA_SCRATCH = options.scratchDir;
 	return env;
 }
 
@@ -129,10 +134,13 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 		const runtime = getRuntime();
 		const row = await runtime.db.get<{ id: string }>("SELECT id FROM sessions WHERE conversation_id = ?", target.conversationId);
 		if (row) await ensureMemoryWorktree(runtime, row.id);
+		// SCR-01: made on every open, because a sweep may have removed it while the session was idle.
+		const scratch = row ? ensureScratch(runtime, row.id) : undefined;
 		return new PanaExecutionEnv({
-			// REF-01: a session with no cwd of its own runs in the panad user's home, not panad's cwd.
-			cwd: target.cwd ?? homedir(),
+			// SCR-02: a session with no cwd of its own runs in its scratch; never in panad's cwd.
+			cwd: target.cwd ?? scratch ?? homedir(),
 			sessionId: row?.id,
+			scratchDir: scratch,
 			hooksDir: runtime.paths.hooks,
 			stateDir: runtime.paths.dir,
 		});
