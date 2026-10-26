@@ -2,15 +2,23 @@
 // command's flags and positionals in any order. An unknown flag or a wrong argument count is a
 // usage error, and the CLI exits 2.
 
-import type { CommandSpec, FlagSpec, Flags } from "./commands.ts";
+import type { CommandSpec, FlagSpec } from "./commands.ts";
 
-/** A problem with how the command was invoked. The CLI prints the usage line and exits 2. */
+/**
+ * A problem with how a command was invoked. The CLI prints the usage line and exits 2.
+ * The pana tools raise the same error, so a tool and the CLI reject the same input the same way
+ * (TOL-02, TOL-03); `CommandUsageError` is the name WP4's tools already use.
+ */
 export class UsageError extends Error {
+	readonly exitCode = 2;
+
 	constructor(message: string) {
 		super(message);
-		this.name = "UsageError";
+		this.name = "CommandUsageError";
 	}
 }
+
+export { UsageError as CommandUsageError };
 
 /** Flags that need no command context and may appear anywhere. */
 export const GLOBAL_FLAGS: ReadonlySet<string> = new Set(["--json", "--help", "-h"]);
@@ -27,6 +35,13 @@ export interface ParsedArgv {
 	positionals: string[];
 	json: boolean;
 	help: boolean;
+}
+
+/** Flags as a command sees them: one value, a list, or presence. */
+export interface Flags {
+	has(name: string): boolean;
+	get(name: string): string | undefined;
+	list(name: string): string[];
 }
 
 function specForFlag(specs: readonly FlagSpec[], written: string): FlagSpec | undefined {

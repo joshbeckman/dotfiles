@@ -281,7 +281,7 @@ describe("pana CLI", () => {
 			[["session", "show"], "missing SESSION"],
 			[["memory", "search"], "missing TEXT"],
 			[["thread", "read", "A", "B"], "unexpected argument B"],
-			[["thread", "read", "A", "--message", "B"], "not both"],
+			[["thread", "read", "A", "--message", "B"], "THREAD or --message"],
 			[["nope", "--help"], "unknown command"],
 		];
 		for (const [argv, message] of cases) {
@@ -489,6 +489,36 @@ describe("pana CLI routes", () => {
 		expect(JSON.parse(asJson.stdout)).toEqual({ threads: [threadHit] });
 	});
 
+	it("runs thread create, respond, and a stale respond end to end", async () => {
+		const t = await start();
+
+		const created = await run(["--json", "thread", "create", "--to", "friend", "--body", "hello there"], t);
+		expect(created.code).toBe(0);
+		const thread = JSON.parse(created.stdout) as { thread: { id: string }; message: { id: string } };
+		expect(thread.thread.id).toMatch(/^[0-9A-Z]{26}$/);
+
+		const responded = await run(
+			["--json", "thread", "respond", "--thread", thread.thread.id, "--after", thread.message.id, "--body", "second"],
+			t,
+		);
+		expect(responded.code).toBe(0);
+		const second = JSON.parse(responded.stdout) as { message: { id: string; body: string } };
+		expect(second.message.body).toBe("second");
+
+		// The head moved, so the same `--after` is stale: exit 3 and nothing is appended.
+		const stale = await run(
+			["thread", "respond", "--thread", thread.thread.id, "--after", thread.message.id, "--body", "third"],
+			t,
+		);
+		expect(stale.code).toBe(3);
+		expect(stale.stderr).toContain("moved");
+
+		const read = await run(["--json", "thread", "read", thread.thread.id], t);
+		expect(read.code).toBe(0);
+		const bodies = (JSON.parse(read.stdout) as { messages: Array<{ body: string }> }).messages.map((message) => message.body);
+		expect(bodies).toEqual(["hello there", "second"]);
+	});
+
 	it("a memory conflict exits 3", async () => {
 		const t = await start({
 			handlers: {
@@ -508,8 +538,12 @@ describe("pana CLI routes", () => {
 			handlers: {
 				"files.upload": (request) => {
 					uploads.push({ headers: request.headers, bytes: request.rawBody.byteLength });
-					const name = decodeURIComponent(String(request.headers["x-pana-filename"]));
-					return { status: 201, body: { file: { id: "01JBFILE", name, url: `pana://${TEST_DOMAIN}/files/01JBFILE/${name}` } } };
+					const name = request.query.get("name")!;
+					const mediaType = String(request.headers["content-type"]);
+					return {
+						status: 201,
+						body: { file: { id: "01JBFILE", name, url: `pana://${TEST_DOMAIN}/files/01JBFILE/${name}`, mediaType } },
+					};
 				},
 				"threads.create": (request) => ({ status: 201, body: request.body }),
 			},
