@@ -24,6 +24,7 @@ import { defaultHandlers } from "./handlers.ts";
 import { acquirePidLock } from "./lock.ts";
 import { createRequestLogger } from "./log.ts";
 import { createProviderModels, hasModel } from "./models.ts";
+import { detectTailscaleNames } from "./tailscale.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 
 export interface StartOptions {
@@ -231,8 +232,11 @@ function closeServer(server: Server): Promise<void> {
 /** `panad` entry point. Returns the exit code. `options` lets a test fixture swap in a faux model. */
 export async function main(_argv: string[], options: StartOptions = {}): Promise<number> {
 	let panad: Panad;
+	// API-05: answer to the tailnet name Tailscale Serve forwards. Only the entry point asks
+	// tailscale; tests that call startPanad pass names explicitly.
+	const tailscaleNames = options.tailscaleNames ?? (await detectTailscaleNames());
 	try {
-		panad = await startPanad(options);
+		panad = await startPanad({ ...options, tailscaleNames });
 	} catch (error) {
 		if (error instanceof ConfigError) {
 			console.error(`panad: ${error.message}`);
@@ -254,6 +258,9 @@ export async function main(_argv: string[], options: StartOptions = {}): Promise
 	// never sent to the server or written to an access log.
 	if (panad.tcpPort !== undefined) {
 		console.error(`panad: open ${launchUrl(loopbackOrigin(panad.tcpPort), panad.webToken)}`);
+		for (const name of tailscaleNames) {
+			console.error(`panad: open ${launchUrl(`https://${name}`, panad.webToken)} (after tailscale serve --bg ${panad.tcpPort})`);
+		}
 	}
 	return new Promise((resolve) => {
 		let stopping = false;

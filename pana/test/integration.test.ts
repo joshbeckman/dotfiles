@@ -3,10 +3,13 @@
 
 import { createRequire } from "node:module";
 import { request as httpRequest, type IncomingMessage } from "node:http";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPushTransport, type PushMessage } from "../src/push/index.ts";
 import { createProviderModels, hasModel } from "../src/server/models.ts";
+import { detectTailscaleNames } from "../src/server/tailscale.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { postNotice } from "../src/threads/index.ts";
 import { commitView, entryView, inboxRow, memoryHitView, messageView, scheduleBody, scheduleWhen, threadRow } from "../web/views.js";
@@ -216,6 +219,25 @@ describe("INT-02 the PWA reads the real handler shapes", () => {
 		expect(updated.status, JSON.stringify(updated.body)).toBe(200);
 		expect(updated.body.schedule).toMatchObject({ at: Date.parse(at), payload: { body: "remember, edited" } });
 		expect(scheduleBody({ kind: "session", when: "0 9 * * *", text: "daily" })).toEqual({ kind: "session", cron: "0 9 * * *", payload: { prompt: "daily" } });
+	});
+});
+
+describe("INT-02 the PWA through Tailscale Serve", () => {
+	it("INT-02 API-05 panad's entry point detects the tailnet name, so phones pass the Host check", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pana-tailscale-"));
+		try {
+			const fake = join(dir, "tailscale");
+			writeFileSync(fake, `#!/bin/sh\necho '{"Self":{"DNSName":"Lantern.tailnet.ts.net."}}'\n`);
+			chmodSync(fake, 0o755);
+			expect(await detectTailscaleNames(fake)).toEqual(["lantern.tailnet.ts.net"]);
+			expect(await detectTailscaleNames(join(dir, "missing"))).toEqual([]);
+			const broken = join(dir, "broken");
+			writeFileSync(broken, "#!/bin/sh\necho not json\n");
+			chmodSync(broken, 0o755);
+			expect(await detectTailscaleNames(broken)).toEqual([]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 
