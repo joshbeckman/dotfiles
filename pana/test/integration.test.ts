@@ -9,6 +9,7 @@ import { setPushTransport, type PushMessage } from "../src/push/index.ts";
 import { createProviderModels, hasModel } from "../src/server/models.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { postNotice } from "../src/threads/index.ts";
+import { commitView, entryView, inboxRow, memoryHitView, messageView, scheduleBody, scheduleWhen, threadRow } from "../web/views.js";
 import { FAKE_EPOCH, startTestPanad, type Script, type TestPanad } from "./harness/index.ts";
 
 // Vite resolves a static `node:sqlite` import as a package named `sqlite`.
@@ -157,6 +158,64 @@ describe("INT-02 schedule edits keep their time", () => {
 		// Sending a time still retimes it.
 		const moved = await t!.client.post<{ schedule: { cron: string; at: number | null } }>(`/schedules/${id}`, { cron: "30 8 * * *" });
 		expect(moved.body.schedule).toMatchObject({ cron: "30 8 * * *", at: null });
+	});
+});
+
+describe("INT-02 the PWA reads the real handler shapes", () => {
+	it("INT-02 every view mapper reads real responses from inbox, threads, sessions, memory, and schedules", async () => {
+		await start([{ toolCalls: [{ name: "bash", args: { command: "true" } }] }, { text: "Paris." }]);
+		const created = await createSession({ prompt: "What is the capital of France?" });
+		const sessionUrl = t!.runtime.url({ kind: "session", id: created.session.id });
+		await until(async () => (await t!.runtime.db.get("SELECT 1 FROM messages WHERE thread_id = ? AND seq = 2", created.thread.id)) ?? false, "the reply");
+
+		const inbox = await t!.tcp.get<{ deliveries: unknown[] }>("/inbox");
+		expect(inbox.body.deliveries.map(inboxRow)).toEqual([
+			expect.objectContaining({ threadId: created.thread.id, subject: "What is the capital of France?", sender: sessionUrl, read: false }),
+		]);
+
+		const listing = await t!.tcp.get<{ threads: unknown[] }>("/threads");
+		expect(listing.body.threads.map(threadRow)).toEqual([expect.objectContaining({ id: created.thread.id, subject: "What is the capital of France?" })]);
+		const hits = await t!.tcp.get<{ threads: unknown[] }>("/threads?query=Paris");
+		expect(hits.body.threads.map(threadRow)).toEqual([expect.objectContaining({ id: created.thread.id, snippet: expect.stringContaining("Paris") })]);
+
+		const read = await t!.tcp.get<{ messages: unknown[] }>(`/threads/${created.thread.id}`);
+		expect(read.body.messages.map(messageView)).toEqual([
+			expect.objectContaining({ sender: t!.runtime.userUrl, body: "What is the capital of France?", revised: false, redacted: false }),
+			expect.objectContaining({ sender: sessionUrl, body: "Paris." }),
+		]);
+		expect((await t!.tcp.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries.map(inboxRow)[0]!.read).toBe(true);
+
+		const transcript = await t!.tcp.get<{ entries: unknown[] }>(`/sessions/${created.session.id}/transcript`);
+		const entries = transcript.body.entries.map(entryView);
+		expect(entries).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "pana.message", role: "user", text: expect.stringContaining("What is the capital of France?") }),
+				expect.objectContaining({ kind: "pi.assistant", role: "assistant", text: expect.stringContaining("→ bash") }),
+				expect.objectContaining({ kind: "pi.assistant", role: "assistant", text: "Paris." }),
+			]),
+		);
+
+		await t!.tcp.post("/memory/files/notes.md", { content: "hello memory\n" });
+		const files = await t!.tcp.get<{ files: Array<{ path: string; size: number }> }>("/memory/files");
+		expect(files.body.files).toEqual([{ path: "notes.md", size: 13 }]);
+		const log = await t!.tcp.get<{ commits: unknown[] }>("/memory/log");
+		expect(commitView(log.body.commits[0])).toMatchObject({ author: t!.runtime.userUrl, message: "Update notes.md" });
+		const found = await t!.tcp.get<{ results: unknown[] }>("/memory/search?query=HELLO");
+		expect(found.body.results.map(memoryHitView)).toEqual([{ path: "notes.md", text: "1: hello memory" }]);
+
+		const at = new Date(FAKE_EPOCH + 86_400_000).toISOString();
+		const made = await t!.tcp.post<{ schedule: { id: string; kind: string; cron: string | null; at: number | null; payload: Record<string, unknown> } }>(
+			"/schedules",
+			scheduleBody({ kind: "thread", when: at, text: "remember", to: "tester" }),
+		);
+		expect(made.status, JSON.stringify(made.body)).toBe(201);
+		expect(scheduleWhen(made.body.schedule)).toBe(at);
+		const edit = scheduleBody({ kind: "thread", when: "", text: "remember, edited", to: "" }, made.body.schedule);
+		expect(edit).toEqual({ kind: "thread", payload: { body: "remember, edited", to: ["tester"] } });
+		const updated = await t!.tcp.post<{ schedule: { at: number; payload: Record<string, unknown> } }>(`/schedules/${made.body.schedule.id}`, edit);
+		expect(updated.status, JSON.stringify(updated.body)).toBe(200);
+		expect(updated.body.schedule).toMatchObject({ at: Date.parse(at), payload: { body: "remember, edited" } });
+		expect(scheduleBody({ kind: "session", when: "0 9 * * *", text: "daily" })).toEqual({ kind: "session", cron: "0 9 * * *", payload: { prompt: "daily" } });
 	});
 });
 
