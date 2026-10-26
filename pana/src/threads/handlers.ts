@@ -4,7 +4,7 @@ import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { loadFile, uploadFile } from "./files.ts";
 import { parseLimit } from "../api/pagination.ts";
-import { archiveThread, createThread, INBOX_LIMIT, inbox, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
+import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
 function bodyObject(ctx: RequestContext): Record<string, unknown> {
 	const body = ctx.body;
@@ -110,14 +110,18 @@ export const handlers: Handlers = {
 		body: await redactMessage(ctx.runtime, ctx.caller, ctx.params.id!),
 	}),
 
-	"inbox.list": async (ctx): Promise<HandlerResult> => ({
-		status: 200,
-		body: await inbox(ctx.runtime, ctx.caller, participantQuery(ctx), {
+	"inbox.list": async (ctx): Promise<HandlerResult> => {
+		const options = {
 			archived: truthyQuery(ctx, "archived"),
 			limit: parseLimit(ctx.query.get("limit"), INBOX_LIMIT),
 			cursor: ctx.query.get("cursor"),
-		}),
-	}),
+		};
+		// UX-03: the PWA reads threads; `session inbox` keeps the delivery list INB-01 describes.
+		const view = ctx.query.get("view") ?? "deliveries";
+		if (view === "threads") return { status: 200, body: await inboxThreads(ctx.runtime, ctx.caller, participantQuery(ctx), options) };
+		if (view !== "deliveries") throw ApiError.badRequest("invalid_view", "view must be deliveries or threads");
+		return { status: 200, body: await inbox(ctx.runtime, ctx.caller, participantQuery(ctx), options) };
+	},
 
 	"files.upload": async (ctx): Promise<HandlerResult> => {
 		const name = ctx.query.get("name") ?? header(ctx, "x-pana-name") ?? header(ctx, "x-file-name");

@@ -864,6 +864,151 @@ export async function inbox(
 	});
 }
 
+// --- Thread inbox (UX-03) --------------------------------------------------------
+
+export interface InboxThread {
+	threadId: string;
+	threadUrl: string;
+	subject: string | null;
+	participants: PersonView[];
+	/** The newest message in the thread, whoever sent it. */
+	latest: {
+		messageId: string;
+		messageUrl: string;
+		sender: PersonView;
+		createdAt: number;
+		snippet: string;
+		revised: boolean;
+		redacted: boolean;
+	};
+	/** The reader's unread messages in this thread (REF-05). */
+	unreadCount: number;
+	archived: boolean;
+}
+
+export const SNIPPET_LENGTH = 140;
+
+/** One line of a message body for a list row: whitespace collapsed, cut at a word near `max`. */
+export function snippetOf(body: string | undefined, max = SNIPPET_LENGTH): string {
+	const text = String(body ?? "").replace(/\s+/g, " ").trim();
+	if (text.length <= max) return text;
+	const cut = text.slice(0, max);
+	const space = cut.lastIndexOf(" ");
+	return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+interface InboxThreadRow {
+	thread_id: string;
+	subject: string | null;
+	last_at: number;
+	last_id: string;
+}
+
+/**
+ * UX-03: one row per thread the reader participates in, newest activity first, with the latest
+ * message and the reader's unread count. Unlike the delivery inbox, a thread whose latest message
+ * the reader sent still shows: activity, not mail, orders it.
+ *
+ * The latest message is found per thread at read time. A `last_message_at` column kept up to
+ * date on every append would make a page an index range scan, but it is one more piece of state
+ * that every writer must maintain; the per-thread lookup measured about 10 ms at 10,000 threads,
+ * well under SCALE-03's 100 ms.
+ */
+export async function inboxThreads(
+	runtime: Runtime,
+	caller: Caller,
+	participant?: string,
+	options: InboxOptions = {},
+): Promise<{ participant: PersonView; threads: InboxThread[]; unreadTotal: number; nextCursor: string | null }> {
+	const now = runtime.clock.now();
+	const archivedFilter = options.archived ? "EXISTS" : "NOT EXISTS";
+	const limit = options.limit ?? INBOX_LIMIT;
+	const after = decodeCursor(options.cursor, ["number", "string"]);
+	return runtime.db.atomically(async (tx) => {
+		const reader = await readerFor(tx, runtime, caller, participant, now);
+		const fetched = await tx.all<InboxThreadRow>(
+			`SELECT x.thread_id AS thread_id, x.subject AS subject, m.created_at AS last_at, m.id AS last_id
+			   FROM (SELECT tp.thread_id AS thread_id, t.subject AS subject,
+			                (SELECT MAX(seq) FROM messages WHERE thread_id = tp.thread_id) AS last_seq
+			           FROM thread_participants tp
+			           JOIN threads t ON t.id = tp.thread_id
+			          WHERE tp.participant_id = ?
+			            AND ${archivedFilter} (SELECT 1 FROM thread_archives a WHERE a.thread_id = tp.thread_id AND a.participant_id = tp.participant_id)) x
+			   JOIN messages m ON m.thread_id = x.thread_id AND m.seq = x.last_seq
+			  ${after ? "WHERE m.created_at < ? OR (m.created_at = ? AND x.thread_id < ?)" : ""}
+			  ORDER BY m.created_at DESC, x.thread_id DESC
+			  LIMIT ?`,
+			reader.id,
+			...(after ? [after[0]!, after[0]!, after[1]!] : []),
+			limit + 1,
+		);
+		const { items: rows, nextCursor } = pageOf(fetched, limit, (row) => [row.last_at, row.thread_id]);
+		const threadIds = rows.map((row) => row.thread_id);
+		const messageIds = rows.map((row) => row.last_id);
+		const inList = (ids: readonly string[]) => ids.map(() => "?").join(",");
+		const messages =
+			messageIds.length === 0
+				? []
+				: await tx.all<{ id: string; body: string; sender_id: string; sender_kind: ParticipantKind; sender_url: string }>(
+						`SELECT m.id AS id, m.body AS body, p.id AS sender_id, p.kind AS sender_kind, p.url AS sender_url
+						   FROM messages m JOIN participants p ON p.id = m.sender_id
+						  WHERE m.id IN (${inList(messageIds)})`,
+						...messageIds,
+					);
+		const byId = new Map(messages.map((message) => [message.id, message]));
+		const events = await latestEvents(tx, messageIds);
+		const members =
+			threadIds.length === 0
+				? []
+				: await tx.all<{ thread_id: string; id: string; kind: ParticipantKind; url: string }>(
+						`SELECT tp.thread_id AS thread_id, p.id AS id, p.kind AS kind, p.url AS url
+						   FROM thread_participants tp JOIN participants p ON p.id = tp.participant_id
+						  WHERE tp.thread_id IN (${inList(threadIds)})
+						  ORDER BY tp.thread_id, tp.joined_at, p.id`,
+						...threadIds,
+					);
+		const participantsOf = new Map<string, PersonView[]>();
+		for (const member of members) {
+			const list = participantsOf.get(member.thread_id) ?? [];
+			list.push({ id: member.id, kind: member.kind, url: member.url });
+			participantsOf.set(member.thread_id, list);
+		}
+		const unread = await unreadCounts(tx, reader.id, threadIds);
+		const unreadTotal = (await tx.get<{ n: number }>(
+			`SELECT COUNT(*) AS n FROM deliveries d
+			  WHERE d.recipient_id = ? AND d.read_at IS NULL
+			    AND ${archivedFilter} (SELECT 1 FROM thread_archives a WHERE a.thread_id = d.thread_id AND a.participant_id = d.recipient_id)`,
+			reader.id,
+		))!.n;
+		return {
+			participant: { id: reader.id, kind: reader.kind, url: reader.url },
+			threads: rows.map((row) => {
+				const message = byId.get(row.last_id)!;
+				const current = applyEvent(message.body, events.get(row.last_id));
+				return {
+					threadId: row.thread_id,
+					threadUrl: runtime.url({ kind: "thread", id: row.thread_id }),
+					subject: row.subject,
+					participants: participantsOf.get(row.thread_id) ?? [],
+					latest: {
+						messageId: row.last_id,
+						messageUrl: runtime.url({ kind: "message", id: row.last_id, thread: row.thread_id }),
+						sender: { id: message.sender_id, kind: message.sender_kind, url: message.sender_url },
+						createdAt: row.last_at,
+						snippet: current.redacted ? "[redacted]" : snippetOf(current.body),
+						revised: current.revised,
+						redacted: current.redacted,
+					},
+					unreadCount: unread.get(row.thread_id) ?? 0,
+					archived: Boolean(options.archived),
+				};
+			}),
+			unreadTotal,
+			nextCursor,
+		};
+	});
+}
+
 // --- Notices -------------------------------------------------------------------
 
 export interface NoticeInput {
