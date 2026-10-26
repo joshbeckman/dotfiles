@@ -196,6 +196,19 @@ export const MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX thread_archives_participant ON thread_archives(participant_id);
 		`,
 	},
+	{
+		version: 5,
+		name: "delivery lookups",
+		// SCALE-03 and BENCH.md. Finding the delivery behind a session's submission (the auto-reply
+		// and the failure notice) read every delivery of the session through
+		// `deliveries_recipient`. Counting a reader's unread messages per thread (REF-05) did the
+		// same once per listed thread, which made one page of /threads take 60 ms with 14,000
+		// deliveries. The unread index is partial, so it holds only what is still unread.
+		sql: `
+			CREATE INDEX deliveries_recipient_submission ON deliveries(recipient_id, wake_submission_id);
+			CREATE INDEX deliveries_recipient_unread ON deliveries(recipient_id, thread_id) WHERE read_at IS NULL;
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
