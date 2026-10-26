@@ -84,6 +84,25 @@ RSS mostly measures how much heap V8 keeps between collections, so it moves with
 | answer p50 / p99 | 976 / 1589 ms | 283 / 388 ms |
 | Live heap after a full collection | 86 MB | 39 MB |
 
+### Live work in progress (WP13)
+
+UX-12 publishes `session.live` while a window is subscribed, and the bench's own `/events` connection is one, so every bench run now builds and streams live views: up to one per session every 250 ms. N=200, M=1000, K=5, without the list phase. "Before" is `574bf4c`, "after" is the UX-12 branch; both pass every SCALE-02 check.
+
+| Phase | Before | After, run 1 | After, run 2 |
+|---|---|---|---|
+| sessions: 200 created at once | 7.5 s, 26.7/s | 7.5 s, 26.8/s | 7.3 s, 27.5/s |
+| threads: 10,000 messages | 19.5 s, 512/s; answer p50 / p99 188 / 340 ms | 20.7 s, 482/s; 201 / 339 ms | 19.9 s, 503/s; 193 / 323 ms |
+| broadcast: 1,000 wakes | 2.7 s, 375/s; post p50 / p99 510 / 561 ms | 2.7 s, 365/s; 504 / 662 ms | 3.0 s, 334/s; 445 / 958 ms |
+| fan-out: 150 sessions | 12.2 s | 11.5 s | 12.6 s |
+| `threads.respond` p50 / p99 | 1.11 / 10.51 ms | 1.13 / 12.64 ms | 1.09 / 12.35 ms |
+
+The differences are inside the run-to-run spread. A second "before" run was cut short when the disk filled.
+
+Two things changed since the results above, both before WP13:
+
+- At N=200 the bench failed: concurrent session creates each add a memory worktree, and an add that failed under contention could leave its branch behind, so the retry failed with "a branch named ... already exists". The retry now checks the branch again (`574bf4c`).
+- `sessions.create` p50 went from 2.08 ms to about 4.3 s, and the sessions and fan-out phases from 0.8 s and 1.3 s to about 7.5 s and 12 s. A session now gets its memory worktree when it is created, and 200 concurrent `git worktree add` runs dominate. This is the next bottleneck to look at.
+
 ## Bottlenecks and fixes
 
 Each was found with a CPU profile of the bench's `panad` or with `PANA_BENCH_SQL`, and confirmed by a run with and without the fix.
