@@ -746,3 +746,17 @@ describe("restart", () => {
 		expect(await messages(res.thread.id)).toHaveLength(2);
 	});
 });
+
+describe("session environment", () => {
+	it("SES-01 a new session's memory worktree exists before its first run, and its bash finds this build's pana", async () => {
+		await start({ script: [{ text: "ok" }] });
+		const res = await create({ prompt: "hi", model: "faux/faux-1" });
+		const path = join(t!.runtime.paths.memoryWorktrees, res.session.id);
+		expect(existsSync(join(path, ".git"))).toBe(true);
+
+		const { panaShellEnv, PANA_BIN } = await import("../src/extension/env.ts");
+		const env = panaShellEnv({ cwd: path, hooksDir: t!.runtime.paths.hooks, sessionId: res.session.id });
+		expect(env.PATH?.split(":")[0]).toBe(PANA_BIN);
+		expect(existsSync(join(PANA_BIN, "pana"))).toBe(true);
+	});
+});

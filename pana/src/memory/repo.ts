@@ -182,6 +182,20 @@ export class Memory {
 		await gitOrThrow(["-C", gitDir, "update-ref", `refs/heads/${MAIN}`, commit.stdout.trim(), ""]);
 	}
 
+	/**
+	 * Per-worktree config lets each writer have its own git identity. With it on, git reads
+	 * `core.bare` from the shared config in every worktree, so it must move to the bare repo's
+	 * own `config.worktree` first, or every worktree would think it is bare.
+	 */
+	private async enableWorktreeConfig(): Promise<void> {
+		const { gitDir } = this.options;
+		const enabled = await runGit(["--git-dir", gitDir, "config", "--get", "extensions.worktreeConfig"]);
+		if (enabled.stdout.trim() === "true") return;
+		await gitOrThrow(["--git-dir", gitDir, "config", "extensions.worktreeConfig", "true"]);
+		await runGit(["--git-dir", gitDir, "config", "--unset", "core.bare"]);
+		await gitOrThrow(["--git-dir", gitDir, "config", "--worktree", "core.bare", "true"]);
+	}
+
 	/** The writer's worktree, created on `writer/<id>` from `main` if needed (MEM-02). */
 	async worktree(writer: MemoryWriter): Promise<Worktree> {
 		return serialize(`worktree/${writer.id}`, () => this.worktreeSerialized(writer));
@@ -211,6 +225,11 @@ export class Memory {
 			result = await add();
 		}
 		if (result.code !== 0) throw new Error(`git worktree add failed: ${result.stderr.trim()}`);
+		// A writer may also run plain `git commit` in its worktree. Without its own identity that
+		// commit would carry whatever global git identity the process has, e.g. the human's.
+		await serialize("repo/worktree-config", () => this.enableWorktreeConfig());
+		await gitOrThrow(["config", "--worktree", "user.name", writer.url], { cwd: path });
+		await gitOrThrow(["config", "--worktree", "user.email", emailFor(writer.id, this.options.domain)], { cwd: path });
 		return { ...base, created: true };
 	}
 
@@ -234,7 +253,11 @@ export class Memory {
 		await gitOrThrow(["add", "-A"], { cwd: worktree.path });
 		const status = await gitOrThrow(["status", "--porcelain", "-z"], { cwd: worktree.path });
 		if (status.stdout.length === 0) {
-			return { committed: false, path: worktree.path, branch: worktree.branch };
+			// Commits made with plain `git commit` in the worktree still need publishing.
+			const ahead = await gitOrThrow(["rev-list", "--count", `${MAIN}..HEAD`], { cwd: worktree.path });
+			if (Number(ahead.stdout.trim()) === 0) return { committed: false, path: worktree.path, branch: worktree.branch };
+			const commit = await this.publish(worktree);
+			return { committed: true, path: worktree.path, branch: worktree.branch, commit };
 		}
 
 		await gitOrThrow(["commit", "--quiet", "--allow-empty", "--no-verify", "-m", message], {

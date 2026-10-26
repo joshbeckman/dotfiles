@@ -272,3 +272,27 @@ describe("memory", () => {
 		expect((await t.tcp.post("/memory/files/%2e%2e%2fescape.md", { content: "nope" })).status).toBe(400);
 	});
 });
+
+describe("memory for sessions", () => {
+	it("MEM-02 a plain git commit in a writer's worktree is authored by that writer, not the process's git identity", async () => {
+		t = await startTestPanad();
+		const session = await addSession(t);
+		const path = await worktree(session);
+		writeFileSync(join(path, "direct.md"), "written with plain git\n");
+		await git(["-C", path, "add", "direct.md"]);
+		// No GIT_AUTHOR_* in the environment: the worktree's own config must supply the identity.
+		await git(["-C", path, "commit", "-q", "--no-verify", "-m", "direct"]);
+		expect(await git(["-C", path, "log", "-1", "--format=%an <%ae>"])).toBe(
+			`${t.runtime.url({ kind: "session", id: session })} <${session}@${TEST_DOMAIN}>`,
+		);
+		// The user's worktree keeps its own identity, and git still treats both as worktrees.
+		const mine = await worktree();
+		expect(await git(["-C", mine, "config", "user.name"])).toBe(t.runtime.userUrl);
+		expect(await git(["-C", mine, "rev-parse", "--is-bare-repository"])).toBe("false");
+		// `pana memory commit` publishes commits made with plain git, even with a clean tree.
+		const published = await commit("publish direct", session);
+		expect(published.body.committed).toBe(true);
+		expect(await git(["-C", repo(), "log", "-1", "--format=%s", "main"])).toBe("direct");
+		expect((await commit("nothing left", session)).body.committed).toBe(false);
+	});
+});

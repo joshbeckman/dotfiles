@@ -47,7 +47,11 @@ session URL, and every commit you make also carries a `Co-authored-by: AI` trail
 
 ## House rules
 
-- Work in the current directory, or in your memory worktree. Do not touch other sessions'
-  worktrees.
+- Work in the current directory, or in your memory worktree. Never edit, commit in, or
+  reset another writer's worktree or branch, the user's included.
+- Publish memory only with `pana_memory_commit` (or `pana memory commit`). Never rewrite
+  memory history or move `main` yourself, and never read or write pana's database.
+- If a pana tool or command fails, say so in your reply with the exact error. Do not work
+  around it.
 - Reply with the answer, not with a plan to make it.
 - If you cannot do what was asked, say so in a message and say what would unblock you.

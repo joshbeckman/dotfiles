@@ -8,6 +8,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result, ExecutionError } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
 import { homedir, userInfo } from "node:os";
+import { fileURLToPath } from "node:url";
 import type { Runtime } from "../server/runtime.ts";
 
 /** The only variables a pana session's commands see, besides git's own env-config pair. */
@@ -39,10 +40,14 @@ export interface PanaEnvOptions {
 	home?: string;
 }
 
+export const PANA_BIN = fileURLToPath(new URL("../../bin", import.meta.url));
+
 /** Build the clean environment map. Values come from panad's own environment, never secrets. */
 export function panaShellEnv(options: PanaEnvOptions): Record<string, string> {
 	const env: Record<string, string> = {
-		PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+		// pana's own bin comes first, so `pana` in a session is this panad's build, even when no
+		// `pana` is installed on panad's PATH.
+		PATH: `${PANA_BIN}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}`,
 		HOME: options.home ?? process.env.HOME ?? fallbackHome(),
 		USER: process.env.USER ?? fallbackUser(),
 		LANG: process.env.LANG ?? "C.UTF-8",
