@@ -3,7 +3,7 @@
 // on SIGTERM (SRV-02), and resuming work a previous process left behind (SRV-03).
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels, type Models } from "@earendil-works/pi-ai/models";
+import type { Models } from "@earendil-works/pi-ai/models";
 import { Harness, type HarnessOptions, type HarnessSettings, type Registry } from "@earendil-works/pi-durable";
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -23,12 +23,14 @@ import { createApp, type RequestLogEntry } from "./app.ts";
 import { defaultHandlers } from "./handlers.ts";
 import { acquirePidLock } from "./lock.ts";
 import { createRequestLogger } from "./log.ts";
+import { createProviderModels, hasModel } from "./models.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 
 export interface StartOptions {
 	/** State directory; default `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
 	stateDir?: string;
 	clock?: Clock;
+	/** Default: every pi-ai provider with credentials in panad's environment (INT-01). */
 	models?: Models;
 	/** Default: the pana registry, `CodingTools` and `pana` only (ISO-01). */
 	registry?: Registry;
@@ -87,7 +89,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		});
 
 		const { db, storage } = await openSharedDatabase(paths.sqlite, { onFatal });
-		const models = options.models ?? createModels();
+		const models = options.models ?? (await createProviderModels(process.env));
 		const getRuntime = () => runtime;
 		const registry = options.registry ?? createPanaRegistry(getRuntime);
 		const env = options.env ?? createPanaEnv(getRuntime);
@@ -226,11 +228,11 @@ function closeServer(server: Server): Promise<void> {
 	});
 }
 
-/** `panad` entry point. Returns the exit code. */
-export async function main(_argv: string[]): Promise<number> {
+/** `panad` entry point. Returns the exit code. `options` lets a test fixture swap in a faux model. */
+export async function main(_argv: string[], options: StartOptions = {}): Promise<number> {
 	let panad: Panad;
 	try {
-		panad = await startPanad();
+		panad = await startPanad(options);
 	} catch (error) {
 		if (error instanceof ConfigError) {
 			console.error(`panad: ${error.message}`);
@@ -240,6 +242,14 @@ export async function main(_argv: string[]): Promise<number> {
 	}
 	const tcp = panad.tcpPort === undefined ? "" : ` and http://127.0.0.1:${panad.tcpPort}`;
 	console.error(`panad: listening on ${panad.socketPath}${tcp}`);
+	const { models, config } = panad.runtime;
+	const providers = models.getProviders().map((provider) => provider.id);
+	console.error(`panad: model providers: ${providers.length > 0 ? providers.join(", ") : "none (set a provider API key in panad's environment)"}`);
+	if (config.defaultModel === undefined) {
+		console.error("panad: no defaultModel in config.json; sessions need --model or a profile model");
+	} else if (!hasModel(models, config.defaultModel)) {
+		console.error(`panad: defaultModel ${config.defaultModel} is not available from the registered providers`);
+	}
 	// WEB-01: open this URL to authorize a window. The token sits in the fragment, so it is
 	// never sent to the server or written to an access log.
 	if (panad.tcpPort !== undefined) {
