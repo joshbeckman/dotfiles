@@ -236,3 +236,30 @@ describe("list pagination", () => {
 		}
 	});
 });
+
+describe("BENCH.md", () => {
+	it("SCALE-04 records the bench results on this machine, each bottleneck found, and its fix", () => {
+		const bench = readFileSync(new URL("../BENCH.md", import.meta.url), "utf8");
+		const section = (title: string) => {
+			const start = bench.indexOf(`\n## ${title}\n`);
+			expect(start, title).toBeGreaterThan(0);
+			const end = bench.indexOf("\n## ", start + 1);
+			return bench.slice(start, end < 0 ? undefined : end);
+		};
+		expect(section("Machine")).toMatch(/Node \d+/);
+
+		const results = section("Results");
+		expect(results).toContain("N=200, M=1000, K=5");
+		expect(results).toContain("10,000 threads");
+		expect(results).toMatch(/\| Phase \| Before \| After \|/);
+		for (const phase of ["sessions", "threads", "broadcast", "fan-out"]) expect(results).toMatch(new RegExp(`\\| ${phase}: `));
+		for (const list of ["/inbox", "/threads", "/sessions", "/schedules"]) expect(results).toContain(`| \`${list}\` |`);
+		for (const metric of ["RSS", "Live heap", "Database"]) expect(results).toContain(metric);
+
+		const fixes = section("Bottlenecks and fixes");
+		expect(fixes).toMatch(/\| # \| Bottleneck \| Evidence \| Fix \|/);
+		const rows = fixes.split("\n").filter((line) => /^\| \d+ \|/.test(line));
+		expect(rows.length).toBeGreaterThanOrEqual(4);
+		for (const row of rows) expect(row.split("|").filter((cell) => cell.trim()).length, row).toBe(4);
+	});
+});

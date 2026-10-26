@@ -331,7 +331,7 @@ Each package was built against contracts and fakes. These items prove the packag
 
 ## WP12: Scale
 
-- [ ] **SCALE-01** `pana/scripts/bench` drives a real `panad` child with the faux model through the socket. It creates N sessions concurrently (default 200), M threads (default 1000) of K messages each (default 5), and a fan-out where sessions create child sessions up to `spawnDepth`. It reports throughput, p50 and p99 latency per route, panad RSS, and database size.
-- [ ] **SCALE-02** Under the bench, no request fails. Every message is delivered exactly once to every recipient, and every session run posts its reply. The bench checks this from the database.
-- [ ] **SCALE-03** List routes (`/inbox`, `/threads`, `/sessions`, `/schedules`) take `limit` and a `cursor` and return a `nextCursor`. With 10,000 threads, each list call answers in under 100 ms at p99. The PWA lists load more on scroll or with a button.
-- [ ] **SCALE-04** `pana/BENCH.md` records the bench results on this machine, each bottleneck found, and its fix.
+- [x] **SCALE-01** `pana/scripts/bench` drives a real `panad` child with the faux model through the socket. It creates N sessions concurrently (default 200), M threads (default 1000) of K messages each (default 5), and a fan-out where sessions create child sessions up to `spawnDepth`. It reports throughput, p50 and p99 latency per route, panad RSS, and database size.
+- [x] **SCALE-02** Under the bench, no request fails. Every message is delivered exactly once to every recipient, and every session run posts its reply. The bench checks this from the database.
+- [x] **SCALE-03** List routes (`/inbox`, `/threads`, `/sessions`, `/schedules`) take `limit` and a `cursor` and return a `nextCursor`. With 10,000 threads, each list call answers in under 100 ms at p99. The PWA lists load more on scroll or with a button.
+- [x] **SCALE-04** `pana/BENCH.md` records the bench results on this machine, each bottleneck found, and its fix.

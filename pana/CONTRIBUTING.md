@@ -10,6 +10,7 @@ npm install
 npm test           # Vitest, all suites (no browser)
 npm run test:web   # the PWA browser suite against a real test panad (installed Chrome + chrome-devtools CLI)
 PANA_SMOKE_FAUX=1 scripts/smoke   # a throwaway panad end to end; drop the variable and pass a key for a real model
+scripts/bench      # the scale bench (not in npm test); BENCH.md has its results
 npx tsc --noEmit   # must be clean before you report
 ```
 
@@ -38,6 +39,7 @@ One directory per work package, so parallel agents rarely edit the same file.
 | `test/harness` | WP0 | `startTestPanad`, fake clock, scripted model |
 | `test/fixtures/faux-panad.ts` | WP10 | the real `panad` entry point with a scripted faux model, for child-process tests |
 | `scripts/smoke` | WP10 | a real-model smoke run on a temp state directory |
+| `scripts/bench`, `test/bench` | WP12 | the scale bench and its faux model; results in `BENCH.md` |
 
 Put your tests in `test/<package>.test.ts`. Mark unbuilt work with `TODO(WPn)`.
 
