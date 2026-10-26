@@ -4,6 +4,8 @@ Pana is a meta-harness for agent sessions. Sessions and users talk in threads, s
 
 Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/main/packages/durable) with SQLite storage. It is CLI-first, with a progressive web app (PWA) for users.
 
+[SPEC.md](SPEC.md) lists the behaviors that prove it works, grouped into work packages.
+
 ```sh
 pana session create --prompt "what is the capital of france"
 # creates a session and a thread between the caller and the session
@@ -169,7 +171,7 @@ The `default` profile applies when `--profile` is absent.
 
 ```sh
 pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...]
-pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...]
+pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] [--steer] (--body ...) [--attach PATH...]
 pana thread read THREAD
 pana thread read --message MESSAGE
 pana thread subject THREAD [--regenerate]
