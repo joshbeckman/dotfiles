@@ -314,3 +314,24 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **INT-04** One test drives only `pana/bin/pana` against a real `panad` child process with a scripted faux model: `session create`, a `bash` call that runs `pana memory` and `pana memory commit` and makes a git commit, the answer in `thread read`, a second wake from `thread respond --after`, the session URL in `memory log`, and the commit trailer.
 - [x] **INT-05** `pana/scripts/smoke` starts a throwaway `panad` with the provider keys in its environment, creates a session from the CLI, and prints the thread and the PWA launch URL. `PANA_SMOKE_FAUX=1` runs it with the faux model, and `--keep` leaves `panad` running.
 - [x] **INT-06** README has a "Run it" section: `config.json`, `panad` directly and as a service, the CLI, and the PWA. README and this spec match what the build does.
+
+---
+
+## WP11: Refinements from first use
+
+- [ ] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is.
+- [ ] **REF-02** `pana session archive SESSION` calls `POST /sessions/:id/archive`. Only the user may archive. An archived session follows STA-07. The PWA session view has an Archive button that asks for confirmation.
+- [ ] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default thread list only. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
+- [ ] **REF-04** A new message delivered to a participant unarchives the thread for that participant.
+- [ ] **REF-05** Inbox items and thread list items carry the caller's `unreadCount`. `GET /threads?unread=1` and `pana thread search --unread` return only threads with unread messages.
+- [ ] **REF-06** The PWA marks threads with unread messages and shows their count. The nav shows the inbox unread count. Both update live from `/events`, and opening a thread clears its count.
+- [ ] **REF-07** The PWA inbox and thread views have Archive and Unarchive buttons.
+- [ ] **REF-08** Every ID and `pana://` URL the PWA shows is a link to its view: sessions to the session view, threads to the thread, messages to the thread scrolled to the message, schedules to the schedule, files to the file, and the user to the inbox. That includes senders, participants, headers, and `pana://` URLs inside message bodies and transcripts.
+- [ ] **REF-09** The session view shows the complete transcript: thinking blocks (collapsed by default), every tool call with its full arguments, every tool result with its full output (collapsed when long), system and compaction entries, and per-turn usage.
+
+## WP12: Scale
+
+- [ ] **SCALE-01** `pana/scripts/bench` drives a real `panad` child with the faux model through the socket. It creates N sessions concurrently (default 200), M threads (default 1000) of K messages each (default 5), and a fan-out where sessions create child sessions up to `spawnDepth`. It reports throughput, p50 and p99 latency per route, panad RSS, and database size.
+- [ ] **SCALE-02** Under the bench, no request fails. Every message is delivered exactly once to every recipient, and every session run posts its reply. The bench checks this from the database.
+- [ ] **SCALE-03** List routes (`/inbox`, `/threads`, `/sessions`, `/schedules`) take `limit` and a `cursor` and return a `nextCursor`. With 10,000 threads, each list call answers in under 100 ms at p99. The PWA lists load more on scroll or with a button.
+- [ ] **SCALE-04** `pana/BENCH.md` records the bench results on this machine, each bottleneck found, and its fix.
