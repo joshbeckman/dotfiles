@@ -238,15 +238,15 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP5: Memory
 
-- [ ] **MEM-01** On first start, `memory.git` is a bare repo with one empty commit on `main`.
-- [ ] **MEM-02** `pana memory` prints the caller's worktree path, creating `memory/worktrees/<id>` on branch `writer/<id>` from `main` if needed.
-- [ ] **MEM-03** `pana memory commit -m M` stages all changes, commits with author name = caller URL and email = `<id>@<domain>`, rebases onto `main`, and moves `main` with a compare-and-swap `git update-ref`.
-- [ ] **MEM-04** A rebase conflict aborts the rebase, leaves the commit on `writer/<id>`, and exits 3 with the conflicting paths.
-- [ ] **MEM-05** Two writers committing different files at once both land on `main`.
-- [ ] **MEM-06** `pana memory commit` with no changes exits 0 and creates no commit.
-- [ ] **MEM-07** `pana memory search T` runs a case-insensitive `git grep` over `main` and returns path, line, and text.
-- [ ] **MEM-08** `pana memory log [PATH]` returns commits with author URL, time, and message.
-- [ ] **MEM-09** Memory edits from the PWA commit as the user through the same path as MEM-03.
+- [x] **MEM-01** On first start, `memory.git` is a bare repo with one empty commit on `main`.
+- [x] **MEM-02** `pana memory` prints the caller's worktree path, creating `memory/worktrees/<id>` on branch `writer/<id>` from `main` if needed.
+- [x] **MEM-03** `pana memory commit -m M` stages all changes, commits with author name = caller URL and email = `<id>@<domain>`, rebases onto `main`, and moves `main` with a compare-and-swap `git update-ref`.
+- [x] **MEM-04** A rebase conflict aborts the rebase, leaves the commit on `writer/<id>`, and exits 3 with the conflicting paths.
+- [x] **MEM-05** Two writers committing different files at once both land on `main`.
+- [x] **MEM-06** `pana memory commit` with no changes exits 0 and creates no commit.
+- [x] **MEM-07** `pana memory search T` runs a case-insensitive `git grep` over `main` and returns path, line, and text.
+- [x] **MEM-08** `pana memory log [PATH]` returns commits with author URL, time, and message.
+- [x] **MEM-09** Memory edits from the PWA commit as the user through the same path as MEM-03.
 
 ---
 
@@ -265,13 +265,13 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ## WP7: Subjects and search
 
-- [ ] **SUB-01** A new thread's subject is the first line of its first message, trimmed to 80 characters.
-- [ ] **SUB-02** With `subjectModel` set, a background job replaces the subject. Thread create does not wait for it.
-- [ ] **SUB-03** A failed subject job leaves the first-line subject and logs the failure.
-- [ ] **SUB-04** `thread subject --regenerate` makes a new subject and keeps the old ones in `subjects`.
-- [ ] **SRC-01** `thread search --query Q` searches subjects and message bodies with FTS5 and returns thread, message, and a snippet.
-- [ ] **SRC-02** Redacted text is removed from the index. Revised text replaces the old text.
-- [ ] **SRC-03** `session search --query Q` searches user and assistant text of transcripts, indexed when each run settles.
+- [x] **SUB-01** A new thread's subject is the first line of its first message, trimmed to 80 characters.
+- [x] **SUB-02** With `subjectModel` set, a background job replaces the subject. Thread create does not wait for it.
+- [x] **SUB-03** A failed subject job leaves the first-line subject and logs the failure.
+- [x] **SUB-04** `thread subject --regenerate` makes a new subject and keeps the old ones in `subjects`.
+- [x] **SRC-01** `thread search --query Q` searches subjects and message bodies with FTS5 and returns thread, message, and a snippet.
+- [x] **SRC-02** Redacted text is removed from the index. Revised text replaces the old text.
+- [x] **SRC-03** `session search --query Q` searches user and assistant text of transcripts, indexed when each run settles.
 
 ---
 
