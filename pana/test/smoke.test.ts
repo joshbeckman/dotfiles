@@ -72,7 +72,7 @@ describe("scripts/smoke", () => {
 		expect(result.stdout).toMatch(/session: pana:\/\/smoke\.example\/sessions\/[0-9A-Z]{26}/);
 		expect(result.stdout).toContain("pana://smoke.example/users/tester:\nWhat is the capital of France? Answer in one word.");
 		expect(result.stdout).toMatch(/pana:\/\/smoke\.example\/sessions\/[0-9A-Z]{26}:\nParis/);
-		expect(result.stdout).toMatch(/PWA: http:\/\/127\.0\.0\.1:\d+\/#[A-Za-z0-9_-]{20,}/);
+		expect(result.stdout).toMatch(/PWA: http:\/\/localhost:\d+\/#[A-Za-z0-9_-]{20,}/);
 		expect(result.stdout).toContain("smoke: ok");
 		expect(readdirSync(tmp).filter((name) => name.startsWith("pana-smoke."))).toEqual([]);
 	});

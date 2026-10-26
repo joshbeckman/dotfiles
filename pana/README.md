@@ -30,7 +30,7 @@ Start `panad` with a provider key in its environment. It prints the providers it
 s FIREWORKS_API_KEY -- pana/bin/panad
 # panad: listening on ~/.local/state/pana/panad.sock and http://127.0.0.1:8766
 # panad: model providers: fireworks
-# panad: open http://127.0.0.1:8766/#<web-token>
+# panad: open http://localhost:8766/#<web-token>
 ```
 
 As a service, load the launchd job on macOS. On Linux, `setup` enables `panad.service`. Both run `bin/panad-service`, which injects the provider keys from `s`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux.
@@ -47,7 +47,7 @@ pana thread read THREAD
 pana thread respond --thread THREAD --after MESSAGE --body "Thanks"
 ```
 
-Open the launch URL in a browser to authorize the PWA. In Safari, use `http://localhost:8766/#<web-token>` instead: Safari answered "denied" for notifications on `127.0.0.1` even after Allow, and the app links there when it does. For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
+Open the launch URL in a browser to authorize the PWA. It uses `localhost`, because Safari answers "denied" to notifications on `127.0.0.1`. For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
 
 ```sh
 tailscale serve --bg 8766

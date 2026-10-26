@@ -104,5 +104,6 @@ export function launchUrl(origin: string, token: string): string {
 
 /** The loopback origin for a bound TCP port. */
 export function loopbackOrigin(port: number): string {
-	return `http://127.0.0.1:${port}`;
+	// Safari answers "denied" to notification requests from an IP-address origin.
+	return `http://localhost:${port}`;
 }

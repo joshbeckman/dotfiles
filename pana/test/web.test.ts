@@ -98,13 +98,13 @@ describe("PWA shell and static assets", () => {
 		expect((await request({ host: "127.0.0.1", port, token: t.panad.webToken }, "GET", "/nope")).status).toBe(404);
 
 		const url = launchUrl(loopbackOrigin(port), t.panad.webToken);
-		expect(url).toBe(`http://127.0.0.1:${port}/#${t.panad.webToken}`);
+		expect(url).toBe(`http://localhost:${port}/#${t.panad.webToken}`);
 
 		// The real entry point prints that URL and keeps the token out of the path.
 		const dir = makeStateDir({ http: { port: 0 } });
 		const child = spawn(process.execPath, [panadBin], { env: { ...process.env, PANA_STATE: dir } });
 		try {
-			const match = await waitForLine(child, /panad: open (http:\/\/127\.0\.0\.1:(\d+)\/#(\S+))/);
+			const match = await waitForLine(child, /panad: open (http:\/\/localhost:(\d+)\/#(\S+))/);
 			const [, , printedPort, printedToken] = match;
 			expect(printedToken).toBe(readFileSync(join(dir, "web-token"), "utf8").trim());
 			expect(Number(printedPort)).toBeGreaterThan(0);
