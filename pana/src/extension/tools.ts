@@ -5,7 +5,14 @@ import type { JsonValue } from "@earendil-works/chord";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { Runtime } from "../server/runtime.ts";
-import { commandForTool, runPanaCommand, type CommandOutcome, type CommandParams, type PanaToolName } from "./commands.ts";
+import {
+	commandForTool,
+	commandName,
+	runPanaCommand,
+	type CommandOutcome,
+	type CommandParams,
+	type PanaToolName,
+} from "../cli/commands.ts";
 
 /** The value a tool gives programs: the CLI exit code, plus the response body when there is one. */
 const resultSchema = Type.Object({
@@ -48,7 +55,7 @@ function tool(getRuntime: () => Runtime, name: PanaToolName, description: string
 		async execute(args, api) {
 			const runtime = getRuntime();
 			const caller = await sessionFor(runtime, api.conversationId);
-			const outcome = await runPanaCommand(command.command, args as unknown as CommandParams, {
+			const outcome = await runPanaCommand(commandName(command), args as unknown as CommandParams, {
 				endpoint: { socketPath: runtime.paths.socket },
 				caller,
 			});

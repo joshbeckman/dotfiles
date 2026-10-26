@@ -9,18 +9,23 @@ import { createPanaTools } from "./tools.ts";
 
 export { createPanaEnv, PanaExecutionEnv, panaShellEnv, PANA_ENV_NAMES } from "./env.ts";
 export { HOOK_DOMAIN_FILE, HOOK_RUNNER, STANDARD_HOOKS, commitTrailer, installGitHooks } from "./hooks.ts";
+// The command layer lives in src/cli/commands.ts so the CLI and the pana tools share one
+// definition. Re-exported here, where WP4's callers already look for it.
 export {
 	CommandUsageError,
 	PANA_COMMANDS,
 	commandForTool,
+	commandName,
 	isCommandName,
 	runPanaCli,
 	runPanaCommand,
+	usageFor,
 	type CommandOutcome,
 	type CommandParams,
+	type CommandSpec,
 	type PanaCommandName,
 	type PanaToolName,
-} from "./commands.ts";
+} from "../cli/commands.ts";
 export { agentsFiles, fillPrompt, promptTemplate, PROMPT_PATH } from "./prompt.ts";
 
 export const PANA_EXTENSION_NAME = "pana";
