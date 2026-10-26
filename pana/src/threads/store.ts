@@ -12,6 +12,7 @@
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
+import { decodeCursor, pageOf } from "../api/pagination.ts";
 import { wakeRequestId } from "../db/outbox.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import {
@@ -678,12 +679,30 @@ interface InboxRow {
 	body: string;
 }
 
-/** INB-01 and INB-03: one participant's deliveries, newest first. */
-export async function inbox(runtime: Runtime, caller: Caller, participant?: string): Promise<{ participant: PersonView; deliveries: InboxDelivery[] }> {
+export interface ListPage {
+	limit?: number;
+	cursor?: string | null;
+}
+
+export const INBOX_LIMIT = 50;
+
+/**
+ * INB-01 and INB-03: one participant's deliveries, newest first, one page at a time (SCALE-03).
+ * Deliveries share their message's `created_at`, and delivery IDs grow in append order, so
+ * `(created_at, id)` orders the inbox and walks the `deliveries_recipient` index.
+ */
+export async function inbox(
+	runtime: Runtime,
+	caller: Caller,
+	participant?: string,
+	page: ListPage = {},
+): Promise<{ participant: PersonView; deliveries: InboxDelivery[]; nextCursor: string | null }> {
 	const now = runtime.clock.now();
+	const limit = page.limit ?? INBOX_LIMIT;
+	const after = decodeCursor(page.cursor, ["number", "string"]);
 	return runtime.db.atomically(async (tx) => {
 		const reader = await readerFor(tx, runtime, caller, participant, now);
-		const rows = await tx.all<InboxRow>(
+		const fetched = await tx.all<InboxRow>(
 			`SELECT d.id AS delivery_id, d.message_id AS message_id, d.thread_id AS thread_id,
 			        d.created_at AS delivered_at, d.read_at AS read_at,
 			        m.body AS body, m.created_at AS created_at,
@@ -694,18 +713,27 @@ export async function inbox(runtime: Runtime, caller: Caller, participant?: stri
 			   JOIN threads t ON t.id = d.thread_id
 			   JOIN participants p ON p.id = m.sender_id
 			  WHERE d.recipient_id = ?
-			  ORDER BY m.created_at DESC, m.seq DESC, d.id DESC`,
+			        ${after ? "AND d.created_at <= ? AND (d.created_at < ? OR d.id < ?)" : ""}
+			  ORDER BY d.created_at DESC, d.id DESC
+			  LIMIT ?`,
 			reader.id,
+			...(after ? [after[0]!, after[0]!, after[1]!] : []),
+			limit + 1,
 		);
+		const { items: rows, nextCursor } = pageOf(fetched, limit, (row) => [row.delivered_at, row.delivery_id]);
 		const events = await latestEvents(tx, rows.map((row) => row.message_id));
-		const recipients = await tx.all<{ message_id: string; id: string; kind: ParticipantKind; url: string; read_at: number | null }>(
-			`SELECT d.message_id AS message_id, p.id AS id, p.kind AS kind, p.url AS url, d.read_at AS read_at
-			   FROM deliveries d
-			   JOIN participants p ON p.id = d.recipient_id
-			  WHERE d.message_id IN (SELECT message_id FROM deliveries WHERE recipient_id = ?)
-			  ORDER BY d.message_id, d.id`,
-			reader.id,
-		);
+		const messageIds = [...new Set(rows.map((row) => row.message_id))];
+		const recipients =
+			messageIds.length === 0
+				? []
+				: await tx.all<{ message_id: string; id: string; kind: ParticipantKind; url: string; read_at: number | null }>(
+						`SELECT d.message_id AS message_id, p.id AS id, p.kind AS kind, p.url AS url, d.read_at AS read_at
+						   FROM deliveries d
+						   JOIN participants p ON p.id = d.recipient_id
+						  WHERE d.message_id IN (${messageIds.map(() => "?").join(",")})
+						  ORDER BY d.message_id, d.id`,
+						...messageIds,
+					);
 		const byMessage = new Map<string, InboxRecipient[]>();
 		for (const row of recipients) {
 			const list = byMessage.get(row.message_id) ?? [];
@@ -729,6 +757,7 @@ export async function inbox(runtime: Runtime, caller: Caller, participant?: stri
 				readAt: row.read_at,
 				...applyEvent(row.body, events.get(row.message_id)),
 			})),
+			nextCursor,
 		};
 	});
 }

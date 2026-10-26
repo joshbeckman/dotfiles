@@ -3,7 +3,8 @@
 import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { loadFile, uploadFile } from "./files.ts";
-import { createThread, inbox, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
+import { parseLimit } from "../api/pagination.ts";
+import { createThread, INBOX_LIMIT, inbox, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
 function bodyObject(ctx: RequestContext): Record<string, unknown> {
 	const body = ctx.body;
@@ -88,7 +89,10 @@ export const handlers: Handlers = {
 
 	"inbox.list": async (ctx): Promise<HandlerResult> => ({
 		status: 200,
-		body: await inbox(ctx.runtime, ctx.caller, participantQuery(ctx)),
+		body: await inbox(ctx.runtime, ctx.caller, participantQuery(ctx), {
+			limit: parseLimit(ctx.query.get("limit"), INBOX_LIMIT),
+			cursor: ctx.query.get("cursor"),
+		}),
 	}),
 
 	"files.upload": async (ctx): Promise<HandlerResult> => {

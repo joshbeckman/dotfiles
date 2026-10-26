@@ -277,6 +277,7 @@ Sessions show things to the user only through message Markdown (images, Mermaid)
 
 - Text on a TTY, JSON otherwise. `--json` forces JSON.
 - `--body TEXT`, `--body-file PATH`, or `--body -` for stdin.
+- List commands print one page. `--limit N` sets its size, and `--cursor C` continues from the `nextCursor` of the previous page.
 - Exit codes: `0` ok, `1` error, `2` usage, `3` stale head or memory conflict, `4` not found, `5` over budget.
 - The caller's identity comes from `PANA_SESSION`, set by `panad` for each session. With no `PANA_SESSION`, the caller is the local user. Pana trusts local processes.
 

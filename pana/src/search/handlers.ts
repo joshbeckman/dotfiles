@@ -4,18 +4,25 @@
 // `searchSessions` from this package; that route is not registered here.
 
 import { ApiError } from "../api/errors.ts";
+import { decodeCursor, decodeOffset, pageOf, parseLimit } from "../api/pagination.ts";
 import type { Handlers } from "../api/types.ts";
 import { DEFAULT_SEARCH_LIMIT, listThreads, searchThreads } from "./query.ts";
 import { regenerateSubject, SubjectError, subjectHistory } from "./subjects.ts";
 
-const MAX_SEARCH_LIMIT = 100;
-
 export const handlers: Handlers = {
 	"threads.search": async (ctx) => {
 		const query = (ctx.query.get("query") ?? "").trim();
-		const limit = parseLimit(ctx.query.get("limit"));
-		if (!query) return { status: 200, body: { threads: await listThreads(ctx.runtime, { limit }) } };
-		return { status: 200, body: { threads: await searchThreads(ctx.runtime, query, { limit }) } };
+		const limit = parseLimit(ctx.query.get("limit"), DEFAULT_SEARCH_LIMIT);
+		const cursor = ctx.query.get("cursor");
+		if (!query) {
+			const before = decodeCursor(cursor, ["string"])?.[0] as string | undefined;
+			const page = pageOf(await listThreads(ctx.runtime, { limit: limit + 1, before }), limit, (row) => [row.threadId]);
+			return { status: 200, body: { threads: page.items, nextCursor: page.nextCursor } };
+		}
+		const offset = decodeOffset(cursor);
+		const hits = await searchThreads(ctx.runtime, query, { limit: limit + 1, offset });
+		const page = pageOf(hits, limit, () => [offset + limit]);
+		return { status: 200, body: { threads: page.items, nextCursor: page.nextCursor } };
 	},
 
 	"threads.subject": async (ctx) => {
@@ -50,12 +57,6 @@ export const handlers: Handlers = {
 function wantsRegeneration(body: unknown, query: string | null): boolean {
 	if (typeof body === "object" && body !== null && (body as { regenerate?: unknown }).regenerate === true) return true;
 	return query === "1" || query === "true";
-}
-
-function parseLimit(value: string | null): number {
-	const limit = Number(value);
-	if (!Number.isFinite(limit) || limit < 1) return DEFAULT_SEARCH_LIMIT;
-	return Math.min(Math.floor(limit), MAX_SEARCH_LIMIT);
 }
 
 /** A subject failure is the caller's fault when the config or body is wrong, and upstream's otherwise. */

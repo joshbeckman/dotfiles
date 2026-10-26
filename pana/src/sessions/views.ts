@@ -6,7 +6,9 @@
 
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { UsageDoc, type ConversationId, type HarnessInspection, type UsageState } from "@earendil-works/pi-durable";
+import type { SqliteValue } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
+import { decodeCursor, decodeOffset, pageOf, type Page } from "../api/pagination.ts";
 import { searchSessions } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { usageCost } from "./budget.ts";
@@ -88,42 +90,87 @@ export interface SearchSessionsInput {
 	state?: string;
 	parent?: string;
 	limit?: number;
+	cursor?: string | null;
 }
 
-/** STA-06 and SRC-03: filter by state and parent, and by transcript text when `query` is set. */
-export async function findSessions(runtime: Runtime, input: SearchSessionsInput): Promise<Array<SessionView & { snippet?: string }>> {
+export const SESSION_LIMIT = 100;
+
+/** Rows read per query while filling a page whose filter runs in JavaScript (`waiting`). */
+const SCAN_BATCH = 200;
+
+/**
+ * STA-06 and SRC-03: filter by state and parent, and by transcript text when `query` is set, one
+ * page at a time (SCALE-03). Session IDs are ULIDs made on the runtime clock, so ID order is
+ * creation order and the primary key serves each page. `waiting` is a `running` row whose work
+ * sleeps (STA-03), so those two states filter in JavaScript after SQL narrows to `running`.
+ */
+export async function findSessions(runtime: Runtime, input: SearchSessionsInput): Promise<Page<SessionView & { snippet?: string }>> {
 	if (input.state !== undefined && !(SESSION_STATES as readonly string[]).includes(input.state)) {
 		throw ApiError.badRequest("invalid_state", `state must be one of ${SESSION_STATES.join(", ")}`);
 	}
-	const limit = input.limit ?? 100;
-	let rows: SessionRow[];
-	const snippets = new Map<string, string>();
-	if (input.query) {
-		const hits = await searchSessions(runtime, input.query, { limit: 500 });
-		const ids: string[] = [];
-		for (const hit of hits) {
-			if (snippets.has(hit.sessionId)) continue;
-			snippets.set(hit.sessionId, hit.snippet);
-			ids.push(hit.sessionId);
-		}
-		if (ids.length === 0) return [];
-		const found = await runtime.db.all<SessionRow>(`SELECT * FROM sessions WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids);
-		const byId = new Map(found.map((row) => [row.id, row]));
-		rows = ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
-	} else {
-		rows = await runtime.db.all<SessionRow>("SELECT * FROM sessions ORDER BY created_at DESC, id DESC");
-	}
+	const limit = input.limit ?? SESSION_LIMIT;
 	const waiting = waitingConversations(await runtime.harness.inspect(ctx));
-	const out: Array<SessionView & { snippet?: string }> = [];
-	for (const row of rows) {
-		if (input.parent !== undefined && row.parent !== input.parent) continue;
+	const keep = (row: SessionRow) => {
+		if (input.parent !== undefined && row.parent !== input.parent) return undefined;
 		const view = sessionView(runtime, row, waiting);
-		if (input.state !== undefined && view.state !== input.state) continue;
-		const snippet = snippets.get(row.id);
-		out.push(snippet === undefined ? view : { ...view, snippet });
-		if (out.length >= limit) break;
+		return input.state === undefined || view.state === input.state ? view : undefined;
+	};
+
+	if (input.query) return searchPage(runtime, input.query, input.cursor, limit, keep);
+
+	const where: string[] = [];
+	const params: SqliteValue[] = [];
+	if (input.parent !== undefined) {
+		where.push("parent = ?");
+		params.push(input.parent);
 	}
-	return out;
+	if (input.state !== undefined) {
+		where.push("state = ?");
+		params.push(input.state === "waiting" ? "running" : input.state);
+	}
+	let before = decodeCursor(input.cursor, ["string"])?.[0] as string | undefined;
+	const out: SessionView[] = [];
+	for (;;) {
+		const conditions = before === undefined ? where : [...where, "id < ?"];
+		const rows = await runtime.db.all<SessionRow>(
+			`SELECT * FROM sessions ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`,
+			...params,
+			...(before === undefined ? [] : [before]),
+			SCAN_BATCH,
+		);
+		for (const row of rows) {
+			const view = keep(row);
+			if (view) out.push(view);
+			if (out.length > limit) return pageOf(out, limit, (session) => [session.id]);
+		}
+		if (rows.length < SCAN_BATCH) return pageOf(out, limit, (session) => [session.id]);
+		before = rows[rows.length - 1]!.id;
+	}
+}
+
+/** Transcript search: hits in rank order, paged by offset. */
+async function searchPage(
+	runtime: Runtime,
+	query: string,
+	cursor: string | null | undefined,
+	limit: number,
+	keep: (row: SessionRow) => SessionView | undefined,
+): Promise<Page<SessionView & { snippet: string }>> {
+	const offset = decodeOffset(cursor);
+	const hits = await searchSessions(runtime, query, { limit: 500 });
+	const snippets = new Map<string, string>();
+	for (const hit of hits) if (!snippets.has(hit.sessionId)) snippets.set(hit.sessionId, hit.snippet);
+	const ids = [...snippets.keys()];
+	if (ids.length === 0) return { items: [], nextCursor: null };
+	const found = await runtime.db.all<SessionRow>(`SELECT * FROM sessions WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids);
+	const byId = new Map(found.map((row) => [row.id, row]));
+	const matches: Array<SessionView & { snippet: string }> = [];
+	for (const id of ids) {
+		const row = byId.get(id);
+		const view = row && keep(row);
+		if (view) matches.push({ ...view, snippet: snippets.get(id)! });
+	}
+	return pageOf(matches.slice(offset, offset + limit + 1), limit, () => [offset + limit]);
 }
 
 export interface TranscriptView {

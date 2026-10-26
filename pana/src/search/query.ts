@@ -35,6 +35,8 @@ export interface ThreadSummary {
 
 export interface SearchOptions {
 	limit?: number;
+	/** Hits to skip, for the next page of a search (SCALE-03). */
+	offset?: number;
 }
 
 /**
@@ -55,7 +57,8 @@ export function matchExpression(query: string): string | undefined {
 export async function searchThreads(runtime: Runtime, query: string, options: SearchOptions = {}): Promise<ThreadHit[]> {
 	const match = matchExpression(query);
 	if (!match) return [];
-	const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
+	// Subject hits come first, so a page past them needs the subject hits before it counted too.
+	const limit = (options.limit ?? DEFAULT_SEARCH_LIMIT) + (options.offset ?? 0);
 
 	const subjectRows = await runtime.db.all<{ threadId: string; subject: string | null; snippet: string; createdAt: number }>(
 		`SELECT subjects_fts.thread_id AS threadId, t.subject AS subject,
@@ -88,7 +91,7 @@ export async function searchThreads(runtime: Runtime, query: string, options: Se
 		limit,
 	);
 
-	return [
+	const hits: ThreadHit[] = [
 		...subjectRows.map((row) => ({
 			threadId: row.threadId,
 			threadUrl: formatUrl({ kind: "thread", id: row.threadId }, runtime.config.domain),
@@ -108,6 +111,7 @@ export async function searchThreads(runtime: Runtime, query: string, options: Se
 			createdAt: row.createdAt,
 		})),
 	];
+	return hits.slice(options.offset ?? 0, limit);
 }
 
 /** Search the user and assistant text of session transcripts, indexed when each run settled. */
@@ -130,10 +134,21 @@ export async function searchSessions(runtime: Runtime, query: string, options: S
 	}));
 }
 
-/** Every thread, newest first. `GET /threads` without a query serves this. */
-export async function listThreads(runtime: Runtime, options: SearchOptions = {}): Promise<ThreadSummary[]> {
+export interface ListOptions {
+	limit?: number;
+	/** The ID of the last thread of the previous page; the list continues with older threads. */
+	before?: string;
+}
+
+/**
+ * Every thread, newest first. `GET /threads` without a query serves this. Thread IDs are ULIDs made
+ * on the runtime clock when the thread is, so ID order is creation order and the primary key
+ * index serves each page (SCALE-03).
+ */
+export async function listThreads(runtime: Runtime, options: ListOptions = {}): Promise<ThreadSummary[]> {
 	const rows = await runtime.db.all<{ id: string; subject: string | null; createdAt: number }>(
-		"SELECT id, subject, created_at AS createdAt FROM threads ORDER BY created_at DESC, id DESC LIMIT ?",
+		`SELECT id, subject, created_at AS createdAt FROM threads ${options.before === undefined ? "" : "WHERE id < ?"} ORDER BY id DESC LIMIT ?`,
+		...(options.before === undefined ? [] : [options.before]),
 		options.limit ?? DEFAULT_SEARCH_LIMIT,
 	);
 	return rows.map((row) => ({

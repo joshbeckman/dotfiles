@@ -12,6 +12,7 @@
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { Cron } from "croner";
 import { ApiError } from "../api/errors.ts";
+import { decodeCursor, pageOf, type Page } from "../api/pagination.ts";
 import type { Caller } from "../api/types.ts";
 import type { PersonView } from "../threads/store.ts";
 import { addressList, messageBody } from "../threads/store.ts";
@@ -247,16 +248,31 @@ export async function showSchedule(runtime: Runtime, id: string): Promise<Schedu
 	return scheduleView(row, runtime);
 }
 
-/** SCH-07: active first, then the next time they run. Deleted rows are gone from the list. */
-export async function listSchedules(runtime: Runtime, kind?: string | null): Promise<ScheduleView[]> {
+export const SCHEDULE_LIMIT = 100;
+
+/** The list order, as a row value, so a cursor can resume strictly after one row (SCALE-03). */
+const SCHEDULE_ORDER = "CASE s.state WHEN 'active' THEN 0 ELSE 1 END, s.next_at IS NULL, COALESCE(s.next_at, 0), s.created_at, s.id";
+
+/** SCH-07: active first, then the next time they run, one page at a time. Deleted rows are gone. */
+export async function listSchedules(
+	runtime: Runtime,
+	kind?: string | null,
+	page: { limit?: number; cursor?: string | null } = {},
+): Promise<Page<ScheduleView>> {
 	const filter = kindFilter(kind);
+	const limit = page.limit ?? SCHEDULE_LIMIT;
+	const after = decodeCursor(page.cursor, ["number", "number", "number", "number", "string"]);
 	const rows = await runtime.db.all<ScheduleJoinRow>(
 		`${SELECT_SCHEDULE}
-		  WHERE s.state <> 'deleted' ${filter ? "AND s.kind = ?" : ""}
-		  ORDER BY CASE s.state WHEN 'active' THEN 0 ELSE 1 END, s.next_at IS NULL, s.next_at, s.created_at, s.id`,
+		  WHERE s.state <> 'deleted' ${filter ? "AND s.kind = ?" : ""} ${after ? `AND (${SCHEDULE_ORDER}) > (?, ?, ?, ?, ?)` : ""}
+		  ORDER BY ${SCHEDULE_ORDER}
+		  LIMIT ?`,
 		...(filter ? [filter] : []),
+		...(after ?? []),
+		limit + 1,
 	);
-	return rows.map((row) => scheduleView(row, runtime));
+	const result = pageOf(rows, limit, (row) => [row.state === "active" ? 0 : 1, row.next_at === null ? 1 : 0, row.next_at ?? 0, row.created_at, row.id]);
+	return { items: result.items.map((row) => scheduleView(row, runtime)), nextCursor: result.nextCursor };
 }
 
 // --- Writes --------------------------------------------------------------------

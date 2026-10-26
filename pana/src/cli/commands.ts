@@ -178,6 +178,16 @@ const BODY_FLAGS = [
 	list("attach", "--attach PATH", "Attach a file (repeatable)"),
 ] as const;
 
+/** SCALE-03: every list command pages. `nextCursor` in the output is the next page's `--cursor`. */
+const PAGE_FLAGS = [
+	string("limit", "--limit N", "Return at most N items"),
+	string("cursor", "--cursor CURSOR", "Continue from a previous page's nextCursor"),
+] as const;
+
+function pageQuery(params: CommandParams): Record<string, string | undefined> {
+	return { limit: text(params, "limit"), cursor: text(params, "cursor") };
+}
+
 const SESSION_CREATE_FLAGS = [
 	string("prompt", "--prompt TEXT", "The first message, which starts the session", { required: true }),
 	string("model", "--model M", "Model id, overriding the profile"),
@@ -224,6 +234,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			string("query", "--query TEXT", "Search transcripts"),
 			string("state", "--state STATE", "Only sessions in this state"),
 			string("parent", "--parent SESSION", "Only sessions created by this session"),
+			...PAGE_FLAGS,
 		],
 		positionals: [],
 		request: (params) => ({
@@ -233,6 +244,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				query: text(params, "query"),
 				state: text(params, "state"),
 				parent: text(params, "parent"),
+				...pageQuery(params),
 			},
 		}),
 	},
@@ -264,9 +276,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ["session", "inbox"],
 		usage: "pana session inbox SESSION",
 		summary: "List a session's inbox",
-		flags: [],
+		flags: [...PAGE_FLAGS],
 		positionals: [{ name: "SESSION", param: "session", required: true }],
-		request: (params) => ({ method: "GET", path: "/inbox", query: { participant: idOf(text(params, "session"), "session") } }),
+		request: (params) => ({
+			method: "GET",
+			path: "/inbox",
+			query: { participant: idOf(text(params, "session"), "session"), ...pageQuery(params) },
+		}),
 	},
 	{
 		path: ["session", "inbox", "read"],
@@ -353,9 +369,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ["thread", "search"],
 		usage: "pana thread search --query TEXT",
 		summary: "Search thread subjects and bodies",
-		flags: [string("query", "--query TEXT", "What to search for", { required: true })],
+		flags: [string("query", "--query TEXT", "What to search for", { required: true }), ...PAGE_FLAGS],
 		positionals: [],
-		request: (params) => ({ method: "GET", path: "/threads", query: { query: text(params, "query") } }),
+		request: (params) => ({ method: "GET", path: "/threads", query: { query: text(params, "query"), ...pageQuery(params) } }),
 	},
 	{
 		path: ["memory"],
@@ -461,9 +477,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ["schedule", "list"],
 		usage: "pana schedule list [--kind session|thread]",
 		summary: "List schedules",
-		flags: [string("kind", "--kind KIND", "Only schedules of this kind")],
+		flags: [string("kind", "--kind KIND", "Only schedules of this kind"), ...PAGE_FLAGS],
 		positionals: [],
-		request: (params) => ({ method: "GET", path: "/schedules", query: { kind: text(params, "kind") } }),
+		request: (params) => ({ method: "GET", path: "/schedules", query: { kind: text(params, "kind"), ...pageQuery(params) } }),
 	},
 	{
 		path: ["schedule", "delete"],

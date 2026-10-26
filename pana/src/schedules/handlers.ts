@@ -4,7 +4,8 @@
 // and update, `{schedules}` on list, `{schedule}` on create, show, and update, and 204 on delete.
 
 import type { Handlers } from "../api/types.ts";
-import { createSchedule, deleteSchedule, listSchedules, showSchedule, updateSchedule } from "./store.ts";
+import { parseLimit } from "../api/pagination.ts";
+import { createSchedule, deleteSchedule, listSchedules, SCHEDULE_LIMIT, showSchedule, updateSchedule } from "./store.ts";
 
 export const handlers: Handlers = {
 	"schedules.create": async (ctx) => ({
@@ -12,10 +13,13 @@ export const handlers: Handlers = {
 		body: { schedule: await createSchedule(ctx.runtime, ctx.caller, ctx.body) },
 	}),
 
-	"schedules.list": async (ctx) => ({
-		status: 200,
-		body: { schedules: await listSchedules(ctx.runtime, ctx.query.get("kind")) },
-	}),
+	"schedules.list": async (ctx) => {
+		const page = await listSchedules(ctx.runtime, ctx.query.get("kind"), {
+			limit: parseLimit(ctx.query.get("limit"), SCHEDULE_LIMIT),
+			cursor: ctx.query.get("cursor"),
+		});
+		return { status: 200, body: { schedules: page.items, nextCursor: page.nextCursor } };
+	},
 
 	"schedules.show": async (ctx) => ({
 		status: 200,

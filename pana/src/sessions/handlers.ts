@@ -3,11 +3,12 @@
 import { BACKGROUND_CONTEXT as BG } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { ApiError } from "../api/errors.ts";
+import { parseLimit } from "../api/pagination.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { isUlid, parseRef } from "../ids/index.ts";
 import { createSession } from "./create.ts";
 import { sessionRuntime } from "./runtime.ts";
-import { findSessions, sessionRow, sessionView, showSession, transcript, waitingConversations } from "./views.ts";
+import { findSessions, SESSION_LIMIT, sessionRow, sessionView, showSession, transcript, waitingConversations } from "./views.ts";
 
 function bodyObject(ctx: RequestContext): Record<string, unknown> {
 	const body = ctx.body;
@@ -67,13 +68,14 @@ export const handlers: Handlers = {
 
 	"sessions.search": async (ctx): Promise<HandlerResult> => {
 		const parent = query(ctx, "parent");
-		const sessions = await findSessions(ctx.runtime, {
+		const page = await findSessions(ctx.runtime, {
 			query: query(ctx, "query"),
 			state: query(ctx, "state"),
 			parent: parent === undefined ? undefined : sessionId(ctx, parent),
-			limit: integer(query(ctx, "limit"), "limit"),
+			limit: parseLimit(query(ctx, "limit"), SESSION_LIMIT),
+			cursor: query(ctx, "cursor"),
 		});
-		return { status: 200, body: { sessions } };
+		return { status: 200, body: { sessions: page.items, nextCursor: page.nextCursor } };
 	},
 
 	"sessions.show": async (ctx): Promise<HandlerResult> => ({
