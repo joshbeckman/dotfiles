@@ -1,6 +1,6 @@
 # pana behavior spec
 
-This spec turns [README.md](README.md) into testable behaviors. Each `- [ ]` item is one test. A work package is done when all its items pass in CI on macOS and Linux.
+This spec turns [README.md](README.md) into testable behaviors. Each `- [ ]` item is one test. A work package is done when all its items pass on macOS and Linux. So far every item has run on macOS only; Linux is unverified.
 
 The README says what pana is. This file says how to check that it works. If they disagree, fix the README first, then this file.
 
@@ -38,7 +38,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 - [x] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
 - [x] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
-- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766).
+- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600).
 - [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
 - [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
@@ -84,7 +84,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | GET | `/memory/files` | list the files on `main` |
 | GET, POST, DELETE | `/schedules`, `/schedules/:id` | scheduling |
 | GET, POST | `/push/key`, `/push/subscriptions` | Web Push |
-| GET | `/events` | server-sent events for the PWA |
+| GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live` |
 
 - [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`.
 - [x] **API-02** Status codes map to CLI exit codes: 400 → 2, 404 → 4, 409 → 3, 402 → 5, any other non-2xx → 1.
@@ -190,7 +190,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Replies
 
-- [x] **RPL-01** When a run settles, its final assistant text posts to the thread whose message started the run, from the session.
+- [x] **RPL-01** When a run settles, its final assistant text posts to the thread whose message started the run, from the session, subject to RPL-06.
 - [x] **RPL-02** The auto-post's head is the newest message of that thread in the session's transcript.
 - [x] **RPL-03** If the thread moved during the run, the reply is not posted. The next run's input lists the new messages and says the previous reply was not posted.
 - [x] **RPL-04** If the session already posted to the triggering thread during the run, there is no auto-post.
@@ -212,7 +212,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 - [x] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
 - [x] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
-- [x] **ISO-03** `bash` runs with exactly `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
+- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
 - [x] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
 
 ### System prompt
@@ -243,8 +243,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 ## WP5: Memory
 
 - [x] **MEM-01** On first start, `memory.git` is a bare repo with one empty commit on `main`.
-- [x] **MEM-02** `pana memory` prints the caller's worktree path, creating `memory/worktrees/<id>` on branch `writer/<id>` from `main` if needed.
-- [x] **MEM-03** `pana memory commit -m M` stages all changes, commits with author name = caller URL and email = `<id>@<domain>`, rebases onto `main`, and moves `main` with a compare-and-swap `git update-ref`.
+- [x] **MEM-02** `pana memory` prints the caller's worktree path, creating `memory/worktrees/<id>` on branch `writer/<id>` from `main` if needed. A session's worktree is also made on first use (its first prompt render or tool call). Each worktree has its own git identity, so a plain `git commit` in it is authored by its writer.
+- [x] **MEM-03** `pana memory commit -m M` stages all changes, commits with author name = caller URL and email = `<id>@<domain>`, rebases onto `main`, and moves `main` with a compare-and-swap `git update-ref`. With a clean tree it still publishes commits the writer made with plain `git`.
 - [x] **MEM-04** A rebase conflict aborts the rebase, leaves the commit on `writer/<id>`, and exits 3 with the conflicting paths.
 - [x] **MEM-05** Two writers committing different files at once both land on `main`.
 - [x] **MEM-06** `pana memory commit` with no changes exits 0 and creates no commit.

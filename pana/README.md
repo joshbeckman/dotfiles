@@ -53,6 +53,8 @@ Open the launch URL in a browser to authorize the PWA. It uses `localhost`, beca
 tailscale serve --bg 8766
 ```
 
+To try pana from this checkout without installing the service, run `pana/scripts/try`. It writes a scratch `config.json` in `~/tmp/pana-try` (`PANA_STATE` overrides) on first run, reads the anthropic, openai, and fireworks keys from pi's `~/.pi/agent/auth.json` into `panad` only, and starts `panad` in the foreground. `--fresh` wipes the scratch state first.
+
 `pana/scripts/smoke` checks a real model end to end on a throwaway state directory: `s FIREWORKS_API_KEY -- pana/scripts/smoke`. Add `--keep` to leave that `panad` running for a look in the PWA.
 
 ## Goals
@@ -111,7 +113,7 @@ Pana runs beside the current pi setup and shares nothing with it.
 
 - `panad` builds its own pi-durable registry with two extensions: `CodingTools` (`read`, `write`, `edit`, `bash`) from pi-durable, and `pana`, which adds the pana tools and system prompt sections.
 - Sessions load no pi-coding-agent extensions, skills, prompt templates, MCP servers, or `~/.pi/agent/AGENTS.md`.
-- The `bash` tool runs commands with a clean environment: `PATH`, `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables that set pana's hook directory. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
+- The `bash` tool runs commands with a clean environment: `PATH` (with pana's own `bin` first, so `pana` in a session is this `panad`'s build), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, and the `GIT_CONFIG_*` variables that set pana's hook directory. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
 - A `bash` call that names no timeout stops after `tools.bashTimeoutSec` in `config.json` (600 seconds by default). Pana kills the command's whole process group, and the model gets an error result that says the call timed out.
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
@@ -152,7 +154,7 @@ The `bash` tool sets `core.hooksPath` through `GIT_CONFIG_COUNT` to pana's hook 
 | `stopped` | A user stopped it. Mail queues but does not wake it. |
 | `archived` | Read-only. |
 
-An idle session holds no task. pi-durable drops its context from memory after a retention window. "Default-off" means this: when a run ends, nothing of the session stays in flight.
+An idle session holds no task. `panad` sets pi-durable's `contextRetentionMs` to 0, so an idle session's context leaves memory as soon as its run ends. "Default-off" means this: when a run ends, nothing of the session stays in flight.
 
 A session cannot own a background process that outlives its run.
 
@@ -167,7 +169,9 @@ When a message lands in a session's inbox:
 
 ### Replies
 
-The final assistant message of a run posts to the thread whose message started that run. Its head is the newest message of that thread in the session's transcript. If the thread moved during the run, `panad` does not post the reply. The next run receives the new messages and a note that the previous reply was not posted.
+When a user's message starts a run, or the thread's first message does (the prompt that created the session), the run's final assistant message posts to that thread. Its head is the newest message of that thread in the session's transcript. If the thread moved during the run, `panad` does not post the reply. The next run receives the new messages and a note that the previous reply was not posted. An empty final message posts nothing.
+
+When another session's follow-up starts a run, nothing posts automatically. Two sessions that auto-replied to each other would wake each other forever. A session that has something to say back uses `pana_reply`, and `pana/prompt.md` tells it not to reply just to acknowledge, agree, thank, or sign off.
 
 To post to another thread, or mid-run, a session uses the `pana_reply` tool or `pana thread respond`.
 
@@ -231,7 +235,8 @@ pana thread search [--query TEXT] [--archived] [--unread]
 
 - Memory is a bare git repo at `~/.local/state/pana/memory.git`, outside any public repo.
 - It is a tree of Markdown files, organized by topic.
-- Each writer edits in its own worktree. `pana memory commit` commits, rebases onto `main`, and fast-forwards `main`. A conflict exits with code 3, the same as a stale thread.
+- Each writer edits in its own worktree on branch `writer/<id>`. A session's worktree is made on first use. `pana memory commit` commits any changes, rebases onto `main`, and fast-forwards `main`, publishing commits the writer already made with plain `git` too. A conflict exits with code 3, the same as a stale thread.
+- Each worktree has its own git identity, so a plain `git commit` in it is attributed to its writer.
 - The git author name is the writer's URL. The author email is `<id>@<domain>`, e.g. `01JB...@lantern.joshbeckman.org` or `joshbeckman@lantern.joshbeckman.org`.
 - `git log` and `git blame` show every writer.
 
@@ -264,7 +269,7 @@ The PWA has these sections:
 
 - **Inbox.** One row per thread the user is in, latest activity first: subject, the other participants, the newest message's snippet and time, and the unread count. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
 - **Threads.** New starts a session and its thread. Browse and search, including only unread or only archived threads, with each thread's unread count. Edit or redact a message, with a warning.
-- **Sessions.** Live and past sessions with the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Assistant text and thinking render as Markdown, and each entry has a Raw toggle for its exact source. While a session runs, its view streams the answer in progress and each running tool call with its arguments, output, and elapsed time. Stop, compact, archive, reload.
+- **Sessions.** Live and past sessions. A session opens at its newest entry, with its header (`pana://` URL, state, model, directory, cost, and controls) pinned while the transcript scrolls. It shows the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Assistant text and thinking render as Markdown, and each entry has a Raw toggle for its exact source. While a session runs, its view streams the answer in progress and each running tool call with its arguments, output, and elapsed time. Stop, compact, archive, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.
 
@@ -274,7 +279,7 @@ Each participant has one color, from the style guide palette, in every thread: t
 
 While a session works, it shows just above the reply box in its own color with a pulsing dot and what it is doing, such as "running bash · 3m", and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
 
-The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `s`, `m`, `c`, or `h` changes section, `/` searches, `r` replies, `e` archives, `u` or `Esc` goes back, and `?` lists every key. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
+The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `s`, `m`, or `h` changes section (Inbox, Threads, Sessions, Memory, Schedules), `g c` starts a new thread, `/` searches, `r` replies, `e` archives, `u` or `Esc` goes back, and `?` lists every key. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
 
 `panad` prints a launch URL with the web token in the fragment when it starts. Treat that URL as private: anyone who has it can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
 
@@ -296,6 +301,6 @@ Pana starts empty and runs beside the old stack, so nothing has to change for it
 
 - `agent-mail`, `agent-mail2`, `agent-mail-web`, and their launchd and systemd units.
 - Session naming: name allocation, realms, the identity registry, `agent-identity-backfill`, `agent-slug`, surname inheritance, and RFC 0001.
-- `agent-trailer`. Pana's commit hook replaces it.
+- `agent-trailer`, once `gw` and `gsw` read `PANA_SESSION` themselves. Pana's commit hook already writes the trailer on commits.
 - `agent-team`, scratchpads, and `agent-find`, unless pana keeps an equivalent.
 - The AGENTS.md sections on names, scratchpads, Agent Mail, teams, notifications, and attribution. Replace them with one section on pana.
