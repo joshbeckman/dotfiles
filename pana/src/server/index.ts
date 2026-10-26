@@ -16,6 +16,7 @@ import { createPanaEnv, createPanaRegistry, installGitHooks } from "../extension
 import { ensureMemoryRepo } from "../memory/index.ts";
 import { initPush } from "../push/index.ts";
 import { startScheduler } from "../schedules/index.ts";
+import { startSessions } from "../sessions/runtime.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
 import { launchUrl, loopbackOrigin } from "../web/static.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
@@ -126,9 +127,13 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		// PSH-01: the VAPID pair exists before the first push, not on the first request.
 		initPush(runtime);
 
+		// WP3: the delivery hook and the run listener must be in place before any wake or run.
+		const sessions = startSessions(runtime, report);
+		cleanup.unshift(() => sessions.close());
 		// Finish wakes a crash interrupted, then pick up runs the last process left pending (SRV-03).
 		await sweepWakes(db, runtime.wake, (error, wake) => report(error, `wake for delivery ${wake.deliveryId}`));
 		harness.resume();
+		sessions.recover();
 
 		const webToken = readWebToken(dir);
 		const logger =

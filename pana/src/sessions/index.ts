@@ -1,6 +1,21 @@
-// Session runtime: lifecycle, delivery, replies, limits (WP3). Not built yet.
+// Session runtime: lifecycle, delivery, replies, limits (WP3).
 //
-// TODO(WP3): implement SES, STA, DLV, RPL, LIM from SPEC.md. Keep this package's code in src/sessions/ and its tests in
-// test/sessions.test.ts. Register HTTP handlers in src/sessions/handlers.ts; src/server/handlers.ts already
-// merges them into panad.
-export {};
+// `startSessions(runtime)` attaches the delivery hook and the run listener; panad calls it before
+// the startup wake sweep. `createSessionHooks` is the auto-reply hook the pana extension installs.
+
+export { createSession, loadProfile, parseModel, THINKING_LEVELS, WORKTREE, type CreateSessionInput, type CreatedSession, type Profile } from "./create.ts";
+export { createSessionHooks } from "./reply.ts";
+export {
+	creatorOf,
+	SESSION_STATES,
+	SessionRuntime,
+	sessionRuntime,
+	startSessions,
+	transcriptText,
+	wakeDelivery,
+	type SessionRow,
+	type SessionState,
+} from "./runtime.ts";
+export { findSessions, showSession, transcript, type SessionDetail, type SessionView } from "./views.ts";
+export { defaultWakeSubmitter, MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND, renderMessage, sessionConversation } from "./wake.ts";
+export { domainCostToday, localDay, nextDayStart, usageCost } from "./budget.ts";

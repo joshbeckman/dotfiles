@@ -164,6 +164,22 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 3,
+		name: "session cost ledger",
+		// LIM-02 and LIM-03 need spend per session and per local day. pi-durable's `pi.usage` only
+		// holds a running total per conversation, so pana records the total it last saw on the
+		// session and adds each increase to the day it was seen.
+		sql: `
+			ALTER TABLE sessions ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+
+			CREATE TABLE domain_costs (
+				day         TEXT PRIMARY KEY, -- YYYY-MM-DD in config.timezone
+				cost_usd    REAL NOT NULL DEFAULT 0,
+				noticed_at  INTEGER
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

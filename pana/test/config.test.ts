@@ -135,15 +135,15 @@ describe("config and state", () => {
 	});
 
 	it("CFG-05 a second panad on the same state directory exits 1 naming the running PID", async () => {
-		t = await startTestPanad();
+		t = await startTestPanad({ handlers: { "push.key": undefined } });
 		await expect(startTestPanad({ stateDir: t.dir })).rejects.toThrow(`panad is already running (pid ${process.pid})`);
 
 		const run = await runPanad(t.dir);
 		expect(run.code).toBe(1);
 		expect(run.stderr).toContain(`pid ${process.pid}`);
 
-		// The first panad still serves. `/sessions/:id/transcript` is WP3's and still unbuilt.
-		expect((await t.client.get(`/sessions/${t.runtime.newId()}/transcript`)).status).toBe(501);
+		// The first panad still serves; `/push/key` is pinned unbuilt above.
+		expect((await t.client.get("/push/key")).status).toBe(501);
 	});
 
 	it("CFG-05 a stale PID file from a dead panad does not block a start", async () => {

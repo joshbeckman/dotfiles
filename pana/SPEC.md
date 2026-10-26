@@ -159,46 +159,46 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Create
 
-- [ ] **SES-01** `session create --prompt P` creates a session, a thread with the caller and the session, and a first message with body P from the caller. It returns all three as JSON.
-- [ ] **SES-02** `--to` adds more participants to that thread.
-- [ ] **SES-03** Profile values apply, and flags override them. An unknown profile returns 400.
-- [ ] **SES-04** `cwd: "worktree"` creates a git worktree for the session under `<state>/worktrees/<ulid>` from the repo named by `--cwd`.
-- [ ] **SES-05** A session created by a session records `parent`. Its depth is the parent's plus one.
+- [x] **SES-01** `session create --prompt P` creates a session, a thread with the caller and the session, and a first message with body P from the caller. It returns all three as JSON.
+- [x] **SES-02** `--to` adds more participants to that thread.
+- [x] **SES-03** Profile values apply, and flags override them. An unknown profile returns 400.
+- [x] **SES-04** `cwd: "worktree"` creates a git worktree for the session under `<state>/worktrees/<ulid>` from the repo named by `--cwd`.
+- [x] **SES-05** A session created by a session records `parent`. Its depth is the parent's plus one.
 
 ### States
 
-- [ ] **STA-01** A new session is `running` until its first run settles, then `idle`.
-- [ ] **STA-02** A run that ends `unanswered` sets `failed` and posts a notice in the triggering thread.
-- [ ] **STA-03** A session asleep on a timer or a child task reports `waiting`.
-- [ ] **STA-04** `session stop` aborts the current run and sets `stopped`.
-- [ ] **STA-05** `session resume` on a stopped session sets `idle` and delivers queued mail in order.
-- [ ] **STA-06** `session search --state S` returns only sessions in state S.
-- [ ] **STA-07** Archived sessions are read-only. Messages to them return 409.
+- [x] **STA-01** A new session is `running` until its first run settles, then `idle`.
+- [x] **STA-02** A run that ends `unanswered` sets `failed` and posts a notice in the triggering thread.
+- [x] **STA-03** A session asleep on a timer or a child task reports `waiting`.
+- [x] **STA-04** `session stop` aborts the current run and sets `stopped`.
+- [x] **STA-05** `session resume` on a stopped session sets `idle` and delivers queued mail in order.
+- [x] **STA-06** `session search --state S` returns only sessions in state S.
+- [x] **STA-07** Archived sessions are read-only. Messages to them return 409.
 
 ### Delivery
 
-- [ ] **DLV-01** A message to an idle or failed session submits a pi-durable input with entry kind `pana.message`, and the session becomes `running`.
-- [ ] **DLV-02** The model input contains the sender URL, the thread URL, the message URL, the subject, the body, and the local path of each attachment.
-- [ ] **DLV-03** Delivery to a session marks the message read for it.
-- [ ] **DLV-04** A message from a session to a running session queues as a follow-up and starts the next run.
-- [ ] **DLV-05** A message from a user to a running session submits a steer. It reaches the model after the current tool round. If the run ends first, it starts the next run.
-- [ ] **DLV-06** A message to a stopped session wakes nothing and stays unread.
-- [ ] **DLV-07** Messages from one session to a thread do not wake that same session.
+- [x] **DLV-01** A message to an idle or failed session submits a pi-durable input with entry kind `pana.message`, and the session becomes `running`.
+- [x] **DLV-02** The model input contains the sender URL, the thread URL, the message URL, the subject, the body, and the local path of each attachment.
+- [x] **DLV-03** Delivery to a session marks the message read for it.
+- [x] **DLV-04** A message from a session to a running session queues as a follow-up and starts the next run.
+- [x] **DLV-05** A message from a user to a running session submits a steer. It reaches the model after the current tool round. If the run ends first, it starts the next run.
+- [x] **DLV-06** A message to a stopped session wakes nothing and stays unread.
+- [x] **DLV-07** Messages from one session to a thread do not wake that same session.
 
 ### Replies
 
-- [ ] **RPL-01** When a run settles, its final assistant text posts to the thread whose message started the run, from the session.
-- [ ] **RPL-02** The auto-post's head is the newest message of that thread in the session's transcript.
-- [ ] **RPL-03** If the thread moved during the run, the reply is not posted. The next run's input lists the new messages and says the previous reply was not posted.
-- [ ] **RPL-04** If the session already posted to the triggering thread during the run, there is no auto-post.
-- [ ] **RPL-05** An empty final answer posts nothing.
+- [x] **RPL-01** When a run settles, its final assistant text posts to the thread whose message started the run, from the session.
+- [x] **RPL-02** The auto-post's head is the newest message of that thread in the session's transcript.
+- [x] **RPL-03** If the thread moved during the run, the reply is not posted. The next run's input lists the new messages and says the previous reply was not posted.
+- [x] **RPL-04** If the session already posted to the triggering thread during the run, there is no auto-post.
+- [x] **RPL-05** An empty final answer posts nothing.
 
 ### Limits
 
-- [ ] **LIM-01** A session at `spawnDepth` gets 402 from `session create`.
-- [ ] **LIM-02** A session whose cost passes `budget.sessionUsd` is stopped, and a notice goes to its creator.
-- [ ] **LIM-03** When the domain's cost for the local day passes `budget.domainDailyUsd`, new runs do not start, `session create` returns 402, and the user gets a notice. Runs resume the next local day.
-- [ ] **LIM-04** `session show` reports cost from pi-durable usage.
+- [x] **LIM-01** A session at `spawnDepth` gets 402 from `session create`.
+- [x] **LIM-02** A session whose cost passes `budget.sessionUsd` is stopped, and a notice goes to its creator.
+- [x] **LIM-03** When the domain's cost for the local day passes `budget.domainDailyUsd`, new runs do not start, `session create` returns 402, and the user gets a notice. Runs resume the next local day.
+- [x] **LIM-04** `session show` reports cost from pi-durable usage.
 
 ---
 

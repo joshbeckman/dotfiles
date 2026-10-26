@@ -13,6 +13,7 @@ import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harnes
 import { appendAndWake, seedThread, type Appended, type Fixture } from "./harness/wake-fixture.ts";
 
 const PANA_TABLES = [
+	"domain_costs",
 	"participants",
 	"sessions",
 	"threads",
@@ -253,5 +254,23 @@ describe("DB-04 atomic append and wake", () => {
 		expect(await sweepWakes(again.runtime.db, again.runtime.wake)).toBe(0);
 		const resubmitted = await again.runtime.wake(planned!.wakes[1]!);
 		expect(resubmitted).toBe(swept!.wake_submission_id);
+	});
+
+	it("DB-04 a commit that joins while the transaction is finishing commits inside it", async () => {
+		const t = await start();
+		const db = t.runtime.db;
+		let joined: Promise<void> | undefined;
+		await db.atomically(async (tx) => {
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES ('a', 'user', 'pana://x/users/a', 0)");
+			// Like a background pi-durable commit: it opens its savepoint now and finishes after `fn` returns.
+			joined = db.transaction(async (sp) => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				await sp.run("INSERT INTO participants (id, kind, url, created_at) VALUES ('b', 'user', 'pana://x/users/b', 0)");
+			});
+		});
+		await expect(joined).resolves.toBeUndefined();
+		const rows = await db.all<{ id: string }>("SELECT id FROM participants WHERE id IN ('a', 'b') ORDER BY id");
+		expect(rows.map((row) => row.id)).toEqual(["a", "b"]);
+		expect(t.fatal).toEqual([]);
 	});
 });
