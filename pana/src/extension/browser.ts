@@ -152,7 +152,11 @@ export interface BrowserSweeper {
 }
 
 /** Sweep now, then every five minutes on `runtime.clock` (ISO-07). */
-export function startBrowserSweeper(runtime: Runtime, report: (error: unknown, what: string) => void): BrowserSweeper {
+export function startBrowserSweeper(
+	runtime: Runtime,
+	report: (error: unknown, what: string) => void,
+	options: SweepBrowsersOptions = {},
+): BrowserSweeper {
 	let closed = false;
 	let cancel: (() => void) | undefined;
 	let inFlight: Promise<BrowserStop[]> | undefined;
@@ -164,7 +168,7 @@ export function startBrowserSweeper(runtime: Runtime, report: (error: unknown, w
 		// declines background timers, and close() cancels this one so it cannot hold panad open.
 		cancel = runtime.clock.setTimer(kick, SWEEP_EVERY_MS, { background: false });
 		if (inFlight) return;
-		const sweep = sweepBrowsers(runtime);
+		const sweep = sweepBrowsers(runtime, options);
 		inFlight = sweep;
 		sweep
 			.catch((error) => report(error, "browser sweep"))

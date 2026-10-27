@@ -71,6 +71,14 @@ export const handlers: Handlers = {
 		status: 200,
 		body: { tree: "main", files: await memoryFor(ctx.runtime).listFiles() },
 	}),
+	"memory.files.delete": async (ctx: RequestContext) => {
+		const path = normalizeMemoryPath(ctx.params.rest ?? "");
+		const body = bodyObject(ctx.body);
+		const result = await memoryFor(ctx.runtime).deleteFile(
+			writerOf(ctx.caller), path, typeof body.message === "string" ? body.message : "",
+		);
+		return { status: 200, body: { ...result, worktree: result.path, path } };
+	},
 	"memory.files.write": async (ctx: RequestContext) => {
 		const path = normalizeMemoryPath(ctx.params.rest ?? "");
 		const body = bodyObject(ctx.body);

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { statusToExitCode } from "../src/api/errors.ts";
@@ -272,6 +272,60 @@ describe("memory", () => {
 		expect((await t.tcp.post("/memory/files/%2e%2e%2fescape.md", { content: "nope" })).status).toBe(400);
 		// A control character would split `git show`'s patch headers; it is not a path.
 		expect((await t.tcp.post("/memory/files/a%0Ab.md", { content: "nope" })).status).toBe(400);
+	});
+
+	it("MEM-13 deletion removes the file from main, listing and search but preserves attributed history", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/notes/two%20words.md", { content: "unique-memory-text\n" });
+		const deleted = await t.tcp.delete<{ committed: boolean; commit: { hash: string; authorUrl: string; message: string } }>("/memory/files/notes/two%20words.md");
+		expect(deleted.status).toBe(200);
+		expect(deleted.body.committed).toBe(true);
+		expect(deleted.body.commit.authorUrl).toBe(t.runtime.userUrl);
+		expect(deleted.body.commit.message).toBe("Delete notes/two words.md");
+		expect((await t.tcp.get("/memory/files/notes/two%20words.md")).status).toBe(404);
+		expect((await t.tcp.get<{ files: unknown[] }>("/memory/files")).body.files).toEqual([]);
+		expect((await t.tcp.get<{ results: unknown[] }>("/memory/search?query=unique-memory-text")).body.results).toEqual([]);
+		const detail = await t.tcp.get<{ files: Array<{ path: string; status: string; patch: string }> }>(`/memory/commits/${deleted.body.commit.hash}`);
+		expect(detail.body.files[0]).toMatchObject({ path: "notes/two words.md", status: "deleted" });
+		expect(detail.body.files[0]!.patch).toContain("-unique-memory-text");
+		expect(await git(["-C", repo(), "show", "main^:notes/two words.md"])).toBe("unique-memory-text");
+		expect((await t.tcp.delete("/memory/files/notes/two%20words.md")).status).toBe(404);
+	});
+
+	it("MEM-13 deletion fast-forwards a clean stale user worktree to include session-created files", async () => {
+		t = await startTestPanad();
+		await worktree();
+		const session = await addSession(t);
+		await t.client.post("/memory/files/from-session.md", { content: "session note" }, { caller: session });
+		const deleted = await t.tcp.delete("/memory/files/from-session.md", { body: { message: "Remove old note" } });
+		expect(deleted.status).toBe(200);
+		expect(await git(["-C", repo(), "log", "-1", "--format=%s", "main"])).toBe("Remove old note");
+		expect((await t.tcp.get("/memory/files/from-session.md")).status).toBe(404);
+	});
+
+	it("MEM-13 deletion rejects unsafe paths, directories, symlinks and dirty or unpublished worktrees", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/notes/keep.md", { content: "keep me" });
+		expect((await t.tcp.delete("/memory/files/%2e%2e%2fescape.md")).status).toBe(400);
+		expect((await t.tcp.delete("/memory/files/.git")).status).toBe(400);
+		expect((await t.tcp.delete("/memory/files/notes")).status).toBe(400);
+		const path = await worktree();
+		writeFileSync(join(path, "local.md"), "uncommitted");
+		expect((await t.tcp.delete("/memory/files/notes/keep.md")).status).toBe(409);
+		expect((await t.tcp.get("/memory/files/notes/keep.md")).status).toBe(200);
+		await git(["-C", path, "add", "local.md"]);
+		await git(["-C", path, "commit", "-qm", "unpublished"]);
+		expect((await t.tcp.delete("/memory/files/notes/keep.md")).status).toBe(409);
+		await commit("publish local");
+		writeFileSync(join(path, ".gitignore"), "ignored.md\n");
+		await commit("ignore local file");
+		writeFileSync(join(path, "ignored.md"), "not memory");
+		expect((await t.tcp.delete("/memory/files/ignored.md")).status).toBe(404);
+		expect(existsSync(join(path, "ignored.md"))).toBe(true);
+		symlinkSync(join(path, "notes"), join(path, "link"));
+		await commit("add symlink");
+		expect((await t.tcp.delete("/memory/files/link/keep.md")).status).toBe(400);
+		expect((await t.tcp.get("/memory/files/notes/keep.md")).status).toBe(200);
 	});
 
 	it("MEM-10 a commit view has its message, author, file statuses, and patch", async () => {
