@@ -168,6 +168,19 @@ export async function renderDiagrams(root, { ensureMermaid, DOMPurify, idPrefix 
 /** Render one message body into `target` and prepare its links and images. */
 export async function renderMessage(target, text, options) {
 	target.innerHTML = markdownToHtml(text, options);
+	// Keep wide tables locally scrollable without changing table semantics. Memory has its
+	// own layout; only message/transcript prose opts into this treatment.
+	if (target.classList.contains("prose")) {
+		for (const table of target.querySelectorAll("table")) {
+			const wrapper = target.ownerDocument.createElement("div");
+			wrapper.className = "prose-table";
+			wrapper.tabIndex = 0;
+			wrapper.setAttribute("role", "region");
+			wrapper.setAttribute("aria-label", "Scrollable table");
+			table.replaceWith(wrapper);
+			wrapper.append(table);
+		}
+	}
 	rewriteLinks(target, options.domain);
 	linkifyTextNodes(target, options.domain);
 	await hydrateFiles(target, options.fetchFile);
