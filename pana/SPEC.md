@@ -70,7 +70,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/sessions/:id/stop`, `/resume`, `/compact`, `/archive` | control |
 | GET | `/inbox` | caller's inbox, with `unreadCount` (`participant` lets a user view a session's inbox; `view=threads` lists one row per thread) |
 | POST | `/threads` | create a thread |
-| GET | `/threads` | search (`query`, `archived`, `unread`) |
+| GET | `/threads` | search (`query`, `archived`, `includeArchived`, `unread`) |
 | GET | `/threads/:id` | read |
 | POST | `/threads/:id/messages` | respond |
 | POST | `/threads/:id/subject` | regenerate subject |
@@ -349,11 +349,11 @@ Each package was built against contracts and fakes. These items prove the packag
 
 - [x] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is. SCR-02 later replaced the HOME default with the session's scratch directory; panad's own working directory is still never used.
 - [x] **REF-02** `pana session archive SESSION` calls `POST /sessions/:id/archive`. Only the user may archive. An archived session follows STA-07. The PWA session view has an Archive button that asks for confirmation.
-- [x] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default thread list only. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
+- [x] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default API/CLI thread list only. `GET /threads?includeArchived=1` includes both archive states in lists and searches; `archived=1` takes precedence. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
 - [x] **REF-04** A new message delivered to a participant unarchives the thread for that participant.
 - [x] **REF-05** Inbox items and thread list items carry the caller's `unreadCount`. `GET /threads?unread=1` and `pana thread search --unread` return only threads with unread messages.
 - [x] **REF-06** The PWA marks threads with unread messages and shows their count. The nav shows the inbox unread count. Both update live from `/events`, and opening a thread clears its count.
-- [x] **REF-07** The PWA inbox and thread views have Archive and Unarchive buttons.
+- [x] **REF-07** The PWA inbox and open-thread views have Archive and Unarchive buttons. Open-thread controls (including the palette and keyboard) are available only to participants. The Threads browse list and its search always include both archive states, label each row Archived or Not archived, and have no archive checkbox or row action.
 - [x] **REF-08** Every ID and `pana://` URL the PWA shows is a link to its view: sessions to the session view, threads to the thread, messages to the thread scrolled to the message, schedules to the schedule, files to the file, and the user to the inbox. That includes senders, participants, headers, and `pana://` URLs inside message bodies and transcripts.
 - [x] **REF-09** The session view shows the complete transcript: thinking blocks (collapsed by default), every tool call with its full arguments, every tool result with its full output (collapsed when long), system and compaction entries, and per-turn usage.
 
@@ -373,7 +373,7 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **UX-05** Opening a thread scrolls to its latest message. A link to a specific message scrolls to that message.
 - [x] **UX-06** In a thread, each participant's messages have a left border in that participant's own color. A participant keeps the same color in every thread, and the user always has the same color. Colors come from the style guide palette.
 - [x] **UX-07** The PWA's layout is consistent. Labels and controls align vertically, spacing has one rhythm, and every control sits visibly inside the form or section it acts on.
-- [x] **UX-08** Vim-like keyboard navigation works everywhere outside text inputs. `j`/`k` move the selection through list rows and thread messages. `Enter` or `o` opens the selection. `g` then `i`/`t`/`s`/`m`/`c`/`h` goes to Inbox, Threads, Sessions, Memory, Compose, or Schedules. `/` focuses search, `r` focuses the reply box, `e` archives the open or selected thread and, from an open thread, returns to the list it was opened from, `u` or `Esc` goes back, and `?` shows a help overlay. `Esc` leaves a text input.
+- [x] **UX-08** Vim-like keyboard navigation works everywhere outside text inputs. `j`/`k` move the selection through list rows and thread messages. `Enter` or `o` opens the selection. `g` then `i`/`t`/`s`/`m`/`c`/`h` goes to Inbox, Threads, Sessions, Memory, Compose, or Schedules. `/` focuses search, `r` focuses the reply box, `e` archives the open thread or selected inbox thread and, from an open thread, returns to the list it was opened from, `u` or `Esc` goes back, and `?` shows a help overlay. `Esc` leaves a text input.
 - [x] **UX-09** The bottom of a thread, just above the reply box, shows which participant sessions are working right now (state `running`, or `waiting`), in their participant colors, with a small animated indicator. Indicators appear and disappear live. Every session state change publishes a `session.state` event `{sessionId, state}` on `/events`, from one helper that every state write goes through. `GET /threads/:id` returns each session participant's current state, so a freshly opened thread is right before any event arrives. Inbox and thread-list rows show a small working mark for threads with a working session.
 - [x] **UX-10** Opening a session scrolls to its newest transcript entry. The session's header, details, controls, and `pana://` URL stay pinned below the nav while the transcript scrolls. New live entries are followed only when the reader is already at the bottom.
 - [x] **UX-13** The nav has no Compose item. A New button on the Threads page opens the composer, and the nav marks Threads while it is open. `g c` still opens it.

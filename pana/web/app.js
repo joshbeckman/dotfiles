@@ -66,6 +66,7 @@ const state = {
 	section: "inbox",
 	thread: null,
 	threadArchived: false,
+	threadCanArchive: false,
 	session: null,
 	draft: null,
 	confirm: null,
@@ -953,9 +954,8 @@ async function submitCompose(event) {
 async function searchThreads(event, cursor) {
 	event?.preventDefault();
 	const query = $("threads-query").value.trim();
-	const params = new URLSearchParams();
+	const params = new URLSearchParams({ includeArchived: "1" });
 	if (query) params.set("query", query);
-	if ($("threads-archived")?.checked) params.set("archived", "1");
 	if ($("threads-unread")?.checked) params.set("unread", "1");
 	const suffix = params.toString();
 	const body = await api("GET", pagePath(`/threads${suffix ? `?${suffix}` : ""}`, cursor));
@@ -971,19 +971,16 @@ async function searchThreads(event, cursor) {
 		if (seen.has(thread.id)) continue;
 		seen.add(thread.id);
 		learnDomain(thread.url);
-		const archive = rowAction(thread.archived ? "thread-unarchive" : "thread-archive", thread.archived ? "Unarchive" : "Archive", () =>
-			void archiveThread(thread.id, !thread.archived),
-		);
 		const aside = document.createElement("div");
 		aside.className = "item-aside";
 		aside.append(timeEl(thread.at));
 		const row = item(
 			thread.subject,
-			[thread.unreadCount > 0 ? unreadBadge(thread.unreadCount) : undefined, thread.archived ? badge("archived") : undefined, thread.snippet],
+			[thread.unreadCount > 0 ? unreadBadge(thread.unreadCount) : undefined, badge(thread.archived ? "Archived" : "Not archived"), thread.snippet],
 			() => {
 				location.hash = `#/threads/${thread.id}`;
 			},
-			{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, aside, actions: [archive] },
+			{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, aside },
 		);
 		// UX-09: a row marks the thread while one of its sessions works.
 		rememberWorking(thread.id, thread.working);
@@ -1074,6 +1071,7 @@ async function openThread(id, focusMessage) {
 	const messages = body.messages ?? [];
 	state.thread = thread;
 	state.threadArchived = Boolean(body.archived);
+	state.threadCanArchive = Boolean(body.canArchive);
 	learnDomain(thread?.url);
 
 	const draft = newDraft({ id, messages });
@@ -1108,6 +1106,7 @@ async function openThread(id, focusMessage) {
 	renderThreadWorking();
 	// REF-07: one toggle, labelled for the thread's state for this reader.
 	const archiveButton = $("thread-archive");
+	archiveButton.hidden = !state.threadCanArchive;
 	archiveButton.dataset.archived = String(Boolean(body.archived));
 	archiveButton.textContent = body.archived ? "Unarchive" : "Archive";
 	archiveButton.dataset.testid = body.archived ? "thread-unarchive" : "thread-archive";
@@ -2183,10 +2182,12 @@ function focusReply() {
 
 function archiveKey() {
 	if (state.section === "threads" && !$("thread").hidden && state.thread) {
+		if (!state.threadCanArchive) return;
 		// UX-08: archiving the open thread leaves it for the list, instead of redrawing it archived.
 		void archiveThread(state.thread.id, !state.threadArchived, { leave: !state.threadArchived });
 		return;
 	}
+	if (state.section !== "inbox") return;
 	const row = selected();
 	const threadId = row?.dataset.thread;
 	if (!threadId) return;
@@ -2284,7 +2285,7 @@ const palette = {
 function paletteContext() {
 	const thread = state.section === "threads" && !$("thread").hidden ? state.thread : undefined;
 	const session = state.section === "sessions" && !$("session").hidden ? state.session : undefined;
-	return { thread, session, selection: Boolean(selected()), push: state.push };
+	return { thread, canArchive: Boolean(thread && state.threadCanArchive), session, selection: Boolean(selected()), push: state.push };
 }
 
 function openPalette() {
@@ -2476,7 +2477,7 @@ function onPaletteInput() {
 async function paletteSearch(query, search) {
 	try {
 		const [threads, sessions, memory] = await Promise.all([
-			api("GET", pagePath(`/threads?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
+			api("GET", pagePath(`/threads?includeArchived=1&query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", `/memory/search?query=${encodeURIComponent(query)}&limit=${HITS_PER_STORE}`),
 		]);
@@ -2683,7 +2684,6 @@ $("session-confirm-yes").addEventListener("click", () => void confirmArchiveSess
 $("session-confirm-no").addEventListener("click", () => {
 	$("session-confirm").hidden = true;
 });
-$("threads-archived").addEventListener("change", () => void searchThreads());
 $("inbox-archived").addEventListener("change", () => void loadInbox());
 $("threads-unread").addEventListener("change", () => void searchThreads());
 $("memory-delete").addEventListener("click", () => {

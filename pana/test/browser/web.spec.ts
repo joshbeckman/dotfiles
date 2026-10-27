@@ -658,6 +658,35 @@ describeBrowser("pana in a browser", () => {
 		expect((await messages(seeded.thread.id))[1]).toMatchObject({ redacted: true });
 	});
 
+	it("REF-07 hides archive actions for a thread the reader is not in, including keyboard and palette", async () => {
+		await start([{ text: "Ready." }]);
+		const seeded = await seedSession("A participant thread");
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		const made = await t!.client.post<{ thread: { id: string } }>("/threads", {
+			to: [seeded.session.id], body: "Session-only discussion",
+		}, { caller: seeded.session.id });
+		expect(made.status).toBe(201);
+		const id = made.body.thread.id;
+		expect((await t!.client.get<{ canArchive: boolean }>(`/threads/${id}`)).body.canArchive).toBe(false);
+		expect((await t!.client.post(`/threads/${id}/archive`, {})).status).toBe(403);
+		await open();
+		const result = await evaluatePage<{ hidden: boolean; paletteArchive: boolean; listActions: number }>(`
+			location.hash = "#/threads";
+			await until(() => document.querySelector("#threads-list [data-thread='${id}']"));
+			const listActions = document.querySelectorAll("#threads-list .item-actions").length;
+			location.hash = "#/threads/${id}";
+			await until(() => !document.getElementById("thread").hidden && document.getElementById("thread-subject").textContent === "Session-only discussion");
+			document.activeElement?.blur();
+			document.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
+			document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+			await until(() => !document.getElementById("palette").hidden);
+			return { hidden: document.getElementById("thread-archive").hidden,
+				paletteArchive: Boolean(document.querySelector("[data-command=archive-thread]")), listActions };
+		`);
+		expect(result).toEqual({ hidden: true, paletteArchive: false, listActions: 0 });
+		expect((await t!.client.get<{ archived: boolean }>(`/threads/${id}`)).body.archived).toBe(false);
+	});
+
 	it("REF-06 REF-07 unread counts mark threads and the inbox, follow /events, and the archive buttons hide and restore a thread", async () => {
 		await start([{ text: "Paris." }]);
 		const seeded = await seedSession("What is the capital of France?");
@@ -682,14 +711,18 @@ describeBrowser("pana in a browser", () => {
 		expect(marked.unread).toBe(true);
 		expect(marked.count).toContain("1 unread");
 
-		// REF-07: archive from the thread list, and the list and the nav count both drop it.
+		// The Threads list has no archive actions; archive from the open thread instead.
 		const archived = await evaluatePage<{ items: number; navHidden: boolean }>(`
-			document.querySelector("#threads-list [data-testid=thread-archive]").click();
-			await until(() => document.querySelectorAll("#threads-list .row").length === 0);
-			await until(() => document.getElementById("nav-inbox-count").hidden);
+			if (document.querySelector("#threads-list .item-actions") || document.getElementById("threads-archived")) throw new Error("unexpected list archive control");
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			document.getElementById("thread-archive").click();
+			await until(() => document.querySelector("[data-testid=thread-unarchive]"));
+			location.hash = "#/threads";
+			await until(() => !document.getElementById("threads-list").hidden && document.querySelector("#threads-list .archived"));
 			return { items: document.querySelectorAll("#threads-list .item").length, navHidden: document.getElementById("nav-inbox-count").hidden };
 		`);
-		expect(archived.items).toBe(0);
+		expect(archived.items).toBe(1);
 		expect(archived.navHidden).toBe(true);
 		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toEqual([]);
 
@@ -702,26 +735,22 @@ describeBrowser("pana in a browser", () => {
 		expect(inboxHidden).toBe(0);
 		expect(await t!.client.get<{ deliveries: unknown[] }>("/inbox")).toMatchObject({ body: { deliveries: [] } });
 
-		// REF-07: the archived filter lists it, and Unarchive restores it.
-		const restored = await evaluatePage<{ href: string; after: number; nav: string }>(`
+		// Searching also finds archived threads without a checkbox, with a clear state label.
+		const restored = await evaluatePage<number>(`
 			location.hash = "#/threads";
 			await until(() => !document.getElementById("threads-list").hidden);
-			document.getElementById("threads-archived").checked = true;
+			document.getElementById("threads-query").value = "France";
 			document.getElementById("threads-search").requestSubmit();
-			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
-			document.querySelector("#threads-list [data-testid=thread-unarchive]").click();
-			await until(() => document.getElementById("nav-inbox-count").textContent === "1");
-			document.getElementById("threads-archived").checked = false;
-			document.getElementById("threads-search").requestSubmit();
-			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
-			return {
-				href: document.querySelector("#threads-list .item .title").textContent,
-				after: document.querySelectorAll("#threads-list .item").length,
-				nav: document.getElementById("nav-inbox-count").textContent,
-			};
+			await until(() => document.querySelector("#threads-list .archived .meta")?.textContent.includes("Archived"));
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			document.getElementById("thread-archive").click();
+			await until(() => document.querySelector("[data-testid=thread-archive]"));
+			location.hash = "#/threads";
+			await until(() => !document.getElementById("threads-list").hidden && document.querySelector("#threads-list .meta")?.textContent.includes("Not archived"));
+			return document.querySelectorAll("#threads-list .item").length;
 		`);
-		expect(restored.after).toBe(1);
-		expect(restored.nav).toBe("1");
+		expect(restored).toBe(1);
 
 		// REF-06: opening the thread clears its unread count, and a new delivery brings it back
 		// from `/events` without a reload.

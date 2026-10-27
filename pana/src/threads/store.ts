@@ -606,7 +606,7 @@ export async function readThread(
 	runtime: Runtime,
 	caller: Caller,
 	threadId: string,
-): Promise<{ thread: ThreadView; messages: MessageView[]; archived: boolean }> {
+): Promise<{ thread: ThreadView; messages: MessageView[]; archived: boolean; canArchive: boolean }> {
 	const now = runtime.clock.now();
 	const read = await runtime.db.atomically(async (tx) => {
 		const thread = await threadView(tx, runtime, threadId);
@@ -621,7 +621,12 @@ export async function readThread(
 		);
 		const archived = await isThreadArchived(tx, threadId, reader.id);
 		await markThreadRead(tx, reader.id, threadId, now);
-		return { thread, messages: await messageViews(tx, runtime, rows, reader.id), archived };
+		return {
+			thread,
+			messages: await messageViews(tx, runtime, rows, reader.id),
+			archived,
+			canArchive: thread.participants.some((participant) => participant.id === reader.id),
+		};
 	});
 	const sessions = read.thread.participants.filter((participant) => participant.kind === "session");
 	const states = await sessionStates(runtime.db, runtime, sessions.map((participant) => participant.id));
