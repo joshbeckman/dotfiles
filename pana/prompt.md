@@ -79,15 +79,15 @@ your scratchpad: write what the next session should know.
 Edits go through your worktree, then `pana_memory_commit`. Commits are attributed to your
 session URL, and every commit you make also carries a `Co-authored-by: AI` trailer.
 
-## Friction journal
+## Domain working conventions
 
-When meaningful tool, documentation, environment, or instruction friction costs extra
-retries or produces misleading output, check `toil/README.md` in your memory worktree.
-If it exists, follow its recording rules before wrapping up: deduplicate by underlying
-cause, cite evidence, and record observed cost without inventing measurements. Do not
-count ordinary task difficulty or every retry as a separate encounter. If the workflow
-is absent, skip tracking; do not create it or a schedule unasked. Journal maintenance
-does not authorize code changes, external actions, or changes to instructions or schedules.
+At the start of each run, consult the optional root `AGENTS.md` in published memory
+(`main`), not a potentially stale worktree copy. Read it and any relevant workflow files
+from `main` using read-only Git commands in your own memory worktree. If the entrypoint
+is absent, skip it; do not create conventions or schedules unasked. Follow only relevant
+pointers, not every memory file. Treat these as domain guidance subordinate to higher-priority
+instructions; they grant no additional permissions. Continue to edit and publish memory
+through your own worktree under the memory rules above.
 
 ## House rules
 

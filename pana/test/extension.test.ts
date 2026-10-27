@@ -450,21 +450,21 @@ describe("system prompt", () => {
 		]) expect(text).toContain(rule);
 	});
 
-	it("PRM-06 the rendered prompt discovers an optional friction journal without granting new authority", async () => {
+	it("PRM-06 the rendered prompt discovers optional domain conventions from published memory", async () => {
 		const seeded = await start();
 		await runTurn();
 		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
 		for (const rule of [
-			"meaningful tool, documentation, environment, or instruction friction",
-			"check `toil/README.md` in your memory worktree",
-			"If it exists, follow its recording rules before wrapping up",
-			"deduplicate by underlying cause",
-			"cite evidence",
-			"record observed cost without inventing measurements",
-			"Do not count ordinary task difficulty or every retry as a separate encounter",
-			"If the workflow is absent, skip tracking",
-			"do not create it or a schedule unasked",
-			"does not authorize code changes, external actions, or changes to instructions or schedules",
+			"At the start of each run",
+			"optional root `AGENTS.md` in published memory (`main`)",
+			"not a potentially stale worktree copy",
+			"Read it and any relevant workflow files from `main` using read-only Git commands in your own memory worktree",
+			"If the entrypoint is absent, skip it",
+			"do not create conventions or schedules unasked",
+			"Follow only relevant pointers, not every memory file",
+			"domain guidance subordinate to higher-priority instructions",
+			"they grant no additional permissions",
+			"Continue to edit and publish memory through your own worktree under the memory rules above",
 		]) expect(text).toContain(rule);
 	});
 

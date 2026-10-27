@@ -226,8 +226,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **PRM-02** Project section: every `AGENTS.md` from the git root of `cwd` down to `cwd`, root first. Outside a git repo, only `cwd/AGENTS.md`.
 - [x] **PRM-03** The pana section includes the session's URL, the memory worktree path, and the memory commands.
 - [x] **PRM-04** Rendering the prompt twice for the same session gives identical text.
-- [x] **PRM-06** The rendered prompt directs sessions encountering meaningful tool, documentation, environment, or instruction friction to the optional `toil/README.md` workflow in their memory worktree. It requires deduplication, evidence and observed costs, excludes ordinary task difficulty and retry inflation, skips absent workflows without unsolicited setup, and grants no authority beyond journal maintenance.
 - [x] **PRM-05** The rendered house rules permit a fast-forward of the user's checkout only on explicit user request. The session verifies checkout path, branch, remote/upstream, and working-tree status; requires no staged or tracked changes; leaves untracked files untouched; uses `git pull --ff-only` without autostash; and never switches branches, stashes, discards changes, resets, rebases, or resolves conflicts automatically. It stops when fast-forward is impossible or local files would be overwritten. Other sessions' worktrees and memory publishing remain protected.
+- [x] **PRM-06** The rendered prompt directs sessions at the start of each run to the optional root `AGENTS.md` and relevant workflow files in published memory (`main`), not stale worktree copies. It skips absent entrypoints without unsolicited setup, loads only relevant pointers, subordinates domain guidance to higher-priority instructions, grants no additional permissions, and preserves the ordinary memory publishing rules.
 
 ### Tools
 
