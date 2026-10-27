@@ -148,7 +148,7 @@ describe("extension isolation", () => {
 		}
 	});
 
-	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_STATE, PANA_SCRATCH, PANA_BROWSER_SESSION, and GIT_CONFIG_*", async () => {
+	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_STATE, PANA_SCRATCH, PANA_BROWSER_SESSION", async () => {
 		const seeded = await start({ capture: true });
 		const first = seeded.sessions[0]!;
 		const conversation = await conversationOf(t!, first.conversationId);
@@ -168,9 +168,9 @@ describe("extension isolation", () => {
 		expect(env.PANA_BROWSER_SESSION).toBe(browserScope(first.id));
 		expect(env.PANA_STATE).toBe(t!.runtime.paths.dir);
 		expect(env.PANA_SCRATCH).toBe(join(t!.runtime.paths.scratch, first.id));
-		expect(env.GIT_CONFIG_COUNT).toBe("1");
-		expect(env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
-		expect(env.GIT_CONFIG_VALUE_0).toBe(t!.runtime.paths.hooks);
+		expect(env.GIT_CONFIG_COUNT).toBeUndefined();
+		expect(env.GIT_CONFIG_KEY_0).toBeUndefined();
+		expect(env.GIT_CONFIG_VALUE_0).toBeUndefined();
 		expect(env.HOME).toBe(process.env.HOME);
 	});
 
@@ -221,7 +221,7 @@ describe("browser isolation", () => {
 
 	it("ISO-06 bin/chrome-devtools runs the CLI with this session's --sessionId", () => {
 		// ISO-03 puts pana's bin first on a session's PATH, so the shim is what `chrome-devtools` means.
-		const env = panaShellEnv({ cwd: tmpdir(), hooksDir: tmpdir(), sessionId: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
+		const env = panaShellEnv({ cwd: tmpdir(), sessionId: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
 		expect(env.PATH?.split(":")[0]).toBe(PANA_BIN);
 		expect(existsSync(join(PANA_BIN, "chrome-devtools"))).toBe(true);
 		expect(env.PANA_BROWSER_SESSION).toBe("pana-01HZZZZZZZZZZZZZZZZZZZZZZZ");

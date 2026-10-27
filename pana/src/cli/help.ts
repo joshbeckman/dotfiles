@@ -3,6 +3,16 @@
 
 import type { CommandSpec } from "./commands.ts";
 
+export const GIT_COMMIT_USAGE = "pana git commit [GIT_COMMIT_ARGS...]";
+export const GIT_COMMIT_HELP = `${GIT_COMMIT_USAGE}
+
+Create a session-attributed commit using native Git hooks and signing.
+Requires PANA_SESSION and the local Pana config; no running daemon is needed.
+Git arguments and output are passed through, not parsed as Pana flags or JSON.
+Dry-run, fixup/squash, custom trailers, and unknown/abbreviated options are rejected.
+Attribution is verified after commit; verification failure does not undo the commit.
+`;
+
 const ROOT_USAGE = "Usage: pana <noun> <command> [options]";
 
 function words(path: readonly string[]): string {
@@ -41,6 +51,7 @@ export function renderHelp(commands: readonly CommandSpec[], path: readonly stri
 				for (const usage of [command.usage, ...(command.altUsage ?? [])]) lines.push(`  ${usage}`);
 			}
 		}
+		lines.push("", "git     Local session-attributed Git commits", `  ${GIT_COMMIT_USAGE}`);
 		lines.push(
 			"",
 			"Global flags:",

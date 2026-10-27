@@ -158,7 +158,6 @@ export interface StatePaths {
 	scratch: string;
 	profiles: string;
 	defaultProfile: string;
-	hooks: string;
 	webToken: string;
 	socket: string;
 	pidFile: string;
@@ -176,7 +175,6 @@ export function statePaths(dir = stateDir()): StatePaths {
 		scratch: join(dir, "scratch"),
 		profiles: join(dir, "profiles"),
 		defaultProfile: join(dir, "profiles", "default.json"),
-		hooks: join(dir, "hooks"),
 		webToken: join(dir, "web-token"),
 		socket: join(dir, "panad.sock"),
 		pidFile: join(dir, "panad.pid"),
@@ -186,7 +184,7 @@ export function statePaths(dir = stateDir()): StatePaths {
 
 /**
  * Create the state layout on first start (CFG-04): `pana.sqlite`, `files/`, `memory.git/`,
- * `memory/worktrees/`, `scratch/`, `profiles/default.json`, `hooks/`, and a `web-token` with mode 0600.
+ * `memory/worktrees/`, `scratch/`, `profiles/default.json`, and a `web-token` with mode 0600.
  * Returns the resolved paths. Existing files are left untouched.
  */
 export function ensureStateLayout(dir = stateDir()): StatePaths {
@@ -197,7 +195,6 @@ export function ensureStateLayout(dir = stateDir()): StatePaths {
 	mkdirSync(paths.memoryWorktrees, { recursive: true });
 	mkdirSync(paths.scratch, { recursive: true });
 	mkdirSync(paths.profiles, { recursive: true });
-	mkdirSync(paths.hooks, { recursive: true });
 
 	if (!existsSync(paths.defaultProfile)) {
 		writeFileSync(paths.defaultProfile, `${JSON.stringify({}, null, "\t")}\n`, { mode: 0o644 });
