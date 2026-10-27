@@ -30,6 +30,18 @@ await build({
   outfile: "composer-vendor.js",
   legalComments: "eof",
 });
+// Pana's memory editor is this app's CodeMirror stack with line numbers and Markdown
+// highlighting. It is built here because the editor packages live here; pana copies the output
+// to its own `web/` and loads it only when someone edits a memory file.
+await build({
+  entryPoints: ["memory-editor.js"],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  globalName: "PanaMemoryEditor",
+  outfile: "memory-editor-vendor.js",
+  legalComments: "eof",
+});
 const lock = JSON.parse(await readFile("package-lock.json", "utf8"));
 // Everything below the header is regenerated from the lockfile, so anything hand-written here
 // is lost on the next build. The font notice was added by hand once and dropped by a later

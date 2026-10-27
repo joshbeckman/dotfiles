@@ -224,7 +224,9 @@ npm run build
 npm audit --omit=dev --registry=https://registry.npmjs.org
 ```
 
-Commit `vendor.js`, `mermaid-vendor.js`, `composer-vendor.js`, `package-lock.json`, and `THIRD_PARTY_LICENSES.txt` together when updating dependencies. No runtime CDN requests are needed.
+Commit `vendor.js`, `mermaid-vendor.js`, `composer-vendor.js`, `memory-editor-vendor.js`, `package-lock.json`, and `THIRD_PARTY_LICENSES.txt` together when updating dependencies. No runtime CDN requests are needed.
+
+`memory-editor.js` builds to `memory-editor-vendor.js` (global `PanaMemoryEditor`) for pana's memory editor. Pana copies that output to `pana/web/`; this app does not load it.
 
 Co-authored-by: AI Simoom Farrier @+simoom-farrier
 Co-authored-by: AI Carrick Bailey of Hearth @+carrick-bailey-of-hearth
