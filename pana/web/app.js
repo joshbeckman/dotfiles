@@ -1503,8 +1503,12 @@ async function confirmArchiveSession() {
 let memoryBack = "#/memory";
 /** The file being edited; "" while creating a new one. */
 let memoryEditingPath = "";
+let memoryEditorLoad = 0;
+let memoryEditorReady = false;
 
 function showMemoryDetail(which) {
+	memoryEditorLoad++; // Invalidate pending editor reads when navigating to any memory view.
+	memoryEditorReady = false;
 	$("memory-browse").hidden = which !== "browse";
 	$("memory-file-view").hidden = which !== "file";
 	$("memory-edit-view").hidden = which !== "edit";
@@ -1726,9 +1730,12 @@ function ensureMemoryEditor() {
 }
 
 let memoryEditor;
+let memoryBaseCommit = null;
 
 async function openMemoryEditor(path) {
 	showMemoryDetail("edit");
+	const load = memoryEditorLoad;
+	$("memory-save").disabled = true;
 	memoryEditingPath = path;
 	const creating = path.length === 0;
 	$("memory-edit-title").textContent = creating ? "New file" : path;
@@ -1736,11 +1743,18 @@ async function openMemoryEditor(path) {
 	$("memory-path-field").hidden = !creating;
 	$("memory-path-input").value = path;
 	let content = "";
-	if (!creating) content = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`)).content;
+	let baseCommit = null; // New files are create-only, never accidental overwrites.
+	if (!creating) {
+		const file = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`));
+		content = file.content;
+		baseCommit = file.commit;
+	}
 
+	if (load !== memoryEditorLoad) return;
 	const parent = $("memory-editor");
 	if (!memoryEditor) empty(parent, "Loading editor…");
 	const lib = await ensureMemoryEditor();
+	if (load !== memoryEditorLoad) return;
 	if (!memoryEditor) {
 		parent.replaceChildren();
 		memoryEditor = lib.create(parent, () => {});
@@ -1757,6 +1771,9 @@ async function openMemoryEditor(path) {
 		);
 	}
 	memoryEditor.load(content);
+	memoryBaseCommit = baseCommit; // Install the content and its token together.
+	memoryEditorReady = true;
+	$("memory-save").disabled = false;
 	if (creating) $("memory-path-input").focus();
 	else memoryEditor.focus();
 }
@@ -1770,11 +1787,11 @@ async function saveMemory(event) {
 		$("memory-path-input").focus();
 		return;
 	}
-	if (!memoryEditor) return status("The editor is still loading.", true);
+	if (!memoryEditor || !memoryEditorReady) return status("The editor is still loading.", true);
 	const save = $("memory-save");
 	save.disabled = true;
 	try {
-		await api("POST", `/memory/files/${memoryPath(path)}`, { content: memoryEditor.value() });
+		await api("POST", `/memory/files/${memoryPath(path)}`, { content: memoryEditor.value(), baseCommit: memoryBaseCommit });
 		status("Saved and committed to main.");
 		memoryBack = "#/memory";
 		location.hash = memoryFileHref(path);

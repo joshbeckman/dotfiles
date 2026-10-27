@@ -567,25 +567,60 @@ export class Memory {
 		await this.ensureRepo();
 		const commit = await this.revParse(`refs/heads/${MAIN}`, this.options.gitDir);
 		if (commit === undefined) return undefined;
-		const blob = await runGit(["-C", this.options.gitDir, "cat-file", "blob", `${MAIN}:${path}`]);
+		const blob = await runGit(["-C", this.options.gitDir, "cat-file", "blob", `${commit}:${path}`]);
 		if (blob.code !== 0) return undefined;
 		return { path, content: blob.stdout, commit };
 	}
 
-	/** Write a file into the writer's worktree and commit it through the MEM-03 path (MEM-09). */
-	async writeFile(writer: MemoryWriter, relativePath: string, content: string, message: string): Promise<CommitResult> {
+	/** UI saves start from main, not the writer's potentially stale checkout. */
+	async writeFile(
+		writer: MemoryWriter, relativePath: string, content: string, message: string, baseCommit?: string | null,
+	): Promise<CommitResult> {
 		const path = normalizeMemoryPath(relativePath);
-		const worktree = await this.worktree(writer);
-		const target = resolve(worktree.path, path);
-		if (!target.startsWith(worktree.path + sep)) {
-			throw ApiError.badRequest("invalid_path", `invalid memory path: ${relativePath}`);
-		}
-		if (existsSync(target) && !isFile(target)) {
-			throw ApiError.badRequest("invalid_path", `memory path is not a file: ${path}`);
-		}
-		mkdirSync(dirname(target), { recursive: true });
-		writeFileSync(target, content);
-		return this.commit(writer, message.length > 0 ? message : `Update ${path}`);
+		return serialize(`branch/${writer.id}`, async () => {
+			const worktree = await this.worktreeSerialized(writer);
+			// Never overwrite local work or sweep it into a UI save. In particular, a previous
+			// failed publish must be resolved explicitly, not compounded by each Save retry.
+			const status = await gitOrThrow(["status", "--porcelain", "-z"], { cwd: worktree.path });
+			const ahead = await gitOrThrow(["rev-list", "--count", `${MAIN}..HEAD`], { cwd: worktree.path });
+			if (status.stdout.length > 0 || Number(ahead.stdout.trim()) > 0) {
+				throw new ApiError(409, "dirty_worktree", "Commit or resolve your memory worktree changes before saving a file", {
+					path: worktree.path, branch: worktree.branch,
+				});
+			}
+			await gitOrThrow(["merge", "--ff-only", "--quiet", MAIN], { cwd: worktree.path });
+			// Compare against this checkout, not a moving main. publish() handles subsequent
+			// races using the usual rebase/CAS. Unrelated file changes do not stale the editor.
+			if (baseCommit !== undefined) {
+				if (baseCommit !== null && (!/^[0-9a-f]{40}$/.test(baseCommit) ||
+					await this.revParse(`${baseCommit}^{commit}`, worktree.path) === undefined)) {
+					throw ApiError.badRequest("invalid_base_commit", "baseCommit must name an existing full commit hash or be null");
+				}
+				const before = baseCommit === null ? undefined : await this.revParse(`${baseCommit}:${path}`, worktree.path);
+				const current = await this.revParse(`HEAD:${path}`, worktree.path);
+				if (before !== current) {
+					throw new ApiError(409, "stale_file", "This memory file changed since you opened it. Copy your edits, reload the file, and try again.", { paths: [path] });
+				}
+			}
+			const target = resolve(worktree.path, path);
+			if (!target.startsWith(worktree.path + sep)) {
+				throw ApiError.badRequest("invalid_path", `invalid memory path: ${relativePath}`);
+			}
+			// Reject symlink parents too: a UI path must never write outside its worktree.
+			let parent = worktree.path;
+			for (const part of path.split("/")) {
+				parent = join(parent, part);
+				if (lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) {
+					throw ApiError.badRequest("invalid_path", `memory path contains a symbolic link: ${path}`);
+				}
+			}
+			if (existsSync(target) && !isFile(target)) {
+				throw ApiError.badRequest("invalid_path", `memory path is not a file: ${path}`);
+			}
+			mkdirSync(dirname(target), { recursive: true });
+			writeFileSync(target, content);
+			return this.commitSerialized(writer, message.length > 0 ? message : `Update ${path}`, worktree);
+		});
 	}
 
 	/** Delete through the same commit/publish path as edits, retaining the file in history. */
