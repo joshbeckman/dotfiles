@@ -2,9 +2,10 @@
 // environment, and the git hook directory. `createPanaRegistry` is what panad installs.
 
 import { createRegistry, defineExtension, type Extension, type Registry } from "@earendil-works/pi-durable";
-import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { createCodingTools } from "@earendil-works/pi-durable/tools";
 import type { Runtime } from "../server/runtime.ts";
 import { createSessionHooks } from "../sessions/reply.ts";
+import { nodeImages } from "./images.ts";
 import { bashTimeoutWrap } from "./bash.ts";
 import { createPanaSections } from "./prompt.ts";
 import { createPanaTools } from "./tools.ts";
@@ -53,7 +54,7 @@ export function createPanaExtension(getRuntime: () => Runtime): Extension {
 /** panad's registry: `CodingTools` first, then `pana`, and nothing else (ISO-01). */
 export function createPanaRegistry(getRuntime: () => Runtime): Registry {
 	const registry = createRegistry();
-	registry.install(CodingTools);
+	registry.install(createCodingTools({ images: nodeImages }));
 	registry.install(createPanaExtension(getRuntime));
 	return registry;
 }

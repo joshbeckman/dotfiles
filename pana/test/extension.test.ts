@@ -87,6 +87,18 @@ async function runTurn(text = "ok"): Promise<void> {
 	if (settled.status !== "done") throw new Error(`run failed: ${JSON.stringify(settled)}`);
 }
 
+describe("reader image preparation", () => {
+	it("shrinks a 2050x380 screenshot through the installed reader", async () => {
+		const first = await start({ capture: true });
+		const path = join(import.meta.dirname, "fixtures/wide-screenshot.png");
+		const original = readFileSync(path);
+		const outcome = await runTool(t!, first.sessions[0]!.conversationId, "read", { path });
+		expect(outcome.isError).toBe(false);
+		expect(JSON.stringify(outcome.diagnostics)).toContain("Resized from 2050x380 to 2000x371");
+		expect(readFileSync(path)).toEqual(original);
+	});
+});
+
 describe("extension isolation", () => {
 	it("ISO-01 the registry holds only CodingTools and pana", async () => {
 		t = await startTestPanad({ script: [] });
