@@ -1,6 +1,6 @@
 // WP17: sessions schedule their own wakeups instead of sleeping in bash (WAK-01..WAK-06).
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runPanaCommand } from "../src/cli/commands.ts";
 import { fillPrompt, promptTemplate } from "../src/extension/prompt.ts";
 import { longestSleep, MAX_SLEEP_SEC } from "../src/extension/bash.ts";
@@ -87,7 +87,7 @@ describe("WAK-01 scheduling a wake", () => {
 
 		expect((await wake(own.session.id, { in: "soon", note: "x" })).status).toBe(400);
 		const cron = await t!.client.post("/schedules", { kind: "wake", cron: "* * * * *", note: "x" }, { caller: own.session.id });
-		expect(cron.status).toBe(400);
+		expect(cron.status).toBe(201);
 		expect((await t!.client.post("/schedules", { kind: "wake", in: "5m" }, { caller: own.session.id })).status).toBe(400);
 
 		await runPanaCommand("session archive", { id: other.session.id }, { endpoint: { socketPath: t!.panad.socketPath } });
@@ -113,6 +113,42 @@ describe("WAK-02 a wake fires", () => {
 		expect(t!.model.calls()).toBe(2);
 		expect(JSON.stringify(entries)).toContain("Check CI on PR 75; reply in the thread");
 		expect(await messageCount(created.thread.id)).toBe(before);
+	});
+
+	it("SCH-10 cron wakes gate each occurrence and use distinct request IDs with the original schedule URL", async () => {
+		await start([{ text: "watching" }, { text: "first wake" }, { text: "second wake" }]);
+		const created = await session();
+		const response = await t!.client.post<{ schedule: { id: string; url: string } }>("/schedules", {
+			kind: "wake", cron: "* * * * *", check: "true", note: "report if ready", session: created.session.id,
+		});
+		expect(response.status).toBe(201);
+		const schedule = response.body.schedule;
+		for (let n = 1; n <= 2; n++) {
+			await t!.clock.advance(MINUTE);
+			await vi.waitFor(async () => expect(await wakeEntries(created.session.id)).toHaveLength(n));
+			await settled(created.session.id);
+		}
+		expect(t!.model.calls()).toBe(3);
+		const entries = JSON.stringify(await wakeEntries(created.session.id));
+		expect(entries).toContain(schedule.url);
+		expect((await t!.client.get<{ schedule: { state: string } }>(`/schedules/${schedule.id}`)).body.schedule.state).toBe("active");
+	});
+
+	it("SCH-14 a refused recurring wake does not stop until a wake can be dispatched", async () => {
+		await start([{ text: "watching" }]);
+		const created = await session();
+		await t!.client.post(`/sessions/${created.session.id}/stop`);
+		const response = await t!.client.post<{ schedule: { id: string } }>("/schedules", {
+			kind: "wake", cron: "* * * * *", check: "true", stopAfterSuccess: true, note: "report if ready", session: created.session.id,
+		});
+		expect(response.status).toBe(201);
+		await t!.clock.advance(MINUTE);
+		await vi.waitFor(async () => {
+			const found = await t!.client.get<{ schedule: { lastCheck: unknown; state: string } }>(`/schedules/${response.body.schedule.id}`);
+			expect(found.body.schedule.lastCheck).not.toBeNull();
+			expect(found.body.schedule.state).toBe("active");
+		});
+		expect(await wakeEntries(created.session.id)).toEqual([]);
 	});
 
 	it("WAK-02 a stopped session is not woken", async () => {

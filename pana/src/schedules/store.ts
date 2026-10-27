@@ -10,6 +10,8 @@
 // one `db.write`.
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
+import { isAbsolute } from "node:path";
+import type { CheckResult } from "./check.ts";
 import { Cron } from "croner";
 import { ApiError } from "../api/errors.ts";
 import { isUlid, parseRef } from "../ids/index.ts";
@@ -24,6 +26,11 @@ export type ScheduleKind = "session" | "thread" | "wake";
 export type ScheduleState = "active" | "done" | "missed" | "deleted";
 
 export interface ScheduleRow {
+	revision: number;
+	check_command: string | null;
+	check_cwd: string | null;
+	stop_after_success: number;
+	last_check: string | null;
 	id: string;
 	kind: ScheduleKind;
 	state: ScheduleState;
@@ -43,6 +50,10 @@ interface ScheduleJoinRow extends ScheduleRow {
 }
 
 export interface ScheduleView {
+	check: string | null;
+	checkCwd: string | null;
+	stopAfterSuccess: boolean;
+	lastCheck: CheckResult | null;
 	id: string;
 	url: string;
 	kind: ScheduleKind;
@@ -59,6 +70,9 @@ export interface ScheduleView {
 }
 
 export interface ScheduleInput {
+	check?: unknown;
+	checkCwd?: unknown;
+	stopAfterSuccess?: unknown;
 	kind?: unknown;
 	cron?: unknown;
 	at?: unknown;
@@ -247,6 +261,24 @@ async function wakeTarget(runtime: Runtime, caller: Caller, value: unknown): Pro
 	return id;
 }
 
+/** Conditions belong to the schedule, never the action payload. */
+function conditions(input: ScheduleInput, cron: string | null) {
+	const check = input.check ?? null;
+	if (check !== null && (typeof check !== "string" || !check.trim())) {
+		throw ApiError.badRequest("invalid_check", "--check must be a nonempty bash command");
+	}
+	const stop = input.stopAfterSuccess ?? false;
+	if (typeof stop !== "boolean") throw ApiError.badRequest("invalid_stop_after_success", "stopAfterSuccess must be boolean");
+	if ((check !== null || stop) && !cron) {
+		throw ApiError.badRequest("requires_cron", "--check and --stop-after-success require a recurring --cron schedule");
+	}
+	const cwd = input.checkCwd ?? (check === null ? null : process.cwd());
+	if (cwd !== null && (check === null || typeof cwd !== "string" || !isAbsolute(cwd))) {
+		throw ApiError.badRequest("invalid_check_cwd", "--check-cwd requires --check and an absolute directory path");
+	}
+	return { check: check as string | null, cwd: cwd as string | null, stop };
+}
+
 // --- Reads ---------------------------------------------------------------------
 
 function scheduleView(row: ScheduleJoinRow, runtime: Runtime): ScheduleView {
@@ -259,6 +291,10 @@ function scheduleView(row: ScheduleJoinRow, runtime: Runtime): ScheduleView {
 	}
 	const creatorKind = row.creator_kind === "session" ? "session" : "user";
 	return {
+		check: row.check_command,
+		checkCwd: row.check_cwd,
+		stopAfterSuccess: row.stop_after_success === 1,
+		lastCheck: row.last_check ? JSON.parse(row.last_check) : null,
 		id: row.id,
 		url: runtime.url({ kind: "schedule", id: row.id }),
 		kind: row.kind,
@@ -343,19 +379,16 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 	const input = withDelay(inputObject(value), runtime.clock.now());
 	const now = runtime.clock.now();
 	const kind = scheduleKind(input.kind);
-	if (kind === "wake" && hasValue(input.cron)) {
-		// A recurring self-wake would run, and spend, forever with nobody asking.
-		throw ApiError.badRequest("invalid_cron", "a wake takes --in or --at, not --cron");
-	}
 	const timing = scheduleTiming(input, runtime.config.timezone, now);
+	const condition = conditions(input, timing.cron);
 	const payload = schedulePayload(input, kind);
 	if (kind === "wake") payload.session = await wakeTarget(runtime, caller, payload.session);
 	const id = runtime.newId();
 	const view = await runtime.db.write(async (tx) => {
 		await ensureParticipant(tx, runtime, now, caller);
 		await tx.run(
-			`INSERT INTO schedules (id, kind, state, cron, at, timezone, creator_id, payload, next_at, created_at, updated_at)
-			 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO schedules (id, kind, state, cron, at, timezone, creator_id, payload, next_at, created_at, updated_at, check_command, check_cwd, stop_after_success)
+			 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id,
 			kind,
 			timing.cron,
@@ -366,6 +399,9 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 			timing.nextAt,
 			now,
 			now,
+			condition.check,
+			condition.cwd,
+			condition.stop ? 1 : 0,
 		);
 		return scheduleView(await scheduleRow(tx, id), runtime);
 	});
@@ -389,8 +425,13 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
 		const payload = input.payload === undefined ? JSON.parse(existing.payload) : schedulePayload(input, kind);
 		const next = timing ?? { cron: existing.cron, at: existing.at, timezone: existing.timezone, nextAt: existing.next_at };
+		const condition = conditions({
+			check: input.check === undefined ? existing.check_command : input.check,
+			checkCwd: input.checkCwd === undefined ? (input.check === null ? null : existing.check_cwd) : input.checkCwd,
+			stopAfterSuccess: input.stopAfterSuccess === undefined ? existing.stop_after_success === 1 : input.stopAfterSuccess,
+		}, next.cron);
 		await tx.run(
-			`UPDATE schedules SET kind = ?, state = ?, cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?
+			`UPDATE schedules SET revision = revision + 1, kind = ?, state = ?, cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?, check_command = ?, check_cwd = ?, stop_after_success = ?
 			  WHERE id = ?`,
 			kind,
 			timing ? "active" : existing.state,
@@ -400,6 +441,9 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 			JSON.stringify(payload),
 			next.nextAt,
 			now,
+			condition.check,
+			condition.cwd,
+			condition.stop ? 1 : 0,
 			id,
 		);
 		return scheduleView(await scheduleRow(tx, id), runtime);
@@ -435,9 +479,10 @@ export async function dueSchedules(runtime: Runtime, now: number): Promise<Sched
 }
 
 /** The earliest `next_at` of any active schedule, or null when nothing is armed. */
-export async function nextDueAt(runtime: Runtime): Promise<number | null> {
+export async function nextDueAt(runtime: Runtime, excluding: string[] = []): Promise<number | null> {
 	const row = await runtime.db.get<{ next: number | null }>(
-		"SELECT MIN(next_at) AS next FROM schedules WHERE state = 'active' AND next_at IS NOT NULL",
+		`SELECT MIN(next_at) AS next FROM schedules WHERE state = 'active' AND next_at IS NOT NULL ${excluding.length ? `AND id NOT IN (${excluding.map(() => "?").join(",")})` : ""}`,
+		...excluding,
 	);
 	return row?.next ?? null;
 }
@@ -446,11 +491,11 @@ export async function nextDueAt(runtime: Runtime): Promise<number | null> {
  * Claim one fire. Returns false when the schedule is no longer active (deleted or already fired),
  * so two clocks, or a delete that lands mid-fire, can never run it twice.
  */
-export async function claimSchedule(runtime: Runtime, id: string, state: "active" | "done" | "missed", nextAt: number | null): Promise<boolean> {
+export async function claimSchedule(runtime: Runtime, id: string, state: "active" | "done" | "missed", nextAt: number | null, expected?: ScheduleRow): Promise<boolean> {
 	const now = runtime.clock.now();
 	return runtime.db.write(async (tx) => {
-		const row = await tx.get<{ state: ScheduleState }>("SELECT state FROM schedules WHERE id = ?", id);
-		if (row?.state !== "active") return false;
+		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
+		if (row?.state !== "active" || (expected && (row.revision !== expected.revision || row.next_at !== expected.next_at))) return false;
 		await tx.run("UPDATE schedules SET state = ?, next_at = ?, updated_at = ? WHERE id = ?", state, nextAt, now, id);
 		return true;
 	});
@@ -461,13 +506,14 @@ export async function claimSchedule(runtime: Runtime, id: string, state: "active
  * `GET /schedules/:id` the same way a user's delete is. The row stays in the table, so a spent
  * wake is still answerable from the database when someone asks whether it fired.
  */
-export async function finishSchedule(runtime: Runtime, id: string): Promise<void> {
+export async function finishSchedule(runtime: Runtime, id: string, revision: number): Promise<void> {
 	const now = runtime.clock.now();
 	await runtime.db.write(async (tx) => {
 		await tx.run(
-			"UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ? AND state <> 'deleted'",
+			"UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ? AND state <> 'deleted' AND revision = ?",
 			now,
 			id,
+			revision,
 		);
 	});
 	notifySchedulesChanged(runtime);
@@ -489,4 +535,29 @@ export async function creatorAddress(runtime: Runtime, creatorId: string): Promi
 	);
 	if (row && row.kind === "user") return row.url;
 	return runtime.userUrl;
+}
+
+/** Save diagnostics without altering recurrence or dispatching anything. */
+export async function recordCheck(runtime: Runtime, id: string, result: CheckResult): Promise<void> {
+	await runtime.db.write(async (tx) => {
+		await tx.run("UPDATE schedules SET last_check = ?, updated_at = ? WHERE id = ?", JSON.stringify(result), runtime.clock.now(), id);
+	});
+}
+
+export async function completeSchedule(runtime: Runtime, id: string, revision: number): Promise<void> {
+	await runtime.db.write(async (tx) => {
+		await tx.run("UPDATE schedules SET state = 'done', next_at = NULL, updated_at = ? WHERE id = ? AND state = 'active' AND revision = ?", runtime.clock.now(), id, revision);
+	});
+}
+
+/** Skip missed in-flight occurrences only for the claimed configuration, atomically. */
+export async function settleSchedule(runtime: Runtime, expected: ScheduleRow): Promise<boolean> {
+	return runtime.db.write(async (tx) => {
+		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", expected.id);
+		const now = runtime.clock.now();
+		if (!row || row.revision !== expected.revision || row.state !== "active" || !row.cron || row.next_at === null || row.next_at > now) return false;
+		const nextAt = nextCronAt(row.cron, row.timezone ?? runtime.config.timezone, now);
+		await tx.run("UPDATE schedules SET state = ?, next_at = ?, updated_at = ? WHERE id = ?", nextAt === null ? "done" : "active", nextAt, now, row.id);
+		return nextAt === null;
+	});
 }

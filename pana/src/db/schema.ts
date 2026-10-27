@@ -243,6 +243,17 @@ export const MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX schedules_state ON schedules(state, next_at);
 		`,
 	},
+	{
+		version: 8,
+		name: "schedule conditions",
+		sql: `
+			ALTER TABLE schedules ADD COLUMN check_command TEXT;
+			ALTER TABLE schedules ADD COLUMN check_cwd TEXT;
+			ALTER TABLE schedules ADD COLUMN stop_after_success INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE schedules ADD COLUMN last_check TEXT;
+			ALTER TABLE schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

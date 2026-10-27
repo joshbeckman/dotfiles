@@ -146,6 +146,8 @@ export function defaultWakeSubmitter(getRuntime: () => Runtime): WakeSubmitter {
 }
 
 export interface ScheduledWake {
+	/** Cron occurrence time makes repeated wakes distinct without changing the schedule URL. */
+	occurrence?: number;
 	scheduleId: string;
 	sessionId: string;
 	note: string;
@@ -177,7 +179,7 @@ export async function wakeScheduled(runtime: Runtime, wake: ScheduledWake): Prom
 				].join("\n"),
 				whenBusy: "followUp",
 				entry: { kind: WAKE_ENTRY_KIND, data: { scheduleId: wake.scheduleId } },
-				requestId: `pana.wake:${wake.scheduleId}`,
+				requestId: `pana.wake:${wake.scheduleId}${wake.occurrence === undefined ? "" : `:${wake.occurrence}`}`,
 			},
 			BACKGROUND_CONTEXT,
 		);

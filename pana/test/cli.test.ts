@@ -33,11 +33,13 @@ const README_COMMANDS = [
 	"pana memory search TEXT",
 	"pana memory commit -m MSG",
 	"pana memory log [PATH]",
-	'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT',
+	'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 	"pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT",
 	"pana schedule thread create --at 2026-10-25T18:26:14Z --to ADDRS --body-file PATH",
+	'pana schedule thread create --cron "*/5 * * * *" --to ADDRS --body TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 	"pana schedule wake --in 10m --note TEXT [--session SESSION]",
 	"pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT",
+	'pana schedule wake --cron "*/5 * * * *" --note TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 	"pana schedule list [--kind session|thread|wake]",
 	"pana schedule delete SCHEDULE",
 ];
@@ -409,6 +411,50 @@ describe("pana CLI routes", () => {
 		expect(
 			(await run(["schedule", "session", "create", "--cron", "* * * * *", "--at", "2026-01-01T00:00:00Z", "--prompt", "p"], t)).code,
 		).toBe(2);
+	});
+
+	it("SCH-09 CLI forwards recurring check options for every kind and leaves cwd defaulting to panad", async () => {
+		const t = await start({ handlers: { "schedules.create": (request) => ({ status: 201, body: request.body }) } });
+		const kinds = [
+			{ command: ["schedule", "session", "create"], args: ["--prompt", "p"], kind: "session" },
+			{ command: ["schedule", "thread", "create"], args: ["--to", "a", "--body", "b"], kind: "thread" },
+			{ command: ["schedule", "wake"], args: ["--note", "n", "--session", "S"], kind: "wake" },
+		];
+		for (const { command, args, kind } of kinds) {
+			const result = await run([...command, ...args, "--cron", "*/5 * * * *", "--check", "test -f ready", "--check-cwd", tmpdir(), "--stop-after-success", "--json"], t);
+			expect(result.code).toBe(0);
+			expect(JSON.parse(result.stdout)).toMatchObject({ kind, cron: "*/5 * * * *", check: "test -f ready", checkCwd: tmpdir(), stopAfterSuccess: true });
+			const defaults = await run([...command, ...args, "--cron", "* * * * *", "--check", "true", "--json"], t);
+			expect(defaults.code).toBe(0);
+			expect(JSON.parse(defaults.stdout)).not.toHaveProperty("checkCwd");
+			const noCheck = await run([...command, ...args, "--cron", "* * * * *", "--stop-after-success", "--json"], t);
+			expect(noCheck.code).toBe(0);
+			expect(JSON.parse(noCheck.stdout)).toMatchObject({ stopAfterSuccess: true });
+		}
+	});
+
+	it("SCH-09 CLI rejects invalid check options and timing combinations before dispatch", async () => {
+		const commands = [
+			["schedule", "session", "create", "--prompt", "p"],
+			["schedule", "thread", "create", "--to", "a", "--body", "b"],
+			["schedule", "wake", "--note", "n"],
+		];
+		for (const command of commands) {
+			for (const options of [
+				[],
+				["--cron", "* * * * *", "--at", "2027-01-01T00:00:00Z"],
+				["--at", "2027-01-01T00:00:00Z", "--check", "true"],
+				["--at", "2027-01-01T00:00:00Z", "--stop-after-success"],
+				["--cron", "* * * * *", "--check", " "],
+				["--cron", "* * * * *", "--check", "true", "--check-cwd", "relative"],
+				["--cron", "* * * * *", "--check-cwd", tmpdir()],
+			]) expect((await run([...command, ...options], undefined)).code).toBe(2);
+		}
+		for (const options of [
+			["--in", "10m", "--cron", "* * * * *"],
+			["--in", "10m", "--at", "2027-01-01T00:00:00Z"],
+			["--in", "10m", "--check", "true"],
+		]) expect((await run(["schedule", "wake", "--note", "n", ...options], undefined)).code).toBe(2);
 	});
 
 	it("the user can read any inbox, and the caller is the user without PANA_SESSION", async () => {
