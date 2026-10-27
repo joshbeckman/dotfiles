@@ -1325,3 +1325,19 @@ kbd {
 		height: 55dvh;
 	}
 }
+
+/* Full schedule instructions stay readable without overwhelming the list. */
+.schedule-content {
+	margin-top: 0.6rem;
+	font-size: 0.875rem;
+}
+.schedule-content > summary {
+	cursor: pointer;
+	color: var(--c-text-alt);
+}
+.schedule-content > pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font: inherit;
+	margin-bottom: 0;
+}

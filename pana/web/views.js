@@ -388,6 +388,10 @@ export function scheduleBody(form, editing) {
 		.filter(Boolean);
 	if (kind === "thread" && to.length > 0) payload.to = to;
 	const body = { kind, payload };
+	// This labels the schedule, not a thread created by payload.subject.
+	const subject = String(form.subject ?? "").trim();
+	if (subject && (!editing || subject !== editing.subject)) body.subject = subject;
+	else if (!subject && editing && form.subject !== undefined) body.subject = null;
 	if (when) {
 		if (ISO_DATE.test(when)) body.at = when;
 		else body.cron = when;
