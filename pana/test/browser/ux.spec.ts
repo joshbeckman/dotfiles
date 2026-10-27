@@ -669,7 +669,7 @@ describeBrowser("pana usability in a browser", () => {
 			const filtered = [...document.querySelectorAll("#palette-list [data-testid=palette-command]")].map((row) => row.dataset.command);
 			await press("Enter");
 			await until(() => location.hash === "#/memory" && !open());
-			return { filtered, hash: location.hash, closed: !open };
+			return { filtered, hash: location.hash, closed: !open() };
 		`);
 		expect(ran.filtered[0]).toBe("go:memory");
 		expect(ran.hash).toBe("#/memory");

@@ -138,6 +138,17 @@ export function memoryHits(body) {
 	});
 }
 
+/** A thread's search hits repeat once per matching message; the palette lists it once. */
+function dedupe(hits) {
+	const seen = new Set();
+	return hits.filter((hit) => {
+		const key = `${hit.kind}:${hit.id}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
 /** What the fuzzy match reads for a hit: its title and the line the store matched it on. */
 function hitText(hit) {
 	return `${hit.label} ${hit.meta ?? ""}`;
@@ -156,9 +167,7 @@ export function paletteHits(bodies, query, limit = HITS_PER_STORE) {
 	return groups
 		.map(([title, hits]) => ({
 			title,
-			hits: rankBy(hits, query, hitText, { keep: true })
-				.slice(0, limit)
-				.map((entry) => entry.item),
+			hits: dedupe(rankBy(hits, query, hitText, { keep: true }).map((entry) => entry.item)).slice(0, limit),
 		}))
 		.filter((group) => group.hits.length > 0);
 }

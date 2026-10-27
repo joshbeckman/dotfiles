@@ -347,6 +347,16 @@ describe("UX-15 the command palette", () => {
 		expect(paletteHits({ threads: { threads: [{ threadId: "T3", subject: "Lunch", snippet: "deploy" }] } }, "zzz")[0]!.hits[0]!.id).toBe("T3");
 		expect(groups[1]!.hits[0]).toEqual({ kind: "session", id: "S1", label: "…deployed it…", meta: "session ABC9Z1", at: undefined });
 		expect(groups[2]!.hits[0]).toEqual({ kind: "memory", id: "ops/deploy.md", label: "ops/deploy.md", meta: "3: deploy steps" });
+		// A thread that matched in three of its messages is still one row.
+		const repeated = {
+			threads: {
+				threads: [
+					{ threadId: "T9", subject: "Deploy notes", snippet: "deploy", createdAt: 1, unreadCount: 0, archived: false },
+					{ threadId: "T9", subject: "Deploy notes", snippet: "deploy again", createdAt: 2, unreadCount: 0, archived: false },
+				],
+			},
+		};
+		expect(paletteHits(repeated, "deploy")[0]!.hits).toHaveLength(1);
 		// A store that matched nothing is left out, and no store answers with more than its share.
 		expect(paletteHits({}, "deploy")).toEqual([]);
 		const many = { results: Array.from({ length: 9 }, (_, at) => ({ path: `note-${at}.md`, line: 1, text: `deploy ${at}` })) };

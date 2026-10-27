@@ -2255,23 +2255,35 @@ function paletteStage(stage) {
 	$("palette-input").focus();
 }
 
+/** A command's own key, set to the right of its row the way the help overlay writes one. */
+function paletteKeyHint(hint) {
+	const aside = document.createElement("div");
+	aside.className = "item-aside";
+	const kbd = document.createElement("kbd");
+	kbd.textContent = hint;
+	aside.append(kbd);
+	return aside;
+}
+
 /** One palette row, built like every other list row so it reads the same (REF-07, UX-07). */
 function paletteRow({ command, hit }) {
 	const label = command ? command.label : hit.label || "(untitled)";
-	const meta = command ? [command.hint].filter(Boolean) : [hit.meta].filter(Boolean);
-	const row = item(label, meta, () => runPaletteRow(row), {
+	const entry = { kind: command ? "command" : "hit", command, hit, row: undefined };
+	const row = item(label, command ? [] : [hit.meta].filter(Boolean), () => runPaletteRow(entry), {
 		testid: command ? "palette-command" : "palette-hit",
 		id: command ? command.id : hit.id,
+		aside: command?.hint ? paletteKeyHint(command.hint) : undefined,
 	});
+	entry.row = row;
 	// The palette keeps its own selection; j and k still move the page's list behind it.
 	delete row.dataset.selectable;
 	row.setAttribute("role", "option");
 	row.setAttribute("aria-selected", "false");
 	row.id = `palette-row-${palette.rows.length}`;
-	row.dataset.kind = command ? "command" : "hit";
+	row.dataset.kind = entry.kind;
 	if (command) row.dataset.command = command.id;
 	if (hit) row.dataset.hitKind = hit.kind;
-	palette.rows.push({ kind: row.dataset.kind, command, hit, row });
+	palette.rows.push(entry);
 	return row;
 }
 

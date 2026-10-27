@@ -130,6 +130,9 @@ export async function seedDomain(): Promise<Seeded> {
 	must(archive.status === 200, "archive the thread");
 
 	await t.client.post("/memory/files/notes/pana.md", { content: "# pana\n\nDecisions and open questions.\n" });
+	// Search reads `main`, so the notes are committed the way a session leaves them.
+	const committed = await t.client.post("/memory/commit", { message: "Seed the memory notes" });
+	must(committed.status === 200, JSON.stringify(committed.body));
 	await t.client.post("/schedules", { kind: "session", cron: "0 9 * * 1-5", payload: { prompt: "Morning review of open threads" } });
 	await t.client.post("/schedules", {
 		kind: "thread",

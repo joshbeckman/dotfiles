@@ -2,6 +2,7 @@
 // and the session header keeps its ID readable. Set PANA_MOBILE_SHOTS=DIR to save a screenshot of
 // each view for review.
 
+import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loopbackOrigin } from "../../src/web/static.ts";
@@ -63,7 +64,7 @@ async function view(name: string, hash: string, ready: string): Promise<Overflow
 		${MEASURE}
 	`);
 	const dir = process.env.PANA_MOBILE_SHOTS;
-	if (dir) await screenshot(join(dir, `${name}.png`));
+	if (dir) copyFileSync(await screenshot(), join(dir, `${name}.png`));
 	return overflow;
 }
 

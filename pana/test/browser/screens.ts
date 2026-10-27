@@ -2,8 +2,7 @@
 // screenshot of every section to DIR/LABEL-<name>.png, for the before-and-after review of UX-06
 // and UX-07. `dark` renders with the dark color scheme.
 
-import { renameSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { closePage, emulateColorScheme, evaluatePage, newPage, resizePage, screenshot } from "./cli.ts";
@@ -30,9 +29,8 @@ async function shot(name: string, hash: string, ready: string, extra = ""): Prom
 		await sleep(100);
 		return true;
 	`);
-	const file = join(tmpdir(), `${label}-${name}.png`);
-	await screenshot(file, true);
-	renameSync(file, join(dir, `${label}-${name}.png`));
+	const file = await screenshot(true);
+	copyFileSync(file, join(dir, `${label}-${name}.png`));
 	console.log(join(dir, `${label}-${name}.png`));
 }
 

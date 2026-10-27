@@ -22,8 +22,15 @@ pana session create --prompt "what is the capital of france"
   <img src="docs/session.png" alt="A pana session: its pinned header with state, model, cost, and controls, above the transcript" width="74%">
   <img src="docs/thread-phone.png" alt="A pana thread on a phone" width="24%">
 </p>
+<p>
+  <img src="docs/palette.png" alt="The command palette: every action the page can do, matched fuzzily as you type, with the key each one answers to" width="49%">
+  <img src="docs/palette-search.png" alt="The palette's search, asking threads and sessions at once and listing the best hits of each" width="49%">
+</p>
+<p>
+  <img src="docs/palette-phone.png" alt="The command palette on a phone, opened from the magnifier in the top bar" width="24%">
+</p>
 
-The screenshots come from the browser test domain. Regenerate them with `node test/browser/screens.ts DIR LABEL`.
+The screenshots come from the browser test domain. Regenerate them with `node test/browser/screens.ts DIR LABEL`, and the palette's with `node test/browser/palette-shots.ts DIR`.
 
 ## Run it
 

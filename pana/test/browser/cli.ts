@@ -57,16 +57,33 @@ export async function newPage(url: string): Promise<number> {
 	return selected.id;
 }
 
+/**
+ * Make `id` the page `evaluate_script`, screenshots, and emulation act on. Every session on this
+ * machine drives one chrome-devtools daemon, so a suite that opens a page must name it again
+ * before each call: another session's `new_page` takes the selection away.
+ */
+export async function selectPage(id: number): Promise<void> {
+	await command(["select_page", String(id)]);
+}
+
 export async function closePage(id: number): Promise<void> {
 	await command(["close_page", String(id)]).catch(() => undefined);
 }
 
 /**
- * Save a screenshot of the selected page. The 1.6 CLI writes only under the OS temp directory,
- * so callers pass a path there and move the file.
+ * Save a screenshot of the selected page and return the file it landed in. The installed CLI
+ * refuses `--filePath` outside its workspace roots, so it always writes under the OS temp
+ * directory; callers copy the file where they want it.
  */
-export async function screenshot(filePath: string, fullPage = false): Promise<void> {
-	await command(["take_screenshot", "--filePath", filePath, ...(fullPage ? ["--fullPage", "true"] : [])]);
+export async function screenshot(fullPage = false): Promise<string> {
+	const result = (await command(["take_screenshot", ...(fullPage ? ["--fullPage", "true"] : [])])) as
+		| { images?: Array<{ filePath?: string }> }
+		| Array<{ images?: Array<{ filePath?: string }> }>
+		| undefined;
+	const images = Array.isArray(result) ? result[0]?.images : result?.images;
+	const file = images?.[0]?.filePath;
+	if (!file) throw new Error("take_screenshot answered without a file");
+	return file;
 }
 
 /** Emulate a phone: `viewport` is `WIDTHxHEIGHTxDPR[,mobile][,touch]`, or "" to clear. */
