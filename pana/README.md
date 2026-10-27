@@ -372,6 +372,8 @@ pana schedule list [--kind session|thread|wake]
 pana schedule delete SCHEDULE
 ```
 
+- Every schedule has a short subject. All create commands (including wakes) accept `--subject "Weekly planning"`; the API uses a top-level `subject`, separate from the action payload. If omitted, the prompt/body/note's first line is shown immediately and `subjectModel`, when configured, generates a better label in the background. A model failure leaves the fallback label. Subjects are one line, at most 80 characters.
+- The PWA lists subjects with timing/status metadata and keeps full instructions behind a disclosure. Editing instructions regenerates automatic subjects but keeps manually chosen labels. Clear the subject in the edit form (API `subject: null`) to return to automatic naming. Existing schedules get fallback labels immediately and background naming as they are viewed.
 - Cron uses the domain's local timezone.
 - A run missed while the machine was off is skipped.
 - A failed scheduled session mails the schedule's creator.

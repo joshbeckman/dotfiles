@@ -624,6 +624,18 @@ describe("pana tools", () => {
 		}
 	});
 
+	it("SCH-15 the wake tool forwards an optional display subject", async () => {
+		let received: unknown;
+		await start({ capture: true, handlers: { "schedules.create": request => {
+			received = request.body;
+			return { status: 201, body: { schedule: { subject: "Review CI" } } };
+		} } });
+		const first = session();
+		const outcome = await runTool(t!, first.conversationId, "pana_schedule_wake", { in: "10m", note: "Check CI and reply in the source thread", subject: "Review CI" });
+		expect(outcome.isError).toBe(false);
+		expect(received).toMatchObject({ kind: "wake", in: "10m", note: "Check CI and reply in the source thread", subject: "Review CI" });
+	});
+
 	it("TOL-03 a tool error carries the CLI exit code in structuredOutput.exitCode", async () => {
 		const api = fakeApi({
 			"memory.commit": {
