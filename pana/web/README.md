@@ -39,3 +39,5 @@ npm run test:web  # drives the installed Chrome through the chrome-devtools CLI
 The browser suite starts a real test `panad` with the scripted faux model, seeds it through the API, and asserts each section end to end, checking results through the API too. It needs `chrome-devtools` on `PATH`; without it the suite skips instead of downloading a browser. `test/integration.test.ts` also runs `views.js` against real handler output under `npm test`.
 
 `node test/browser/screens.ts DIR LABEL` seeds a domain (`test/browser/seed.ts`) and saves a full-page screenshot of every section to `DIR/LABEL-<section>.png`, for reviewing a visual change.
+
+Memory saves send the editor's read commit as `baseCommit` (`null` for a new file). The server fast-forwards clean writer worktrees before applying edits and rejects dirty/unpublished local work instead of overwriting or publishing it. A 409 `stale_file` leaves editor text intact: copy the edits, reload the current file, then reapply them. Existing unpublished commits from older failed saves still need explicit worktree conflict resolution; retries never discard them or add more commits.

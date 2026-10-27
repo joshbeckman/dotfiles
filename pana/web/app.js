@@ -1725,6 +1725,7 @@ function ensureMemoryEditor() {
 }
 
 let memoryEditor;
+let memoryBaseCommit = null;
 
 async function openMemoryEditor(path) {
 	showMemoryDetail("edit");
@@ -1735,7 +1736,12 @@ async function openMemoryEditor(path) {
 	$("memory-path-field").hidden = !creating;
 	$("memory-path-input").value = path;
 	let content = "";
-	if (!creating) content = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`)).content;
+	memoryBaseCommit = null; // New files are create-only, never accidental overwrites.
+	if (!creating) {
+		const file = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`));
+		content = file.content;
+		memoryBaseCommit = file.commit;
+	}
 
 	const parent = $("memory-editor");
 	if (!memoryEditor) empty(parent, "Loading editor…");
@@ -1773,7 +1779,7 @@ async function saveMemory(event) {
 	const save = $("memory-save");
 	save.disabled = true;
 	try {
-		await api("POST", `/memory/files/${memoryPath(path)}`, { content: memoryEditor.value() });
+		await api("POST", `/memory/files/${memoryPath(path)}`, { content: memoryEditor.value(), baseCommit: memoryBaseCommit });
 		status("Saved and committed to main.");
 		memoryBack = "#/memory";
 		location.hash = memoryFileHref(path);

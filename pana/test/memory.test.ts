@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { statusToExitCode } from "../src/api/errors.ts";
@@ -272,6 +272,114 @@ describe("memory", () => {
 		expect((await t.tcp.post("/memory/files/%2e%2e%2fescape.md", { content: "nope" })).status).toBe(400);
 		// A control character would split `git show`'s patch headers; it is not a path.
 		expect((await t.tcp.post("/memory/files/a%0Ab.md", { content: "nope" })).status).toBe(400);
+	});
+
+	it("MEM-09 UI save fast-forwards a clean stale worktree before editing a session-created file", async () => {
+		t = await startTestPanad();
+		const path = await worktree(); // Exists before the session creates the file.
+		const session = await addSession(t);
+		expect((await t.client.post("/memory/files/profile.md", { content: "Principal engineer\n" }, { caller: session })).status).toBe(201);
+		const read = await t.tcp.get<{ content: string; commit: string }>("/memory/files/profile.md");
+		expect(read.status).toBe(200);
+		expect(existsSync(join(path, "profile.md"))).toBe(false);
+		const saved = await t.tcp.post("/memory/files/profile.md", { content: "Senior Staff engineer\n", baseCommit: read.body.commit });
+		expect(saved.status).toBe(201);
+		expect(await git(["-C", repo(), "show", "main:profile.md"])).toBe("Senior Staff engineer");
+		expect(await git(["-C", repo(), "log", "-1", "--format=%an", "main"])).toBe(t.runtime.userUrl);
+		expect(await git(["-C", path, "status", "--porcelain"])).toBe("");
+		const again = await t.tcp.post("/memory/files/profile.md", { content: "Senior Staff engineer\n" });
+		expect(again.status).toBe(200); // No redundant commit on retry.
+	});
+
+	it("MEM-09 UI save updates an existing stale file without reverting unrelated session changes", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/profile.md", { content: "old\n" });
+		const session = await addSession(t);
+		await t.client.post("/memory/files/profile.md", { content: "current\n" }, { caller: session });
+		await t.client.post("/memory/files/other.md", { content: "keep\n" }, { caller: session });
+		const read = await t.tcp.get<{ commit: string }>("/memory/files/profile.md");
+		const saved = await t.tcp.post("/memory/files/profile.md", { content: "edited current\n", baseCommit: read.body.commit });
+		expect(saved.status).toBe(201);
+		expect(await git(["-C", repo(), "show", "main:other.md"])).toBe("keep");
+	});
+
+	it("MEM-09 UI save rejects dirty and unpublished worktrees without changing or publishing them", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/profile.md", { content: "published\n" });
+		const path = await worktree();
+		const main = await git(["-C", repo(), "rev-parse", "main"]);
+		writeFileSync(join(path, "profile.md"), "local edit\n");
+		writeFileSync(join(path, "untracked.md"), "untracked\n");
+		const status = await git(["-C", path, "status", "--porcelain"]);
+		const dirty = await t.tcp.post<{ error: { code: string } }>("/memory/files/profile.md", { content: "UI edit\n" });
+		expect(dirty.status).toBe(409);
+		expect(dirty.body.error.code).toBe("dirty_worktree");
+		expect(await git(["-C", path, "status", "--porcelain"])).toBe(status);
+		expect(readFileSync(join(path, "profile.md"), "utf8")).toBe("local edit\n");
+		await git(["-C", path, "add", "-A"]);
+		await git(["-C", path, "commit", "-qm", "unpublished local work"]);
+		const head = await git(["-C", path, "rev-parse", "HEAD"]);
+		for (let i = 0; i < 2; i++) {
+			const blocked = await t.tcp.post("/memory/files/profile.md", { content: "UI edit\n" });
+			expect(blocked.status).toBe(409);
+			expect(await git(["-C", path, "rev-parse", "HEAD"])).toBe(head);
+			expect(await git(["-C", repo(), "rev-parse", "main"])).toBe(main);
+		}
+	});
+
+	it("MEM-09 UI save detects stale editor content but allows unrelated main changes", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/profile.md", { content: "original\n" });
+		const read = await t.tcp.get<{ commit: string }>("/memory/files/profile.md");
+		const session = await addSession(t);
+		await t.client.post("/memory/files/other.md", { content: "unrelated\n" }, { caller: session });
+		expect((await t.tcp.post("/memory/files/profile.md", { content: "first edit\n", baseCommit: read.body.commit })).status).toBe(201);
+		const main = await git(["-C", repo(), "rev-parse", "main"]);
+		const stale = await t.tcp.post<{ error: { code: string } }>("/memory/files/profile.md", { content: "stale edit\n", baseCommit: read.body.commit });
+		expect(stale.status).toBe(409);
+		expect(stale.body.error.code).toBe("stale_file");
+		expect(await git(["-C", repo(), "rev-parse", "main"])).toBe(main);
+		expect(await git(["-C", await worktree(), "status", "--porcelain"])).toBe("");
+	});
+
+	it("MEM-09 UI creation never overwrites an existing file and validates its base revision", async () => {
+		t = await startTestPanad();
+		expect((await t.tcp.post("/memory/files/new.md", { content: "new\n", baseCommit: null })).status).toBe(201);
+		expect((await t.tcp.post("/memory/files/new.md", { content: "overwrite\n", baseCommit: null })).status).toBe(409);
+		for (const baseCommit of [123, "main", "0".repeat(40)]) {
+			expect((await t.tcp.post("/memory/files/new.md", { content: "bad\n", baseCommit })).status).toBe(400);
+		}
+	});
+
+	it("MEM-09 stale editor cannot recreate a deleted file and saves reject symlink paths", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/notes/keep.md", { content: "keep\n" });
+		const read = await t.tcp.get<{ commit: string }>("/memory/files/notes/keep.md");
+		const session = await addSession(t);
+		expect((await t.client.delete("/memory/files/notes/keep.md", { caller: session })).status).toBe(200);
+		expect((await t.tcp.post("/memory/files/notes/keep.md", { content: "stale\n", baseCommit: read.body.commit })).status).toBe(409);
+		const path = await worktree();
+		mkdirSync(join(path, "notes"), { recursive: true });
+		writeFileSync(join(path, "notes/keep.md"), "keep\n");
+		symlinkSync(join(path, "notes"), join(path, "link"));
+		symlinkSync(join(path, "missing"), join(path, "dangling"));
+		await commit("seed symlinks");
+		for (const target of ["link/keep.md", "dangling/new.md"]) {
+			expect((await t.tcp.post(`/memory/files/${target}`, { content: "unsafe\n" })).status).toBe(400);
+		}
+		expect(readFileSync(join(path, "notes/keep.md"), "utf8")).toBe("keep\n");
+		expect(existsSync(join(path, "missing"))).toBe(false);
+	});
+
+	it("MEM-09 concurrent UI saves by the same writer are serialized before writing or staging", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/shared.md", { content: "original\n" });
+		const read = await t.tcp.get<{ commit: string }>("/memory/files/shared.md");
+		const results = await Promise.all(["one\n", "two\n"].map(content =>
+			t!.tcp.post("/memory/files/shared.md", { content, baseCommit: read.body.commit })));
+		expect(results.map(r => r.status).sort()).toEqual([201, 409]);
+		expect(await git(["-C", repo(), "rev-list", "--count", "main"])).toBe("3");
+		expect(await git(["-C", await worktree(), "status", "--porcelain"])).toBe("");
 	});
 
 	it("MEM-13 deletion removes the file from main, listing and search but preserves attributed history", async () => {

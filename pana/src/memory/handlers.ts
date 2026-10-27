@@ -84,7 +84,10 @@ export const handlers: Handlers = {
 		const body = bodyObject(ctx.body);
 		if (typeof body.content !== "string") throw ApiError.badRequest("missing_content", "memory file needs content");
 		const message = typeof body.message === "string" ? body.message : "";
-		const result = await memoryFor(ctx.runtime).writeFile(writerOf(ctx.caller), path, body.content, message);
+		if (body.baseCommit !== undefined && body.baseCommit !== null && typeof body.baseCommit !== "string") {
+			throw ApiError.badRequest("invalid_base_commit", "baseCommit must be a commit hash or null");
+		}
+		const result = await memoryFor(ctx.runtime).writeFile(writerOf(ctx.caller), path, body.content, message, body.baseCommit as string | null | undefined);
 		return {
 			status: result.committed ? 201 : 200,
 			body: { path, worktree: result.path, branch: result.branch, committed: result.committed, commit: result.commit },

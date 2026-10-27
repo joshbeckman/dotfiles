@@ -86,6 +86,41 @@ async function seedSession(prompt: string): Promise<Created> {
 }
 
 describeBrowser("pana in a browser", () => {
+	it("MEM-09 browser saves a session-created file from a stale worktree and retains edits on a stale-editor conflict", async () => {
+		await start([{ text: "Ready." }]);
+		await t!.client.get("/memory/worktree"); // The UI user's checkout predates the file.
+		const session = await seedSession("Create a memory note");
+		const created = await t!.client.post("/memory/files/profile.md", { content: "# Profile\n\nPrincipal engineer\n" }, { caller: session.session.id });
+		expect(created.status).toBe(201);
+		await open();
+		await evaluatePage(`
+			await until(() => window.__pana && document.getElementById("authorize").hidden);
+			location.hash = "#/memory/edit/profile.md";
+			await until(() => !document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor);
+			window.__pana.memoryEditor.load("# Profile\\n\\nSenior Staff engineer\\n");
+			document.getElementById("memory-save").click();
+			await until(() => location.hash === "#/memory/files/profile.md" && document.getElementById("memory-file").textContent.includes("Senior Staff"));
+			return true;
+		`);
+		expect((await t!.client.get<{ content: string }>("/memory/files/profile.md")).body.content).toContain("Senior Staff engineer");
+		await evaluatePage(`
+			document.getElementById("memory-edit-link").click();
+			await until(() => !document.getElementById("memory-edit-view").hidden && document.activeElement.closest("#memory-editor") && window.__pana.memoryEditor.value().includes("Senior Staff"));
+			window.__pana.memoryEditor.load("my unsaved correction");
+			return true;
+		`);
+		expect((await t!.client.post("/memory/files/profile.md", { content: "newer session correction\n" }, { caller: session.session.id })).status).toBe(201);
+		const stale = await evaluatePage<{ content: string; path: string; error: string }>(`
+			document.getElementById("memory-save").click();
+			await until(() => document.getElementById("status").textContent.includes("changed since you opened it"));
+			return { content: window.__pana.memoryEditor.value(), path: location.hash, error: document.getElementById("status").textContent };
+		`);
+		expect(stale.content).toBe("my unsaved correction");
+		expect(stale.path).toBe("#/memory/edit/profile.md");
+		expect(stale.error).toContain("Copy your edits");
+		expect((await t!.client.get<{ content: string }>("/memory/files/profile.md")).body.content).toBe("newer session correction\n");
+	});
+
 	it("WEB-02 a 403 shows the authorize panel, and a pasted launch URL stores the token", async () => {
 		await start();
 		await postNotice(t!.runtime, { body: "A rendered thread" });
