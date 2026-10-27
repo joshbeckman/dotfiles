@@ -29,6 +29,18 @@ export interface LinkSegment {
 	href?: string;
 }
 
+/** The part of an uploaded file's view a Markdown reference needs (FIL-02, FIL-06). */
+export interface Attachment {
+	name: string;
+	url: string;
+	mediaType?: string | null;
+}
+
+export function isImageType(mediaType: unknown): boolean;
+export function referenceFor(file: Partial<Attachment> | undefined): string;
+export function appendReference(body: unknown, reference: string): string;
+export function withReferences(body: unknown, files: ReadonlyArray<Partial<Attachment>> | undefined): string;
+
 export function tokenFromInput(raw: unknown): string;
 export function appHref(href: string | null | undefined, domain: string): string | undefined;
 export function routeFromHash(hash: string): Route;

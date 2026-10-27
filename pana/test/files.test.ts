@@ -1,8 +1,19 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { statusToExitCode } from "../src/api/errors.ts";
-import { appendAttachmentMarkdown, attachmentMarkdown } from "../src/threads/index.ts";
+import {
+	appendAttachmentMarkdown,
+	attachmentMarkdown,
+	findBackend,
+	imageSize,
+	loadFile,
+	MAX_WIDTH,
+	MIN_WIDTH,
+	parseWidth,
+	resizedImage,
+} from "../src/threads/index.ts";
 import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 
 interface FileBody {
@@ -30,6 +41,60 @@ async function start(options: Parameters<typeof startTestPanad>[0] = {}): Promis
 }
 
 const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02, 0x03]);
+
+/** A 4x2 baseline JPEG, small enough to keep inline, for the header reader (FIL-07). */
+const TINY_JPEG = Buffer.from(
+	"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/wAALCAACAAQBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AZn//2Q==",
+	"base64",
+);
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+	let value = index;
+	for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+	return value >>> 0;
+});
+
+function crc32(bytes: Buffer): number {
+	let crc = 0xffffffff;
+	for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+	return (crc ^ 0xffffffff) >>> 0;
+}
+
+function chunk(type: string, data: Buffer): Buffer {
+	const head = Buffer.alloc(8);
+	head.writeUInt32BE(data.length, 0);
+	head.write(type, 4, "ascii");
+	const crc = Buffer.alloc(4);
+	crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])), 0);
+	return Buffer.concat([head, data, crc]);
+}
+
+/** A real PNG of the given size, with noise so a smaller copy is also fewer bytes. */
+function png(width: number, height: number): Buffer {
+	const rows = Buffer.alloc(height * (1 + width * 3));
+	let seed = 7;
+	for (let y = 0; y < height; y++) {
+		const start = y * (1 + width * 3);
+		rows[start] = 0;
+		for (let x = 0; x < width; x++) {
+			seed = (seed * 1103515245 + 12345) % 2147483648;
+			rows[start + 1 + x * 3] = seed % 256;
+			rows[start + 2 + x * 3] = (seed >>> 8) % 256;
+			rows[start + 3 + x * 3] = (seed >>> 16) % 256;
+		}
+	}
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(width, 0);
+	ihdr.writeUInt32BE(height, 4);
+	ihdr[8] = 8;
+	ihdr[9] = 2;
+	return Buffer.concat([
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		chunk("IHDR", ihdr),
+		chunk("IDAT", deflateSync(rows)),
+		chunk("IEND", Buffer.alloc(0)),
+	]);
+}
 
 async function upload(t: TestPanad, name: string, bytes: Buffer, mediaType = "image/png"): Promise<FileBody["file"]> {
 	const res = await t.client.request<FileBody>("POST", `/files?name=${encodeURIComponent(name)}`, {
@@ -104,6 +169,90 @@ describe("files", () => {
 
 		const missing = await t.client.get(`/files/${t.runtime.newId()}/cat.png`);
 		expect(missing.status).toBe(404);
+	});
+
+	it("FIL-07 a width the picture already fits, a bad width, and a non-image serve the original", async () => {
+		const t = await start();
+		const wide = png(200, 100);
+		const small = await upload(t, "small.png", png(20, 10));
+		const doc = await upload(t, "notes.txt", Buffer.from("hello"), "text/plain");
+
+		for (const query of ["", "?w=1024", "?w=abc", "?w=0", "?w=-4"]) {
+			const res = await t.client.get(`/files/${small.id}/small.png${query}`);
+			expect(res.status, query).toBe(200);
+			expect(res.raw, query).toEqual(png(20, 10));
+		}
+		const text = await t.client.get(`/files/${doc.id}/notes.txt?w=64`);
+		expect(text.raw).toEqual(Buffer.from("hello"));
+
+		// A width the source is not wider than and a width past the cap both leave the bytes alone.
+		const original = await t.client.get(`/files/${small.id}/small.png?w=${MAX_WIDTH}`);
+		expect(original.raw).toEqual(png(20, 10));
+		expect(imageSize(wide)).toEqual({ width: 200, height: 100 });
+	});
+
+	it("FIL-07 ?w= serves a copy no wider than asked for, made once and kept beside the original", async () => {
+		const t = await start();
+		const wide = png(200, 100);
+		const file = await upload(t, "wide.png", wide);
+		if (!findBackend()) {
+			// No resizer on this host: the original is the answer, and FIL-07's fallback is all
+			// this test can check.
+			const res = await t.client.get(`/files/${file.id}/wide.png?w=64`);
+			expect(res.raw).toEqual(wide);
+			return;
+		}
+
+		const res = await t.client.get(`/files/${file.id}/wide.png?w=64`);
+		expect(res.status).toBe(200);
+		expect(String(res.headers["content-type"])).toBe("image/png");
+		const size = imageSize(res.raw as Buffer);
+		expect(size?.width).toBe(64);
+		expect(size?.height).toBe(32);
+		expect((res.raw as Buffer).length).toBeLessThan(wide.length);
+
+		// The copy is on disk beside the original, and a second request reuses it.
+		const cache = join(t.dir, "files", file.id, ".resized");
+		expect(readdirSync(cache)).toEqual(["64-wide.png"]);
+		const again = await t.client.get(`/files/${file.id}/wide.png?w=64`);
+		expect(again.raw).toEqual(res.raw);
+		expect(readdirSync(cache)).toEqual(["64-wide.png"]);
+
+		// The original is untouched, and its own request still serves full size.
+		expect(readFileSync(join(t.dir, file.path))).toEqual(wide);
+		expect((await t.client.get(`/files/${file.id}/wide.png`)).raw).toEqual(wide);
+	});
+
+	it("FIL-07 without a resizer, or with one that fails, the original bytes come back", async () => {
+		const t = await start();
+		const wide = png(200, 100);
+		const file = await upload(t, "wide.png", wide);
+		const loaded = await loadFile(t.runtime, file.id, "wide.png");
+
+		expect(await resizedImage(t.runtime, loaded, 64, null)).toEqual({ bytes: loaded.bytes, mediaType: "image/png" });
+		const broken = { command: "no-such-resizer", probe: [], args: () => [] };
+		expect(await resizedImage(t.runtime, loaded, 64, broken)).toEqual({ bytes: loaded.bytes, mediaType: "image/png" });
+		expect(readdirSync(join(t.dir, "files", file.id))).toEqual(["wide.png"]);
+	});
+
+	it("FIL-07 a requested width is clamped to the cache's range or ignored", () => {
+		expect(parseWidth("64")).toBe(64);
+		expect(parseWidth(" 128 ")).toBe(128);
+		expect(parseWidth("1")).toBe(MIN_WIDTH);
+		expect(parseWidth("99999")).toBe(MAX_WIDTH);
+		expect(parseWidth("7.6")).toBe(MIN_WIDTH);
+		expect(parseWidth("abc")).toBeUndefined();
+		expect(parseWidth("0")).toBeUndefined();
+		expect(parseWidth("")).toBeUndefined();
+		expect(parseWidth(undefined)).toBeUndefined();
+		expect(parseWidth(64)).toBeUndefined();
+	});
+
+	it("FIL-07 PNG and JPEG headers give the pixel size, and anything else has none", () => {
+		expect(imageSize(png(3, 2))).toEqual({ width: 3, height: 2 });
+		expect(imageSize(TINY_JPEG)).toEqual({ width: 4, height: 2 });
+		expect(imageSize(Buffer.from("not an image"))).toBeUndefined();
+		expect(imageSize(Buffer.alloc(0))).toBeUndefined();
 	});
 
 	it("FIL-05 file bytes are never stored in SQLite", async () => {

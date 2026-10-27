@@ -8,7 +8,19 @@ import { request } from "../src/api/client.ts";
 import { matchRoute } from "../src/api/routes.ts";
 import { publish, subscriberCount } from "../src/web/events.ts";
 import { launchUrl, loopbackOrigin } from "../src/web/static.ts";
-import { appHref, CONFIRM_EDIT, CONFIRM_REDACT, newDraft, notificationTarget, routeFromHash, SECTIONS, tokenFromInput } from "../web/links.js";
+import {
+	appendReference,
+	appHref,
+	CONFIRM_EDIT,
+	CONFIRM_REDACT,
+	newDraft,
+	notificationTarget,
+	referenceFor,
+	routeFromHash,
+	SECTIONS,
+	tokenFromInput,
+	withReferences,
+} from "../web/links.js";
 import { makeStateDir, startTestPanad, TEST_DOMAIN, type TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
@@ -167,6 +179,9 @@ describe("PWA shell and static assets", () => {
 		expect(html).toContain('id="reply-form"');
 		expect(html).toContain('id="memory-search"');
 		expect(html).toContain('id="schedule-form"');
+		// FIL-06: the composers' attach controls ride along with the shell.
+		expect(html).toContain('data-testid="compose-attach"');
+		expect(html).toContain('data-testid="reply-attach"');
 	});
 
 	it("WEB-04 the shell reuses the agent-mail renderers and the Mermaid bundle", async () => {
@@ -201,6 +216,19 @@ describe("PWA shell and static assets", () => {
 		expect(appHref("https://example.com/x", domain)).toBe("https://example.com/x");
 		expect(appHref("#/inbox", domain)).toBe("#/inbox");
 		expect(appHref(undefined, domain)).toBeUndefined();
+	});
+
+	it("FIL-06 a composer references an upload the way the CLI does", () => {
+		const image = { name: "shot.png", url: `pana://${TEST_DOMAIN}/files/F1/shot.png`, mediaType: "image/png" };
+		const doc = { name: "notes[v2].md", url: `pana://${TEST_DOMAIN}/files/F2/notes[v2].md`, mediaType: "text/markdown" };
+		expect(referenceFor(image)).toBe(`![shot.png](pana://${TEST_DOMAIN}/files/F1/shot.png)`);
+		// The label is escaped, the URL is not: brackets in a name must not end the alt text.
+		expect(referenceFor(doc)).toBe(`[notes\\[v2\\].md](pana://${TEST_DOMAIN}/files/F2/notes[v2].md)`);
+		expect(appendReference("", referenceFor(image))).toBe(referenceFor(image));
+		expect(appendReference("look\n\n", referenceFor(image))).toBe(`look\n\n${referenceFor(image)}`);
+		expect(withReferences("look", [image, doc])).toBe(`look\n\n${referenceFor(image)}\n\n${referenceFor(doc)}`);
+		// No media type from the server means a link, never an image that cannot load.
+		expect(referenceFor({ name: "blob", url: "u" })).toBe("[blob](u)");
 	});
 
 	it("WEB-06 /events streams live transcript events to an authorized window", async () => {

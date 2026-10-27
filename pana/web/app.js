@@ -7,10 +7,12 @@ import {
 	CONFIRM_EDIT,
 	CONFIRM_REDACT,
 	TOKEN_KEY,
+	appendReference,
 	appHref,
 	idHref,
 	newDraft,
 	panaLinkSegments,
+	referenceFor,
 	routeFromHash,
 	tokenFromInput,
 } from "./links.js";
@@ -115,7 +117,11 @@ async function api(method, path, body) {
 		options.body = JSON.stringify(body);
 		options.headers = { "content-type": "application/json" };
 	}
-	const response = await raw(path, options);
+	return decode(await raw(path, options), method, path);
+}
+
+/** Parse a response the way `api` does, error body and all. */
+async function decode(response, method, path) {
 	const text = await response.text();
 	let data;
 	if (text) {
@@ -141,6 +147,87 @@ async function fetchFile(path) {
 		throw new Error(`file ${path} is not available`);
 	}
 	return response.blob();
+}
+
+// ---- Attachments ----------------------------------------------------------------------------
+
+/** FIL-01 from the browser: the bytes go to the same route `--attach` uploads to. */
+async function uploadFile(file) {
+	const body = await file.arrayBuffer();
+	const response = await raw(`/files?name=${encodeURIComponent(file.name)}`, {
+		method: "POST",
+		headers: { "content-type": file.type || "application/octet-stream" },
+		body,
+	});
+	const data = await decode(response, "POST", "/files");
+	return data.file;
+}
+
+/**
+ * FIL-06: upload each file, then append its Markdown reference to the body (FIL-02), so the
+ * composer shows exactly the message it will send. The `input` event keeps a reply draft saved.
+ */
+async function attachFiles(textarea, files) {
+	let count = 0;
+	for (const file of files) {
+		if (!file || typeof file.name !== "string") continue;
+		status(`Uploading ${file.name}…`);
+		const { name, url, mediaType } = await uploadFile(file);
+		textarea.value = appendReference(textarea.value, referenceFor({ name, url, mediaType }));
+		count += 1;
+	}
+	if (count === 0) return 0;
+	textarea.dispatchEvent(new Event("input"));
+	textarea.focus();
+	textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+	status(count === 1 ? "Attached 1 file." : `Attached ${count} files.`);
+	return count;
+}
+
+/** FIL-06: a button, a drop anywhere on the composer, and a screenshot pasted into the body. */
+function wireAttach(formId, buttonId, inputId, bodyId) {
+	const form = $(formId);
+	const button = $(buttonId);
+	const input = $(inputId);
+	const body = $(bodyId);
+	const upload = async (files) => {
+		button.disabled = true;
+		try {
+			await attachFiles(body, files);
+		} catch (error) {
+			fail(error);
+		} finally {
+			button.disabled = false;
+		}
+	};
+	button.addEventListener("click", () => input.click());
+	input.addEventListener("change", () => {
+		const files = [...input.files];
+		// Clear the input first, so choosing the same file twice still fires `change`.
+		input.value = "";
+		if (files.length > 0) void upload(files);
+	});
+	form.addEventListener("dragover", (event) => {
+		if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+		event.preventDefault();
+		form.classList.add("dropping");
+	});
+	form.addEventListener("dragleave", (event) => {
+		if (!form.contains(event.relatedTarget)) form.classList.remove("dropping");
+	});
+	form.addEventListener("drop", (event) => {
+		const files = [...(event.dataTransfer?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		form.classList.remove("dropping");
+		void upload(files);
+	});
+	body.addEventListener("paste", (event) => {
+		const files = [...(event.clipboardData?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		void upload(files);
+	});
 }
 
 // ---- Authorization --------------------------------------------------------------------------
@@ -1958,6 +2045,8 @@ $("authorize-form").addEventListener("submit", (event) => {
 	void authorize($("authorize-input").value);
 });
 $("compose-form").addEventListener("submit", (event) => void submitCompose(event));
+wireAttach("compose-form", "compose-attach", "compose-files", "compose-body");
+wireAttach("reply-form", "reply-attach", "reply-files", "reply-body");
 $("threads-search").addEventListener("submit", (event) => void searchThreads(event));
 $("sessions-search").addEventListener("submit", (event) => {
 	event.preventDefault();
