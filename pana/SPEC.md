@@ -225,6 +225,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **PRM-02** Project section: every `AGENTS.md` from the git root of `cwd` down to `cwd`, root first. Outside a git repo, only `cwd/AGENTS.md`.
 - [x] **PRM-03** The pana section includes the session's URL, the memory worktree path, and the memory commands.
 - [x] **PRM-04** Rendering the prompt twice for the same session gives identical text.
+- [x] **PRM-05** The rendered house rules permit a fast-forward of the user's checkout only on explicit user request. The session verifies checkout path, branch, remote/upstream, and working-tree status; requires no staged or tracked changes; leaves untracked files untouched; uses `git pull --ff-only` without autostash; and never switches branches, stashes, discards changes, resets, rebases, or resolves conflicts automatically. It stops when fast-forward is impossible or local files would be overwritten. Other sessions' worktrees and memory publishing remain protected.
 
 ### Tools
 

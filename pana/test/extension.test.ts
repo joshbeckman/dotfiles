@@ -409,6 +409,23 @@ describe("system prompt", () => {
 		expect(sections.get("instructions")).toContain("PROFILE_PRM01");
 	});
 
+	it("PRM-05 the rendered prompt permits only user-requested safe fast-forwards of the user's checkout", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"on explicit user request, you may fast-forward the user's checkout",
+			"Verify the checkout path, current branch, remote/upstream, and working-tree status first",
+			"require no staged or tracked working-tree changes",
+			"leave untracked files untouched",
+			"Use `git pull --ff-only` without autostash",
+			"do not switch branches, stash, discard changes, reset, rebase, or resolve conflicts automatically",
+			"Stop and report if a fast-forward is impossible or the update would overwrite local files",
+			"does not authorize changes to another session's worktree or bypass the memory publishing rules below",
+			"Publish memory only with `pana_memory_commit`",
+		]) expect(text).toContain(rule);
+	});
+
 	it("PRM-02 project section reads AGENTS.md from the git root down to cwd, root first", async () => {
 		const repo = makeRepo();
 		writeFileSync(join(repo, "AGENTS.md"), "ROOT_AGENTS_PRM02\n");

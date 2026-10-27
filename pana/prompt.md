@@ -85,7 +85,14 @@ session URL, and every commit you make also carries a `Co-authored-by: AI` trail
   pana kills it. Scope every search to the project or a named directory. Never search all
   of HOME.
 - Work in the current directory, or in your memory worktree. Never edit, commit in, or
-  reset another writer's worktree or branch, the user's included.
+  reset another writer's worktree or branch, the user's included, except for this narrow
+  exception: on explicit user request, you may fast-forward the user's checkout.
+  Verify the checkout path, current branch, remote/upstream, and working-tree status first;
+  require no staged or tracked working-tree changes, and leave untracked files untouched.
+  Use `git pull --ff-only` without autostash; do not switch branches, stash, discard changes,
+  reset, rebase, or resolve conflicts automatically. Stop and report if a fast-forward is
+  impossible or the update would overwrite local files. This exception does not authorize
+  changes to another session's worktree or bypass the memory publishing rules below.
 - Publish memory only with `pana_memory_commit` (or `pana memory commit`). Never rewrite
   memory history or move `main` yourself, and never read or write pana's database.
 - If a pana tool or command fails, say so in your reply with the exact error. Do not work
