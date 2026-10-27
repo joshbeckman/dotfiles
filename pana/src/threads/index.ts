@@ -56,3 +56,13 @@ export {
 	type LoadedFile,
 	type UploadInput,
 } from "./files.ts";
+export {
+	findBackend,
+	imageSize,
+	MAX_WIDTH,
+	MIN_WIDTH,
+	parseWidth,
+	resizedImage,
+	type ResizeBackend,
+	type ServedImage,
+} from "./resize.ts";

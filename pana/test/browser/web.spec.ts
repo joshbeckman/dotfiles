@@ -342,7 +342,8 @@ describeBrowser("pana in a browser", () => {
 		expect(rendered.width).toBe(1);
 		expect(rendered.svg).toBe(true);
 		expect(rendered.anchors).toContainEqual({ href: `#/sessions/${seeded.session.id}`, target: null });
-		expect(rendered.files).toContain(`/files/${upload.body.file.id}/pixel.png`);
+		// FIL-07: an inline image asks for a bounded copy; the original stays behind the link.
+		expect(rendered.files).toContain(`/files/${upload.body.file.id}/pixel.png?w=1024`);
 		expect(upload.body.file.url).toBe(`pana://${TEST_DOMAIN}/files/${upload.body.file.id}/pixel.png`);
 	});
 

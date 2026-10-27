@@ -11,6 +11,9 @@ import { appHref, panaLinkSegments } from "./links.js";
 // and they are rewritten to app routes before the HTML reaches the DOM.
 const ALLOWED_URI = /^(?:(?:https?|mailto|pana):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i;
 
+/** FIL-07: the widest copy an inline image asks for, so a photo does not arrive at full size. */
+export const INLINE_WIDTH = 1024;
+
 export function markdownToHtml(text, { marked, DOMPurify }) {
 	const source = String(text ?? "");
 	if (!marked || !DOMPurify) return escapeHtml(source);
@@ -56,7 +59,8 @@ export function rewriteLinks(root, domain) {
 			image.removeAttribute("src");
 			continue;
 		}
-		if (mapped.startsWith("/files/")) image.setAttribute("data-file-path", mapped);
+		// The link keeps the original bytes; the picture gets a copy bounded by INLINE_WIDTH.
+		if (mapped.startsWith("/files/")) image.setAttribute("data-file-path", `${mapped}?w=${INLINE_WIDTH}`);
 		else image.setAttribute("src", mapped);
 	}
 	return root;

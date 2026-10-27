@@ -3,6 +3,7 @@
 import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { loadFile, uploadFile } from "./files.ts";
+import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
 import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
@@ -136,11 +137,13 @@ export const handlers: Handlers = {
 
 	"files.download": async (ctx): Promise<HandlerResult> => {
 		const loaded = await loadFile(ctx.runtime, ctx.params.id!, ctx.params.rest ?? "");
+		// FIL-07: `?w=N` asks for an inline-sized copy; the bytes are the original otherwise.
+		const image = await resizedImage(ctx.runtime, loaded, parseWidth(ctx.query.get("w")));
 		return {
 			status: 200,
-			bytes: loaded.bytes,
+			bytes: image.bytes,
 			headers: {
-				"content-type": loaded.mediaType,
+				"content-type": image.mediaType,
 				"content-disposition": `inline; filename="${loaded.row.name.replace(/["\\]/g, "_")}"`,
 			},
 		};
