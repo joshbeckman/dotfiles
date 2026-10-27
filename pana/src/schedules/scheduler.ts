@@ -12,6 +12,7 @@ import type { Caller, Handlers } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { wakeScheduled } from "../sessions/wake.ts";
 import { createThread, postNotice } from "../threads/index.ts";
+import { runCheck } from "./check.ts";
 import { registerScheduler, unregisterScheduler } from "./registry.ts";
 import {
 	activeSchedules,
@@ -21,6 +22,9 @@ import {
 	finishSchedule,
 	nextCronAt,
 	nextDueAt,
+	recordCheck,
+	settleSchedule,
+	completeSchedule,
 	skipScheduleTo,
 	type ScheduleRow,
 } from "./store.ts";
@@ -45,6 +49,8 @@ class ScheduleLoop implements Scheduler {
 	#handle: (() => void) | undefined;
 	#chain: Promise<void> = Promise.resolve();
 	#closed = false;
+	#running = new Map<string, Promise<void>>();
+	#abort = new AbortController();
 
 	constructor(options: SchedulerOptions) {
 		this.#runtime = options.runtime;
@@ -68,7 +74,9 @@ class ScheduleLoop implements Scheduler {
 		this.#closed = true;
 		this.#clear();
 		unregisterScheduler(this.#runtime, this);
+		this.#abort.abort();
 		await this.#chain.catch(() => {});
+		await Promise.all(this.#running.values());
 	}
 
 	/** A schedule was created, updated, or deleted: re-arm from the clock's current time. */
@@ -89,12 +97,25 @@ class ScheduleLoop implements Scheduler {
 		if (this.#closed) return;
 		const now = this.#runtime.clock.now();
 		for (const row of await dueSchedules(this.#runtime, now)) {
-			try {
-				await this.#fire(row, now);
-			} catch (error) {
-				// One unreadable row must not stop the others or leave the timer unarmed.
-				this.#report(error, `schedule ${row.id}`);
-			}
+			if (this.#closed) break;
+			if (this.#running.has(row.id)) continue;
+			// Claim and execute independently: a slow check must not block unrelated schedules.
+			const task = this.#fire(row, now)
+				.catch((error) => this.#report(error, `schedule ${row.id}`))
+				.finally(async () => {
+					try {
+						// Do not replay occurrences missed while this action/check was in flight.
+						if (await settleSchedule(this.#runtime, row)) {
+							await this.#notify(row, `Scheduled ${row.kind} ${this.#runtime.url({ kind: "schedule", id: row.id })} is done: ${row.cron} has no future run.`);
+						}
+					} catch (error) {
+						this.#report(error, `schedule ${row.id} completion`);
+					} finally {
+						this.#running.delete(row.id);
+						if (!this.#closed) void this.#kick();
+					}
+				});
+			this.#running.set(row.id, task);
 		}
 		await this.#arm();
 	}
@@ -102,8 +123,8 @@ class ScheduleLoop implements Scheduler {
 	async #arm(): Promise<void> {
 		this.#clear();
 		if (this.#closed) return;
-		const nextAt = await nextDueAt(this.#runtime);
-		if (nextAt === null) return;
+		const nextAt = await nextDueAt(this.#runtime, [...this.#running.keys()]);
+		if (this.#closed || nextAt === null) return;
 		const delay = Math.max(0, nextAt - this.#runtime.clock.now());
 		this.#handle = this.#runtime.clock.setTimer(
 			() => {
@@ -129,11 +150,30 @@ class ScheduleLoop implements Scheduler {
 		const nextAt = row.cron ? nextCronAt(row.cron, timezone, now) : null;
 		// A cron with no future run is finished, the same as a one-off that has run.
 		const keepsRunning = row.cron !== null && nextAt !== null;
-		const claimed = await claimSchedule(this.#runtime, row.id, keepsRunning ? "active" : "done", nextAt);
-		if (!claimed) return;
+		const claimed = await claimSchedule(this.#runtime, row.id, keepsRunning ? "active" : "done", nextAt, row);
+		if (!claimed || this.#closed) return;
 		let delivered = false;
 		try {
+			if (row.check_command !== null) {
+				const result = await runCheck(row.check_command, row.check_cwd!, this.#runtime.clock, this.#abort.signal);
+				await recordCheck(this.#runtime, row.id, result);
+				if (this.#closed) return;
+				if (result.status === "failed") {
+					this.#report(new Error(result.error ?? "check failed"), `schedule ${row.id} check`);
+					await this.#notify(row, `Scheduled ${row.kind} ${this.#runtime.url({ kind: "schedule", id: row.id })} check failed: ${result.error}`);
+				}
+				if (result.status !== "passed") return;
+				// Deletion or editing while the check ran cancels this occurrence.
+				const current = await this.#runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", row.id);
+				if (!current || current.state === "deleted" || current.revision !== row.revision || current.next_at !== nextAt) return;
+			}
+			if (this.#closed) return;
+			// A recurring wake uses an occurrence-specific request ID (the one-shot ID stays stable).
 			delivered = await this.#run(row);
+			if (delivered && row.stop_after_success === 1) {
+				await completeSchedule(this.#runtime, row.id, row.revision);
+				return;
+			}
 		} catch (error) {
 			this.#report(error, `schedule ${row.id}`);
 			await this.#notify(row, `Scheduled ${row.kind} ${this.#runtime.url({ kind: "schedule", id: row.id })} failed: ${messageOf(error)}`);
@@ -141,29 +181,29 @@ class ScheduleLoop implements Scheduler {
 		}
 		// WAK-07: a wake is spent once its session has it. Anything else keeps its row, so a
 		// `done` schedule is exactly one whose outcome is unknown or refused, never a normal fire.
-		if (delivered) await finishSchedule(this.#runtime, row.id);
+		if (delivered && row.kind === "wake" && !row.cron) await finishSchedule(this.#runtime, row.id, row.revision);
 		if (!keepsRunning && row.cron !== null) {
 			await this.#notify(row, `Scheduled ${row.kind} ${this.#runtime.url({ kind: "schedule", id: row.id })} is done: ${row.cron} has no future run.`);
 		}
 	}
 
-	/** Run one claimed schedule. Returns true when the schedule has done its whole job. */
+	/** Run one claimed schedule. Returns true when the action was successfully dispatched. */
 	async #run(row: ScheduleRow): Promise<boolean> {
 		const creator = await this.#caller(row.creator_id);
 		const payload = JSON.parse(row.payload) as Record<string, unknown>;
 		if (row.kind === "session") {
 			await this.#createSession(creator, payload);
-			return false;
+			return true;
 		}
 		if (row.kind === "wake") {
-			return wakeScheduled(this.#runtime, { scheduleId: row.id, sessionId: String(payload.session), note: String(payload.note) });
+			return wakeScheduled(this.#runtime, { scheduleId: row.id, occurrence: row.cron ? row.next_at! : undefined, sessionId: String(payload.session), note: String(payload.note) });
 		}
 		await createThread(this.#runtime, creator, {
 			to: payload.to,
 			body: payload.body,
 			subject: payload.subject,
 		});
-		return false;
+		return true;
 	}
 
 	/** SES-01: the session is created through the registered handler, as the schedule's creator. */

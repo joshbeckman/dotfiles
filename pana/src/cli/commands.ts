@@ -6,6 +6,7 @@
 // Handlers live in the packages that own them (routes.ts names the owner). A command works as
 // soon as its route does; until then panad answers 501 and the command exits 1.
 
+import { isAbsolute } from "node:path";
 import { request, type ApiResponse, type Endpoint } from "../api/client.ts";
 import { statusToExitCode } from "../api/errors.ts";
 import type { Method } from "../api/routes.ts";
@@ -173,6 +174,38 @@ const string = (name: string, syntax: string, description: string, extra: { requ
 const list = (name: string, syntax: string, description: string, extra: { required?: boolean } = {}) =>
 	flag(name, syntax, "list", description, extra);
 const bool = (name: string, syntax: string, description: string) => flag(name, syntax, "boolean", description);
+
+const RECURRING_FLAGS = [
+	string("cron", "--cron CRON", "Cron expression in the domain timezone"),
+	string("check", "--check COMMAND", "Bash readiness check before each cron dispatch: 0 ready, 1 not ready"),
+	string("checkCwd", "--check-cwd DIR", "Absolute check directory; defaults to the daemon's cwd at creation"),
+	bool("stopAfterSuccess", "--stop-after-success", "Finish a cron schedule after its first successful dispatch"),
+];
+
+function validateSchedule(params: CommandParams, wake = false): string | undefined {
+	const choices = wake ? ["in", "at", "cron"] : ["cron", "at"];
+	if (choices.filter((key) => text(params, key) !== undefined).length !== 1) {
+		return wake ? "give exactly one of --in DURATION, --at TIME, or --cron CRON" : "give exactly one of --cron CRON or --at TIME";
+	}
+	const check = text(params, "check");
+	const cwd = text(params, "checkCwd");
+	if ((check !== undefined || cwd !== undefined || params.stopAfterSuccess === true) && text(params, "cron") === undefined) {
+		return "--check, --check-cwd, and --stop-after-success require --cron";
+	}
+	if (check !== undefined && !check.trim()) return "--check must not be empty";
+	if (cwd !== undefined && check === undefined) return "--check-cwd requires --check";
+	if (cwd !== undefined && !isAbsolute(cwd)) return "--check-cwd must be an absolute directory";
+	return undefined;
+}
+
+function recurringFields(params: CommandParams): Record<string, unknown> {
+	return {
+		cron: text(params, "cron"),
+		check: text(params, "check"),
+		checkCwd: text(params, "checkCwd"),
+		stopAfterSuccess: params.stopAfterSuccess,
+	};
+}
 
 const BODY_FLAGS = [
 	string("body", "--body TEXT", "Message body, or - to read stdin"),
@@ -484,28 +517,22 @@ export const COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		path: ["schedule", "session", "create"],
-		usage: 'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT',
+		usage: 'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 		altUsage: ["pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT"],
 		summary: "Create a session on a cron schedule",
 		flags: [
-			string("cron", "--cron CRON", "Cron expression in the domain timezone"),
+			...RECURRING_FLAGS,
 			string("at", "--at TIME", "Run once at this ISO time"),
 			...SESSION_CREATE_FLAGS,
 		],
 		positionals: [],
-		validate: (params) => {
-			const cron = text(params, "cron");
-			const at = text(params, "at");
-			if (cron === undefined && at === undefined) return "give --cron CRON or --at TIME";
-			if (cron !== undefined && at !== undefined) return "--cron and --at are mutually exclusive";
-			return undefined;
-		},
+		validate: (params) => validateSchedule(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/schedules",
 			body: compact({
 				kind: "session",
-				cron: text(params, "cron"),
+				...recurringFields(params),
 				at: text(params, "at"),
 				prompt: text(params, "prompt"),
 				model: text(params, "model"),
@@ -519,19 +546,25 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["schedule", "thread", "create"],
 		usage: "pana schedule thread create --at 2026-10-25T18:26:14Z --to ADDRS --body-file PATH",
-		summary: "Create a thread at a future time",
+		altUsage: [
+			'pana schedule thread create --cron "*/5 * * * *" --to ADDRS --body TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
+		],
+		summary: "Create a thread once or on a cron schedule",
 		flags: [
-			string("at", "--at TIME", "Run once at this ISO time", { required: true }),
+			...RECURRING_FLAGS,
+			string("at", "--at TIME", "Run once at this ISO time"),
 			list("to", "--to ADDRS", "Participants, comma-separated", { required: true }),
 			...BODY_FLAGS,
 		],
 		positionals: [],
 		needsBody: true,
+		validate: (params) => validateSchedule(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/schedules",
 			body: compact({
 				kind: "thread",
+				...recurringFields(params),
 				at: text(params, "at"),
 				to: items(params, "to"),
 				body: bodyWithAttachments(params),
@@ -542,27 +575,26 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ["schedule", "wake"],
 		tool: "pana_schedule_wake",
 		usage: "pana schedule wake --in 10m --note TEXT [--session SESSION]",
-		altUsage: ["pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT"],
+		altUsage: [
+			"pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT",
+			'pana schedule wake --cron "*/5 * * * *" --note TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
+		],
 		summary: "Wake a session later with a note: yours by default",
 		flags: [
+			...RECURRING_FLAGS,
 			string("in", "--in DURATION", "Wake after this long: 90s, 10m, 2h, or 1d"),
 			string("at", "--at TIME", "Wake at this ISO time"),
 			string("note", "--note TEXT", "What to check when you wake, and where to reply", { required: true }),
 			string("session", "--session SESSION", "The session to wake; only the user may name another"),
 		],
 		positionals: [],
-		validate: (params) => {
-			const delay = text(params, "in");
-			const at = text(params, "at");
-			if (delay === undefined && at === undefined) return "give --in DURATION or --at TIME";
-			if (delay !== undefined && at !== undefined) return "--in and --at are mutually exclusive";
-			return undefined;
-		},
+		validate: (params) => validateSchedule(params, true),
 		request: (params) => ({
 			method: "POST",
 			path: "/schedules",
 			body: compact({
 				kind: "wake",
+				...recurringFields(params),
 				in: text(params, "in"),
 				at: text(params, "at"),
 				note: text(params, "note"),

@@ -327,11 +327,13 @@ pana scratch prune [--dry-run]     # runs the sweep now and lists what it remove
 ## Scheduling
 
 ```sh
-pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT
+pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]
 pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT
 pana schedule thread create --at 2026-10-25T18:26:14Z --to ADDRS --body-file PATH
+pana schedule thread create --cron "*/5 * * * *" --to ADDRS --body TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]
 pana schedule wake --in 10m --note TEXT [--session SESSION]
 pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT
+pana schedule wake --cron "*/5 * * * *" --note TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]
 pana schedule list [--kind session|thread|wake]
 pana schedule delete SCHEDULE
 ```
@@ -339,15 +341,27 @@ pana schedule delete SCHEDULE
 - Cron uses the domain's local timezone.
 - A run missed while the machine was off is skipped.
 - A failed scheduled session mails the schedule's creator.
+- Every kind (`session`, `thread`, `wake`) accepts `--cron`. `--check`, `--check-cwd`, and `--stop-after-success` require `--cron`; one-shot schedules reject them. Choose exactly one timing flag (`--cron` or `--at`, or `--in` for wakes).
+- `--check 'COMMAND'` runs a Bash readiness check before each dispatch: exit 0 dispatches, exit 1 skips this occurrence quietly. Other exit codes, signals, launch errors, and a 30-second timeout skip dispatch and notify the creator, without waking a session. No session is created just to run a check.
+- Checks run as `bash --noprofile --norc -c COMMAND` with the daemon's environment. `--check-cwd` must be an absolute directory and requires `--check`; otherwise the daemon records its own working directory at creation. This is separate from a scheduled session's `--cwd`. Timeout/shutdown kills the ordinary process group and settles without waiting for pipe closure. Checks must not daemonize, enable job control, or move children to other process groups: escaped children are not guaranteed to be terminated. Checks can execute arbitrary commands: use trusted, noninteractive commands that need no shell startup files.
+- Different schedules' checks run concurrently; a schedule never overlaps its own check or dispatch. Missed cron occurrences are still skipped.
+- `--stop-after-success` finishes the recurring schedule only after a successful dispatch, not merely a passing check. It also works without a check. A not-ready or failed check leaves the schedule active; dispatch success does not wait for the resulting agent run to finish.
+- API creation fields are `check` (string or null), `checkCwd` (string or null), and `stopAfterSuccess` (boolean, default false). List and detail responses expose `lastCheck` (null before any check, otherwise `{checkedAt, status, exitCode, signal, stdout, stderr, error}`). Status is `passed`, `not_ready`, or `failed`; diagnostics retain at most 8 KiB per output stream. Output is diagnostic only and is never inserted into agent prompts.
+
+For example, poll a local readiness script without starting an agent each time, then create a session once:
+
+```sh
+pana schedule session create --cron '*/5 * * * *' --check './ready.sh' --check-cwd /absolute/project --stop-after-success --prompt 'Read the readiness result and report it.'
+```
 
 ### Wakeups
 
 A session waits for things outside its run (CI, a review, a deploy, another session) by scheduling a wake and ending its run, not by sleeping in `bash`.
 
-- `pana schedule wake` (the `pana_schedule_wake` tool) takes `--in` (`90s`, `10m`, `2h`, `1d`) or `--at`, and a `--note`. A session wakes only itself; the user may wake any session with `--session`. Wakes take no `--cron`, so nothing wakes a session forever.
+- `pana schedule wake` (the `pana_schedule_wake` tool) takes one of `--in` (`90s`, `10m`, `2h`, `1d`), `--at`, or `--cron`, and a `--note`. A session wakes only itself; the user may wake any session with `--session`. Use `--check` and `--stop-after-success` with `--cron` to wait for readiness without repeated agent runs.
 - When it fires, the note reaches the session as a new input, as a message would, and the session runs. A stopped or archived session is not woken.
 - Nothing is posted automatically at the end of a wakeup run. The note says which thread to reply in, and the session replies with `pana_reply` if it has news.
-- A wake that came due while `panad` was down fires when it starts, because a session is waiting on it. Other one-offs are marked missed.
+- A one-shot wake that came due while `panad` was down fires when it starts, because a session is waiting on it. Other one-offs are marked missed.
 - `bash` refuses a command that sleeps 60 seconds or more, and its error names `pana schedule wake`. Shorter sleeps, such as waiting for a local server the command started, still work.
 
 ## UI
