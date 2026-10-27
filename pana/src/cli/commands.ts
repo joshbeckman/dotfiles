@@ -182,14 +182,26 @@ const RECURRING_FLAGS = [
 	bool("stopAfterSuccess", "--stop-after-success", "Finish a cron schedule after its first successful dispatch"),
 ];
 
+/** Empty optional timing fields from tool calls are absent, including in the API payload. */
+function scheduleSelector(params: CommandParams, name: string): string | undefined {
+	const value = text(params, name);
+	return value?.trim() ? value : undefined;
+}
+
 function validateSchedule(params: CommandParams, wake = false): string | undefined {
 	const choices = wake ? ["in", "at", "cron"] : ["cron", "at"];
-	if (choices.filter((key) => text(params, key) !== undefined).length !== 1) {
-		return wake ? "give exactly one of --in DURATION, --at TIME, or --cron CRON" : "give exactly one of --cron CRON or --at TIME";
+	const supplied = choices.filter((key) => scheduleSelector(params, key) !== undefined);
+	if (supplied.length === 0) {
+		return wake
+			? "Provide one schedule selector: --in DURATION, --at TIME, or --cron CRON"
+			: "Provide one schedule selector: --cron CRON or --at TIME";
+	}
+	if (supplied.length > 1) {
+		return `Conflicting schedule selectors: ${supplied.map((key) => `--${key}`).join(", ")}. Provide only one.`;
 	}
 	const check = text(params, "check");
 	const cwd = text(params, "checkCwd");
-	if ((check !== undefined || cwd !== undefined || params.stopAfterSuccess === true) && text(params, "cron") === undefined) {
+	if ((check !== undefined || cwd !== undefined || params.stopAfterSuccess === true) && scheduleSelector(params, "cron") === undefined) {
 		return "--check, --check-cwd, and --stop-after-success require --cron";
 	}
 	if (check !== undefined && !check.trim()) return "--check must not be empty";
@@ -200,7 +212,7 @@ function validateSchedule(params: CommandParams, wake = false): string | undefin
 
 function recurringFields(params: CommandParams): Record<string, unknown> {
 	return {
-		cron: text(params, "cron"),
+		cron: scheduleSelector(params, "cron"),
 		check: text(params, "check"),
 		checkCwd: text(params, "checkCwd"),
 		stopAfterSuccess: params.stopAfterSuccess,
@@ -535,7 +547,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				kind: "session",
 				...recurringFields(params),
 				subject: text(params, "subject"),
-				at: text(params, "at"),
+				at: scheduleSelector(params, "at"),
 				prompt: text(params, "prompt"),
 				model: text(params, "model"),
 				thinking: text(params, "thinking"),
@@ -569,7 +581,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				kind: "thread",
 				...recurringFields(params),
 				subject: text(params, "subject"),
-				at: text(params, "at"),
+				at: scheduleSelector(params, "at"),
 				to: items(params, "to"),
 				body: bodyWithAttachments(params),
 			}),
@@ -601,8 +613,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 				kind: "wake",
 				...recurringFields(params),
 				subject: text(params, "subject"),
-				in: text(params, "in"),
-				at: text(params, "at"),
+				in: scheduleSelector(params, "in"),
+				at: scheduleSelector(params, "at"),
 				note: text(params, "note"),
 				session: text(params, "session"),
 			}),

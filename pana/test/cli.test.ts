@@ -413,6 +413,39 @@ describe("pana CLI routes", () => {
 		).toBe(2);
 	});
 
+	it("schedule selectors ignore blanks in validation and API payloads for every kind", async () => {
+		const t = await start({ handlers: { "schedules.create": (request) => ({ status: 201, body: request.body }) } });
+		for (const command of [
+			["schedule", "session", "create", "--prompt", "p"],
+			["schedule", "thread", "create", "--to", "a", "--body", "b"],
+			["schedule", "wake", "--note", "n"],
+		]) {
+			const selectors = command[1] === "wake" ? ["in", "at", "cron"] : ["at", "cron"];
+			const values: Record<string, string> = { in: "5m", at: "2027-01-01T00:00:00Z", cron: "* * * * *" };
+			for (const selected of selectors) {
+				for (const blank of ["", " \t "]) {
+					const options = selectors.flatMap((key) => [`--${key}`, key === selected ? values[key]! : blank]);
+					const result = await run([...command, ...options, "--json"], t);
+					expect(result.code).toBe(0);
+					const body = JSON.parse(result.stdout);
+					expect(body[selected]).toBe(values[selected]);
+					for (const unused of selectors.filter((key) => key !== selected)) expect(body).not.toHaveProperty(unused);
+				}
+			}
+			const missing = await run([...command, ...selectors.flatMap((key) => [`--${key}`, " \t "])], undefined);
+			expect(missing.code).toBe(2);
+			expect(missing.stderr).toContain("Provide one schedule selector:");
+			const conflict = await run([...command, "--at", values.at!, "--cron", values.cron!], undefined);
+			expect(conflict.code).toBe(2);
+			expect(conflict.stderr).toContain("Conflicting schedule selectors:");
+			expect(conflict.stderr).toContain("--at");
+			expect(conflict.stderr).toContain("--cron");
+			const check = await run([...command, "--at", values.at!, "--cron", " ", "--check", "true"], undefined);
+			expect(check.code).toBe(2);
+			expect(check.stderr).toContain("require --cron");
+		}
+	});
+
 	it("SCH-09 CLI forwards recurring check options for every kind and leaves cwd defaulting to panad", async () => {
 		const t = await start({ handlers: { "schedules.create": (request) => ({ status: 201, body: request.body }) } });
 		const kinds = [

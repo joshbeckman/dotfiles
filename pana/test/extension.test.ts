@@ -636,6 +636,28 @@ describe("pana tools", () => {
 		expect(received).toMatchObject({ kind: "wake", in: "10m", note: "Check CI and reply in the source thread", subject: "Review CI" });
 	});
 
+	it("the wake tool ignores blank unused selectors but rejects missing or conflicting times", async () => {
+		const received: unknown[] = [];
+		await start({ capture: true, handlers: { "schedules.create": request => {
+			received.push(request.body);
+			return { status: 201, body: {} };
+		} } });
+		const first = session();
+		for (const blank of ["", " \t "]) {
+			for (const args of [{ in: "5m", at: blank }, { in: blank, at: "2027-01-01T00:00:00Z" }]) {
+				const outcome = await runTool(t!, first.conversationId, "pana_schedule_wake", { ...args, note: "Check CI" });
+				expect(outcome.isError).toBe(false);
+				expect(received.at(-1)).toEqual({ kind: "wake", note: "Check CI", ...(args.in === blank ? { at: args.at } : { in: args.in }) });
+			}
+		}
+		for (const args of [{ in: "", at: " " }, { in: "5m", at: "2027-01-01T00:00:00Z" }]) {
+			const outcome = await runTool(t!, first.conversationId, "pana_schedule_wake", { ...args, note: "Check CI" });
+			expect(outcome.isError).toBe(true);
+			expect(outcome.structuredOutput).toMatchObject({ exitCode: 2 });
+		}
+		expect(received).toHaveLength(4);
+	});
+
 	it("TOL-03 a tool error carries the CLI exit code in structuredOutput.exitCode", async () => {
 		const api = fakeApi({
 			"memory.commit": {
