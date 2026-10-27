@@ -955,6 +955,27 @@ button.quiet:hover,
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
+/* A document reads with more air than a chat message; keep the site's one spacing scale. */
+#memory-file.memory-markdown p,
+#memory-file.memory-markdown ul,
+#memory-file.memory-markdown ol,
+#memory-file.memory-markdown blockquote,
+#memory-file.memory-markdown table {
+	margin: var(--s2) 0;
+}
+#memory-file.memory-markdown ul,
+#memory-file.memory-markdown ol {
+	padding-left: var(--s6);
+}
+#memory-file.memory-markdown li {
+	margin: var(--s1) 0;
+}
+#memory-file.memory-markdown h1,
+#memory-file.memory-markdown h2,
+#memory-file.memory-markdown h3,
+#memory-file.memory-markdown h4 {
+	margin: var(--s4) 0 var(--s2);
+}
 #memory-file.memory-markdown > :first-child {
 	margin-top: 0;
 }
