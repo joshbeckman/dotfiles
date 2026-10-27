@@ -127,7 +127,7 @@ export function panaLinkSegments(text, domain) {
 	return segments;
 }
 
-/** Parse a location hash into a section, an id, and query parameters. */
+/** Parse a location hash into a section, an id, the remaining path segments, and query parameters. */
 export function routeFromHash(hash) {
 	const text = String(hash ?? "").replace(/^#/, "");
 	const queryAt = text.indexOf("?");
@@ -135,7 +135,37 @@ export function routeFromHash(hash) {
 	const query = new URLSearchParams(queryAt === -1 ? "" : text.slice(queryAt + 1));
 	const parts = path.split("/").filter((part) => part.length > 0);
 	const section = parts[0] && SECTIONS.some((s) => s.id === parts[0]) ? parts[0] : "inbox";
-	return { section, id: parts[1] ? decodeURIComponent(parts[1]) : undefined, query };
+	return {
+		section,
+		id: parts[1] ? decodeURIComponent(parts[1]) : undefined,
+		// A memory path is many segments; decode each so the caller can join them back with `/`.
+		rest: parts.slice(2).map((part) => decodeURIComponent(part)),
+		query,
+	};
+}
+
+/** The route for one memory file's read view. */
+export function memoryFileHref(path) {
+	const parts = String(path ?? "")
+		.split("/")
+		.filter((part) => part.length > 0)
+		.map((part) => encodeURIComponent(part));
+	return parts.length > 0 ? `#/memory/files/${parts.join("/")}` : "#/memory";
+}
+
+/** The route for one memory file's full-view editor. */
+export function memoryEditHref(path) {
+	const parts = String(path ?? "")
+		.split("/")
+		.filter((part) => part.length > 0)
+		.map((part) => encodeURIComponent(part));
+	return parts.length > 0 ? `#/memory/edit/${parts.join("/")}` : "#/memory/new";
+}
+
+/** The route for one memory commit's `git show` view. */
+export function memoryCommitHref(hash) {
+	const value = String(hash ?? "");
+	return value.length > 0 ? `#/memory/commits/${encodeURIComponent(value)}` : "#/memory";
 }
 
 /** The draft head is the thread's newest message when the reply editor opens (WEB-07). */

@@ -205,7 +205,16 @@ describeBrowser("pana in a browser", () => {
 
 		// Memory: browse, search, open, edit, and the commit is the user's.
 		await t!.client.post("/memory/files/notes.md", { content: "# Notes\n\nhello memory\n" });
-		const memory = await evaluatePage<{ worktree: string; files: string[]; content: string; log: string }>(`
+		const memory = await evaluatePage<{
+			worktree: string;
+			files: string[];
+			content: string;
+			log: string;
+			listHidden: boolean;
+			commit: string;
+			commitBack: string;
+			source: string;
+		}>(`
 			location.hash = "#/memory";
 			await until(() => document.getElementById("memory-worktree").textContent.includes("memory/worktrees/tester"));
 			await until(() => document.querySelectorAll("#memory-files .item").length === 1);
@@ -213,22 +222,46 @@ describeBrowser("pana in a browser", () => {
 			document.getElementById("memory-search").requestSubmit();
 			await until(() => document.querySelectorAll("#memory-results .item").length === 1);
 			document.querySelector("#memory-results .item").click();
-			await until(() => !document.getElementById("memory-file").hidden && document.getElementById("memory-file").textContent.includes("hello memory"));
-			document.getElementById("memory-edit").value = "# Notes\\n\\nhello memory, edited\\n";
+			await until(() => !document.getElementById("memory-file-view").hidden && document.getElementById("memory-file").textContent.includes("hello memory"));
+			// MEM-11: a file stands alone; the file list and the edit pane are not beside it.
+			const listHidden = document.getElementById("memory-browse").hidden;
+			// Source is the exact bytes the editor opens, and the reader can switch back.
+			document.getElementById("memory-source").click();
+			await until(() => location.hash.includes("?source=1") && document.getElementById("memory-file").classList.contains("raw"));
+			const source = document.getElementById("memory-file").textContent;
+			document.getElementById("memory-source").click();
+			await until(() => !location.hash.includes("source=1") && document.getElementById("memory-file").classList.contains("memory-markdown"));
+			document.getElementById("memory-edit-link").click();
+			await until(() => !document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor);
+			window.__pana.memoryEditor.load("# Notes\\n\\nhello memory, edited\\n");
 			document.querySelector("[data-testid=memory-save]").click();
-			await until(() => document.getElementById("memory-file").textContent.includes("edited"));
+			await until(() => location.hash.startsWith("#/memory/files/") && document.getElementById("memory-file").textContent.includes("edited"));
+			// The log at the bottom of the browse view opens a commit of its own (MEM-11).
+			location.hash = "#/memory";
 			await until(() => document.querySelectorAll("#memory-log .item").length === 3);
+			const commitRow = document.querySelector("#memory-log .item");
+			commitRow.click();
+			await until(() => !document.getElementById("memory-commit-view").hidden && document.querySelectorAll("#memory-commit-files .commit-file").length === 1);
 			return {
 				worktree: document.getElementById("memory-worktree").textContent,
 				files: [...document.querySelectorAll("#memory-files .item")].map((el) => el.dataset.path),
-				content: document.getElementById("memory-file").textContent,
-				log: document.querySelector("#memory-log .item").textContent,
+				content: location.hash.startsWith("#/memory/commits/") ? document.getElementById("memory-commit-files").textContent : "",
+				log: commitRow.textContent,
+				listHidden,
+				commit: document.getElementById("memory-commit-subject").textContent + " " + document.getElementById("memory-commit-files").textContent,
+				commitBack: document.getElementById("memory-commit-back").getAttribute("href"),
+				source,
 			};
 		`);
 		expect(memory.files).toEqual(["notes.md"]);
-		expect(memory.content).toContain("hello memory, edited");
+		expect(memory.listHidden).toBe(true);
 		expect(memory.log).toContain("Update notes.md");
-		expect(memory.log).toContain(t!.runtime.userUrl);
+		// The row names its author the way every other view does, as the shortened URL label.
+		expect(memory.log).toContain("tester");
+		expect(memory.commit).toContain("Update notes.md");
+		expect(memory.commit).toContain("+hello memory, edited");
+		expect(memory.commitBack).toBe("#/memory");
+		expect(memory.source).toBe("# Notes\n\nhello memory\n");
 		const onMain = await t!.client.get<{ content: string }>("/memory/files/notes.md");
 		expect(onMain.body.content).toContain("hello memory, edited");
 
@@ -1029,5 +1062,89 @@ describeBrowser("pana in a browser", () => {
 			};
 		`);
 		expect(view).toEqual({ navCompose: false, composeVisible: true, current: "threads" });
+	});
+	it("MEM-11 a memory file and a commit are their own views, and the log opens the commit", async () => {
+		await start([]);
+		await open();
+		await t!.client.post("/memory/files/guide.md", { content: "# Guide\n\nFirst line.\n" });
+		await t!.client.post("/memory/files/guide.md", { content: "# Guide\n\nSecond line.\n" });
+		const shown = await evaluatePage<{
+			browseHidden: boolean;
+			editorHidden: boolean;
+			source: string;
+			sourceClass: string;
+			commitSubject: string;
+			commitPatch: string;
+			commitBack: string;
+		}>(`
+			location.hash = "#/memory";
+			await until(() => document.querySelectorAll("#memory-files .item").length === 1 && document.querySelectorAll("#memory-log .item").length === 3);
+			document.querySelector("#memory-files .item").click();
+			await until(() => !document.getElementById("memory-file-view").hidden && document.getElementById("memory-file").textContent.includes("Second line"));
+			// Opening a file hides the list and the editor; Edit is a button, not a pane already open.
+			const browseHidden = document.getElementById("memory-browse").hidden;
+			const editorHidden = document.getElementById("memory-edit-view").hidden;
+			document.getElementById("memory-source").click();
+			await until(() => location.hash.includes("?source=1") && document.getElementById("memory-file").classList.contains("raw"));
+			const source = document.getElementById("memory-file").textContent;
+			const sourceClass = document.getElementById("memory-file").className;
+			document.getElementById("memory-file-back").click();
+			await until(() => !document.getElementById("memory-browse").hidden);
+			document.querySelector("#memory-log .item").click();
+			await until(() => !document.getElementById("memory-commit-view").hidden && document.getElementById("memory-commit-subject").textContent.length > 0);
+			return {
+				browseHidden,
+				editorHidden,
+				source,
+				sourceClass,
+				commitSubject: document.getElementById("memory-commit-subject").textContent,
+				commitPatch: document.getElementById("memory-commit-files").textContent,
+				commitBack: document.getElementById("memory-commit-back").getAttribute("href"),
+			};
+		`);
+		expect(shown.browseHidden).toBe(true);
+		expect(shown.editorHidden).toBe(true);
+		expect(shown.source).toBe("# Guide\n\nSecond line.\n");
+		expect(shown.sourceClass).toContain("raw");
+		expect(shown.commitSubject).toBe("Update guide.md");
+		expect(shown.commitPatch).toContain("-First line.");
+		expect(shown.commitPatch).toContain("+Second line.");
+		expect(shown.commitBack).toBe("#/memory");
+	});
+
+	it("MEM-12 editing and creating use a full-view code editor, and Save commits as the user", async () => {
+		await start([]);
+		await open();
+		await t!.client.post("/memory/files/notes.md", { content: "# Notes\n\nold\n" });
+		const layout = await evaluatePage<{ gutter: boolean; label: string; height: number; lines: number }>(`
+			location.hash = "#/memory/edit/notes.md";
+			await until(() => !document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor && document.querySelector("#memory-editor .cm-editor"));
+			const editor = document.querySelector("#memory-editor");
+			return {
+				gutter: Boolean(editor.querySelector(".cm-gutters")),
+				label: editor.querySelector(".cm-content")?.getAttribute("aria-label") ?? "",
+				height: editor.getBoundingClientRect().height,
+				lines: editor.querySelectorAll(".cm-line").length,
+			};
+		`);
+		expect(layout.gutter).toBe(true);
+		expect(layout.label).toBe("Memory file content");
+		expect(layout.height).toBeGreaterThan(300);
+		// Three text lines plus the empty line after the trailing newline.
+		expect(layout.lines).toBeGreaterThanOrEqual(3);
+
+		// Create view: a path field and the same editor, and Save writes through the API.
+		const created = await evaluatePage<string>(`
+			location.hash = "#/memory/new";
+			await until(() => !document.getElementById("memory-edit-view").hidden && !document.getElementById("memory-path-field").hidden && window.__pana.memoryEditor);
+			document.getElementById("memory-path-input").value = "notes/from-the-editor.md";
+			window.__pana.memoryEditor.load("# From the editor\\n\\nSaved from a phone-sized screen.\\n");
+			document.getElementById("memory-save").click();
+			await until(() => location.hash.startsWith("#/memory/files/") && document.getElementById("memory-file").textContent.includes("Saved from a phone-sized screen"));
+			return location.hash;
+		`);
+		expect(created).toBe("#/memory/files/notes/from-the-editor.md");
+		const written = await t!.client.get<{ content: string }>("/memory/files/notes/from-the-editor.md");
+		expect(written.body.content).toContain("Saved from a phone-sized screen.");
 	});
 });

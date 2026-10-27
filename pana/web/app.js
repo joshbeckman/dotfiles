@@ -10,6 +10,9 @@ import {
 	appendReference,
 	appHref,
 	idHref,
+	memoryCommitHref,
+	memoryEditHref,
+	memoryFileHref,
 	newDraft,
 	panaLinkSegments,
 	referenceFor,
@@ -28,6 +31,8 @@ import {
 	inboxThreadRow,
 	isWorking,
 	liveActivityLabel,
+	memoryCommitView,
+	memoryFileView,
 	memoryHitView,
 	messageView,
 	participantColor,
@@ -1460,8 +1465,32 @@ async function confirmArchiveSession() {
 }
 
 // ---- Memory ---------------------------------------------------------------------------------
+//
+// One thing at a time (MEM-10, MEM-11): the browse view (files and the log), one file, one
+// commit, or the full-view editor. A file view keeps no list and no editor beside it, because
+// the same screen is a phone.
+
+/** Where a memory detail view goes back to: the browse view unless a file history opened it. */
+let memoryBack = "#/memory";
+/** The file being edited; "" while creating a new one. */
+let memoryEditingPath = "";
+
+function showMemoryDetail(which) {
+	$("memory-browse").hidden = which !== "browse";
+	$("memory-file-view").hidden = which !== "file";
+	$("memory-edit-view").hidden = which !== "edit";
+	$("memory-commit-view").hidden = which !== "commit";
+}
+
+function fileSize(bytes) {
+	const size = Number(bytes) || 0;
+	if (size < 1024) return `${size} B`;
+	if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+	return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 async function loadMemory() {
+	showMemoryDetail("browse");
 	const [worktree, listing] = await Promise.all([api("GET", "/memory/worktree"), api("GET", "/memory/files")]);
 	$("memory-worktree").textContent = worktree?.path ? `Your worktree: ${worktree.path}` : "No memory worktree yet.";
 	const files = asList(listing, ["files"]);
@@ -1471,30 +1500,32 @@ async function loadMemory() {
 		empty(list, "Memory is empty.");
 	} else {
 		for (const file of files) {
-			const row = item(file.path, [`${file.size} B`], () => void openMemoryFile(file.path), {
-				testid: "memory-file-item",
-				id: file.path,
-			});
+			const row = item(file.path, [fileSize(file.size)], () => {
+				memoryBack = "#/memory";
+				location.hash = memoryFileHref(file.path);
+			}, { testid: "memory-file-item", id: file.path });
 			row.dataset.path = file.path;
-			if (file.path === openMemoryPath) row.classList.add("focus");
 			list.append(row);
 		}
 	}
-	await loadMemoryLog();
+	const body = await api("GET", "/memory/log");
+	memoryLogRows($("memory-log"), asList(body, ["commits"]), (commit) => {
+		memoryBack = "#/memory";
+		location.hash = memoryCommitHref(commit.hash);
+	});
 }
 
-async function loadMemoryLog() {
-	const body = await api("GET", "/memory/log");
-	const list = $("memory-log");
+/** A log's rows. `onOpen` receives the mapped commit; each row also links its author. */
+function memoryLogRows(list, commits, onOpen, testid = "memory-commit") {
 	list.replaceChildren();
-	const commits = asList(body, ["commits"]);
 	if (commits.length === 0) return empty(list, "No memory commits yet.");
 	for (const raw of commits) {
 		const commit = commitView(raw);
 		const aside = document.createElement("div");
 		aside.className = "item-aside";
 		aside.append(timeEl(Date.parse(commit.at)));
-		list.append(item(commit.message, [commit.author, commit.short], () => {}, { testid: "memory-commit", id: commit.hash, aside }));
+		const author = refLink(commit.author, "user", refLabel(commit.author), commit.author);
+		list.append(item(commit.message, [author, span(commit.short, "commit-hash")], () => onOpen(commit), { testid, id: commit.hash, aside }));
 	}
 }
 
@@ -1509,7 +1540,10 @@ async function searchMemory(event) {
 	if (results.length === 0) return empty(list, `Nothing matches “${query}”.`);
 	for (const result of results) {
 		const hit = memoryHitView(result);
-		const row = item(hit.path, [hit.text], () => void openMemoryFile(hit.path), { testid: "memory-result" });
+		const row = item(hit.path, [hit.text], () => {
+			memoryBack = "#/memory";
+			location.hash = memoryFileHref(hit.path);
+		}, { testid: "memory-result" });
 		row.dataset.path = hit.path;
 		list.append(row);
 	}
@@ -1519,31 +1553,204 @@ function memoryPath(path) {
 	return path.split("/").map(encodeURIComponent).join("/");
 }
 
-let openMemoryPath = "";
-
-async function openMemoryFile(path) {
-	if (!path) return;
-	openMemoryPath = path;
-	const file = await api("GET", `/memory/files/${memoryPath(path)}`);
-	const content = file.content;
+async function openMemoryFile(path, showSource = false) {
+	if (!path) return loadMemory();
+	showMemoryDetail("file");
 	$("memory-path").textContent = path;
-	$("memory-file").textContent = content;
-	$("memory-file").hidden = false;
-	$("memory-edit").value = content;
-	$("memory-open").hidden = false;
-	for (const row of document.querySelectorAll("#memory-files .item")) row.classList.toggle("focus", row.dataset.path === path);
+	$("memory-edit-link").href = memoryEditHref(path);
+	$("memory-file-back").href = memoryBack || "#/memory";
+	const meta = $("memory-file-meta");
+	meta.replaceChildren();
+	$("memory-file-log").replaceChildren();
+	$("memory-file-history-section").hidden = true;
+
+	const file = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`));
+	const markdown = /\.(?:md|markdown|mdown|mkd|mdx)$/i.test(path);
+	const raw = showSource || !markdown;
+	const body = $("memory-file");
+	body.classList.toggle("memory-markdown", !raw);
+	body.classList.toggle("raw", raw);
+	body.replaceChildren();
+	// A Markdown file reads as prose; Source shows the exact bytes an editor will open.
+	const source = $("memory-source");
+	source.hidden = !markdown;
+	source.textContent = raw ? "Rendered" : "Source";
+	source.dataset.href = raw ? memoryFileHref(path) : `${memoryFileHref(path)}?source=1`;
+	if (raw) {
+		body.textContent = file.content;
+	} else {
+		await ensureVendor();
+		const { marked, DOMPurify } = window.MailRenderers ?? {};
+		await renderMessage(body, file.content, {
+			marked,
+			DOMPurify,
+			domain: state.domain,
+			fetchFile,
+			ensureMermaid,
+			idPrefix: `memory-${file.commit.slice(0, 8)}`,
+			dark: matchMedia("(prefers-color-scheme: dark)").matches,
+		});
+	}
+
+	meta.append(span(`main @ ${file.commit.slice(0, 8)}`, "commit-hash"));
+	const history = asList(await api("GET", `/memory/log?path=${encodeURIComponent(path)}&limit=10`), ["commits"]);
+	const latest = history[0] ? commitView(history[0]) : undefined;
+	if (latest) {
+		meta.append(refLink(latest.author, "user", refLabel(latest.author), latest.author), timeEl(Date.parse(latest.at)));
+	}
+	$("memory-file-history-section").hidden = history.length === 0;
+	memoryLogRows($("memory-file-log"), history, (commit) => {
+		memoryBack = memoryFileHref(path);
+		location.hash = memoryCommitHref(commit.hash);
+	}, "memory-file-commit");
+}
+
+/** The classes a `git show` patch line gets. Headers first: `+++`/`---` are not additions. */
+function patchLineClass(line) {
+	if (/^(diff --git|index |old mode |new mode |deleted file mode |new file mode |similarity index |rename |--- |\+\+\+ |Binary files |\\ No newline)/.test(line)) return "meta";
+	if (line.startsWith("@@")) return "hunk";
+	if (line.startsWith("+")) return "add";
+	if (line.startsWith("-")) return "del";
+	return "context";
+}
+
+function patchElement(text) {
+	const pre = document.createElement("pre");
+	pre.className = "patch";
+	for (const line of text.split("\n")) {
+		const node = document.createElement("span");
+		node.className = `patch-line ${patchLineClass(line)}`;
+		node.textContent = line;
+		pre.append(node);
+	}
+	return pre;
+}
+
+function commitFileElement(file) {
+	const section = document.createElement("section");
+	section.className = "commit-file";
+	section.dataset.path = file.path;
+	const head = document.createElement("header");
+	head.className = "commit-file-head";
+	head.append(span(file.path, "commit-file-path"), badge(file.status));
+	if (file.binary) head.append(span("binary", "hint"));
+	else head.append(span(`+${file.additions} −${file.deletions}`, "commit-stat"));
+	section.append(head);
+	if (file.patch.length > 0) section.append(patchElement(file.patch));
+	else section.append(span(file.binary ? "Binary file" : "No textual changes", "hint"));
+	if (file.truncated) section.append(span("Patch truncated — open the file in git to see the rest.", "hint"));
+	return section;
+}
+
+async function openMemoryCommit(hash) {
+	if (!hash) return loadMemory();
+	showMemoryDetail("commit");
+	$("memory-commit-back").href = memoryBack || "#/memory";
+	const commit = memoryCommitView(await api("GET", `/memory/commits/${encodeURIComponent(hash)}`));
+	$("memory-commit-subject").textContent = commit.subject || "(no subject)";
+	const meta = $("memory-commit-meta");
+	meta.replaceChildren(
+		span(commit.short, "commit-hash"),
+		refLink(commit.author, "user", refLabel(commit.author), commit.author),
+		timeEl(Date.parse(commit.at)),
+		span(commit.files.length === 1 ? "1 file" : `${commit.files.length} files`),
+	);
+	const message = $("memory-commit-message");
+	message.textContent = commit.body;
+	message.hidden = commit.body.length === 0;
+	const files = $("memory-commit-files");
+	files.replaceChildren();
+	if (commit.files.length === 0) {
+		empty(files, "This commit changed no files (a merge or an empty commit).");
+	} else {
+		for (const file of commit.files) files.append(commitFileElement(file));
+	}
+	if (commit.truncated) files.append(span("A patch was cut short for this screen; the commit itself is complete.", "hint"));
+}
+
+// ---- The memory editor ----------------------------------------------------------------------
+// CodeMirror 6 in a pana-built bundle (web/memory-editor-vendor.js), loaded only when someone
+// edits: the browse view stays a few files, and the editor is ready by the time they type.
+
+let editorLoading;
+function ensureMemoryEditor() {
+	if (window.PanaMemoryEditor) return Promise.resolve(window.PanaMemoryEditor);
+	if (!editorLoading) {
+		editorLoading = new Promise((resolve, reject) => {
+			const script = document.createElement("script");
+			script.src = "/memory-editor-vendor.js";
+			script.onload = () => {
+				if (window.PanaMemoryEditor) resolve(window.PanaMemoryEditor);
+				else reject(new Error("The editor bundle did not expose an editor."));
+			};
+			script.onerror = () => reject(new Error("The editor bundle failed to load."));
+			document.head.append(script);
+		}).catch((error) => {
+			document.querySelector('script[src="/memory-editor-vendor.js"]')?.remove();
+			editorLoading = undefined;
+			throw error;
+		});
+	}
+	return editorLoading;
+}
+
+let memoryEditor;
+
+async function openMemoryEditor(path) {
+	showMemoryDetail("edit");
+	memoryEditingPath = path;
+	const creating = path.length === 0;
+	$("memory-edit-title").textContent = creating ? "New file" : path;
+	$("memory-edit-back").href = creating ? "#/memory" : memoryFileHref(path);
+	$("memory-path-field").hidden = !creating;
+	$("memory-path-input").value = path;
+	let content = "";
+	if (!creating) content = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`)).content;
+
+	const parent = $("memory-editor");
+	if (!memoryEditor) empty(parent, "Loading editor…");
+	const lib = await ensureMemoryEditor();
+	if (!memoryEditor) {
+		parent.replaceChildren();
+		memoryEditor = lib.create(parent, () => {});
+		// CodeMirror handles Enter itself, so the submit chord is caught before the editor can
+		// claim it; the document-level keymap (UX-02) never sees it otherwise.
+		parent.addEventListener(
+			"keydown",
+			(event) => {
+				if (!isSubmitChord(event, APPLE)) return;
+				event.preventDefault();
+				$("memory-edit-form").requestSubmit();
+			},
+			true,
+		);
+	}
+	memoryEditor.load(content);
+	if (creating) $("memory-path-input").focus();
+	else memoryEditor.focus();
 }
 
 async function saveMemory(event) {
 	event?.preventDefault();
-	if (!openMemoryPath) return status("Open a memory file first.", true);
+	const typed = $("memory-path-input").value.trim().replace(/^\/+/, "");
+	const path = memoryEditingPath || typed;
+	if (!path) {
+		status("Give the file a path first.", true);
+		$("memory-path-input").focus();
+		return;
+	}
+	if (!memoryEditor) return status("The editor is still loading.", true);
+	const save = $("memory-save");
+	save.disabled = true;
 	try {
-		await api("POST", `/memory/files/${memoryPath(openMemoryPath)}`, { content: $("memory-edit").value });
-		$("memory-file").textContent = $("memory-edit").value;
+		await api("POST", `/memory/files/${memoryPath(path)}`, { content: memoryEditor.value() });
 		status("Saved and committed to main.");
-		await loadMemory();
+		memoryBack = "#/memory";
+		location.hash = memoryFileHref(path);
 	} catch (error) {
 		fail(error);
+	} finally {
+		save.disabled = false;
 	}
 }
 
@@ -1823,7 +2030,7 @@ function selectables() {
 		case "sessions":
 			return $("session").hidden ? visible("#sessions-list [data-selectable]") : [];
 		case "memory":
-			return visible("#memory-results [data-selectable], #memory-files [data-selectable]");
+			return visible("#memory-results [data-selectable], #memory-files [data-selectable], #memory-log [data-selectable], #memory-file-log [data-selectable]");
 		case "schedules":
 			return visible("#schedules-list [data-selectable]");
 		default:
@@ -1863,6 +2070,15 @@ function focusSearch() {
 	if (search && !$(search).closest("[hidden]")) {
 		$(search).focus();
 		$(search).select();
+		return;
+	}
+	// A memory detail view has no search box; go back to the browse view that owns one.
+	if (state.section === "memory") {
+		location.hash = "#/memory";
+		setTimeout(() => {
+			$("memory-query").focus();
+			$("memory-query").select();
+		}, 0);
 		return;
 	}
 	// The views without a search box search threads.
@@ -1905,6 +2121,16 @@ function goBack() {
 	if (!$("session-confirm").hidden) {
 		$("session-confirm").hidden = true;
 		return;
+	}
+	if (state.section === "memory") {
+		if (!$("memory-edit-view").hidden) {
+			location.hash = $("memory-edit-back").getAttribute("href") || "#/memory";
+			return;
+		}
+		if (!$("memory-file-view").hidden || !$("memory-commit-view").hidden) {
+			location.hash = memoryBack || "#/memory";
+			return;
+		}
 	}
 	const detail = (state.section === "threads" && !$("thread").hidden) || (state.section === "sessions" && !$("session").hidden);
 	if (detail) location.hash = state.lastList;
@@ -2009,7 +2235,7 @@ function showSection(section) {
 }
 
 async function route() {
-	const { section, id, query } = routeFromHash(location.hash);
+	const { section, id, rest, query } = routeFromHash(location.hash);
 	showSection(section);
 	select(null);
 	if (!id && section !== "compose") state.lastList = location.hash || "#/inbox";
@@ -2043,7 +2269,11 @@ async function route() {
 				else await loadSessionList($("sessions-query").value.trim());
 				break;
 			case "memory":
-				await loadMemory();
+				if (id === "files" && rest.length > 0) await openMemoryFile(rest.join("/"), query.get("source") === "1");
+				else if (id === "commits" && rest.length > 0) await openMemoryCommit(rest[0]);
+				else if (id === "edit" && rest.length > 0) await openMemoryEditor(rest.join("/"));
+				else if (id === "new") await openMemoryEditor("");
+				else await loadMemory();
 				break;
 			case "schedules":
 				await loadSchedules(query.get("focus") ?? undefined);
@@ -2115,6 +2345,16 @@ $("inbox-archived").addEventListener("change", () => void loadInbox());
 $("threads-unread").addEventListener("change", () => void searchThreads());
 $("memory-search").addEventListener("submit", (event) => void searchMemory(event));
 $("memory-edit-form").addEventListener("submit", (event) => void saveMemory(event));
+$("memory-source").addEventListener("click", () => {
+	const href = $("memory-source").dataset.href;
+	if (href) location.hash = href;
+});
+// Enter in the path field moves on to writing, instead of saving before there is anything to save.
+$("memory-path-input").addEventListener("keydown", (event) => {
+	if (event.key !== "Enter") return;
+	event.preventDefault();
+	memoryEditor?.focus();
+});
 $("schedule-form").addEventListener("submit", (event) => void createSchedule(event));
 $("schedule-cancel").addEventListener("click", () => {
 	resetScheduleForm();
@@ -2168,7 +2408,12 @@ window.__pana = {
 			help: !$("help").hidden,
 			push: state.push,
 			apple: APPLE,
+			memoryPath: memoryEditingPath || undefined,
 		};
+	},
+	/** The CodeMirror instance while a memory file is open in the editor, for tests and debugging. */
+	get memoryEditor() {
+		return memoryEditor;
 	},
 	enablePush,
 	showPushButton,

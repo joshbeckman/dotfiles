@@ -8,6 +8,8 @@ export interface ThreadLike {
 export interface Route {
 	section: string;
 	id?: string;
+	/** Path segments after the section and id, decoded (a memory file path is many segments). */
+	rest: string[];
 	query: URLSearchParams;
 }
 
@@ -44,6 +46,9 @@ export function withReferences(body: unknown, files: ReadonlyArray<Partial<Attac
 export function tokenFromInput(raw: unknown): string;
 export function appHref(href: string | null | undefined, domain: string): string | undefined;
 export function routeFromHash(hash: string): Route;
+export function memoryFileHref(path: unknown): string;
+export function memoryEditHref(path: unknown): string;
+export function memoryCommitHref(hash: unknown): string;
 export function idHref(id: string | null | undefined, kind: string): string | undefined;
 export function panaLinkSegments(text: unknown, domain: string): LinkSegment[];
 export function newDraft(thread: ThreadLike | undefined): Draft;

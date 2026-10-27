@@ -12,7 +12,18 @@ import { createProviderModels, hasModel } from "../src/server/models.ts";
 import { detectTailscaleNames } from "../src/server/tailscale.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { postNotice } from "../src/threads/index.ts";
-import { commitView, entryView, inboxRow, memoryHitView, messageView, scheduleBody, scheduleWhen, threadRow } from "../web/views.js";
+import {
+	commitView,
+	entryView,
+	inboxRow,
+	memoryCommitView,
+	memoryFileView,
+	memoryHitView,
+	messageView,
+	scheduleBody,
+	scheduleWhen,
+	threadRow,
+} from "../web/views.js";
 import { FAKE_EPOCH, startTestPanad, type Script, type TestPanad } from "./harness/index.ts";
 
 // Vite resolves a static `node:sqlite` import as a package named `sqlite`.
@@ -202,7 +213,16 @@ describe("INT-02 the PWA reads the real handler shapes", () => {
 		const files = await t!.tcp.get<{ files: Array<{ path: string; size: number }> }>("/memory/files");
 		expect(files.body.files).toEqual([{ path: "notes.md", size: 13 }]);
 		const log = await t!.tcp.get<{ commits: unknown[] }>("/memory/log");
-		expect(commitView(log.body.commits[0])).toMatchObject({ author: t!.runtime.userUrl, message: "Update notes.md" });
+		const logged = commitView(log.body.commits[0]);
+		expect(logged).toMatchObject({ author: t!.runtime.userUrl, message: "Update notes.md" });
+		const shown = await t!.tcp.get<unknown>(`/memory/commits/${logged.hash}`);
+		expect(memoryCommitView(shown.body)).toMatchObject({
+			subject: "Update notes.md",
+			author: t!.runtime.userUrl,
+			files: [{ path: "notes.md", status: "added", additions: 1, deletions: 0, binary: false }],
+		});
+		const readFile = await t!.tcp.get<unknown>("/memory/files/notes.md");
+		expect(memoryFileView(readFile.body)).toMatchObject({ path: "notes.md", content: "hello memory\n", commit: expect.stringMatching(/^[0-9a-f]{40}$/) });
 		const found = await t!.tcp.get<{ results: unknown[] }>("/memory/search?query=HELLO");
 		expect(found.body.results.map(memoryHitView)).toEqual([{ path: "notes.md", text: "1: hello memory" }]);
 

@@ -238,18 +238,19 @@ describeBrowser("pana usability in a browser", () => {
 		expect((await t.client.get<{ sessions: unknown[] }>("/sessions")).body.sessions.length).toBe(sessionsBefore + 1);
 		await settle(t, async () => true, "the composed session");
 
-		// Memory.
+		// Memory: the editor is CodeMirror, and the chord submits the form around it (MEM-12).
 		await evaluatePage(`
 			${KEYS}
 			location.hash = "#/memory";
 			await until(() => document.querySelectorAll("#memory-files .item").length >= 1);
 			document.querySelector("#memory-files .item").click();
-			await until(() => !document.getElementById("memory-open").hidden);
-			const box = document.getElementById("memory-edit");
-			box.focus();
-			box.value = "# pana\\n\\nSaved with the keyboard.\\n";
+			await until(() => !document.getElementById("memory-file-view").hidden);
+			document.getElementById("memory-edit-link").click();
+			await until(() => !document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor);
+			window.__pana.memoryEditor.load("# pana\\n\\nSaved with the keyboard.\\n");
+			window.__pana.memoryEditor.focus();
 			await press("Enter", submitChord());
-			await until(() => document.getElementById("memory-file").textContent.includes("Saved with the keyboard"));
+			await until(() => location.hash.startsWith("#/memory/files/") && document.getElementById("memory-file").textContent.includes("Saved with the keyboard"));
 			return true;
 		`);
 		expect((await t.client.get<{ content: string }>("/memory/files/notes/pana.md")).body.content).toContain("Saved with the keyboard");
@@ -476,9 +477,12 @@ describeBrowser("pana usability in a browser", () => {
 			out.searchHidden = document.getElementById("threads-search").offsetParent === null;
 			await fields("#/memory", () => document.querySelectorAll("#memory-files .item").length >= 1);
 			document.querySelector("#memory-files .item").click();
-			await until(() => !document.getElementById("memory-open").hidden);
-			check("memory save", document.getElementById("memory-save"), document.getElementById("memory-open"));
-			check("memory editor", document.getElementById("memory-edit"), document.getElementById("memory-open"));
+			await until(() => !document.getElementById("memory-file-view").hidden);
+			check("memory edit", document.getElementById("memory-edit-link"), document.querySelector("#memory-file-view .view-header"));
+			document.getElementById("memory-edit-link").click();
+			await until(() => !document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor);
+			check("memory save", document.getElementById("memory-save"), document.querySelector("#memory-edit-view .view-header"));
+			check("memory editor", document.getElementById("memory-editor"), document.getElementById("memory-edit-form"));
 			await fields("#/inbox", () => document.querySelectorAll("#inbox-list .item").length >= 3);
 			for (const row of document.querySelectorAll("#inbox-list .item")) for (const button of row.querySelectorAll("button")) check("inbox " + button.textContent, button, row);
 			await fields("#/threads", () => document.querySelectorAll("#threads-list .item").length >= 3);

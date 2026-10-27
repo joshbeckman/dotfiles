@@ -322,6 +322,46 @@ export function memoryHitView(hit) {
 	return { path: hit.path, text: `${hit.line}: ${hit.text}` };
 }
 
+/** One file of `GET /memory/files/*` (MEM-09). */
+export function memoryFileView(file) {
+	return {
+		path: String(file?.path ?? ""),
+		content: String(file?.content ?? ""),
+		commit: String(file?.commit ?? ""),
+	};
+}
+
+/** One file's diff inside `GET /memory/commits/:hash` (MEM-10). */
+export function memoryCommitFileView(file) {
+	return {
+		path: String(file?.path ?? ""),
+		status: String(file?.status ?? "modified"),
+		additions: Number(file?.additions) || 0,
+		deletions: Number(file?.deletions) || 0,
+		binary: Boolean(file?.binary),
+		patch: String(file?.patch ?? ""),
+		truncated: Boolean(file?.truncated),
+	};
+}
+
+/** `GET /memory/commits/:hash` for the commit view (MEM-10). The body excludes the subject. */
+export function memoryCommitView(commit) {
+	const message = String(commit?.message ?? "");
+	const subject = String(commit?.subject ?? message.split("\n", 1)[0] ?? "");
+	const body = message.startsWith(subject) ? message.slice(subject.length).replace(/^\s*\n/, "") : message;
+	return {
+		hash: String(commit?.hash ?? ""),
+		short: String(commit?.short ?? commit?.hash ?? "").slice(0, 8),
+		author: String(commit?.authorUrl ?? ""),
+		at: commit?.time,
+		subject,
+		body,
+		parents: Array.isArray(commit?.parents) ? commit.parents.map(String) : [],
+		files: Array.isArray(commit?.files) ? commit.files.map(memoryCommitFileView) : [],
+		truncated: Boolean(commit?.truncated),
+	};
+}
+
 /** What the schedule form's "when" field shows: the cron expression, or the one-off time. */
 export function scheduleWhen(schedule) {
 	if (schedule.cron) return schedule.cron;

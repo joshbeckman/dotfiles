@@ -75,6 +75,36 @@ export interface LogEntry {
 	message: string;
 }
 
+/** One file of a commit's diff, as `git show` presents it. */
+export interface CommitFile {
+	path: string;
+	status: "added" | "deleted" | "modified";
+	/** Additions and deletions from `--numstat`; 0 for a binary file. */
+	additions: number;
+	deletions: number;
+	binary: boolean;
+	/** The file's unified diff, from its `diff --git` header through its last line. */
+	patch: string;
+	/** True when the patch was too large to send in full. */
+	truncated: boolean;
+}
+
+/** A commit as the PWA's commit view needs it (`git show`-esque). */
+export interface CommitDetail {
+	hash: string;
+	short: string;
+	authorUrl: string;
+	email: string;
+	time: string;
+	/** The full commit message, subject and body. */
+	message: string;
+	subject: string;
+	parents: string[];
+	files: CommitFile[];
+	/** True when at least one file's patch was cut short. */
+	truncated: boolean;
+}
+
 export interface MemoryFile {
 	path: string;
 	content: string;
@@ -90,6 +120,9 @@ const MAX_PUBLISH_ATTEMPTS = 8;
 const MAX_SEARCH_FILES = 500;
 const DEFAULT_SEARCH_LIMIT = 100;
 const DEFAULT_LOG_LIMIT = 50;
+/** A commit view is read on a phone; never ship more patch text than this. */
+const MAX_PATCH_BYTES = 512 * 1024;
+const MAX_FILE_PATCH_BYTES = 128 * 1024;
 
 const WRITER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -107,7 +140,9 @@ export function assertWriterId(id: string): void {
 export function normalizeMemoryPath(input: string): string {
 	const path = input.replace(/^\/+/, "").trim();
 	if (path.length === 0) throw ApiError.badRequest("invalid_path", "memory path is empty");
-	if (path.includes("\\") || path.includes("\0")) throw ApiError.badRequest("invalid_path", `invalid memory path: ${input}`);
+	if (path.includes("\\") || /[\u0000-\u001f\u007f]/.test(path)) {
+		throw ApiError.badRequest("invalid_path", `invalid memory path: ${input}`);
+	}
 	const parts = path.split("/");
 	if (parts.some((part) => part === "" || part === "." || part === "..")) {
 		throw ApiError.badRequest("invalid_path", `invalid memory path: ${input}`);
@@ -386,6 +421,130 @@ export class Memory {
 			});
 	}
 
+	/**
+	 * One commit with its message and per-file patch, for the PWA's commit view. History itself is
+	 * linear (MEM-03), so a single `git show` is the whole diff; merge commits simply have none.
+	 */
+	async showCommit(hash: string): Promise<CommitDetail> {
+		const requested = String(hash ?? "").trim();
+		// A hash is never a flag or a path: only hex reaches git, so an argument cannot be smuggled in.
+		if (!/^[0-9a-f]{4,64}$/i.test(requested)) throw ApiError.badRequest("invalid_hash", `invalid commit hash: ${hash}`);
+		await this.ensureRepo();
+		const full = await this.revParse(`${requested}^{commit}`, this.options.gitDir);
+		if (full === undefined) throw ApiError.notFound(`memory commit ${requested}`);
+		const { gitDir } = this.options;
+
+		const meta = await gitOrThrow(["-C", gitDir, "show", "-s", "--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%B", full]);
+		const fields = meta.stdout.replace(/\n$/, "").split("\x1f");
+		const [commitHash = full, authorUrl = "", email = "", time = "", parents = ""] = fields;
+		const message = fields.slice(5).join("\x1f").replace(/\n$/, "");
+		const subject = message.split("\n", 1)[0] ?? "";
+
+		const statuses = await this.commitStatuses(full);
+		const numbers = await this.commitNumbers(full);
+		const patches = await this.commitPatches(full);
+
+		let budget = MAX_PATCH_BYTES;
+		const files: CommitFile[] = numbers.map((number, index) => {
+			const patch = patches[index] ?? "";
+			const capped = capPatch(patch, Math.min(MAX_FILE_PATCH_BYTES, Math.max(0, budget)));
+			budget -= Buffer.byteLength(capped.patch, "utf8");
+			return {
+				path: number.path,
+				status: statuses.get(number.path) ?? "modified",
+				additions: number.additions,
+				deletions: number.deletions,
+				binary: number.binary,
+				patch: capped.patch,
+				truncated: capped.truncated,
+			};
+		});
+		return {
+			hash: commitHash,
+			short: commitHash.slice(0, 8),
+			authorUrl,
+			email,
+			time,
+			message,
+			subject,
+			parents: parents.split(" ").filter((parent) => parent.length > 0),
+			files,
+			truncated: files.some((file) => file.truncated),
+		};
+	}
+
+	/** Path → A/D/M for one commit, in path order (`--no-renames` keeps it one record per path). */
+	private async commitStatuses(hash: string): Promise<Map<string, CommitFile["status"]>> {
+		const out = await gitOrThrow([
+			"-C",
+			this.options.gitDir,
+			"diff-tree",
+			"--no-commit-id",
+			"--name-status",
+			"-r",
+			"--no-renames",
+			"-z",
+			hash,
+		]);
+		const records = out.stdout.split("\0");
+		const statuses = new Map<string, CommitFile["status"]>();
+		for (let index = 0; index + 1 < records.length; index += 2) {
+			const code = records[index] ?? "";
+			const path = records[index + 1] ?? "";
+			if (path.length === 0) continue;
+			statuses.set(path, code.startsWith("A") ? "added" : code.startsWith("D") ? "deleted" : "modified");
+		}
+		return statuses;
+	}
+
+	/** Per-file line counts in the same order `git show` prints their patches. */
+	private async commitNumbers(hash: string): Promise<Array<{ path: string; additions: number; deletions: number; binary: boolean }>> {
+		const out = await gitOrThrow([
+			"-C",
+			this.options.gitDir,
+			"show",
+			"--no-renames",
+			"--numstat",
+			"-z",
+			"--format=",
+			hash,
+			"--",
+		]);
+		return out.stdout
+			.split("\0")
+			.filter((record) => record.length > 0)
+			.map((record) => {
+				const [added = "", deleted = "", ...pathParts] = record.split("\t");
+				const path = pathParts.join("\t");
+				const binary = added === "-" && deleted === "-";
+				return {
+					path,
+					additions: binary ? 0 : Number(added) || 0,
+					deletions: binary ? 0 : Number(deleted) || 0,
+					binary,
+				};
+			})
+			.filter((entry) => entry.path.length > 0);
+	}
+
+	/** The commit's patch split into one chunk per file, without the `diff --git` preamble. */
+	private async commitPatches(hash: string): Promise<string[]> {
+		const out = await runGit([
+			"-C",
+			this.options.gitDir,
+			"show",
+			"--no-color",
+			"--no-ext-diff",
+			"--no-renames",
+			"--format=",
+			"--patch",
+			hash,
+			"--",
+		]);
+		if (out.code !== 0) throw new Error(`git show failed: ${out.stderr.trim()}`);
+		return splitPatch(out.stdout);
+	}
+
 	/** Every file on `main` with its size in bytes, sorted by path, for the PWA's Memory view. */
 	async listFiles(): Promise<Array<{ path: string; size: number }>> {
 		await this.ensureRepo();
@@ -445,6 +604,34 @@ async function unmergedPaths(cwd: string): Promise<string[]> {
 	const result = await runGit(["diff", "--name-only", "--diff-filter=U", "-z"], { cwd });
 	if (result.code !== 0) return [];
 	return [...new Set(result.stdout.split("\0").filter((path) => path.length > 0))];
+}
+
+/** Split a `git show` patch into per-file chunks, keeping each file's `diff --git` line. */
+function splitPatch(text: string): string[] {
+	const chunks: string[] = [];
+	let current: string[] | undefined;
+	for (const line of text.split("\n")) {
+		if (line.startsWith("diff --git ")) {
+			if (current !== undefined) chunks.push(current.join("\n"));
+			current = [line];
+		} else if (current !== undefined) {
+			current.push(line);
+		}
+	}
+	if (current !== undefined) chunks.push(current.join("\n"));
+	return chunks.map((chunk) => chunk.replace(/\n+$/, ""));
+}
+
+/** Cut a patch at a line boundary, under `limit` bytes. */
+function capPatch(text: string, limit: number): { patch: string; truncated: boolean } {
+	if (Buffer.byteLength(text, "utf8") <= limit) return { patch: text, truncated: false };
+	let kept = "";
+	for (const line of text.split("\n")) {
+		const next = kept.length === 0 ? line : `${kept}\n${line}`;
+		if (Buffer.byteLength(next, "utf8") > limit) break;
+		kept = next;
+	}
+	return { patch: kept, truncated: true };
 }
 
 function isDirectoryEmpty(path: string): boolean {
