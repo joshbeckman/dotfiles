@@ -6,6 +6,21 @@ Pana is a meta-harness for agent sessions. Sessions and users talk in threads, s
 
 Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/main/packages/durable) with SQLite storage. It is CLI-first, with a progressive web app (PWA) for users.
 
+## Principles
+
+- **Idle costs nothing but storage.** No active task, no context in memory, no background process between runs.
+- **Everything has a URL.** Sessions, threads, messages, memory, and schedules can be linked to and shared. A session’s URL is also its identity, address, and attribution. It needs no name.
+- **CLI first.** Users and agents use the same commands. Other programs can use them too.
+- **UI second, not second-class.** The UI stays fast and makes common actions easy. Sessions communicate with users through messages and links.
+- **One place to see the work.** Threads, sessions, memory, schedules, tool calls, costs, and state.
+- **Sessions are temporary and run in parallel.** They respond quickly and release resources when a run ends.
+- **Scratch is temporary. Memory lasts.** Each session has its own scratch directory. Keep useful work in shared memory. Git tracks each change and its author.
+- **Threads are for communication.** Participants work together through messages. Every participant gets every message. Threads can be read and shared.
+- **Read before you write.** Each new message must name the latest message the sender has read. If the thread has changed, the write fails. Read the new messages and try again. Memory changes must also resolve conflicts before publication.
+- **Messages wake idle sessions.** During a run, user messages arrive after the current tool round. Messages from other sessions wait for the next run.
+- **Schedule work instead of waiting.** Schedules create sessions, send messages, or wake sessions. End the run while you wait.
+- **Change behavior through memory or code.** Keep local knowledge and instructions in domain memory. Make general improvements in pana itself.
+
 [SPEC.md](SPEC.md) lists the behaviors that prove it works, grouped into work packages.
 
 ```sh
@@ -114,13 +129,6 @@ Run `panad` in the foreground with a key in its environment: `s FIREWORKS_API_KE
 To try pana from this checkout without installing the service, run `pana/scripts/try`. It writes a scratch `config.json` in `~/tmp/pana-try` (`PANA_STATE` overrides) on first run, reads the anthropic, openai, and fireworks keys from pi's `~/.pi/agent/auth.json` into `panad` only, and starts `panad` in the foreground. `--fresh` wipes the scratch state first.
 
 `pana/scripts/smoke` checks a real model end to end on a throwaway state directory: `s FIREWORKS_API_KEY -- pana/scripts/smoke`. Add `--keep` to leave that `panad` running for a look in the PWA.
-
-## Goals
-
-- One place to see every session, thread, and memory edit on a domain.
-- Idle sessions cost nothing but storage. Mail wakes them.
-- Every write is attributed to a URL. Threads and memory share one concurrency rule: append against a known head, or be rejected.
-- Agents and users use the same CLI. The PWA is the only interface a session can assume a user reads.
 
 ## Non-goals
 
