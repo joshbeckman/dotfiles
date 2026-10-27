@@ -36,6 +36,7 @@ import { LiveFeed } from "./live.ts";
 import { setSessionState } from "./state.ts";
 import { MESSAGE_ENTRY_KIND, NOTE_ENTRY_KIND } from "./wake.ts";
 import { removeArchivedScratch } from "../scratch/index.ts";
+import { stopArchivedBrowser } from "../extension/browser.ts";
 
 export type SessionState = "running" | "waiting" | "idle" | "failed" | "stopped" | "archived";
 export const SESSION_STATES: readonly SessionState[] = ["running", "waiting", "idle", "failed", "stopped", "archived"];
@@ -291,6 +292,8 @@ export class SessionRuntime {
 			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
 		);
 		await removeArchivedScratch(this.runtime, sessionId);
+		// ISO-07: the sweep would get to it, but an archived session never browses again.
+		await stopArchivedBrowser(this.runtime, sessionId);
 	}
 
 	// --- Commits -------------------------------------------------------------------

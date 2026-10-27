@@ -214,8 +214,10 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 - [x] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
 - [x] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
-- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH` (SCR-01), and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
+- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH` (SCR-01), `PANA_BROWSER_SESSION` (ISO-06), and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
 - [x] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
+- [x] **ISO-06** `bash` exports `PANA_BROWSER_SESSION=pana-<session>`. `bin/chrome-devtools`, first on a session's `PATH` (ISO-03), runs the installed CLI with `--sessionId` that value, so every session drives its own chrome-devtools daemon (socket, pid file, and headless Chrome) instead of the machine-wide one. A call that carries its own `--sessionId`, or a shell with no `PANA_BROWSER_SESSION`, runs the CLI unchanged; a second copy of pana's `bin` on the same `PATH` does not re-enter the shim, and no CLI on `PATH` is exit 127, not a loop.
+- [x] **ISO-07** panad stops a session's daemon (`chrome-devtools --sessionId pana-<session> stop`) when it archives the session, and sweeps every five minutes on `runtime.clock` to stop the daemons of archived sessions, of sessions idle for ten minutes or more, and of sessions it has no row for. A running or waiting session keeps its daemon, and the next `chrome-devtools` call starts a fresh one.
 
 ### System prompt
 
