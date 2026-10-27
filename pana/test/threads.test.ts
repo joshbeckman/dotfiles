@@ -352,6 +352,60 @@ describe("threads", () => {
 		expect(unread.every((row) => typeof row.read_at === "number")).toBe(true);
 	});
 
+	it("THR-11 nonmembers read threads and messages without joining, subscribing, or changing others' read state", async () => {
+		const t = await start();
+		const member = await seedSession(t);
+		const outsider = await seedSession(t);
+		const created = await createThread(t, [member], "original");
+		const threadPath = "/threads/" + created.thread.id;
+		const messagePath = "/messages/" + created.message.id;
+		await t.client.post(messagePath + "/revisions", { body: "edited" });
+		const deliveriesBefore = await t.runtime.db.all("SELECT * FROM deliveries WHERE thread_id = ?", created.thread.id);
+
+		const thread = await t.client.get<ReadBody>(threadPath, { caller: outsider });
+		expect(thread.status).toBe(200);
+		expect(thread.body.messages).toHaveLength(1);
+		expect(thread.body.messages[0]).toMatchObject({ id: created.message.id, body: "edited", revised: true });
+		expect(thread.body.messages[0]).not.toHaveProperty("readAt");
+		expect(thread.body.thread.participants.map((p) => p.id)).not.toContain(outsider);
+
+		// Plain reads and both ways to request a read receipt affect only the caller.
+		for (const suffix of ["", "?read=1"]) {
+			const message = await t.client.get<{ message: MessageBody }>(messagePath + suffix, { caller: outsider });
+			expect(message.status).toBe(200);
+			expect(message.body.message).toMatchObject({ id: created.message.id, body: "edited", revised: true });
+			expect(message.body.message).not.toHaveProperty("readAt");
+		}
+		const marked = await t.client.post<{ message: MessageBody }>(messagePath + "/read", {}, { caller: outsider });
+		expect(marked.status).toBe(200);
+		expect(marked.body.message).not.toHaveProperty("readAt");
+		expect(await t.runtime.db.all("SELECT * FROM deliveries WHERE thread_id = ?", created.thread.id)).toEqual(deliveriesBefore);
+		expect(await t.runtime.db.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", created.thread.id, outsider)).toBeUndefined();
+
+		// Reading does not grant reply permission or the ability to act for a recipient.
+		expect((await t.client.post(threadPath + "/messages", { after: created.message.id, body: "not allowed" }, { caller: outsider })).status).toBe(403);
+		expect((await t.client.get("/inbox?participant=" + member, { caller: outsider })).status).toBe(403);
+		expect((await t.client.get(messagePath + "?participant=" + member + "&read=1", { caller: outsider })).status).toBe(403);
+		expect((await t.client.post(messagePath + "/read", { participant: member }, { caller: outsider })).status).toBe(403);
+		expect(await t.runtime.db.all("SELECT * FROM deliveries WHERE thread_id = ?", created.thread.id)).toEqual(deliveriesBefore);
+
+		await t.client.post(messagePath + "/redact", {});
+		const redactedThread = await t.client.get<ReadBody>(threadPath, { caller: outsider });
+		const redactedMessage = await t.client.get<{ message: MessageBody }>(messagePath, { caller: outsider });
+		for (const message of [redactedThread.body.messages[0]!, redactedMessage.body.message]) {
+			expect(message.redacted).toBe(true);
+			expect(message).not.toHaveProperty("body");
+		}
+
+		const later = await t.client.post<ThreadBody>(threadPath + "/messages", { after: created.message.id, body: "later" });
+		expect(later.status).toBe(200);
+		expect(await t.runtime.db.all("SELECT * FROM deliveries WHERE recipient_id = ?", outsider)).toEqual([]);
+		const outsiderInbox = await t.client.get<InboxBody>("/inbox", { caller: outsider });
+		expect(outsiderInbox.body.deliveries).toEqual([]);
+		expect((await t.client.get("/threads/" + t.runtime.newId(), { caller: outsider })).status).toBe(404);
+		expect((await t.client.get("/messages/" + t.runtime.newId(), { caller: outsider })).status).toBe(404);
+	});
+
 	it("SRC-01 a created thread gets a first-line subject, its messages search, and revisions and redactions follow", async () => {
 		const t = await start();
 		const a = await seedSession(t);

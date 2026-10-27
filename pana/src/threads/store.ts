@@ -611,10 +611,7 @@ export async function readThread(
 	const read = await runtime.db.atomically(async (tx) => {
 		const thread = await threadView(tx, runtime, threadId);
 		const reader = await ensureCaller(tx, runtime, now, caller);
-		if (caller.kind !== "user") {
-			const member = await tx.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", threadId, reader.id);
-			if (!member) throw ApiError.forbidden(`session ${reader.id} is not a participant of thread ${threadId}`);
-		}
+		// THR-11: reading by reference does not require (or grant) participation.
 		const rows = await tx.all<MessageRowWithSender>(
 			`SELECT m.*, p.url AS sender_url, p.kind AS sender_kind
 			   FROM messages m JOIN participants p ON p.id = m.sender_id
@@ -661,8 +658,7 @@ export async function readMessage(runtime: Runtime, caller: Caller, messageId: s
 	return runtime.db.atomically(async (tx) => {
 		const row = await messageRow(tx, messageId);
 		const reader = await readerFor(tx, runtime, caller, options.participant, now);
-		const member = await tx.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", row.thread_id, reader.id);
-		if (!member) throw ApiError.forbidden(`${reader.url} is not a participant of thread ${row.thread_id}`);
+		// THR-11: nonmembers may read, but only the reader's own delivery can be marked.
 		if (options.markRead) {
 			await tx.run(
 				"UPDATE deliveries SET read_at = ? WHERE recipient_id = ? AND message_id = ? AND read_at IS NULL",
