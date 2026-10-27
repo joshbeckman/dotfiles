@@ -891,6 +891,33 @@ async function archiveThread(threadId, archived, { leave = false } = {}) {
 	}
 }
 
+/**
+ * UX-16: ask the subject model for a new subject and swap it in without reloading the thread. The
+ * route keeps the old subject in the thread's history (SUB-04) and answers with the new one.
+ */
+async function regenerateThreadSubject() {
+	const thread = state.thread;
+	if (!thread) return;
+	const button = $("thread-subject-regenerate");
+	button.disabled = true;
+	button.textContent = "Regenerating…";
+	try {
+		const body = await api("POST", `/threads/${thread.id}/subject`, { regenerate: true });
+		// The heading is the only place the page names the thread, so a stale one would be a lie.
+		thread.subject = body.subject;
+		$("thread-subject").textContent = body.subject ?? "(no subject)";
+		status("Subject regenerated.");
+	} catch (error) {
+		// The route names the cause. The usual one is a config.json with no subjectModel, which is
+		// the user's to fix, so say how rather than echoing a failure.
+		if (error?.body?.error?.code === "no_subject_model") status("Set subjectModel in config.json to regenerate a subject.", true);
+		else fail(error);
+	} finally {
+		button.disabled = false;
+		button.textContent = "Regenerate subject";
+	}
+}
+
 // ---- Compose --------------------------------------------------------------------------------
 
 async function submitCompose(event) {
@@ -2360,6 +2387,8 @@ function runPaletteCommand(id) {
 			return openSelection();
 		case "archive-thread":
 			return archiveKey();
+		case "subject-regenerate":
+			return void regenerateThreadSubject();
 		case "back":
 			return goBack();
 		case "help":
@@ -2592,6 +2621,7 @@ $("reply-body").addEventListener("input", () => {
 });
 $("confirm").addEventListener("submit", (event) => void confirmAction(event));
 $("confirm-no").addEventListener("click", cancelAction);
+$("thread-subject-regenerate").addEventListener("click", () => void regenerateThreadSubject());
 $("thread-archive").addEventListener("click", () => {
 	const thread = state.thread;
 	if (!thread) return;

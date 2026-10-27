@@ -29,6 +29,12 @@ export const COMMANDS = [
 	{ id: "go:compose", label: "New thread", hint: "g c", keywords: "compose write message" },
 	{ id: "open", label: "Open the selection", hint: "Enter", keywords: "enter row", when: (context) => Boolean(context.selection) },
 	{ id: "archive-thread", label: "Archive the open thread", hint: "e", keywords: "hide unarchive", when: (context) => Boolean(context.thread) },
+	{
+		id: "subject-regenerate",
+		label: "Regenerate the thread subject",
+		keywords: "rename name title heading model subject",
+		when: (context) => Boolean(context.thread),
+	},
 	{ id: "session:stop", label: "Stop the session", keywords: "kill cancel end", when: (context) => Boolean(context.session) },
 	{ id: "session:compact", label: "Compact the session", keywords: "summarize shorten", when: (context) => Boolean(context.session) },
 	{ id: "session:archive", label: "Archive the session", keywords: "hide", when: (context) => Boolean(context.session) },

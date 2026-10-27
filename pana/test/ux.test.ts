@@ -368,6 +368,37 @@ describe("UX-15 the command palette", () => {
 	});
 });
 
+describe("UX-16 the thread header regenerates a subject", () => {
+	it("UX-16 the shell puts the button in the thread header, and the palette lists the same action", () => {
+		const html = readFileSync(new URL("../web/index.html", import.meta.url), "utf8");
+		const app = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+		// It sits in the open thread's header, beside Archive, because it acts on that thread.
+		expect(html).toContain('id="thread-subject-regenerate"');
+		expect(html).toContain('id="thread-archive"');
+		expect(html.indexOf('id="thread-subject-regenerate"')).toBeLessThan(html.indexOf('id="thread-archive"'));
+		expect(app).toContain('$("thread-subject-regenerate").addEventListener("click"');
+		// It asks the SUB-04 route for a regeneration and swaps in the subject it answers with.
+		expect(app).toContain('api("POST", `/threads/${thread.id}/subject`, { regenerate: true })');
+		expect(app).toContain('$("thread-subject").textContent = body.subject');
+		// With no subjectModel there is nothing to regenerate with, so the button says what to set.
+		expect(app).toContain('error?.body?.error?.code === "no_subject_model"');
+		expect(app).toContain("Set subjectModel in config.json to regenerate a subject.");
+
+		const ids = (context: Record<string, unknown>) => paletteCommands(context).map((command) => command.id);
+		expect(ids({})).not.toContain("subject-regenerate");
+		expect(ids({ thread: { id: "T" } })).toContain("subject-regenerate");
+		expect(matchCommands(paletteCommands({ thread: { id: "T" } }), "regenerate subject")[0]!.id).toBe("subject-regenerate");
+	});
+
+	it("UX-16 without a subject model the route names that cause, and with one it keeps the old subject", async () => {
+		t = await startTestPanad();
+		const created = await t.client.post<Created>("/threads", { to: [TEST_USER], body: "a first line\nand a body" });
+		const refused = await t.client.post<{ error: { code: string } }>(`/threads/${created.body.thread.id}/subject`, { regenerate: true });
+		expect(refused.status).toBe(400);
+		expect(refused.body).toMatchObject({ error: { code: "no_subject_model" } });
+	});
+});
+
 describe("UX-02 Cmd+Enter submits the focused form", () => {
 	it("UX-02 Cmd+Enter on Apple platforms and Ctrl+Enter elsewhere, only inside a form", () => {
 		expect(isApplePlatform("MacIntel")).toBe(true);
