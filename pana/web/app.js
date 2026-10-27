@@ -1652,10 +1652,25 @@ async function enablePush({ quiet = false } = {}) {
 		post: (subscription) => api("POST", "/push/subscriptions", subscription),
 	});
 	state.push = result;
+	showPushButton(result);
 	if (quiet && result.subscribed) return result;
 	const message = explainPush(result, env, { localhostUrl: localhostUrl() });
 	status(message.text, !result.subscribed, message.link);
 	return result;
+}
+
+/**
+ * UX-14: the button shows only when there is something to do. Subscribed: hidden. Blocked: it
+ * says so, and a click explains the fix. Otherwise it asks. A revoked permission or a broken
+ * subscription brings it back on the next load, so it needs no off switch of its own.
+ */
+function showPushButton(result) {
+	const button = $("enable-push");
+	const permission = typeof Notification === "undefined" ? "denied" : Notification.permission;
+	// Before the quiet re-subscribe answers, a granted permission is assumed to work, so a
+	// returning window does not flash the button.
+	button.hidden = result === undefined ? permission === "granted" && "serviceWorker" in navigator : Boolean(result.subscribed);
+	button.textContent = permission === "denied" ? "Notifications blocked" : "Notifications";
 }
 
 function registerWorker() {
@@ -1924,6 +1939,7 @@ async function boot() {
 	hideAuthorize();
 	registerWorker();
 	await ensureVendor().catch(() => {});
+	showPushButton(undefined);
 	// A returning user already allowed notifications; refresh or create the subscription
 	// without asking again.
 	if (typeof Notification !== "undefined" && Notification.permission === "granted" && "serviceWorker" in navigator) {
@@ -2022,6 +2038,7 @@ window.__pana = {
 		};
 	},
 	enablePush,
+	showPushButton,
 };
 
 void boot();

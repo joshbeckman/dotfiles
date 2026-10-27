@@ -136,6 +136,47 @@ describeBrowser("pana usability in a browser", () => {
 		expect(rows.map((row) => row.endpoint)).toEqual(["https://push.example/ux-01"]);
 	});
 
+	it("UX-14 the Notifications button shows only when there is something to do", async () => {
+		await start();
+		const states = await evaluatePage<Array<{ step: string; hidden: boolean; text: string }>>(`
+			await until(() => navigator.serviceWorker.getRegistration().then((r) => r?.active ? r : undefined));
+			const button = document.getElementById("enable-push");
+			const look = (step) => ({ step, hidden: button.hidden, text: button.textContent });
+			const permission = (value) => Object.defineProperty(Notification, "permission", { configurable: true, get: () => value });
+			const keys = { p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM", auth: "tBHItJI5svbpez7KI4CCXg" };
+			const out = [];
+
+			permission("default");
+			window.__pana.showPushButton(undefined);
+			out.push(look("not asked"));
+
+			permission("denied");
+			window.__pana.showPushButton(undefined);
+			out.push(look("blocked"));
+
+			permission("granted");
+			window.__pana.showPushButton(undefined);
+			out.push(look("granted, re-subscribing"));
+
+			PushManager.prototype.getSubscription = async () => null;
+			PushManager.prototype.subscribe = async () => { throw new DOMException("push service error", "AbortError"); };
+			await window.__pana.enablePush({ quiet: true });
+			out.push(look("granted, re-subscribe failed"));
+
+			PushManager.prototype.subscribe = async () => ({ endpoint: "https://push.example/ux-14", toJSON: () => ({ endpoint: "https://push.example/ux-14", keys }) });
+			await window.__pana.enablePush({ quiet: true });
+			out.push(look("subscribed"));
+			return out;
+		`);
+		expect(states).toEqual([
+			{ step: "not asked", hidden: false, text: "Notifications" },
+			{ step: "blocked", hidden: false, text: "Notifications blocked" },
+			{ step: "granted, re-subscribing", hidden: true, text: "Notifications" },
+			{ step: "granted, re-subscribe failed", hidden: false, text: "Notifications" },
+			{ step: "subscribed", hidden: true, text: "Notifications" },
+		]);
+	});
+
 	it("UX-02 Cmd+Enter (Ctrl+Enter off macOS) submits reply, compose, edit, memory, and schedules", async () => {
 		const { t } = await start();
 		const group = seeded!.group;
