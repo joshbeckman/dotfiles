@@ -145,6 +145,36 @@ export function newDraft(thread) {
 	return { threadId: thread?.id, after: last?.id, body: "" };
 }
 
+// ---- Attachment references ------------------------------------------------------------------
+// FIL-02 and FIL-06: an uploaded file's Markdown reference. The server owns the upload
+// (`POST /files`) and the CLI owns `--attach`; the composers write the same reference, so a
+// message reads the same whether it was sent from a terminal or from the app.
+
+/** True when a media type is an image, the case that earns `![]()` syntax. */
+export function isImageType(mediaType) {
+	return String(mediaType ?? "")
+		.toLowerCase()
+		.startsWith("image/");
+}
+
+/** One Markdown reference: image syntax for images, a link for everything else. */
+export function referenceFor(file) {
+	const label = String(file?.name ?? "").replace(/([\\[\]])/g, "\\$1");
+	const url = String(file?.url ?? "");
+	return isImageType(file?.mediaType) ? `![${label}](${url})` : `[${label}](${url})`;
+}
+
+/** Append one reference after a blank line, so it starts its own block instead of joining text. */
+export function appendReference(body, reference) {
+	const text = String(body ?? "").replace(/\s+$/, "");
+	return text.length === 0 ? reference : `${text}\n\n${reference}`;
+}
+
+/** Append one reference per file, in order. */
+export function withReferences(body, files) {
+	return (files ?? []).reduce((text, file) => appendReference(text, referenceFor(file)), String(body ?? ""));
+}
+
 /** The URL a push notification click opens (PSH-03). */
 export function notificationTarget(payload) {
 	const data = payload ?? {};

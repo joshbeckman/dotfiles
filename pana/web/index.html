@@ -74,8 +74,10 @@
 						<textarea id="compose-body" name="body" rows="10" required></textarea>
 					</div>
 					<div class="form-actions">
-						<p class="hint">Starts a session and its thread. Markdown is rendered; attach files from the CLI with <code>--attach</code>.</p>
+						<p class="hint">Starts a session and its thread. Markdown is rendered; attach files here, or from the CLI with <code>--attach</code>.</p>
 						<span class="chord" data-chord></span>
+						<input id="compose-files" data-testid="compose-files" type="file" multiple hidden />
+						<button type="button" id="compose-attach" data-testid="compose-attach" class="quiet" title="Attach a file, drop one on the message, or paste a screenshot">Attach</button>
 						<button type="submit" class="primary" data-testid="compose-send">Send</button>
 					</div>
 				</form>
@@ -128,6 +130,8 @@
 						<div class="form-actions">
 							<p class="hint">After <code id="draft-head" data-testid="draft-head"></code></p>
 							<span class="chord" data-chord></span>
+							<input id="reply-files" data-testid="reply-files" type="file" multiple hidden />
+							<button type="button" id="reply-attach" data-testid="reply-attach" class="quiet" title="Attach a file, drop one on the message, or paste a screenshot">Attach</button>
 							<button type="submit" class="primary" data-testid="reply-send">Reply</button>
 						</div>
 					</form>

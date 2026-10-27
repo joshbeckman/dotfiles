@@ -6,7 +6,7 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 |---|---|
 | `index.html` | the shell and the six sections |
 | `app.js` | hash router, API calls, and per-section rendering |
-| `links.js` | pure helpers: `pana://` links, routes, drafts, notification targets |
+| `links.js` | pure helpers: `pana://` links, routes, drafts, notification targets, and an uploaded file's Markdown reference (FIL-02, FIL-06) |
 | `views.js` | the only reader of handler response fields, the schedule form's request body, and participant colors (UX-06) |
 | `render.js` | Markdown, `pana://` links, authenticated images, Mermaid |
 | `push.js` | permission → subscribe → post the subscription, and the cause and fix for each failure (UX-01) |

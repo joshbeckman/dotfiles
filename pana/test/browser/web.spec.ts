@@ -346,6 +346,71 @@ describeBrowser("pana in a browser", () => {
 		expect(upload.body.file.url).toBe(`pana://${TEST_DOMAIN}/files/${upload.body.file.id}/pixel.png`);
 	});
 
+	it("FIL-06 the composers upload an attachment and append the reference", async () => {
+		await start([{ text: "Ready when you are." }]);
+		const seeded = await seedSession("go");
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		await open();
+
+		// Reply: a file from the picker, then a second one dropped on the composer.
+		const attached = await evaluatePage<{ body: string; status: string }>(`
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden && document.getElementById("reply-body"));
+			const body = document.getElementById("reply-body");
+			body.value = "Two things for you.";
+			const png = Uint8Array.from(atob(${JSON.stringify(PNG_1X1.toString("base64"))}), (character) => character.charCodeAt(0));
+			const picked = new DataTransfer();
+			picked.items.add(new File([png], "pixel.png", { type: "image/png" }));
+			const input = document.getElementById("reply-files");
+			input.files = picked.files;
+			input.dispatchEvent(new Event("change"));
+			await until(() => body.value.includes("![pixel.png](pana://"));
+			const dropped = new DataTransfer();
+			dropped.items.add(new File(["a note"], "notes.txt", { type: "text/plain" }));
+			document.getElementById("reply-form").dispatchEvent(
+				new DragEvent("drop", { dataTransfer: dropped, bubbles: true, cancelable: true }),
+			);
+			await until(() => body.value.includes("[notes.txt](pana://"));
+			return { body: body.value, status: document.getElementById("status").textContent };
+		`);
+		expect(attached.body).toMatch(/^Two things for you\.\n\n!\[pixel\.png\]\(pana:\/\/.+\/files\/[^/]+\/pixel\.png\)\n\n\[notes\.txt\]\(pana:\/\/.+\/files\/[^/]+\/notes\.txt\)$/);
+		expect(attached.status).toBe("Attached 1 file.");
+
+		// The replied message renders the image from the authenticated route.
+		const rendered = await evaluatePage<{ image: string; width: number; sent: string }>(`
+			document.getElementById("reply-form").requestSubmit();
+			await until(() => {
+				const body = [...document.querySelectorAll("#thread-messages .body")].at(-1);
+				const image = body?.querySelector("img");
+				return image && image.src.startsWith("blob:") && image.naturalWidth > 0;
+			});
+			const body = [...document.querySelectorAll("#thread-messages .body")].at(-1);
+			const image = body.querySelector("img");
+			return { image: image.src.slice(0, 5), width: image.naturalWidth, sent: body.textContent };
+		`);
+		expect(rendered.image).toBe("blob:");
+		expect(rendered.width).toBe(1);
+		// The link text stays as written; only the reference lines are images and links.
+		expect(rendered.sent).toContain("Two things for you.");
+		const posted = (await messages(seeded.thread.id)).at(-1)!;
+		expect(posted.body).toBe(attached.body);
+		const imagePath = posted.body!.match(/pana:\/\/\S+?\/pixel\.png/)![0]!.replace(`pana://${TEST_DOMAIN}`, "");
+		expect((await t!.client.get(imagePath)).status).toBe(200);
+
+		// Compose: a screenshot pasted into the body attaches the same way.
+		const pasted = await evaluatePage<string>(`
+			location.hash = "#/compose";
+			await until(() => !document.getElementById("view-compose").hidden);
+			const box = document.getElementById("compose-body");
+			const clipboard = new DataTransfer();
+			clipboard.items.add(new File(["from the clipboard"], "pasted.txt", { type: "text/plain" }));
+			box.dispatchEvent(new ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+			await until(() => box.value.includes("[pasted.txt](pana://"));
+			return box.value;
+		`);
+		expect(pasted).toMatch(/^\[pasted\.txt\]\(pana:\/\/.+\/files\/[^/]+\/pasted\.txt\)$/);
+	});
+
 	it("WEB-06 INT-03 the session transcript streams live and stop, compact, and reload work", async () => {
 		// A tiny transcript has nothing to compact under the default policy.
 		await start([{ text: "first answer" }, { text: "live update" }, { text: "compacted summary" }], { compaction: { keepRecentTokens: 1 } });

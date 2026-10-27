@@ -155,6 +155,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **FIL-03** A file over `files.maxBytes` returns 400 and copies nothing.
 - [x] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
 - [x] **FIL-05** File bytes are never stored in SQLite.
+- [x] **FIL-06** Both PWA composers attach files: an Attach button, a file dropped on the composer, and a screenshot pasted into the message box each upload through `POST /files` and append the FIL-02 Markdown reference to the body, so the composer shows exactly the message it sends. A failed upload says why and leaves the body unchanged.
 
 ---
 

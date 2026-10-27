@@ -720,6 +720,12 @@ button.quiet:hover,
 .composer {
 	background: var(--c-bg-alt);
 }
+/* FIL-06: a file dragged over a composer shows where it will land. */
+.composer.dropping {
+	border-color: var(--c-link);
+	outline: 2px dashed var(--c-link);
+	outline-offset: -4px;
+}
 
 /* UX-09: a working session, at the bottom of a thread and as a list row's mark. The dot pulses
    so the state reads without a label; reduced motion keeps the color and drops the animation. */
