@@ -35,8 +35,8 @@ interface Created {
 let t: TestPanad | undefined;
 let page: number | undefined;
 
-async function start(script: Script = [], settings?: HarnessSettings): Promise<TestPanad> {
-	t = await startTestPanad({ script, settings, config: { defaultModel: "faux/faux-1", timezone: "UTC" } });
+async function start(script: Script = [], settings?: HarnessSettings, config: Record<string, unknown> = {}): Promise<TestPanad> {
+	t = await startTestPanad({ script, settings, config: { defaultModel: "faux/faux-1", timezone: "UTC", ...config } });
 	return t;
 }
 
@@ -704,6 +704,44 @@ describeBrowser("pana in a browser", () => {
 		expect(inboxRestored.items).toBe(1);
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toHaveLength(2);
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toEqual([]);
+	});
+
+	it("UX-16 the thread header regenerates the subject and keeps the old ones", async () => {
+		// With a subject model set, the button asks it; a notice starts at its first line, no job.
+		await start([{ text: "Lantern maintenance plan" }], undefined, { subjectModel: "faux/faux-1" });
+		const notice = await postNotice(t!.runtime, { body: "we should talk about the lantern\nand the schedule" });
+		await open();
+
+		const regenerated = await evaluatePage<{ before: string; after: string; status: string; label: string; disabled: boolean }>(`
+			location.hash = "#/threads/${notice.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			await until(() => document.getElementById("thread-subject").textContent === "we should talk about the lantern");
+			const before = document.getElementById("thread-subject").textContent;
+			document.getElementById("thread-subject-regenerate").click();
+			await until(() => document.getElementById("thread-subject").textContent === "Lantern maintenance plan");
+			const button = document.getElementById("thread-subject-regenerate");
+			return {
+				before,
+				after: document.getElementById("thread-subject").textContent,
+				status: document.getElementById("status").textContent,
+				label: button.textContent,
+				disabled: button.disabled,
+			};
+		`);
+		expect(regenerated.before).toBe("we should talk about the lantern");
+		expect(regenerated.after).toBe("Lantern maintenance plan");
+		expect(regenerated.status).toContain("Subject regenerated");
+		// The button comes back for another try, rather than staying busy.
+		expect(regenerated.label).toBe("Regenerate subject");
+		expect(regenerated.disabled).toBe(false);
+		// SUB-04: the old subject is history now, not lost.
+		const history = await t!.client.post<{ subject: string; history: Array<{ subject: string; source: string }> }>(
+			`/threads/${notice.thread.id}/subject`,
+			{},
+		);
+		expect(history.body.subject).toBe("Lantern maintenance plan");
+		expect(history.body.history.map((entry) => entry.subject)).toEqual(["we should talk about the lantern", "Lantern maintenance plan"]);
+		expect(history.body.history.map((entry) => entry.source)).toEqual(["first-line", "model"]);
 	});
 
 	it("REF-02 the session view archives only after a confirmation", async () => {
