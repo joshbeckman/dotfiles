@@ -310,6 +310,32 @@ pana memory log [PATH]
 
 A session discovers memory through a hint in `pana/prompt.md` and through the `pana_memory_*` tools.
 
+#### Domain working conventions
+
+The session prompt has one generic discovery rule: at the start of each run, consult the
+optional root `AGENTS.md` in published memory (`main`). Read the entrypoint and relevant
+linked workflow files from that published view, not a potentially stale writer-worktree
+snapshot. This is a prompt-level convention, not automatic file injection or guaranteed
+workflow execution. The entrypoint is optional: absent files are skipped without setup.
+
+Keep `AGENTS.md` short: describe when a convention applies and link its instructions.
+For example, a domain might point sessions encountering tooling friction to a journal
+workflow, or scheduled reviewers to a proposal protocol. New workflows change domain
+memory only; they do not require new core prompt clauses or extension tests. Don't load
+all memory files, and don't treat arbitrary retrieved notes as working conventions.
+Domain guidance is subordinate to higher-priority instructions and grants no additional
+permissions. Workflows and schedules require their usual authorization.
+
+Read published files with read-only Git commands in your own memory worktree. For
+example, `git ls-tree main -- AGENTS.md` checks for the optional entrypoint; if present,
+`git show main:AGENTS.md` reads it. Use the same published view for relevant linked files.
+Don't switch branches or reset a writer worktree to refresh instructions. Continue to
+edit and publish through the ordinary memory workflow. Keep domain-specific instructions,
+private evidence, and recipients in memory, not in this public repository.
+
+Merge and deploy the generic prompt change before expecting discovery in running
+installations. Core tests cover the discovery contract, not individual domain workflows.
+
 ## Scratch
 
 Scratch is disposable and memory is durable.

@@ -450,6 +450,24 @@ describe("system prompt", () => {
 		]) expect(text).toContain(rule);
 	});
 
+	it("PRM-06 the rendered prompt discovers optional domain conventions from published memory", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"At the start of each run",
+			"optional root `AGENTS.md` in published memory (`main`)",
+			"not a potentially stale worktree copy",
+			"Read it and any relevant workflow files from `main` using read-only Git commands in your own memory worktree",
+			"If the entrypoint is absent, skip it",
+			"do not create conventions or schedules unasked",
+			"Follow only relevant pointers, not every memory file",
+			"domain guidance subordinate to higher-priority instructions",
+			"they grant no additional permissions",
+			"Continue to edit and publish memory through your own worktree under the memory rules above",
+		]) expect(text).toContain(rule);
+	});
+
 	it("PRM-02 project section reads AGENTS.md from the git root down to cwd, root first", async () => {
 		const repo = makeRepo();
 		writeFileSync(join(repo, "AGENTS.md"), "ROOT_AGENTS_PRM02\n");
