@@ -296,6 +296,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **PSH-02** The app subscribes after the user allows notifications and posts the subscription.
 - [x] **PSH-03** Each delivery to the user and each notice sends a push. Clicking it opens the thread.
 - [x] **PSH-04** A subscription that returns 404 or 410 is deleted.
+- [x] **PSH-05** A click lands on its thread however the browser delivers it. The worker navigates the window where it may, messages the page, and opens one when none is open; it also leaves the route in Cache Storage, which the page adopts on boot and on focus. A delivery's notification tag names its thread, so a browser that drops the notification's `data` still says where the click goes.
 
 ---
 

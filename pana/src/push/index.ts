@@ -163,6 +163,13 @@ export async function pushToParticipant(
 	return summary;
 }
 
+/**
+ * A delivery's tag names its thread: one notification per thread, replaced by the next. The tag is
+ * also the click's fallback, so `web/links.js` reads the same prefix to find the thread when a
+ * browser drops the notification's `data`.
+ */
+export const THREAD_TAG_PREFIX = "pana:thread:";
+
 /** A push message for an event that the user must see even when no window is open. */
 export function messageFor(event: { title?: string; body?: string; threadId?: string; url?: string; kind: string }): PushMessage {
 	return {
@@ -170,6 +177,6 @@ export function messageFor(event: { title?: string; body?: string; threadId?: st
 		...(event.body === undefined ? {} : { body: event.body }),
 		...(event.threadId === undefined ? {} : { threadId: event.threadId }),
 		...(event.url === undefined ? {} : { url: event.url }),
-		tag: event.threadId ?? "pana",
+		tag: event.threadId === undefined ? "pana" : `${THREAD_TAG_PREFIX}${event.threadId}`,
 	};
 }

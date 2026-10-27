@@ -183,6 +183,78 @@ export function notificationTarget(payload) {
 	return "/";
 }
 
+// ---- Notification clicks (PSH-03, PSH-05) ---------------------------------------------------
+// The service worker and the page both use these, because a browser picks how a click reaches the
+// app: it may navigate the window, only focus it, or open it fresh at the manifest's `start_url`.
+// So the click's route is also left in Cache Storage (`leaveClickTarget`), and whichever side runs
+// next — the worker steering a window, or the page finding itself open — puts the app on the
+// thread (`takeClickTarget`). The storage is a parameter, so this file still touches no global at
+// load and Node tests hand it a Map.
+
+/** The cache a click leaves its route in, and the key it uses. Both sides read the same names. */
+export const PENDING_CACHE = "pana-notification";
+export const PENDING_KEY = "/__pana-notification-target";
+
+/** A route older than this is stale: the app was open, and the reader has moved on. */
+export const PENDING_TTL_MS = 120_000;
+
+/**
+ * A delivery's tag names its thread, so a browser that drops the notification's `data` still says
+ * which thread was clicked. `src/push/index.ts` writes the other half of this one format.
+ */
+export const TAG_PREFIX = "pana:thread:";
+
+/** A thread's notification tag: one notification per thread, replaced by the next. */
+export function notifyTag(threadId) {
+	return threadId ? `${TAG_PREFIX}${threadId}` : "pana";
+}
+
+/** The app route a click opens: `data.threadId` first, then the tag, then `data.url`, else `/`. */
+export function clickTarget(notification) {
+	const data = (notification && typeof notification.data === "object" && notification.data) || {};
+	const tag = String(notification?.tag ?? "");
+	const threadId =
+		typeof data.threadId === "string" && data.threadId
+			? data.threadId
+			: tag.startsWith(TAG_PREFIX)
+				? tag.slice(TAG_PREFIX.length)
+				: undefined;
+	return notificationTarget({ threadId, url: typeof data.url === "string" ? data.url : undefined });
+}
+
+/**
+ * Leave the clicked route where the page can find it. A cache that fails is not worth losing the
+ * click over: the caller still steers the window if it can.
+ */
+export async function leaveClickTarget(storage, target, now = Date.now()) {
+	if (!storage || typeof storage.open !== "function" || typeof target !== "string") return false;
+	try {
+		const cache = await storage.open(PENDING_CACHE);
+		const body = JSON.stringify({ target, at: Number(now) });
+		await cache.put(PENDING_KEY, new Response(body, { headers: { "content-type": "application/json" } }));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Take the click's route, once, while it is fresh. */
+export async function takeClickTarget(storage, now = Date.now()) {
+	if (!storage || typeof storage.open !== "function") return undefined;
+	try {
+		const cache = await storage.open(PENDING_CACHE);
+		const response = await cache.match(PENDING_KEY);
+		if (!response) return undefined;
+		await cache.delete(PENDING_KEY);
+		const saved = await response.json();
+		if (typeof saved?.target !== "string") return undefined;
+		const age = Number(now) - Number(saved.at);
+		return Number.isFinite(age) && age <= PENDING_TTL_MS ? saved.target : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** WEB-08 copy: a revision changes what readers see; sessions keep what they already received. */
 export const CONFIRM_EDIT =
 	"Editing changes what readers see. Sessions keep what they already received, so they may still act on the old text.";

@@ -935,6 +935,52 @@ describeBrowser("pana in a browser", () => {
 		expect(result.manifest).toBe("/manifest.webmanifest");
 	});
 
+	it("PSH-05 a notification click opens its thread from the cache, on boot or on focus, and from the worker's message", async () => {
+		await start();
+		const seeded = await seedSession("tell me about the tide");
+		const origin = await open();
+		const thread = `#/threads/${seeded.thread.id}`;
+		// A click's target is left in the cache for the page, because a browser may only focus the
+		// window or open the app at `/`. The cache belongs to the origin, so one window can leave
+		// the note that the next boot reads.
+		await evaluatePage(`
+			const cache = await caches.open("pana-notification");
+			await cache.put("/__pana-notification-target", new Response(JSON.stringify({ target: "/${thread}", at: Date.now() })));
+			return true;
+		`);
+		await closePage(page!);
+		page = await newPage(`${origin}/#${t!.panad.webToken}`);
+		const booted = await evaluatePage<string>(`
+			await until(() => location.hash === "${thread}");
+			await until(() => !document.getElementById("thread").hidden);
+			return location.hash;
+		`);
+		expect(booted).toBe(thread);
+
+		// The same click on a window that is already open: adopted when it is focused.
+		const focused = await evaluatePage<string>(`
+			location.hash = "#/inbox";
+			await until(() => location.hash === "#/inbox");
+			const cache = await caches.open("pana-notification");
+			await cache.put("/__pana-notification-target", new Response(JSON.stringify({ target: "/${thread}", at: Date.now() })));
+			window.dispatchEvent(new Event("focus"));
+			await until(() => location.hash === "${thread}");
+			await until(() => !document.getElementById("thread").hidden);
+			return location.hash;
+		`);
+		expect(focused).toBe(thread);
+
+		// And when the worker can reach the page: the same target, as a message.
+		const messaged = await evaluatePage<string>(`
+			location.hash = "#/inbox";
+			await until(() => location.hash === "#/inbox");
+			navigator.serviceWorker.dispatchEvent(new MessageEvent("message", { data: { type: "open", target: "/${thread}" } }));
+			await until(() => location.hash === "${thread}");
+			return location.hash;
+		`);
+		expect(messaged).toBe(thread);
+	});
+
 	it("UX-10 opening a session lands on its newest entry, with its header and controls pinned in view", async () => {
 		const long = "node -e \"console.log('line\\n'.repeat(400))\"";
 		await start([

@@ -48,3 +48,28 @@ export function idHref(id: string | null | undefined, kind: string): string | un
 export function panaLinkSegments(text: unknown, domain: string): LinkSegment[];
 export function newDraft(thread: ThreadLike | undefined): Draft;
 export function notificationTarget(payload: { threadId?: string; url?: string } | undefined): string;
+
+/** The part of a shown notification a click reads: its payload and its tag. */
+export interface ClickedNotification {
+	data?: { threadId?: string; url?: string } | unknown;
+	tag?: string;
+}
+
+/** The slice of Cache Storage the click helpers use. A browser's `caches` fits it. */
+export interface CacheStorageLike {
+	open(name: string): Promise<{
+		put(key: string, response: Response): Promise<void>;
+		match(key: string): Promise<Response | undefined>;
+		delete(key: string): Promise<boolean>;
+	}>;
+}
+
+export const PENDING_CACHE: string;
+export const PENDING_KEY: string;
+export const PENDING_TTL_MS: number;
+export const TAG_PREFIX: string;
+
+export function notifyTag(threadId: string | null | undefined): string;
+export function clickTarget(notification: ClickedNotification | null | undefined): string;
+export function leaveClickTarget(storage: CacheStorageLike | null | undefined, target: string, now?: number): Promise<boolean>;
+export function takeClickTarget(storage: CacheStorageLike | null | undefined, now?: number): Promise<string | undefined>;

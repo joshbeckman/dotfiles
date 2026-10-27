@@ -122,7 +122,9 @@ describe("PWA shell and static assets", () => {
 		expect(page.headers["content-security-policy"]).not.toContain("unsafe-eval");
 
 		// The shell does not need the token, but unknown paths still do (API-04).
-		expect((await request({ host: "127.0.0.1", port }, "GET", "/app.js")).status).toBe(200);
+		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js"]) {
+			expect((await request({ host: "127.0.0.1", port }, "GET", path)).status, path).toBe(200);
+		}
 		expect((await request({ host: "127.0.0.1", port }, "GET", "/nope")).status).toBe(403);
 		expect((await request({ host: "127.0.0.1", port, token: t.panad.webToken }, "GET", "/nope")).status).toBe(404);
 
@@ -320,7 +322,7 @@ describe("Web Push", () => {
 
 	it("PSH-03 a delivery to the user and a notice each send a push that opens the thread", async () => {
 		t = await startTestPanad();
-		const sent: Array<{ endpoint: string; message: { title?: string; body?: string; threadId?: string; url?: string } }> = [];
+		const sent: Array<{ endpoint: string; message: { title?: string; body?: string; threadId?: string; url?: string; tag?: string } }> = [];
 		const { setPushTransport } = await import("../src/push/index.ts");
 		setPushTransport(t.runtime, async (subscription, message) => {
 			sent.push({ endpoint: subscription.endpoint, message });
@@ -342,11 +344,14 @@ describe("Web Push", () => {
 		expect(sent).toHaveLength(1);
 		expect(sent[0]!.message).toMatchObject({ title: "New message", body: "hello", threadId: "T1" });
 		expect(notificationTarget(sent[0]!.message)).toBe("/#/threads/T1");
+		// The tag names the thread too, for a browser that drops the notification's `data` (PSH-05).
+		expect(sent[0]!.message.tag).toBe("pana:thread:T1");
 
 		const notice = await publish(t.runtime, { kind: "notice", to: t.runtime.userUrl, title: "Budget", body: "spent" });
 		expect(notice?.sent).toBe(1);
 		expect(sent).toHaveLength(2);
 		expect(notificationTarget(sent[1]!.message)).toBe("/");
+		expect(sent[1]!.message.tag).toBe("pana");
 
 		// A session's event reaches open windows but never the user's phone.
 		await publish(t.runtime, { kind: "session.transcript", sessionId: "S1", entry: { text: "x" } });

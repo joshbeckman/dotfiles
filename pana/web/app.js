@@ -14,6 +14,7 @@ import {
 	panaLinkSegments,
 	referenceFor,
 	routeFromHash,
+	takeClickTarget,
 	tokenFromInput,
 } from "./links.js";
 import { browserEnv, explainPush, subscribeToPush } from "./push.js";
@@ -1771,10 +1772,31 @@ function registerWorker() {
 	});
 	navigator.serviceWorker.addEventListener("message", (event) => {
 		if (event.data?.type !== "open") return;
-		const target = String(event.data.target ?? "");
-		const hash = target.includes("#") ? target.slice(target.indexOf("#")) : target;
-		if (hash.startsWith("#/")) location.hash = hash;
+		openTarget(event.data.target);
 	});
+}
+
+/**
+ * Put the app on a notification click's target (PSH-03). The target is a route such as
+ * `/#/threads/<id>`, or the path a browser opened; only the fragment names a view.
+ */
+function openTarget(target, { replace = false } = {}) {
+	const value = String(target ?? "");
+	const at = value.indexOf("#");
+	const hash = at === -1 ? value : value.slice(at);
+	if (!hash.startsWith("#/") || hash === location.hash) return false;
+	// `replace` is for a boot: the caller routes right after, and no hashchange should fire.
+	if (replace) history.replaceState(null, "", hash);
+	else location.hash = hash;
+	return true;
+}
+
+/**
+ * PSH-05: a click may reach this window as nothing but a focus — the worker navigated it, or only
+ * opened the app at `/` — so the target it left in the cache is adopted here.
+ */
+async function followClick({ replace = false } = {}) {
+	return openTarget(await takeClickTarget(window.caches), { replace });
 }
 
 // ---- Keyboard (UX-02, UX-08) ----------------------------------------------------------------
@@ -2037,6 +2059,9 @@ async function boot() {
 		void enablePush({ quiet: true });
 	}
 	void startEvents();
+	// A click that opened this window at `/` left its thread in the cache (PSH-05). Adopting it
+	// before `route()` means the app draws the thread once, at boot, instead of twice.
+	await followClick({ replace: true }).catch(() => {});
 	await route();
 }
 
@@ -2108,6 +2133,11 @@ document.addEventListener("click", (event) => {
 });
 window.addEventListener("hashchange", () => void route());
 window.addEventListener("online", () => void startEvents());
+// A click that only focuses the window arrives no other way (PSH-05).
+window.addEventListener("focus", () => void followClick().catch(() => {}));
+document.addEventListener("visibilitychange", () => {
+	if (document.visibilityState === "visible") void followClick().catch(() => {});
+});
 
 // The thread from a notification click arrives as `?thread=<id>` (PSH-03).
 const bootParams = new URLSearchParams(location.search);
