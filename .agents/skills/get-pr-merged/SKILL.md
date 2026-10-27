@@ -55,7 +55,7 @@ Then re-read the timeline. Look for `merge-garden`, `merge-garden[bot]`, `github
 
 ## Monitor loop
 
-Repeat until merged:
+On each run or scheduled wake, check once. Continue across scheduled wakes until merged:
 
 1. Re-read PR state:
 
@@ -66,11 +66,11 @@ gw pr view PR_URL --json state,mergedAt,mergeCommit,headRefName,labels,statusChe
 2. Re-read the timeline with `git pr-view PR_URL`. Bot comments are the source of truth for queue transitions.
 3. Classify the latest queue state and act:
    - **Merged:** stop when `mergedAt` is non-null or the timeline says Merge Garden merged it.
-   - **Queued or CI running:** keep polling. Do not post `/merge` again.
+   - **Queued or CI running:** schedule the next check. Do not post `/merge` again.
    - **Missing approval, failed CI, unresolved review, or stale branch:** use `get-pr-green`, fix the blocker, push, then re-enqueue.
    - **Merge-queue draft PR CI failure:** open the draft PR or CI link from the bot comment, fix the original branch, rerun CI, then re-enqueue.
    - **Merge Garden rejection:** follow the bot reason. If labels were removed, fix the blocker before re-enqueueing.
-4. Sleep 2-5 minutes while queued or CI is running; poll sooner after pushing fixes.
+4. If still queued or CI is running, use `pana schedule wake` and end the run. Follow `own-pr` for the checklist, reply thread, schedule cleanup, and backoff: start at 5 minutes, then 15 minutes, then 1 hour when unchanged. Do not sleep, run a background watcher, or poll in a loop. Include the PR URL, checklist path, current queue state, and reply thread in the wake note. On wake, check again and reply through pana when there is new information.
 
 ## Re-enqueue rules
 

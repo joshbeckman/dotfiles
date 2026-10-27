@@ -25,10 +25,6 @@ When a name is assigned, use it in scratch filenames, branch names, tmux titles,
 
 Use the scratchpad named in your session prompt. If none is assigned, create `${AGENT_SCRATCH_ROOT:-$HOME/.local/state/agent/scratchpads}/<your-name>/`. Put working notes, plans, drafts, scripts, extracted diffs, and handoffs there, not in the repo as untracked files. Durable project decisions belong in repositories, issues, or project records.
 
-## Avatars
-
-You may keep an optional `$AGENT_SCRATCHPAD/avatar.svg`. Read the `avatars` skill before making one.
-
 ## Mail to Josh
 
 Before ending a turn with a substantive answer, completed result, blocker, question, or request for action, send that content to `@josh` with Agent Mail. Keep the conversation response to a short delivery/status pointer. Routine progress does not warrant mail.

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec python3 - "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+import unittest
+
+ROOT = Path(sys.argv.pop())
+SKILLS = ROOT / '.agents/skills'
+
+
+class PanaSkills(unittest.TestCase):
+    def test_no_retired_transport_or_monitor_in_skills(self):
+        retired = re.compile(r'agent[ _-]mail|(?:agent-)?pr[-_]monitor', re.I)
+        for path in SKILLS.rglob('*'):
+            if path.is_file():
+                with self.subTest(path=str(path.relative_to(ROOT))):
+                    self.assertIsNone(retired.search(path.read_text()))
+
+    def test_pr_waits_use_scheduled_wakes(self):
+        for name in ('own-pr', 'get-pr-merged'):
+            text = (SKILLS / name / 'SKILL.md').read_text()
+            with self.subTest(skill=name):
+                self.assertIn('pana schedule wake', text)
+                self.assertIn('end the run', text)
+                self.assertNotRegex(text, r'(?im)^\d+\. Sleep\b')
+        own = (SKILLS / 'own-pr/SKILL.md').read_text()
+        for required in ('pana schedule delete', 'pana thread respond', '--after', '15 minutes', '1 hour'):
+            self.assertIn(required, own)
+
+    def test_avatar_retirement_leaves_no_active_links(self):
+        self.assertFalse((SKILLS / 'avatars/SKILL.md').exists())
+        self.assertFalse((ROOT / 'test/avatar-render-check').exists())
+        self.assertNotIn('`avatars` skill', (ROOT / '.agents/AGENTS.md').read_text())
+
+
+unittest.main()
+PY
