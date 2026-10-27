@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Platform: macOS
+# CI-skip: linux   free-space only cleans macOS caches, and the fixture ages with BSD date
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"

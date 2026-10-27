@@ -62,7 +62,11 @@ check 'pi-test/second/model-two' PI_CODING_AGENT=1 PI_PACKAGE_DIR=/fixture/pi-te
 pana_session=01JB8ZQ4V0K3W9X2Y7Z5A6B8C9
 pana_url="pana://test.example/sessions/$pana_session"
 check "Co-authored-by: AI $pana_url" PANA_SESSION="$pana_session" --
-check "Co-authored-by: AI $pana_url <$pana_session@test.example>" PANA_SESSION="$pana_session" -- --email
+# A session has no mailbox of its own, so the commit form carries the user's own
+# user.email (the field GitHub parses for coauthor credit), not the session id.
+check "Co-authored-by: AI $pana_url <person@example.org>" PANA_SESSION="$pana_session" -- --email
+# With no user.email configured there is still a routable address to fall back on.
+check "Co-authored-by: AI $pana_url <josh+pana@joshbeckman.org>" PANA_SESSION="$pana_session" TEST_GIT_EMAIL= -- --email
 check "pana/session/$pana_session" PANA_SESSION="$pana_session" -- --raw
 # The URL form names its own domain, so it does not need pana's config.
 check "Co-authored-by: AI $pana_url" PANA_SESSION="$pana_url" PANA_STATE=/nonexistent --
