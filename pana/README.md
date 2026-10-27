@@ -27,46 +27,82 @@ The screenshots come from the browser test domain. Regenerate them with `node te
 
 ## Run it
 
-Write `~/.local/state/pana/config.json`. Only `domain` and `user` are required; [SPEC.md](SPEC.md) CFG-03 lists the rest.
+Set pana up as a service in six steps. Each step is safe to repeat.
 
-```json
-{
-  "domain": "lantern.joshbeckman.org",
-  "user": "joshbeckman",
-  "defaultModel": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017"
-}
-```
+1. **Update the dotfiles.** Run `git pull` in the checkout, then `dfm install` (or `./setup`), so `~/Library/LaunchAgents/org.joshbeckman.panad.plist` links to the repo. The two-hour refresh does this, but only on a checkout that can fast-forward.
 
-Start `panad` with a provider key in its environment. It prints the providers it registered and a launch URL for the PWA.
+2. **Store the provider keys in `s`.** `bin/panad-service` injects each provider key the store holds, such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `FIREWORKS_API_KEY` (its `--help` lists them all). Panad writes no key to disk.
 
-```sh
-s FIREWORKS_API_KEY -- pana/bin/panad
-# panad: listening on ~/.local/state/pana/panad.sock and http://127.0.0.1:8766
-# panad: model providers: fireworks
-# panad: open http://localhost:8766/#<web-token>
-```
+   ```sh
+   s set FIREWORKS_API_KEY        # prompts, masked; or pipe a value to: s set NAME --stdin
+   s list                         # names only, values redacted
+   ```
 
-Install pana's dependencies once with `cd pana && npm ci`.
+   To reuse the API keys pi already has, pipe each `api_key` entry of `~/.pi/agent/auth.json` into `s set NAME --stdin`. An OAuth entry there has no key panad can use.
 
-As a service, load the launchd job on macOS. The service starts `panad` only once `config.json` and `pana/node_modules` exist; until then it exits cleanly and stays down, so merging this onto a machine that is not set up for pana changes nothing. After setting it up, restart the job with `launchctl kickstart -k "gui/$(id -u)/org.joshbeckman.panad"` (or `systemctl --user restart panad`). On Linux, `setup` enables `panad.service`. Both run `bin/panad-service`, which injects the provider keys from `s`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux.
+3. **Write `~/.local/state/pana/config.json`.** Only `domain` and `user` are required; [SPEC.md](SPEC.md) CFG-03 lists the rest.
 
-```sh
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.plist
-```
+   ```json
+   {
+     "domain": "lantern.joshbeckman.org",
+     "user": "joshbeckman",
+     "defaultModel": "fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017"
+   }
+   ```
 
-Use the CLI. `PANA_STATE` selects another state directory.
+4. **Install dependencies:** `cd pana && npm ci`.
+
+5. **Start the service.** It starts `panad` only once `config.json` and `pana/node_modules` exist; until then it exits cleanly and stays down, so merging this onto a machine that is not set up for pana changes nothing.
+
+   ```sh
+   launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.plist
+   launchctl kickstart -k "gui/$(id -u)/org.joshbeckman.panad"   # restart after a change
+   ```
+
+   On Linux, `setup` enables `panad.service`; restart it with `systemctl --user restart panad`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux. It names the providers panad registered and prints the launch URL:
+
+   ```
+   panad: listening on ~/.local/state/pana/panad.sock and http://127.0.0.1:8766
+   panad: model providers: anthropic, fireworks, openai
+   panad: open http://localhost:8766/#<web-token>
+   ```
+
+6. **Open the PWA.** Open the launch URL in a browser. The part after `#` is the web token, also kept in `~/.local/state/pana/web-token` (mode 0600). The URL uses `localhost`, because Safari answers "denied" to notifications on `127.0.0.1`. A Safari web app added to the Dock starts with empty storage and shows **Authorize this app**: copy the token and paste it there.
+
+   ```sh
+   pbcopy < ~/.local/state/pana/web-token
+   ```
+
+   For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
+
+   ```sh
+   tailscale serve --bg 8766
+   ```
+
+   Treat the token like a password. Scripts that use loopback TCP send it as `Authorization: Bearer <token>`; the `pana` CLI uses the Unix socket and needs none.
+
+Check it with a real session:
 
 ```sh
 pana session create --prompt "What is the capital of France? Answer in one word."
 pana thread read THREAD
-pana thread respond --thread THREAD --after MESSAGE --body "Thanks"
 ```
 
-Open the launch URL in a browser to authorize the PWA. It uses `localhost`, because Safari answers "denied" to notifications on `127.0.0.1`. For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
+### Replacing agent-mail-web
+
+Pana's PWA replaces the Agent Mail web bridge. Both want the tailnet's `/`, so stop the bridge and move Tailscale Serve to pana. `launchctl disable` keeps the bridge off after a reboot, even though `dfm install` still links its plist.
 
 ```sh
+launchctl bootout "gui/$(id -u)/org.joshbeckman.agent-mail-web"
+launchctl disable "gui/$(id -u)/org.joshbeckman.agent-mail-web"
 tailscale serve --bg 8766
 ```
+
+Agents still send mail with `agent-mail`, and `agent-mail inbox @josh` and `notify-josh` keep working; only the web UI moves. To bring the bridge back, run `launchctl enable` on the same label, `launchctl bootstrap` its plist, and `tailscale serve --bg 8765`.
+
+### Other ways to run it
+
+Run `panad` in the foreground with a key in its environment: `s FIREWORKS_API_KEY -- pana/bin/panad`. `PANA_STATE` selects another state directory, for both `panad` and the CLI.
 
 To try pana from this checkout without installing the service, run `pana/scripts/try`. It writes a scratch `config.json` in `~/tmp/pana-try` (`PANA_STATE` overrides) on first run, reads the anthropic, openai, and fireworks keys from pi's `~/.pi/agent/auth.json` into `panad` only, and starts `panad` in the foreground. `--fresh` wipes the scratch state first.
 
