@@ -87,6 +87,18 @@ async function runTurn(text = "ok"): Promise<void> {
 	if (settled.status !== "done") throw new Error(`run failed: ${JSON.stringify(settled)}`);
 }
 
+describe("reader image preparation", () => {
+	it("shrinks a 2050x380 screenshot through the installed reader", async () => {
+		const first = await start({ capture: true });
+		const path = join(import.meta.dirname, "fixtures/wide-screenshot.png");
+		const original = readFileSync(path);
+		const outcome = await runTool(t!, first.sessions[0]!.conversationId, "read", { path });
+		expect(outcome.isError).toBe(false);
+		expect(JSON.stringify(outcome.diagnostics)).toContain("Resized from 2050x380 to 2000x371");
+		expect(readFileSync(path)).toEqual(original);
+	});
+});
+
 describe("extension isolation", () => {
 	it("ISO-01 the registry holds only CodingTools and pana", async () => {
 		t = await startTestPanad({ script: [] });
@@ -450,6 +462,24 @@ describe("system prompt", () => {
 		]) expect(text).toContain(rule);
 	});
 
+	it("PRM-06 the rendered prompt discovers optional domain conventions from published memory", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"At the start of each run",
+			"optional root `AGENTS.md` in published memory (`main`)",
+			"not a potentially stale worktree copy",
+			"Read it and any relevant workflow files from `main` using read-only Git commands in your own memory worktree",
+			"If the entrypoint is absent, skip it",
+			"do not create conventions or schedules unasked",
+			"Follow only relevant pointers, not every memory file",
+			"domain guidance subordinate to higher-priority instructions",
+			"they grant no additional permissions",
+			"Continue to edit and publish memory through your own worktree under the memory rules above",
+		]) expect(text).toContain(rule);
+	});
+
 	it("PRM-02 project section reads AGENTS.md from the git root down to cwd, root first", async () => {
 		const repo = makeRepo();
 		writeFileSync(join(repo, "AGENTS.md"), "ROOT_AGENTS_PRM02\n");
@@ -592,6 +622,40 @@ describe("pana tools", () => {
 			expect(cliCall).toEqual(toolCall);
 			expect(toolCall.caller).toBe(sessionUrl);
 		}
+	});
+
+	it("SCH-15 the wake tool forwards an optional display subject", async () => {
+		let received: unknown;
+		await start({ capture: true, handlers: { "schedules.create": request => {
+			received = request.body;
+			return { status: 201, body: { schedule: { subject: "Review CI" } } };
+		} } });
+		const first = session();
+		const outcome = await runTool(t!, first.conversationId, "pana_schedule_wake", { in: "10m", note: "Check CI and reply in the source thread", subject: "Review CI" });
+		expect(outcome.isError).toBe(false);
+		expect(received).toMatchObject({ kind: "wake", in: "10m", note: "Check CI and reply in the source thread", subject: "Review CI" });
+	});
+
+	it("the wake tool ignores blank unused selectors but rejects missing or conflicting times", async () => {
+		const received: unknown[] = [];
+		await start({ capture: true, handlers: { "schedules.create": request => {
+			received.push(request.body);
+			return { status: 201, body: {} };
+		} } });
+		const first = session();
+		for (const blank of ["", " \t "]) {
+			for (const args of [{ in: "5m", at: blank }, { in: blank, at: "2027-01-01T00:00:00Z" }]) {
+				const outcome = await runTool(t!, first.conversationId, "pana_schedule_wake", { ...args, note: "Check CI" });
+				expect(outcome.isError).toBe(false);
+				expect(received.at(-1)).toEqual({ kind: "wake", note: "Check CI", ...(args.in === blank ? { at: args.at } : { in: args.in }) });
+			}
+		}
+		for (const args of [{ in: "", at: " " }, { in: "5m", at: "2027-01-01T00:00:00Z" }]) {
+			const outcome = await runTool(t!, first.conversationId, "pana_schedule_wake", { ...args, note: "Check CI" });
+			expect(outcome.isError).toBe(true);
+			expect(outcome.structuredOutput).toMatchObject({ exitCode: 2 });
+		}
+		expect(received).toHaveLength(4);
 	});
 
 	it("TOL-03 a tool error carries the CLI exit code in structuredOutput.exitCode", async () => {

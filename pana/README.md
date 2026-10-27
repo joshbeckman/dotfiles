@@ -6,6 +6,21 @@ Pana is a meta-harness for agent sessions. Sessions and users talk in threads, s
 
 Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/main/packages/durable) with SQLite storage. It is CLI-first, with a progressive web app (PWA) for users.
 
+## Principles
+
+- **Idle costs nothing but storage.** No active task, no context in memory, no background process between runs.
+- **Everything has a URL.** Sessions, threads, messages, memory, and schedules can be linked to and shared. A session’s URL is also its identity, address, and attribution. It needs no name.
+- **CLI first.** Users and agents use the same commands. Other programs can use them too.
+- **UI second, not second-class.** The UI stays fast and makes common actions easy. Sessions communicate with users through messages and links.
+- **One place to see the work.** Threads, sessions, memory, schedules, tool calls, costs, and state.
+- **Sessions are temporary and run in parallel.** They respond quickly and release resources when a run ends.
+- **Scratch is temporary. Memory lasts.** Each session has its own scratch directory. Keep useful work in shared memory. Git tracks each change and its author.
+- **Threads are for communication.** Participants work together through messages. Every participant gets every message. Threads can be read and shared.
+- **Read before you write.** Each new message must name the latest message the sender has read. If the thread has changed, the write fails. Read the new messages and try again. Memory changes must also resolve conflicts before publication.
+- **Messages wake idle sessions.** During a run, user messages arrive after the current tool round. Messages from other sessions wait for the next run.
+- **Schedule work instead of waiting.** Schedules create sessions, send messages, or wake sessions. End the run while you wait.
+- **Change behavior through memory or code.** Keep local knowledge and instructions in domain memory. Make general improvements in pana itself.
+
 [SPEC.md](SPEC.md) lists the behaviors that prove it works, grouped into work packages.
 
 ```sh
@@ -115,19 +130,10 @@ To try pana from this checkout without installing the service, run `pana/scripts
 
 `pana/scripts/smoke` checks a real model end to end on a throwaway state directory: `s FIREWORKS_API_KEY -- pana/scripts/smoke`. Add `--keep` to leave that `panad` running for a look in the PWA.
 
-## Goals
-
-- One place to see every session, thread, and memory edit on a domain.
-- Idle sessions cost nothing but storage. Mail wakes them.
-- Every write is attributed to a URL. Threads and memory share one concurrency rule: append against a known head, or be rejected.
-- Agents and users use the same CLI. The PWA is the only interface a session can assume a user reads.
-
 ## Non-goals
 
 - Cross-domain messaging in v1. URLs carry the domain so federation stays possible later.
-- Multiple humans per domain in v1.
-- A bridge to interactive pi. Pana replaces it.
-- Migrating agent-mail history. Pana starts empty.
+- Multiple humans per domain (in v1).
 
 ## Concepts
 
@@ -174,6 +180,7 @@ Pana runs beside the current pi setup and shares nothing with it.
 - Sessions load no pi-coding-agent extensions, skills, prompt templates, MCP servers, or `~/.pi/agent/AGENTS.md`.
 - The `bash` tool runs commands with a clean environment: `PATH` (with pana's own `bin` first, so `pana` in a session is this `panad`'s build), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH`, `PANA_BROWSER_SESSION`, and the `GIT_CONFIG_*` variables that set pana's hook directory. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
 - `bin/chrome-devtools` is that `bin`, so a session's `chrome-devtools` runs the installed CLI with `--sessionId $PANA_BROWSER_SESSION` and drives its own daemon: its own socket, pid file, and headless Chrome. Two sessions on one machine no longer share a page selection. `panad` stops the daemon when it archives the session, and sweeps every five minutes to stop the daemons of sessions idle for ten minutes. A call that names its own `--sessionId`, or a shell with no `PANA_BROWSER_SESSION`, runs the CLI unchanged.
+- The coding `read` tool prepares images with pi-durable’s worker-backed Photon processor, automatically honoring the model’s dimension and base64 byte limits without modifying the original. This is separate from the thread UI’s host-command resizer and requires no local image-command configuration.
 - A `bash` call that names no timeout stops after `tools.bashTimeoutSec` in `config.json` (600 seconds by default). Pana kills the command's whole process group, and the model gets an error result that says the call timed out.
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
@@ -274,6 +281,7 @@ The `default` profile applies when `--profile` is absent. With no `--cwd` and no
 ### Rules
 
 - A thread has a participant set. Every message goes to every participant. `--cc` adds participants.
+- Sessions may read any same-domain thread or message by reference, even when they are not participants. Reading does not join the thread, subscribe to future messages, or change anyone else's read state. Responding still requires participation, and another session's inbox remains private.
 - Threads are append-only. `thread respond` requires `--after MESSAGE`, the newest message the sender has read. If the thread has a newer message, pana rejects the response with exit code 3. The sender reads the new messages, revises, and retries.
 - Edits and deletes are appended as `message.revised` and `message.redacted` events. Readers show the latest revision. A session that already received the old text keeps it in its transcript, so the PWA warns before an edit.
 - The subject starts as the first line of the first message. A small model replaces it asynchronously. Regenerating keeps the old subjects in history.
@@ -310,6 +318,32 @@ pana memory log [PATH]
 
 A session discovers memory through a hint in `pana/prompt.md` and through the `pana_memory_*` tools.
 
+#### Domain working conventions
+
+The session prompt has one generic discovery rule: at the start of each run, consult the
+optional root `AGENTS.md` in published memory (`main`). Read the entrypoint and relevant
+linked workflow files from that published view, not a potentially stale writer-worktree
+snapshot. This is a prompt-level convention, not automatic file injection or guaranteed
+workflow execution. The entrypoint is optional: absent files are skipped without setup.
+
+Keep `AGENTS.md` short: describe when a convention applies and link its instructions.
+For example, a domain might point sessions encountering tooling friction to a journal
+workflow, or scheduled reviewers to a proposal protocol. New workflows change domain
+memory only; they do not require new core prompt clauses or extension tests. Don't load
+all memory files, and don't treat arbitrary retrieved notes as working conventions.
+Domain guidance is subordinate to higher-priority instructions and grants no additional
+permissions. Workflows and schedules require their usual authorization.
+
+Read published files with read-only Git commands in your own memory worktree. For
+example, `git ls-tree main -- AGENTS.md` checks for the optional entrypoint; if present,
+`git show main:AGENTS.md` reads it. Use the same published view for relevant linked files.
+Don't switch branches or reset a writer worktree to refresh instructions. Continue to
+edit and publish through the ordinary memory workflow. Keep domain-specific instructions,
+private evidence, and recipients in memory, not in this public repository.
+
+Merge and deploy the generic prompt change before expecting discovery in running
+installations. Core tests cover the discovery contract, not individual domain workflows.
+
 ## Scratch
 
 Scratch is disposable and memory is durable.
@@ -338,6 +372,8 @@ pana schedule list [--kind session|thread|wake]
 pana schedule delete SCHEDULE
 ```
 
+- Every schedule has a short subject. All create commands (including wakes) accept `--subject "Weekly planning"`; the API uses a top-level `subject`, separate from the action payload. If omitted, the prompt/body/note's first line is shown immediately and `subjectModel`, when configured, generates a better label in the background. A model failure leaves the fallback label. Subjects are one line, at most 80 characters.
+- The PWA lists subjects with timing/status metadata and keeps full instructions behind a disclosure. Conditional schedules show a readiness-check indicator, stop-after-success behavior, and the latest check status; expand Run conditions / check details for the command, working directory, timestamp, exit code, signal, error, stdout, and stderr. Editing instructions regenerates automatic subjects but keeps manually chosen labels. Clear the subject in the edit form (API `subject: null`) to return to automatic naming. Existing schedules get fallback labels immediately and background naming as they are viewed.
 - Cron uses the domain's local timezone.
 - A run missed while the machine was off is skipped.
 - A failed scheduled session mails the schedule's creator.

@@ -39,6 +39,7 @@ import {
 	participantColor,
 	refLabel,
 	scheduleBody,
+	scheduleCheckView,
 	scheduleWhen,
 	shortTime,
 	threadRow,
@@ -1037,7 +1038,7 @@ async function messageElement(message, { focus }) {
 	article.append(header);
 
 	const body = document.createElement("div");
-	body.className = "body";
+	body.className = "body prose";
 	const { marked, DOMPurify } = window.MailRenderers ?? {};
 	if (view.redacted) {
 		body.textContent = "[redacted]";
@@ -1381,7 +1382,7 @@ function entryElement(entry) {
 /** UX-11: the model's text, as Markdown sanitized the same way as a thread message. */
 function markdownElement(text, testid) {
 	const node = document.createElement("div");
-	node.className = "body markdown";
+	node.className = "body markdown prose";
 	if (testid) node.dataset.testid = testid;
 	const { marked, DOMPurify } = window.MailRenderers ?? {};
 	// The HTML is in place when this returns; only images and diagrams finish later.
@@ -1841,13 +1842,17 @@ async function loadSchedules(focus, cursor) {
 	if (schedules.length === 0 && !cursor) return empty(list, "No schedules yet.");
 	for (const schedule of schedules) {
 		const payload = schedule.payload ?? {};
+		const checkView = scheduleCheckView(schedule, when);
 		const meta = [
 			// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
 			refLink(schedule.url ?? schedule.id, "schedule", schedule.id),
 			// WAK-04: a wake names the session it wakes.
 			schedule.kind === "wake" && typeof payload.session === "string" ? refLink(payload.session, "session", `wakes ${payload.session.slice(-6)}`) : undefined,
-			payload.prompt ?? payload.body ?? payload.note ?? payload.subject,
+			`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`,
 			`next ${when(schedule.nextAt)}`,
+			schedule.check ? "Conditional" : undefined,
+			schedule.stopAfterSuccess ? "Stops after successful dispatch" : undefined,
+			schedule.check || schedule.lastCheck ? `Last check: ${checkView.status}` : undefined,
 		];
 		const edit = rowAction("schedule-edit", "Edit", () => startScheduleEdit(schedule));
 		delete edit.dataset.action;
@@ -1857,9 +1862,17 @@ async function loadSchedules(focus, cursor) {
 		remove.classList.add("danger");
 		// A wake is made by a session for itself; the schedule form edits session and thread schedules only.
 		const wake = schedule.kind === "wake";
-		const row = item(`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`, meta, wake ? () => {} : () => startScheduleEdit(schedule), {
+		const content = details("schedule-content", "Full prompt / message / note", String(payload.prompt ?? payload.body ?? payload.note ?? ""), { testid: "schedule-content" });
+		const below = document.createElement("div");
+		below.append(content);
+		if (checkView) below.append(details("schedule-content", "Run conditions / check details", checkView.text, { testid: "schedule-conditions" }));
+		// Disclosures are independent of the row's edit action (including keyboard activation).
+		below.addEventListener("click", (event) => event.stopPropagation());
+		below.addEventListener("keydown", (event) => event.stopPropagation());
+		const row = item(schedule.subject || "Untitled schedule", meta, wake ? () => {} : () => startScheduleEdit(schedule), {
 			testid: "schedule-item",
 			id: schedule.id,
+			below,
 			actions: wake ? [remove] : [edit, remove],
 		});
 		list.append(row);
@@ -1878,6 +1891,7 @@ async function loadSchedules(focus, cursor) {
 function startScheduleEdit(schedule) {
 	editingSchedule = schedule;
 	$("schedule-kind").value = schedule.kind;
+	$("schedule-subject").value = schedule.subject ?? "";
 	$("schedule-when").value = scheduleWhen(schedule);
 	$("schedule-prompt").value = String(schedule.payload?.prompt ?? schedule.payload?.body ?? "");
 	$("schedule-to").value = Array.isArray(schedule.payload?.to) ? schedule.payload.to.join(", ") : "";
@@ -1893,6 +1907,7 @@ function resetScheduleForm() {
 	$("schedule-create").textContent = "Create";
 	$("schedule-form-title").textContent = "New schedule";
 	$("schedule-cancel").hidden = true;
+	$("schedule-subject").value = "";
 	$("schedule-prompt").value = "";
 	$("schedule-when").value = "";
 	$("schedule-to").value = "";
@@ -1902,7 +1917,7 @@ async function createSchedule(event) {
 	event.preventDefault();
 	const text = $("schedule-prompt").value.trim();
 	if (!text) return status("Write a prompt first.", true);
-	const form = { kind: $("schedule-kind").value, when: $("schedule-when").value, text, to: $("schedule-to").value };
+	const form = { subject: $("schedule-subject").value, kind: $("schedule-kind").value, when: $("schedule-when").value, text, to: $("schedule-to").value };
 	if (!editingSchedule && !form.when.trim()) return status("Give a cron expression or a time.", true);
 	const body = scheduleBody(form, editingSchedule);
 	try {

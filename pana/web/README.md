@@ -41,3 +41,16 @@ The browser suite starts a real test `panad` with the scripted faux model, seeds
 `node test/browser/screens.ts DIR LABEL` seeds a domain (`test/browser/seed.ts`) and saves a full-page screenshot of every section to `DIR/LABEL-<section>.png`, for reviewing a visual change.
 
 Memory saves send the editor's read commit as `baseCommit` (`null` for a new file). The server fast-forwards clean writer worktrees before applying edits and rejects dirty/unpublished local work instead of overwriting or publishing it. A 409 `stale_file` leaves editor text intact: copy the edits, reload the current file, then reapply them. Existing unpublished commits from older failed saves still need explicit worktree conflict resolution; retries never discard them or add more commits.
+
+### Message typography
+
+Thread messages and rendered transcript text opt into `.prose`; the app's headings,
+raw/tool output, and memory keep their own styles. Wide Markdown tables retain semantic
+`table` elements inside keyboard-focusable, locally scrolling regions. The specimen in
+`test/fixtures/message-prose.md` covers heading levels, paragraph rhythm, nested content,
+code, images, and table overflow. Run its desktop/390px light/dark browser regression with:
+
+```sh
+npm run test:web -- test/browser/prose.spec.ts
+PANA_PROSE_SHOTS=docs npm run test:web -- test/browser/prose.spec.ts
+```

@@ -125,9 +125,10 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 			"pana_schedule_wake",
 			"Wake yourself later with a note. Use it to wait for anything outside your run (CI, a review, a deploy, another session) instead of sleeping or polling in bash, then end your run. Nothing is posted when the wakeup run ends, so say in the note where to reply.",
 			Type.Object({
-				in: Type.Optional(Type.String({ description: "Wake after this long: 90s, 10m, 2h, or 1d" })),
-				at: Type.Optional(Type.String({ description: "Wake at this ISO time, instead of in" })),
+				in: Type.Optional(Type.String({ description: "Wake after this long: 90s, 10m, 2h, or 1d. Omit unused selectors; do not pass empty strings." })),
+				at: Type.Optional(Type.String({ description: "Wake at this ISO time, instead of in. Omit unused selectors; do not pass empty strings." })),
 				note: Type.String({ description: "What to check when you wake, and the thread to reply in" }),
+				subject: Type.Optional(Type.String({ description: "Optional schedule label; generated from the note when omitted" })),
 			}),
 		),
 	];

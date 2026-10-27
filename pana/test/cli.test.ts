@@ -413,6 +413,39 @@ describe("pana CLI routes", () => {
 		).toBe(2);
 	});
 
+	it("schedule selectors ignore blanks in validation and API payloads for every kind", async () => {
+		const t = await start({ handlers: { "schedules.create": (request) => ({ status: 201, body: request.body }) } });
+		for (const command of [
+			["schedule", "session", "create", "--prompt", "p"],
+			["schedule", "thread", "create", "--to", "a", "--body", "b"],
+			["schedule", "wake", "--note", "n"],
+		]) {
+			const selectors = command[1] === "wake" ? ["in", "at", "cron"] : ["at", "cron"];
+			const values: Record<string, string> = { in: "5m", at: "2027-01-01T00:00:00Z", cron: "* * * * *" };
+			for (const selected of selectors) {
+				for (const blank of ["", " \t "]) {
+					const options = selectors.flatMap((key) => [`--${key}`, key === selected ? values[key]! : blank]);
+					const result = await run([...command, ...options, "--json"], t);
+					expect(result.code).toBe(0);
+					const body = JSON.parse(result.stdout);
+					expect(body[selected]).toBe(values[selected]);
+					for (const unused of selectors.filter((key) => key !== selected)) expect(body).not.toHaveProperty(unused);
+				}
+			}
+			const missing = await run([...command, ...selectors.flatMap((key) => [`--${key}`, " \t "])], undefined);
+			expect(missing.code).toBe(2);
+			expect(missing.stderr).toContain("Provide one schedule selector:");
+			const conflict = await run([...command, "--at", values.at!, "--cron", values.cron!], undefined);
+			expect(conflict.code).toBe(2);
+			expect(conflict.stderr).toContain("Conflicting schedule selectors:");
+			expect(conflict.stderr).toContain("--at");
+			expect(conflict.stderr).toContain("--cron");
+			const check = await run([...command, "--at", values.at!, "--cron", " ", "--check", "true"], undefined);
+			expect(check.code).toBe(2);
+			expect(check.stderr).toContain("require --cron");
+		}
+	});
+
 	it("SCH-09 CLI forwards recurring check options for every kind and leaves cwd defaulting to panad", async () => {
 		const t = await start({ handlers: { "schedules.create": (request) => ({ status: 201, body: request.body }) } });
 		const kinds = [
@@ -660,4 +693,26 @@ describe("pana CLI references", () => {
 		const wrongKind = await run(["session", "show", `${base}/threads/${thread}`], t, env);
 		expect(wrongKind.code).toBe(2);
 	});
+});
+
+
+it("SCH-15 schedule CLI forwards an optional display subject for every kind", async () => {
+	const bodies: unknown[] = [];
+	const t = await start({ handlers: { "schedules.create": ctx => {
+		bodies.push(ctx.body);
+		return { status: 201, body: {} };
+	} } });
+	for (const args of [
+		["session", "create", "--cron", "0 9 * * *", "--prompt", "Description"],
+		["thread", "create", "--cron", "0 9 * * *", "--to", "tester", "--body", "Description"],
+		["wake", "--in", "10m", "--note", "Description", "--session", "S1"],
+	]) {
+		const result = await run(["schedule", ...args, "--subject", "Short label"], t);
+		expect(result.code).toBe(0);
+	}
+	expect(bodies).toEqual([
+		expect.objectContaining({ kind: "session", subject: "Short label", prompt: "Description" }),
+		expect.objectContaining({ kind: "thread", subject: "Short label", body: "Description" }),
+		expect.objectContaining({ kind: "wake", subject: "Short label", note: "Description" }),
+	]);
 });

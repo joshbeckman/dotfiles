@@ -388,9 +388,36 @@ export function scheduleBody(form, editing) {
 		.filter(Boolean);
 	if (kind === "thread" && to.length > 0) payload.to = to;
 	const body = { kind, payload };
+	// This labels the schedule, not a thread created by payload.subject.
+	const subject = String(form.subject ?? "").trim();
+	if (subject && (!editing || subject !== editing.subject)) body.subject = subject;
+	else if (!subject && editing && form.subject !== undefined) body.subject = null;
 	if (when) {
 		if (ISO_DATE.test(when)) body.at = when;
 		else body.cron = when;
 	}
 	return body;
+}
+
+/** Read-only diagnostics; check output is plain text, never prompt or HTML content. */
+export function scheduleCheckView(schedule, formatTime = (time) => new Date(time).toLocaleString()) {
+	const last = schedule.lastCheck;
+	if (!schedule.check && !schedule.stopAfterSuccess && !last) return null;
+	const statuses = { passed: "Passed", not_ready: "Not ready", failed: "Failed" };
+	const status = last ? (statuses[last.status] ?? String(last.status)) : "Not checked yet";
+	const lines = [
+		"Check command:", schedule.check || "None (dispatch without a readiness check)",
+		"", `Working directory: ${schedule.checkCwd ?? "Not configured"}`,
+		`Stop after successful dispatch: ${schedule.stopAfterSuccess ? "Yes" : "No"}`,
+		"", `Last check: ${last ? status : schedule.check ? "Not checked yet" : "No check recorded"}`,
+	];
+	if (last) lines.push(
+		`Checked at: ${formatTime(last.checkedAt)}`,
+		`Exit code: ${last.exitCode ?? "None"}`,
+		`Signal: ${last.signal ?? "None"}`,
+		`Error: ${last.error ?? "None"}`,
+		"", "Standard output:", last.stdout || "(empty)",
+		"", "Standard error:", last.stderr || "(empty)",
+	);
+	return { status, text: lines.join("\n") };
 }

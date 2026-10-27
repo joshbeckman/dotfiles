@@ -254,6 +254,14 @@ export const MIGRATIONS: readonly Migration[] = [
 			ALTER TABLE schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
 		`,
 	},
+	{
+		version: 9,
+		name: "schedule subjects",
+		sql: `
+			ALTER TABLE schedules ADD COLUMN subject TEXT;
+			ALTER TABLE schedules ADD COLUMN subject_source TEXT CHECK (subject_source IN ('first-line', 'model', 'manual'));
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

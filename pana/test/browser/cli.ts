@@ -78,8 +78,8 @@ export async function screenshot(fullPage = false): Promise<string> {
 }
 
 /** Emulate a phone: `viewport` is `WIDTHxHEIGHTxDPR[,mobile][,touch]`, or "" to clear. */
-export async function emulateViewport(viewport: string): Promise<void> {
-	await command(["emulate", "--viewport", viewport]);
+export async function emulateViewport(viewport: string, colorScheme?: "dark" | "light" | "auto"): Promise<void> {
+	await command(["emulate", "--viewport", viewport, ...(colorScheme ? ["--colorScheme", colorScheme] : [])]);
 }
 
 export async function emulateColorScheme(scheme: "dark" | "light" | "auto"): Promise<void> {
