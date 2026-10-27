@@ -36,7 +36,9 @@ const README_COMMANDS = [
 	'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT',
 	"pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT",
 	"pana schedule thread create --at 2026-10-25T18:26:14Z --to ADDRS --body-file PATH",
-	"pana schedule list [--kind session|thread]",
+	"pana schedule wake --in 10m --note TEXT [--session SESSION]",
+	"pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT",
+	"pana schedule list [--kind session|thread|wake]",
 	"pana schedule delete SCHEDULE",
 ];
 

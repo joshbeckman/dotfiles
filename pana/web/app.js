@@ -1563,7 +1563,9 @@ async function loadSchedules(focus, cursor) {
 		const meta = [
 			// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
 			refLink(schedule.url ?? schedule.id, "schedule", schedule.id),
-			payload.prompt ?? payload.body ?? payload.subject,
+			// WAK-04: a wake names the session it wakes.
+			schedule.kind === "wake" && typeof payload.session === "string" ? refLink(payload.session, "session", `wakes ${payload.session.slice(-6)}`) : undefined,
+			payload.prompt ?? payload.body ?? payload.note ?? payload.subject,
 			`next ${when(schedule.nextAt)}`,
 		];
 		const edit = rowAction("schedule-edit", "Edit", () => startScheduleEdit(schedule));
@@ -1572,10 +1574,12 @@ async function loadSchedules(focus, cursor) {
 		remove.dataset.action = "delete-schedule";
 		remove.dataset.id = schedule.id;
 		remove.classList.add("danger");
-		const row = item(`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`, meta, () => startScheduleEdit(schedule), {
+		// A wake is made by a session for itself; the schedule form edits session and thread schedules only.
+		const wake = schedule.kind === "wake";
+		const row = item(`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`, meta, wake ? () => {} : () => startScheduleEdit(schedule), {
 			testid: "schedule-item",
 			id: schedule.id,
-			actions: [edit, remove],
+			actions: wake ? [remove] : [edit, remove],
 		});
 		list.append(row);
 	}

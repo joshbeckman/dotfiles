@@ -12,6 +12,7 @@
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { Cron } from "croner";
 import { ApiError } from "../api/errors.ts";
+import { isUlid, parseRef } from "../ids/index.ts";
 import { decodeCursor, pageOf, type Page } from "../api/pagination.ts";
 import type { Caller } from "../api/types.ts";
 import type { PersonView } from "../threads/store.ts";
@@ -19,7 +20,7 @@ import { addressList, messageBody } from "../threads/store.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { notifySchedulesChanged } from "./registry.ts";
 
-export type ScheduleKind = "session" | "thread";
+export type ScheduleKind = "session" | "thread" | "wake";
 export type ScheduleState = "active" | "done" | "missed" | "deleted";
 
 export interface ScheduleRow {
@@ -61,6 +62,8 @@ export interface ScheduleInput {
 	kind?: unknown;
 	cron?: unknown;
 	at?: unknown;
+	/** WAK-01: a delay such as `90s`, `5m`, `2h`, or `1d`, instead of `at`. */
+	in?: unknown;
 	timezone?: unknown;
 	payload?: unknown;
 	/** The CLI/PWA may also send prompt, body, to, subject at the top level. */
@@ -72,9 +75,12 @@ export interface ScheduleInput {
 	thinking?: unknown;
 	cwd?: unknown;
 	profile?: unknown;
+	/** WAK-01: the session a wake schedule wakes, and the note it hands that session. */
+	session?: unknown;
+	note?: unknown;
 }
 
-const KINDS: readonly ScheduleKind[] = ["session", "thread"];
+const KINDS: readonly ScheduleKind[] = ["session", "thread", "wake"];
 
 // --- Input parsing -------------------------------------------------------------
 
@@ -89,7 +95,19 @@ function inputObject(value: unknown): ScheduleInput {
 function scheduleKind(value: unknown): ScheduleKind {
 	if (value === undefined || value === null || value === "") return "session";
 	if (typeof value === "string" && (KINDS as readonly string[]).includes(value)) return value as ScheduleKind;
-	throw ApiError.badRequest("invalid_kind", `schedule kind must be session or thread, got ${String(value)}`);
+	throw ApiError.badRequest("invalid_kind", `schedule kind must be session, thread, or wake, got ${String(value)}`);
+}
+
+const DURATION_MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
+
+/** `--in 90s`, `5m`, `2h`, or `1d`, as milliseconds. */
+export function parseDuration(value: unknown): number {
+	const match = typeof value === "string" ? /^\s*(\d+(?:\.\d+)?)\s*([smhd])\s*$/.exec(value) : null;
+	const ms = match ? Number(match[1]) * DURATION_MS[match[2] as keyof typeof DURATION_MS] : Number.NaN;
+	if (!Number.isFinite(ms) || ms <= 0) {
+		throw ApiError.badRequest("invalid_in", `--in must be a duration such as 90s, 5m, 2h, or 1d, got ${String(value)}`);
+	}
+	return ms;
 }
 
 function timezoneFor(value: unknown, fallback: string): string {
@@ -160,7 +178,7 @@ function scheduleTiming(input: ScheduleInput, fallbackTimezone: string, now: num
 }
 
 /** The payload fields the CLI may send at the top level instead of under `payload`. */
-const TOP_LEVEL_FIELDS = ["prompt", "body", "to", "subject", "model", "thinking", "cwd", "profile"] as const;
+const TOP_LEVEL_FIELDS = ["prompt", "body", "to", "subject", "model", "thinking", "cwd", "profile", "session", "note"] as const;
 
 /**
  * The stored request. The PWA sends `payload: {prompt}`; the CLI may send the same fields at the
@@ -176,6 +194,10 @@ function schedulePayload(input: ScheduleInput, kind: ScheduleKind): Record<strin
 	if (kind === "session") {
 		if (typeof payload.prompt !== "string" || payload.prompt.trim().length === 0) {
 			throw ApiError.badRequest("invalid_payload", "a session schedule needs a prompt");
+		}
+	} else if (kind === "wake") {
+		if (typeof payload.note !== "string" || payload.note.trim().length === 0) {
+			throw ApiError.badRequest("invalid_payload", "a wake needs a note: what to check, and where to reply");
 		}
 	} else {
 		messageBody(payload.body);
@@ -194,6 +216,35 @@ function pickPayloadFields(input: ScheduleInput): Record<string, unknown> {
 		if (input[field] !== undefined) payload[field] = input[field];
 	}
 	return payload;
+}
+
+/** WAK-01: `in` becomes `at`, measured from now. */
+function withDelay(input: ScheduleInput, now: number): ScheduleInput {
+	if (!hasValue(input.in)) return input;
+	if (hasValue(input.at) || hasValue(input.cron)) throw ApiError.badRequest("both_times", "give one of --in, --at, or --cron");
+	return { ...input, at: now + parseDuration(input.in) };
+}
+
+/**
+ * WAK-01: a session wakes only itself; the user may wake any session. The target must exist and
+ * must not be archived, since an archived session never runs again.
+ */
+async function wakeTarget(runtime: Runtime, caller: Caller, value: unknown): Promise<string> {
+	const named = typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+	let id: string;
+	if (named === undefined) {
+		if (caller.kind !== "session") throw ApiError.badRequest("missing_session", "name the session to wake with --session");
+		id = caller.id;
+	} else {
+		const ref = isUlid(named) ? { kind: "session", id: named } : parseRef(named, runtime.config.domain);
+		if (ref.kind !== "session") throw ApiError.badRequest("invalid_session", `${named} is not a session`);
+		id = ref.id;
+	}
+	if (caller.kind === "session" && id !== caller.id) throw ApiError.forbidden("a session may schedule wakes only for itself");
+	const row = await runtime.db.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", id);
+	if (!row) throw ApiError.notFound(`session ${id}`);
+	if (row.state === "archived") throw ApiError.stale(`session ${id} is archived`, { session: id });
+	return id;
 }
 
 // --- Reads ---------------------------------------------------------------------
@@ -239,7 +290,7 @@ async function scheduleRow(tx: SqliteExecutor, id: string): Promise<ScheduleJoin
 function kindFilter(value: string | null | undefined): ScheduleKind | undefined {
 	if (value === undefined || value === null || value === "") return undefined;
 	if ((KINDS as readonly string[]).includes(value)) return value as ScheduleKind;
-	throw ApiError.badRequest("invalid_kind", `schedule kind must be session or thread, got ${value}`);
+	throw ApiError.badRequest("invalid_kind", `schedule kind must be session, thread, or wake, got ${value}`);
 }
 
 export async function showSchedule(runtime: Runtime, id: string): Promise<ScheduleView> {
@@ -289,11 +340,16 @@ async function ensureParticipant(tx: SqliteExecutor, runtime: Runtime, now: numb
 }
 
 export async function createSchedule(runtime: Runtime, caller: Caller, value: unknown): Promise<ScheduleView> {
-	const input = inputObject(value);
+	const input = withDelay(inputObject(value), runtime.clock.now());
 	const now = runtime.clock.now();
 	const kind = scheduleKind(input.kind);
+	if (kind === "wake" && hasValue(input.cron)) {
+		// A recurring self-wake would run, and spend, forever with nobody asking.
+		throw ApiError.badRequest("invalid_cron", "a wake takes --in or --at, not --cron");
+	}
 	const timing = scheduleTiming(input, runtime.config.timezone, now);
 	const payload = schedulePayload(input, kind);
+	if (kind === "wake") payload.session = await wakeTarget(runtime, caller, payload.session);
 	const id = runtime.newId();
 	const view = await runtime.db.write(async (tx) => {
 		await ensureParticipant(tx, runtime, now, caller);

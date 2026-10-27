@@ -80,7 +80,8 @@ export type PanaToolName =
 	| "pana_thread_create"
 	| "pana_session_create"
 	| "pana_memory_search"
-	| "pana_memory_commit";
+	| "pana_memory_commit"
+	| "pana_schedule_wake";
 
 /** The command names the pana tools wrap. */
 export type PanaCommandName =
@@ -89,7 +90,8 @@ export type PanaCommandName =
 	| "thread create"
 	| "session create"
 	| "memory search"
-	| "memory commit";
+	| "memory commit"
+	| "schedule wake";
 
 // --- Parameter helpers ---------------------------------------------------------
 
@@ -537,8 +539,40 @@ export const COMMANDS: readonly CommandSpec[] = [
 		}),
 	},
 	{
+		path: ["schedule", "wake"],
+		tool: "pana_schedule_wake",
+		usage: "pana schedule wake --in 10m --note TEXT [--session SESSION]",
+		altUsage: ["pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT"],
+		summary: "Wake a session later with a note: yours by default",
+		flags: [
+			string("in", "--in DURATION", "Wake after this long: 90s, 10m, 2h, or 1d"),
+			string("at", "--at TIME", "Wake at this ISO time"),
+			string("note", "--note TEXT", "What to check when you wake, and where to reply", { required: true }),
+			string("session", "--session SESSION", "The session to wake; only the user may name another"),
+		],
+		positionals: [],
+		validate: (params) => {
+			const delay = text(params, "in");
+			const at = text(params, "at");
+			if (delay === undefined && at === undefined) return "give --in DURATION or --at TIME";
+			if (delay !== undefined && at !== undefined) return "--in and --at are mutually exclusive";
+			return undefined;
+		},
+		request: (params) => ({
+			method: "POST",
+			path: "/schedules",
+			body: compact({
+				kind: "wake",
+				in: text(params, "in"),
+				at: text(params, "at"),
+				note: text(params, "note"),
+				session: text(params, "session"),
+			}),
+		}),
+	},
+	{
 		path: ["schedule", "list"],
-		usage: "pana schedule list [--kind session|thread]",
+		usage: "pana schedule list [--kind session|thread|wake]",
 		summary: "List schedules",
 		flags: [string("kind", "--kind KIND", "Only schedules of this kind"), ...PAGE_FLAGS],
 		positionals: [],

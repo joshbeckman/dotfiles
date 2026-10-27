@@ -226,7 +226,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Tools
 
-- [x] **TOL-01** Tools: `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`.
+- [x] **TOL-01** Tools: `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake` (WAK-01).
 - [x] **TOL-02** Each tool calls the same API route as its CLI command, with the session as caller. For every tool, a test runs the tool and the CLI command with equal inputs and compares results.
 - [x] **TOL-03** A tool error carries the CLI exit code in `structuredOutput.exitCode`.
 - [x] **TOL-04** `pana_reply` requires `after`, as THR-03 does.
@@ -373,3 +373,14 @@ A session's scratch directory is its own place for throwaway work: scripts, down
 - [x] **SCR-05** panad sweeps scratch when it starts and every 24 hours after, on `runtime.clock`. The sweep removes scratch that belongs to an archived session, to no session at all, or to a session whose state is not `running` or `waiting` and whose `updated_at` is older than `scratch.ttlDays` (config.json, default 8). When `scratch.maxTotalMB` is set and the remaining scratch is larger, it then removes the longest-idle scratch until the total fits. It never removes the scratch of a `running` or `waiting` session. Each removal checks the state and renames the directory inside one write transaction, so a wake cannot start a run between the check and the removal. The renamed directory is deleted after the commit.
 - [x] **SCR-06** Each removal records `scratch_removed_at` and `scratch_removed_bytes` on the session. The pana prompt section then says when the scratch was removed, why, and how large it was. The section's change puts that note in the session's transcript once, and a session woken later knows its old files are gone.
 - [x] **SCR-07** `pana scratch prune [--dry-run]` (`POST /scratch/prune`, the user only) runs the sweep now and lists each scratch it removed, or would remove, with its session, reason, and size. `GET /sessions/:id` includes `scratch: {path, bytes}`, `bytes` null when the directory does not exist, and the PWA's session header shows the size.
+
+## WP17: Wakeups
+
+A session waits for anything outside its run by scheduling a wake and ending the run. Sleeping in `bash` held a run, and its budget, open for nothing.
+
+- [x] **WAK-01** `pana schedule wake (--in DURATION | --at TIME) --note TEXT [--session SESSION]` (`POST /schedules` with `kind: "wake"`), and the `pana_schedule_wake` tool. `--in` takes `90s`, `10m`, `2h`, or `1d`. A session wakes only itself, and naming another session is 403. The user must name a session. A wake takes no `--cron`, needs a note, and cannot target an archived session (409). Migration 7 adds `wake` to the schedule kinds.
+- [x] **WAK-02** When a wake fires, the scheduler submits its note to the session as input (`pana.wake` entry, `followUp` when busy, `requestId` `pana.wake:<schedule>`) and sets the session `running`, the same way a delivery does. A stopped or archived session is not woken. Nothing is posted at the end of the run, because RPL-01 finds no delivery behind it. The input says so, and the note names where to reply.
+- [x] **WAK-03** A wake that came due while `panad` was down fires at startup. This is the one exception to SCH-05, because a session is waiting on it.
+- [x] **WAK-04** `pana schedule list --kind wake` lists pending wakes, and `pana schedule delete` cancels one.
+- [x] **WAK-05** `pana/prompt.md` has a Waiting section. It tells the session never to sleep or poll for something outside its run, to schedule a wake with a note that names the thread to reply in, to back off when the thing is still not ready, and that `bash` refuses long sleeps.
+- [x] **WAK-06** `bash` refuses a command whose longest `sleep` is 60 seconds or more, with an error that names `pana schedule wake`. GNU `sleep 1m 30s` counts as 90. Shorter sleeps run, so a command can still wait for a local server it started.

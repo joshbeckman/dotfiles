@@ -12,9 +12,11 @@ import { isAbsolute, join } from "node:path";
 import type { PendingWake, WakeSubmitter } from "../db/outbox.ts";
 import { firstLineSubject } from "../search/subjects.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { setSessionState } from "./state.ts";
 
 export const MESSAGE_ENTRY_KIND = "pana.message";
 export const NOTE_ENTRY_KIND = "pana.note";
+export const WAKE_ENTRY_KIND = "pana.wake";
 
 /** What a `pana.message` entry stores, so readers find the message without parsing text. */
 export interface MessageEntryData {
@@ -141,4 +143,45 @@ export function defaultWakeSubmitter(getRuntime: () => Runtime): WakeSubmitter {
 		);
 		return submission.id;
 	};
+}
+
+export interface ScheduledWake {
+	scheduleId: string;
+	sessionId: string;
+	note: string;
+}
+
+/**
+ * WAK-02: hand a scheduled wake's note to its session as input, like a delivered message. A
+ * stopped or archived session stays as it is: the user stopped it, and a wake must not restart
+ * it. Returns whether the session was woken.
+ *
+ * Nothing is posted for the session when the run ends (RPL-01 finds no delivery behind it), so
+ * the note says where to reply and the session replies with `pana_reply`.
+ */
+export async function wakeScheduled(runtime: Runtime, wake: ScheduledWake): Promise<boolean> {
+	return runtime.db.write(async (tx) => {
+		const row = await tx.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", wake.sessionId);
+		if (!row || row.state === "stopped" || row.state === "archived") return false;
+		const conversation = await sessionConversation(runtime, wake.sessionId);
+		const scheduleUrl = runtime.url({ kind: "schedule", id: wake.scheduleId });
+		await conversation.submit(
+			{
+				type: "input",
+				content: [
+					"Scheduled wakeup.",
+					`Schedule: ${scheduleUrl}`,
+					"Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know.",
+					"",
+					wake.note,
+				].join("\n"),
+				whenBusy: "followUp",
+				entry: { kind: WAKE_ENTRY_KIND, data: { scheduleId: wake.scheduleId } },
+				requestId: `pana.wake:${wake.scheduleId}`,
+			},
+			BACKGROUND_CONTEXT,
+		);
+		await setSessionState(tx, runtime, { sessionId: wake.sessionId, state: "running", from: ["idle", "failed"] });
+		return true;
+	});
 }

@@ -120,5 +120,15 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 			"Commit your memory worktree to `main`. Exit 3 means a conflict: the commit stays on your writer branch. Rebase onto main, fix the files, continue the rebase, then commit again.",
 			Type.Object({ message: Type.String({ description: "Commit message" }) }),
 		),
+		tool(
+			getRuntime,
+			"pana_schedule_wake",
+			"Wake yourself later with a note. Use it to wait for anything outside your run (CI, a review, a deploy, another session) instead of sleeping or polling in bash, then end your run. Nothing is posted when the wakeup run ends, so say in the note where to reply.",
+			Type.Object({
+				in: Type.Optional(Type.String({ description: "Wake after this long: 90s, 10m, 2h, or 1d" })),
+				at: Type.Optional(Type.String({ description: "Wake at this ISO time, instead of in" })),
+				note: Type.String({ description: "What to check when you wake, and the thread to reply in" }),
+			}),
+		),
 	];
 }
