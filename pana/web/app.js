@@ -1585,6 +1585,8 @@ async function openMemoryFile(path, showSource = false) {
 	if (!path) return loadMemory();
 	showMemoryDetail("file");
 	$("memory-path").textContent = path;
+	$("memory-delete").dataset.path = path;
+	$("memory-delete-confirmation").hidden = true;
 	$("memory-edit-link").href = memoryEditHref(path);
 	$("memory-file-back").href = memoryBack || "#/memory";
 	const meta = $("memory-file-meta");
@@ -1779,6 +1781,23 @@ async function saveMemory(event) {
 		fail(error);
 	} finally {
 		save.disabled = false;
+	}
+}
+
+async function deleteMemory() {
+	const button = $("memory-delete-confirm");
+	const path = $("memory-delete").dataset.path;
+	if (!path || button.disabled) return;
+	button.disabled = true;
+	try {
+		await api("DELETE", `/memory/files/${memoryPath(path)}`);
+		status("Deleted and committed to main. Git history is preserved.");
+		memoryBack = "#/memory";
+		location.hash = "#/memory";
+	} catch (error) {
+		fail(error);
+	} finally {
+		button.disabled = false;
 	}
 }
 
@@ -2635,6 +2654,16 @@ $("session-confirm-no").addEventListener("click", () => {
 $("threads-archived").addEventListener("change", () => void searchThreads());
 $("inbox-archived").addEventListener("change", () => void loadInbox());
 $("threads-unread").addEventListener("change", () => void searchThreads());
+$("memory-delete").addEventListener("click", () => {
+	$("memory-delete-path").textContent = $("memory-delete").dataset.path || "";
+	$("memory-delete-confirmation").hidden = false;
+	$("memory-delete-cancel").focus();
+});
+$("memory-delete-cancel").addEventListener("click", () => {
+	$("memory-delete-confirmation").hidden = true;
+	$("memory-delete").focus();
+});
+$("memory-delete-confirm").addEventListener("click", () => void deleteMemory());
 $("memory-search").addEventListener("submit", (event) => void searchMemory(event));
 $("memory-edit-form").addEventListener("submit", (event) => void saveMemory(event));
 $("memory-source").addEventListener("click", () => {

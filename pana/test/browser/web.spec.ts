@@ -1150,6 +1150,29 @@ describeBrowser("pana in a browser", () => {
 		expect(shown.commitBack).toBe("#/memory");
 	});
 
+	it("MEM-13 deleting a memory file requires confirmation, supports cancellation and refreshes the list", async () => {
+		await start();
+		await t!.tcp.post("/memory/files/delete%20me.md", { content: "# Temporary note\n" });
+		await open();
+		const result = await evaluatePage(`
+			location.hash = "#/memory/files/delete%20me.md";
+			await until(() => document.getElementById("memory-file").textContent.includes("Temporary note"));
+			document.getElementById("memory-delete").click();
+			if (document.getElementById("memory-delete-confirmation").hidden) throw new Error("no confirmation");
+			if (document.getElementById("memory-delete-path").textContent !== "delete me.md") throw new Error("wrong path");
+			document.getElementById("memory-delete-cancel").click();
+			if (!document.getElementById("memory-delete-confirmation").hidden) throw new Error("did not cancel");
+			if (location.hash !== "#/memory/files/delete%20me.md") throw new Error("cancel navigated");
+			document.getElementById("memory-delete").click();
+			document.getElementById("memory-delete-confirm").click();
+			await until(() => location.hash === "#/memory" && !document.getElementById("memory-browse").hidden);
+			await until(() => !document.querySelector('[data-testid="memory-file-item"][data-id="delete me.md"]'));
+			return true;
+		`);
+		expect(result).toBe(true);
+		expect((await t!.tcp.get("/memory/files/delete%20me.md")).status).toBe(404);
+	});
+
 	it("MEM-12 editing and creating use a full-view code editor, and Save commits as the user", async () => {
 		await start([]);
 		await open();

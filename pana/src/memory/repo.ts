@@ -6,7 +6,7 @@
 // update-ref refuses and the writer rebases again. Nothing is locked, so two writers of different
 // files both land.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { ApiError } from "../api/errors.ts";
 import { formatUrl } from "../ids/index.ts";
@@ -586,6 +586,34 @@ export class Memory {
 		mkdirSync(dirname(target), { recursive: true });
 		writeFileSync(target, content);
 		return this.commit(writer, message.length > 0 ? message : `Update ${path}`);
+	}
+
+	/** Delete through the same commit/publish path as edits, retaining the file in history. */
+	async deleteFile(writer: MemoryWriter, relativePath: string, message: string): Promise<CommitResult> {
+		const path = normalizeMemoryPath(relativePath);
+		return serialize(`branch/${writer.id}`, async () => {
+			const worktree = await this.worktreeSerialized(writer);
+			// Do not sweep unrelated local changes or unpublished commits into a destructive UI action.
+			const status = await gitOrThrow(["status", "--porcelain", "-z"], { cwd: worktree.path });
+			const ahead = await gitOrThrow(["rev-list", "--count", `${MAIN}..HEAD`], { cwd: worktree.path });
+			if (status.stdout.length > 0 || Number(ahead.stdout.trim()) > 0) {
+				throw new ApiError(409, "dirty_worktree", "Commit or resolve your memory worktree changes before deleting a file");
+			}
+			// The user's worktree may predate a file created by a session. Fast-forward it first.
+			await gitOrThrow(["merge", "--ff-only", "--quiet", MAIN], { cwd: worktree.path });
+			let target = worktree.path;
+			for (const part of path.split("/")) {
+				target = join(target, part);
+				if (!existsSync(target)) throw ApiError.notFound(`memory file ${path}`);
+				if (lstatSync(target).isSymbolicLink()) {
+					throw ApiError.badRequest("invalid_path", `memory path contains a symbolic link: ${path}`);
+				}
+			}
+			if (!isFile(target)) throw ApiError.badRequest("invalid_path", `memory path is not a file: ${path}`);
+			if (!(await this.readFile(path))) throw ApiError.notFound(`memory file ${path}`);
+			rmSync(target);
+			return this.commitSerialized(writer, message.trim() || `Delete ${path}`, worktree);
+		});
 	}
 
 	private async revParse(ref: string, cwd: string): Promise<string | undefined> {

@@ -234,8 +234,16 @@
 						<div class="header-actions">
 							<button type="button" class="quiet" id="memory-source" data-testid="memory-source" hidden>Source</button>
 							<a class="button primary" id="memory-edit-link" data-testid="memory-edit" href="#">Edit</a>
+							<button type="button" class="quiet danger" id="memory-delete" data-testid="memory-delete">Delete</button>
 						</div>
 					</header>
+					<div id="memory-delete-confirmation" hidden>
+						<p>Delete <strong id="memory-delete-path"></strong>? This removes the file from memory, not its Git history.</p>
+						<div class="header-actions">
+							<button type="button" class="danger" id="memory-delete-confirm">Delete file</button>
+							<button type="button" class="quiet" id="memory-delete-cancel">Cancel</button>
+						</div>
+					</div>
 					<p id="memory-file-meta" data-testid="memory-file-meta" class="meta-line"></p>
 					<div id="memory-file" data-testid="memory-file" class="file-body memory-markdown"></div>
 					<section id="memory-file-history-section" hidden>
