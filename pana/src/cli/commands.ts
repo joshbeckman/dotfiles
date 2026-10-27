@@ -522,6 +522,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Create a session on a cron schedule",
 		flags: [
 			...RECURRING_FLAGS,
+			string("subject", "--subject TEXT", "Optional schedule label; generated from the description when omitted"),
 			string("at", "--at TIME", "Run once at this ISO time"),
 			...SESSION_CREATE_FLAGS,
 		],
@@ -533,6 +534,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			body: compact({
 				kind: "session",
 				...recurringFields(params),
+				subject: text(params, "subject"),
 				at: text(params, "at"),
 				prompt: text(params, "prompt"),
 				model: text(params, "model"),
@@ -552,6 +554,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Create a thread once or on a cron schedule",
 		flags: [
 			...RECURRING_FLAGS,
+			string("subject", "--subject TEXT", "Optional schedule label; generated from the description when omitted"),
 			string("at", "--at TIME", "Run once at this ISO time"),
 			list("to", "--to ADDRS", "Participants, comma-separated", { required: true }),
 			...BODY_FLAGS,
@@ -565,6 +568,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			body: compact({
 				kind: "thread",
 				...recurringFields(params),
+				subject: text(params, "subject"),
 				at: text(params, "at"),
 				to: items(params, "to"),
 				body: bodyWithAttachments(params),
@@ -582,6 +586,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: "Wake a session later with a note: yours by default",
 		flags: [
 			...RECURRING_FLAGS,
+			string("subject", "--subject TEXT", "Optional schedule label; generated from the description when omitted"),
 			string("in", "--in DURATION", "Wake after this long: 90s, 10m, 2h, or 1d"),
 			string("at", "--at TIME", "Wake at this ISO time"),
 			string("note", "--note TEXT", "What to check when you wake, and where to reply", { required: true }),
@@ -595,6 +600,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			body: compact({
 				kind: "wake",
 				...recurringFields(params),
+				subject: text(params, "subject"),
 				in: text(params, "in"),
 				at: text(params, "at"),
 				note: text(params, "note"),

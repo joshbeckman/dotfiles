@@ -20,12 +20,15 @@ import type { Caller } from "../api/types.ts";
 import type { PersonView } from "../threads/store.ts";
 import { addressList, messageBody } from "../threads/store.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { fallbackDescription, fallbackScheduleSubject, parseScheduleSubject, queueScheduleSubject } from "./subjects.ts";
 import { notifySchedulesChanged } from "./registry.ts";
 
 export type ScheduleKind = "session" | "thread" | "wake";
 export type ScheduleState = "active" | "done" | "missed" | "deleted";
 
 export interface ScheduleRow {
+	subject: string | null;
+	subject_source: "first-line" | "model" | "manual" | null;
 	revision: number;
 	check_command: string | null;
 	check_cwd: string | null;
@@ -50,6 +53,7 @@ interface ScheduleJoinRow extends ScheduleRow {
 }
 
 export interface ScheduleView {
+	subject: string;
 	check: string | null;
 	checkCwd: string | null;
 	stopAfterSuccess: boolean;
@@ -192,7 +196,7 @@ function scheduleTiming(input: ScheduleInput, fallbackTimezone: string, now: num
 }
 
 /** The payload fields the CLI may send at the top level instead of under `payload`. */
-const TOP_LEVEL_FIELDS = ["prompt", "body", "to", "subject", "model", "thinking", "cwd", "profile", "session", "note"] as const;
+const TOP_LEVEL_FIELDS = ["prompt", "body", "to", "model", "thinking", "cwd", "profile", "session", "note"] as const;
 
 /**
  * The stored request. The PWA sends `payload: {prompt}`; the CLI may send the same fields at the
@@ -291,6 +295,7 @@ function scheduleView(row: ScheduleJoinRow, runtime: Runtime): ScheduleView {
 	}
 	const creatorKind = row.creator_kind === "session" ? "session" : "user";
 	return {
+		subject: row.subject ?? fallbackScheduleSubject(row.kind, payload),
 		check: row.check_command,
 		checkCwd: row.check_cwd,
 		stopAfterSuccess: row.stop_after_success === 1,
@@ -332,6 +337,7 @@ function kindFilter(value: string | null | undefined): ScheduleKind | undefined 
 export async function showSchedule(runtime: Runtime, id: string): Promise<ScheduleView> {
 	const row = await runtime.db.get<ScheduleJoinRow>(`${SELECT_SCHEDULE} WHERE s.id = ?`, id);
 	if (!row || row.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
+	if (row.subject === null) queueScheduleSubject(runtime, row);
 	return scheduleView(row, runtime);
 }
 
@@ -359,6 +365,7 @@ export async function listSchedules(
 		limit + 1,
 	);
 	const result = pageOf(rows, limit, (row) => [row.state === "active" ? 0 : 1, row.next_at === null ? 1 : 0, row.next_at ?? 0, row.created_at, row.id]);
+	for (const row of result.items) if (row.subject === null) queueScheduleSubject(runtime, row);
 	return { items: result.items.map((row) => scheduleView(row, runtime)), nextCursor: result.nextCursor };
 }
 
@@ -383,12 +390,14 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 	const condition = conditions(input, timing.cron);
 	const payload = schedulePayload(input, kind);
 	if (kind === "wake") payload.session = await wakeTarget(runtime, caller, payload.session);
+	const subject = parseScheduleSubject(input.subject);
 	const id = runtime.newId();
+	let saved!: ScheduleJoinRow;
 	const view = await runtime.db.write(async (tx) => {
 		await ensureParticipant(tx, runtime, now, caller);
 		await tx.run(
-			`INSERT INTO schedules (id, kind, state, cron, at, timezone, creator_id, payload, next_at, created_at, updated_at, check_command, check_cwd, stop_after_success)
-			 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO schedules (id, kind, state, cron, at, timezone, creator_id, payload, next_at, created_at, updated_at, check_command, check_cwd, stop_after_success, subject, subject_source)
+			 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id,
 			kind,
 			timing.cron,
@@ -402,10 +411,14 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 			condition.check,
 			condition.cwd,
 			condition.stop ? 1 : 0,
+			subject ?? fallbackScheduleSubject(kind, payload),
+			subject === null ? "first-line" : "manual",
 		);
-		return scheduleView(await scheduleRow(tx, id), runtime);
+		saved = await scheduleRow(tx, id);
+		return scheduleView(saved, runtime);
 	});
 	notifySchedulesChanged(runtime);
+	if (subject === null) queueScheduleSubject(runtime, saved);
 	return view;
 }
 
@@ -417,6 +430,9 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
  */
 export async function updateSchedule(runtime: Runtime, id: string, value: unknown): Promise<ScheduleView> {
 	const input = inputObject(value);
+	const suppliedSubject = input.subject === undefined ? undefined : parseScheduleSubject(input.subject);
+	let saved!: ScheduleJoinRow;
+	let regenerate = false;
 	const now = runtime.clock.now();
 	const retime = hasValue(typeof input.cron === "string" ? input.cron.trim() : input.cron) || hasValue(input.at);
 	const timing = retime ? scheduleTiming(input, runtime.config.timezone, now) : undefined;
@@ -424,6 +440,10 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 		const existing = await scheduleRow(tx, id);
 		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
 		const payload = input.payload === undefined ? JSON.parse(existing.payload) : schedulePayload(input, kind);
+		const descriptionChanged = kind !== existing.kind || fallbackDescription(kind, payload) !== fallbackDescription(existing.kind, JSON.parse(existing.payload));
+		regenerate = suppliedSubject === null || (suppliedSubject === undefined && existing.subject_source !== "manual" && descriptionChanged);
+		const subject = suppliedSubject ?? (regenerate ? fallbackScheduleSubject(kind, payload) : existing.subject);
+		const source = suppliedSubject != null ? "manual" : regenerate ? "first-line" : existing.subject_source;
 		const next = timing ?? { cron: existing.cron, at: existing.at, timezone: existing.timezone, nextAt: existing.next_at };
 		const condition = conditions({
 			check: input.check === undefined ? existing.check_command : input.check,
@@ -431,7 +451,7 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 			stopAfterSuccess: input.stopAfterSuccess === undefined ? existing.stop_after_success === 1 : input.stopAfterSuccess,
 		}, next.cron);
 		await tx.run(
-			`UPDATE schedules SET revision = revision + 1, kind = ?, state = ?, cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?, check_command = ?, check_cwd = ?, stop_after_success = ?
+			`UPDATE schedules SET revision = revision + 1, kind = ?, state = ?, cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?, check_command = ?, check_cwd = ?, stop_after_success = ?, subject = ?, subject_source = ?
 			  WHERE id = ?`,
 			kind,
 			timing ? "active" : existing.state,
@@ -444,11 +464,15 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 			condition.check,
 			condition.cwd,
 			condition.stop ? 1 : 0,
+			subject,
+			source,
 			id,
 		);
-		return scheduleView(await scheduleRow(tx, id), runtime);
+		saved = await scheduleRow(tx, id);
+		return scheduleView(saved, runtime);
 	});
 	notifySchedulesChanged(runtime);
+	if (regenerate || saved.subject === null) queueScheduleSubject(runtime, saved);
 	return view;
 }
 

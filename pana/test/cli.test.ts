@@ -661,3 +661,25 @@ describe("pana CLI references", () => {
 		expect(wrongKind.code).toBe(2);
 	});
 });
+
+
+it("SCH-15 schedule CLI forwards an optional display subject for every kind", async () => {
+	const bodies: unknown[] = [];
+	const t = await start({ handlers: { "schedules.create": ctx => {
+		bodies.push(ctx.body);
+		return { status: 201, body: {} };
+	} } });
+	for (const args of [
+		["session", "create", "--cron", "0 9 * * *", "--prompt", "Description"],
+		["thread", "create", "--cron", "0 9 * * *", "--to", "tester", "--body", "Description"],
+		["wake", "--in", "10m", "--note", "Description", "--session", "S1"],
+	]) {
+		const result = await run(["schedule", ...args, "--subject", "Short label"], t);
+		expect(result.code).toBe(0);
+	}
+	expect(bodies).toEqual([
+		expect.objectContaining({ kind: "session", subject: "Short label", prompt: "Description" }),
+		expect.objectContaining({ kind: "thread", subject: "Short label", body: "Description" }),
+		expect.objectContaining({ kind: "wake", subject: "Short label", note: "Description" }),
+	]);
+});

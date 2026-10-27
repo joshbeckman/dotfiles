@@ -128,6 +128,7 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				in: Type.Optional(Type.String({ description: "Wake after this long: 90s, 10m, 2h, or 1d" })),
 				at: Type.Optional(Type.String({ description: "Wake at this ISO time, instead of in" })),
 				note: Type.String({ description: "What to check when you wake, and the thread to reply in" }),
+				subject: Type.Optional(Type.String({ description: "Optional schedule label; generated from the note when omitted" })),
 			}),
 		),
 	];

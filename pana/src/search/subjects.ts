@@ -236,10 +236,10 @@ function resolveSubjectModel(runtime: Runtime): Model<Api> {
 	return model;
 }
 
-async function askSubjectModel(runtime: Runtime, body: string): Promise<string> {
+export async function askSubjectModel(runtime: Runtime, body: string, systemPrompt = SUBJECT_SYSTEM_PROMPT): Promise<string> {
 	const model = resolveSubjectModel(runtime);
 	const response = await runtime.models.completeSimple(model, {
-		systemPrompt: SUBJECT_SYSTEM_PROMPT,
+		systemPrompt,
 		messages: [{ role: "user", content: body, timestamp: runtime.clock.now() }],
 	});
 	if (response.stopReason === "error" || response.stopReason === "aborted") {
@@ -255,7 +255,7 @@ async function askSubjectModel(runtime: Runtime, body: string): Promise<string> 
 }
 
 /** Collapse to one line and cut to 80 characters. Code points, so a cut never splits an emoji. */
-function shorten(text: string): string {
+export function shorten(text: string): string {
 	const collapsed = text.replace(/\s+/g, " ").trim();
 	return Array.from(collapsed).slice(0, SUBJECT_MAX_LENGTH).join("").trim();
 }
