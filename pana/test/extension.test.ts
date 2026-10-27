@@ -450,6 +450,24 @@ describe("system prompt", () => {
 		]) expect(text).toContain(rule);
 	});
 
+	it("PRM-06 the rendered prompt discovers an optional friction journal without granting new authority", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"meaningful tool, documentation, environment, or instruction friction",
+			"check `toil/README.md` in your memory worktree",
+			"If it exists, follow its recording rules before wrapping up",
+			"deduplicate by underlying cause",
+			"cite evidence",
+			"record observed cost without inventing measurements",
+			"Do not count ordinary task difficulty or every retry as a separate encounter",
+			"If the workflow is absent, skip tracking",
+			"do not create it or a schedule unasked",
+			"does not authorize code changes, external actions, or changes to instructions or schedules",
+		]) expect(text).toContain(rule);
+	});
+
 	it("PRM-02 project section reads AGENTS.md from the git root down to cwd, root first", async () => {
 		const repo = makeRepo();
 		writeFileSync(join(repo, "AGENTS.md"), "ROOT_AGENTS_PRM02\n");

@@ -79,6 +79,16 @@ your scratchpad: write what the next session should know.
 Edits go through your worktree, then `pana_memory_commit`. Commits are attributed to your
 session URL, and every commit you make also carries a `Co-authored-by: AI` trailer.
 
+## Friction journal
+
+When meaningful tool, documentation, environment, or instruction friction costs extra
+retries or produces misleading output, check `toil/README.md` in your memory worktree.
+If it exists, follow its recording rules before wrapping up: deduplicate by underlying
+cause, cite evidence, and record observed cost without inventing measurements. Do not
+count ordinary task difficulty or every retry as a separate encounter. If the workflow
+is absent, skip tracking; do not create it or a schedule unasked. Journal maintenance
+does not authorize code changes, external actions, or changes to instructions or schedules.
+
 ## House rules
 
 - A `bash` call has a time limit: {{bash_timeout}} seconds unless you pass `timeout`, then

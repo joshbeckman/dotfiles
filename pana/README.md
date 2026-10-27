@@ -310,6 +310,23 @@ pana memory log [PATH]
 
 A session discovers memory through a hint in `pana/prompt.md` and through the `pana_memory_*` tools.
 
+#### Optional friction journal
+
+The session prompt points agents that encounter meaningful friction to `toil/README.md`
+in their memory worktree. Domains opt in by creating that workflow in memory; absent
+workflows are skipped without unsolicited setup. Keep the recording rules, a bounded
+active index, evidence-backed entries, archives, and review history in memory, not in
+this public repository. Sessions deduplicate underlying causes and record observed cost;
+ordinary task difficulty and retries within one incident are not separate encounters.
+This is a prompt-level convention, not automatic telemetry or guaranteed error capture.
+
+A domain can separately authorize a recurring `pana schedule session create --cron ...`
+review to rank entries and propose improvements. Its prompt should name the workflow and
+recipient, cap recommendations, suppress unchanged proposals, and stay quiet when there
+is nothing actionable. Recording and review do not grant permission to change code,
+instructions, schedules, or external systems. Merge and deploy the prompt change before
+expecting discovery in running installations; creating memory files alone is not enough.
+
 ## Scratch
 
 Scratch is disposable and memory is durable.
