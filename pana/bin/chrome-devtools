@@ -13,7 +13,6 @@
 # An explicit `--sessionId`, or a shell with no `PANA_BROWSER_SESSION`, runs the CLI unchanged.
 # Only shell builtins run here: a broken PATH must not turn dispatch into a loop.
 set -u
-
 case $0 in
 	*/*) self=${0%/*} ;;
 	*) self=. ;;
@@ -51,4 +50,21 @@ for arg in "$@"; do
 	esac
 done
 [ -n "${PANA_BROWSER_SESSION:-}" ] || exec "$real" "$@"
-exec "$real" --sessionId "$PANA_BROWSER_SESSION" "$@"
+scope=$PANA_BROWSER_SESSION
+
+# A tool call that starts the daemon implicitly leaves `--isolated` off, so that daemon opens the
+# machine-wide Chrome profile, and the next session's daemon cannot: "The browser is already
+# running for …/chrome-devtools-mcp-cli/chrome-profile". Start this scope's daemon first, isolated,
+# when it is not running. Never start a live one: `start` restarts the daemon and closes its pages.
+case ${1:-} in
+	start|stop|status|help|--help|-h|--version) exec "$real" --sessionId "$scope" "$@" ;;
+esac
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+	home=$XDG_RUNTIME_DIR/chrome-devtools-mcp-$scope
+else
+	home=/tmp/chrome-devtools-mcp-$scope-$(id -u 2>/dev/null || echo 0)
+fi
+if [ ! -f "$home/daemon.pid" ]; then
+	"$real" start --sessionId "$scope" --isolated >/dev/null 2>&1 || true
+fi
+exec "$real" --sessionId "$scope" "$@"

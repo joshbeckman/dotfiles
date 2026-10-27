@@ -186,15 +186,25 @@ describe("extension isolation", () => {
 });
 
 describe("browser isolation", () => {
-	/** A stand-in for the installed chrome-devtools CLI: it prints the argv it was given. */
-	function stubCli(dir: string): string {
-		writeFileSync(join(dir, "chrome-devtools"), "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", { mode: 0o755 });
-		return dir;
+	/** A stand-in for the installed chrome-devtools CLI: it appends the argv it was given. */
+	function stubCli(dir: string): { path: string; calls: () => string[] } {
+		const log = join(dir, "argv");
+		writeFileSync(join(dir, "chrome-devtools"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\n`, { mode: 0o755 });
+		return { path: dir, calls: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []) };
 	}
 
-	/** Run pana's shim itself, with only a PATH and the variables a case names. */
-	function runShim(args: string[], path: string, env: Record<string, string> = {}): string {
-		return execFileSync(join(PANA_BIN, "chrome-devtools"), args, { encoding: "utf8", env: { PATH: path, ...env } }).trim();
+	/** Run pana's shim itself, with only a PATH, an XDG runtime dir, and the variables a case names. */
+	function runShim(args: string[], path: string, xdg: string, env: Record<string, string> = {}): string {
+		return execFileSync(join(PANA_BIN, "chrome-devtools"), args, {
+			encoding: "utf8",
+			env: { PATH: path, XDG_RUNTIME_DIR: xdg, ...env },
+		}).trim();
+	}
+
+	/** The pid file the CLI writes for a scope: <xdg>/chrome-devtools-mcp-<scope>/daemon.pid. */
+	function markRunning(xdg: string, scope: string): void {
+		mkdirSync(join(xdg, `chrome-devtools-mcp-${scope}`), { recursive: true });
+		writeFileSync(join(xdg, `chrome-devtools-mcp-${scope}`, "daemon.pid"), "1");
 	}
 
 	it("ISO-06 bin/chrome-devtools runs the CLI with this session's --sessionId", () => {
@@ -205,25 +215,46 @@ describe("browser isolation", () => {
 		expect(env.PANA_BROWSER_SESSION).toBe("pana-01HZZZZZZZZZZZZZZZZZZZZZZZ");
 
 		const stub = stubCli(tempDir("pana-cli-"));
-		const path = `${stub}:/usr/bin:/bin`;
+		const xdg = tempDir("pana-xdg-");
+		const path = `${stub.path}:/usr/bin:/bin`;
 		const scope = env.PANA_BROWSER_SESSION!;
 
-		expect(runShim(["list_pages"], path)).toBe("list_pages");
-		expect(runShim(["list_pages"], path, { PANA_BROWSER_SESSION: scope })).toBe(`--sessionId ${scope} list_pages`);
+		// A shell with no session runs the CLI unchanged, with no daemon started for it.
+		runShim(["list_pages"], path, xdg);
+		expect(stub.calls()).toEqual(["list_pages"]);
+
+		// The first call starts this scope's daemon isolated, because the implicit start opens the
+		// machine-wide Chrome profile, which the next session's daemon cannot open.
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`start --sessionId ${scope} --isolated`, `--sessionId ${scope} list_pages`]);
+
+		// A daemon that is already running is never started again: `start` restarts it and closes
+		// the pages under it.
+		markRunning(xdg, scope);
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`--sessionId ${scope} list_pages`]);
+
+		// `status` and `stop` name the scope but must not start a browser to answer.
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["stop"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`--sessionId ${scope} stop`]);
+
 		// A call that names its own daemon keeps it.
-		expect(runShim(["list_pages", "--sessionId", "mine"], path, { PANA_BROWSER_SESSION: scope })).toBe(
-			"list_pages --sessionId mine",
-		);
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["list_pages", "--sessionId", "mine"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual(["list_pages --sessionId mine"]);
 
 		// pana's bin can appear twice on one PATH; the second copy is not the CLI.
 		const other = tempDir("pana-bin-");
 		copyFileSync(join(PANA_BIN, "chrome-devtools"), join(other, "chrome-devtools"));
-		expect(runShim(["list_pages"], `${other}:${path}`, { PANA_BROWSER_SESSION: scope })).toBe(
-			`--sessionId ${scope} list_pages`,
-		);
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["list_pages"], `${other}:${path}`, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`--sessionId ${scope} list_pages`]);
 
 		// No CLI on PATH is an error, not a loop.
-		expect(() => runShim(["list_pages"], "/usr/bin:/bin", { PANA_BROWSER_SESSION: scope })).toThrow();
+		expect(() => runShim(["list_pages"], "/usr/bin:/bin", xdg, { PANA_BROWSER_SESSION: scope })).toThrow();
 	});
 
 	/** A session row, last changed `idleMs` ago. Not wakeable: the sweeper only reads state. */
