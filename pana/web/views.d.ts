@@ -1,3 +1,5 @@
+import type { ScheduleView } from "../src/schedules/store.ts";
+
 // Types for the browser module `views.js`, which Node tests import directly.
 
 export interface EntryUsage {
@@ -120,6 +122,11 @@ export interface MemoryCommitDetailView {
 export function memoryCommitView(commit: any): MemoryCommitDetailView;
 export function scheduleWhen(schedule: { cron?: string | null; at?: number | null }): string;
 export function scheduleBody(
-	form: { kind?: string; when?: string; text?: string; to?: string },
-	editing?: { kind?: string; payload?: Record<string, unknown> },
-): { kind: string; payload: Record<string, unknown>; cron?: string; at?: string };
+	form: { subject?: string; kind?: string; when?: string; text?: string; to?: string },
+	editing?: { subject?: string; kind?: string; payload?: Record<string, unknown> },
+): { subject?: string | null; kind: string; payload: Record<string, unknown>; cron?: string; at?: string };
+
+export function scheduleCheckView(
+	schedule: Partial<Pick<ScheduleView, "check" | "checkCwd" | "stopAfterSuccess" | "lastCheck">>,
+	formatTime?: (time: number) => string,
+): { status: string; text: string } | null;

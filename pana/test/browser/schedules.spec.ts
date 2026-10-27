@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { recordCheck } from "../../src/schedules/store.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { startTestPanad, type TestPanad } from "../harness/index.ts";
-import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage } from "./cli.ts";
+import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage } from "./cli.ts";
 
 const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
 let t: TestPanad | undefined;
 let page: number | undefined;
+let phone = false;
 afterEach(async () => {
+	if (phone) await emulateViewport("");
+	phone = false;
 	if (page !== undefined) await closePage(page);
 	page = undefined;
 	await t?.close();
@@ -125,5 +129,81 @@ describeBrowser("schedule subjects", () => {
 				closed: !row.querySelector("details").open, editable: !!row.querySelector("[data-testid=schedule-edit]") };
 		`);
 		expect(wakeShown).toEqual({ title: "Release results", note, closed: true, editable: false });
+	});
+});
+
+
+describeBrowser("schedule run conditions", () => {
+	it("SCH-19 shows check commands, cwd, stopping behavior, and complete latest diagnostics safely on desktop and phone", async () => {
+		t = await startTestPanad({ config: { timezone: "UTC" } });
+		const command = "./ready --label '<script>window.checkOutputExecuted = true</script>'";
+		const cwd = "/tmp/" + "long-project-directory-".repeat(12);
+		const output = "<img src=x onerror='window.checkOutputExecuted = true'>\n" + "long-output".repeat(100);
+		for (const state of ["plain", "pending", "passed", "not_ready", "failed", "stop_only"] as const) {
+			const checked = state !== "plain" && state !== "stop_only";
+			const made = await t.client.post<{ schedule: { id: string } }>("/schedules", {
+				subject: state, cron: "0 9 * * *", prompt: "Read and report the test result.",
+				...(checked ? { check: command, checkCwd: cwd } : {}),
+				stopAfterSuccess: state === "pending" || state === "stop_only",
+			});
+			expect(made.status).toBe(201);
+			if (state === "passed" || state === "not_ready" || state === "failed") await recordCheck(t.runtime, made.body.schedule.id, {
+				checkedAt: t.clock.now(), status: state, exitCode: state === "passed" ? 0 : state === "not_ready" ? 1 : null,
+				signal: state === "failed" ? "SIGTERM" : null, stdout: output, stderr: "A diagnostic warning",
+				error: state === "failed" ? "check timed out" : null,
+			});
+		}
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		const rows = await evaluatePage<Array<{ title: string; meta: string; text: string | null; closed: boolean }>>(`
+			location.hash = "#/schedules";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 6);
+			return [...document.querySelectorAll("#schedules-list .item")].map(row => {
+				const conditions = row.querySelector("[data-testid=schedule-conditions]");
+				return { title: row.querySelector(".title").textContent, meta: row.querySelector(".meta").textContent,
+					text: conditions?.querySelector("pre").textContent ?? null, closed: !conditions?.open };
+			});
+		`);
+		const find = (name: string) => rows.find(r => r.title === name)!;
+		expect(find("plain").text).toBeNull();
+		expect(find("plain").meta).not.toContain("Conditional");
+		expect(rows.every(r => r.closed)).toBe(true);
+		expect(find("pending").meta).toContain("Conditional");
+		expect(find("pending").meta).toContain("Stops after successful dispatch");
+		expect(find("pending").meta).toContain("Last check: Not checked yet");
+		expect(find("pending").text).toContain(command);
+		expect(find("pending").text).toContain(`Working directory: ${cwd}`);
+		expect(find("pending").text).toContain("Stop after successful dispatch: Yes");
+		expect(find("stop_only").text).toContain("None (dispatch without a readiness check)");
+		expect(find("stop_only").meta).toContain("Stops after successful dispatch");
+		expect(find("stop_only").meta).not.toContain("Conditional");
+		for (const [state, label, code] of [["passed", "Passed", 0], ["not_ready", "Not ready", 1], ["failed", "Failed", "None"]] as const) {
+			const row = find(state);
+			expect(row.meta).toContain(`Last check: ${label}`);
+			expect(row.text).toContain("Checked at:");
+			expect(row.text).toContain(`Exit code: ${code}`);
+			expect(row.text).toContain("Stop after successful dispatch: No");
+			expect(row.text).toContain(`Standard output:\n${output}`);
+			expect(row.text).toContain("Standard error:\nA diagnostic warning");
+		}
+		expect(find("failed").text).toContain("Signal: SIGTERM");
+		expect(find("failed").text).toContain("Error: check timed out");
+		const interaction = await evaluatePage<{ edit: string; executed: boolean; injected: number }>(`
+			const row = [...document.querySelectorAll("#schedules-list .item")].find(row => row.querySelector(".title").textContent === "failed");
+			row.querySelector("[data-testid=schedule-conditions] summary").click();
+			return { edit: document.getElementById("schedule-create").textContent, executed: !!window.checkOutputExecuted,
+				injected: row.querySelectorAll("[data-testid=schedule-conditions] img, [data-testid=schedule-conditions] script").length };
+		`);
+		expect(interaction).toEqual({ edit: "Create", executed: false, injected: 0 });
+		phone = true;
+		await emulateViewport("390x844x1,mobile,touch");
+		const overflow = await evaluatePage<number>(`
+			for (const details of document.querySelectorAll("[data-testid=schedule-conditions]")) details.open = true;
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			return document.documentElement.scrollWidth - innerWidth;
+		`);
+		expect(overflow).toBeLessThan(2);
+		// Reading diagnostics must never modify the schedule or execute any stored check.
+		const stored = await t.runtime.db.all<{ revision: number; next_at: number }>("SELECT revision, next_at FROM schedules");
+		expect(stored.every(row => row.revision === 0 && row.next_at > t!.clock.now())).toBe(true);
 	});
 });

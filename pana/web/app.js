@@ -39,6 +39,7 @@ import {
 	participantColor,
 	refLabel,
 	scheduleBody,
+	scheduleCheckView,
 	scheduleWhen,
 	shortTime,
 	threadRow,
@@ -1824,6 +1825,7 @@ async function loadSchedules(focus, cursor) {
 	if (schedules.length === 0 && !cursor) return empty(list, "No schedules yet.");
 	for (const schedule of schedules) {
 		const payload = schedule.payload ?? {};
+		const checkView = scheduleCheckView(schedule, when);
 		const meta = [
 			// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
 			refLink(schedule.url ?? schedule.id, "schedule", schedule.id),
@@ -1831,6 +1833,9 @@ async function loadSchedules(focus, cursor) {
 			schedule.kind === "wake" && typeof payload.session === "string" ? refLink(payload.session, "session", `wakes ${payload.session.slice(-6)}`) : undefined,
 			`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`,
 			`next ${when(schedule.nextAt)}`,
+			schedule.check ? "Conditional" : undefined,
+			schedule.stopAfterSuccess ? "Stops after successful dispatch" : undefined,
+			schedule.check || schedule.lastCheck ? `Last check: ${checkView.status}` : undefined,
 		];
 		const edit = rowAction("schedule-edit", "Edit", () => startScheduleEdit(schedule));
 		delete edit.dataset.action;
@@ -1841,13 +1846,16 @@ async function loadSchedules(focus, cursor) {
 		// A wake is made by a session for itself; the schedule form edits session and thread schedules only.
 		const wake = schedule.kind === "wake";
 		const content = details("schedule-content", "Full prompt / message / note", String(payload.prompt ?? payload.body ?? payload.note ?? ""), { testid: "schedule-content" });
-		// A disclosure is independent of the row's edit action (including keyboard activation).
-		content.addEventListener("click", (event) => event.stopPropagation());
-		content.addEventListener("keydown", (event) => event.stopPropagation());
+		const below = document.createElement("div");
+		below.append(content);
+		if (checkView) below.append(details("schedule-content", "Run conditions / check details", checkView.text, { testid: "schedule-conditions" }));
+		// Disclosures are independent of the row's edit action (including keyboard activation).
+		below.addEventListener("click", (event) => event.stopPropagation());
+		below.addEventListener("keydown", (event) => event.stopPropagation());
 		const row = item(schedule.subject || "Untitled schedule", meta, wake ? () => {} : () => startScheduleEdit(schedule), {
 			testid: "schedule-item",
 			id: schedule.id,
-			below: content,
+			below,
 			actions: wake ? [remove] : [edit, remove],
 		});
 		list.append(row);
