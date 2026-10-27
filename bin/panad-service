@@ -100,7 +100,7 @@ fi
 # session's bash never sees panad's environment (ISO-03, ISO-04), but a GitHub
 # token or a push key still has no business in the daemon. panad registers a
 # model provider for each of these that is present.
-default_secrets='FIREWORKS_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY AI_GATEWAY_API_KEY OPENROUTER_API_KEY'
+default_secrets='SHOPIFY_PROXY_KEY FIREWORKS_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY AI_GATEWAY_API_KEY OPENROUTER_API_KEY'
 wanted="${PANA_SECRETS-$default_secrets}"
 wanted="${wanted//,/ }"
 

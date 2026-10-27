@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
+import { registerShopifyProvider } from "./shopify.ts";
+
 export type ProviderEnv = Readonly<Record<string, string | undefined>>;
 
 /**
@@ -45,6 +47,7 @@ export async function createProviderModels(env: ProviderEnv = process.env): Prom
 		};
 		await registerLocalProvider(models, env);
 	}
+	registerShopifyProvider(models, env);
 	for (const provider of models.getProviders()) {
 		const auth = await models.checkAuth(provider.id).catch(() => undefined);
 		if (!auth) models.deleteProvider(provider.id);
