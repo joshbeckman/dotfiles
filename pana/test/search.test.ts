@@ -352,3 +352,25 @@ describe("SRC search", () => {
 		expect(await searchSessions(panad.runtime, "telescope")).toHaveLength(2);
 	});
 });
+
+
+it("REF-03 includes both archive states in browse and search, preserving caller state and pagination", async () => {
+	t = await startTestPanad();
+	const older = await seed(t, "Lantern older");
+	await t.clock.advance(1);
+	const newer = await seed(t, "Lantern newer");
+	await t.client.post(`/threads/${newer.threadId}/archive`, {});
+	const get = async (url: string) => (await t!.client.get<{ threads: Array<{ threadId: string; archived: boolean }>; nextCursor?: string }>(url)).body;
+	expect((await get("/threads")).threads.map(r => r.threadId)).toEqual([older.threadId]);
+	const page = await get("/threads?includeArchived=1&limit=1");
+	expect(page.threads).toMatchObject([{ threadId: newer.threadId, archived: true }]);
+	expect((await get(`/threads?includeArchived=1&limit=1&cursor=${encodeURIComponent(page.nextCursor!)}`)).threads).toMatchObject([{ threadId: older.threadId, archived: false }]);
+	for (const query of ["Lantern", "older", "newer"]) {
+		const all = await get(`/threads?includeArchived=1&query=${query}`);
+		expect(all.threads.length).toBeGreaterThan(0);
+		expect(all.threads.every(r => r.archived === (r.threadId === newer.threadId))).toBe(true);
+	}
+	expect((await get("/threads?includeArchived=1&archived=1")).threads).toMatchObject([{ threadId: newer.threadId, archived: true }]);
+	expect((await get("/threads?includeArchived=1&unread=1")).threads).toEqual([]);
+	expect((await t.client.get<{ canArchive: boolean }>(`/threads/${newer.threadId}`)).body.canArchive).toBe(true);
+});

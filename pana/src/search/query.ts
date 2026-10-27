@@ -52,6 +52,8 @@ export interface ThreadSearchOptions extends SearchOptions {
 	participantId?: string;
 	/** Only archived threads. Default: only threads this participant has not archived (REF-03). */
 	archived?: boolean;
+	/** Include both archive states, unless archived-only was requested. */
+	includeArchived?: boolean;
 	/** Only threads with unread messages for this participant (REF-05). */
 	unread?: boolean;
 	/** The ID of the last thread of the previous page; a list continues with older threads (SCALE-03). */
@@ -81,11 +83,13 @@ function readerFilter(options: ThreadSearchOptions): { sql: string; params: stri
 		if (options.archived) clauses.push("0");
 		if (options.unread) clauses.push("0");
 	} else {
-		const not = options.archived ? "" : "NOT ";
-		clauses.push(
-			`${not}EXISTS (SELECT 1 FROM thread_archives a WHERE a.thread_id = t.id AND a.participant_id = ?)`,
-		);
-		params.push(options.participantId);
+		if (options.archived || !options.includeArchived) {
+			const not = options.archived ? "" : "NOT ";
+			clauses.push(
+				`${not}EXISTS (SELECT 1 FROM thread_archives a WHERE a.thread_id = t.id AND a.participant_id = ?)`,
+			);
+			params.push(options.participantId);
+		}
 		if (options.unread) {
 			clauses.push(
 				`EXISTS (SELECT 1 FROM deliveries d WHERE d.thread_id = t.id AND d.recipient_id = ? AND d.read_at IS NULL)`,

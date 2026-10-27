@@ -20,6 +20,7 @@ export const handlers: Handlers = {
 		const options: ThreadSearchOptions = {
 			participantId: ctx.caller.id,
 			archived: flag(ctx.query.get("archived")),
+			includeArchived: flag(ctx.query.get("includeArchived")),
 			unread: flag(ctx.query.get("unread")),
 		};
 		if (!query) {

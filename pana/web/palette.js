@@ -28,7 +28,7 @@ export const COMMANDS = [
 	{ id: "go:schedules", label: "Go to Schedules", hint: "g h", keywords: "wake cron timers" },
 	{ id: "go:compose", label: "New thread", hint: "g c", keywords: "compose write message" },
 	{ id: "open", label: "Open the selection", hint: "Enter", keywords: "enter row", when: (context) => Boolean(context.selection) },
-	{ id: "archive-thread", label: "Archive the open thread", hint: "e", keywords: "hide unarchive", when: (context) => Boolean(context.thread) },
+	{ id: "archive-thread", label: "Archive the open thread", hint: "e", keywords: "hide unarchive", when: (context) => Boolean(context.canArchive) },
 	{
 		id: "subject-regenerate",
 		label: "Regenerate the thread subject",

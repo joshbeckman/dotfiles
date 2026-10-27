@@ -316,7 +316,8 @@ describe("UX-15 the command palette", () => {
 		expect(new Set(COMMANDS.map((command) => command.id)).size).toBe(COMMANDS.length);
 		expect(ids({})).toEqual(expect.arrayContaining(["palette:search", "go:inbox", "go:compose", "back", "help", "push"]));
 		expect(ids({})).not.toContain("archive-thread");
-		expect(ids({ thread: { id: "T" } })).toContain("archive-thread");
+		expect(ids({ thread: { id: "T" }, canArchive: true })).toContain("archive-thread");
+		expect(ids({ thread: { id: "T" }, canArchive: false })).not.toContain("archive-thread");
 		expect(ids({})).not.toContain("session:stop");
 		expect(ids({ session: { id: "S" } })).toEqual(expect.arrayContaining(["session:stop", "session:compact", "session:archive"]));
 		expect(ids({})).not.toContain("open");
