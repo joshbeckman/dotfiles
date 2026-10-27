@@ -626,6 +626,121 @@ describeBrowser("pana usability in a browser", () => {
 		expect(help.actions).toEqual([...KEYMAP, ...INPUT_KEYMAP].map((binding) => binding.action));
 		expect(help.hidden).toBe(true);
 	});
+
+	it("UX-15 Cmd+K opens the palette, runs a command, and searches the three stores", async () => {
+		const { t } = await start();
+
+		// The chord opens the palette from the page and from a composer, and Escape closes it.
+		const opened = await evaluatePage<{ open: boolean; rows: string[]; fromComposer: string; closed: boolean }>(`
+			${KEYS}
+			const open = () => !document.getElementById("palette").hidden;
+			const rows = () => [...document.querySelectorAll("#palette-list [data-testid=palette-command]")].map((row) => row.dataset.command);
+			document.activeElement?.blur();
+			await press("k", submitChord());
+			await until(open);
+			const shown = rows();
+			await press("Escape");
+			await until(() => !open());
+			location.hash = "#/compose";
+			await until(() => document.activeElement?.id === "compose-to");
+			await press("k", submitChord());
+			await until(() => open() && document.activeElement?.id === "palette-input");
+			const fromComposer = document.activeElement.id;
+			await press("Escape");
+			// Closing gives the composer back, draft and all.
+			await until(() => !open() && document.activeElement?.id === "compose-to");
+			return { open: shown.length > 0, rows: shown, fromComposer, closed: !open() };
+		`);
+		expect(opened.open).toBe(true);
+		expect(opened.rows).toEqual(expect.arrayContaining(["palette:search", "go:inbox", "go:memory"]));
+		expect(opened.closed).toBe(true);
+
+		// Typing narrows the list, ArrowDown moves, and Enter runs the row it is on.
+		const ran = await evaluatePage<{ filtered: string[]; hash: string; closed: boolean }>(`
+			${KEYS}
+			const open = () => !document.getElementById("palette").hidden;
+			const input = document.getElementById("palette-input");
+			document.activeElement?.blur();
+			await press("k", submitChord());
+			await until(open);
+			input.value = "memory";
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			await sleep(40);
+			const filtered = [...document.querySelectorAll("#palette-list [data-testid=palette-command]")].map((row) => row.dataset.command);
+			await press("Enter");
+			await until(() => location.hash === "#/memory" && !open());
+			return { filtered, hash: location.hash, closed: !open };
+		`);
+		expect(ran.filtered[0]).toBe("go:memory");
+		expect(ran.hash).toBe("#/memory");
+		expect(ran.closed).toBe(true);
+
+		// The Search command opens a second input that asks all three stores at once.
+		const searched = await evaluatePage<{ stage: string; groups: string[]; hits: number; hash: string }>(`
+			${KEYS}
+			const open = () => !document.getElementById("palette").hidden;
+			const commands = document.getElementById("palette-input");
+			document.activeElement?.blur();
+			await press("k", submitChord());
+			await until(open);
+			commands.value = "search";
+			commands.dispatchEvent(new Event("input", { bubbles: true }));
+			await sleep(40);
+			await press("Enter");
+			await until(() => document.activeElement?.id === "palette-search-input");
+			const search = document.getElementById("palette-search-input");
+			search.value = "Paris";
+			search.dispatchEvent(new Event("input", { bubbles: true }));
+			await until(() => document.querySelectorAll("#palette-list [data-testid=palette-hit]").length > 0);
+			const groups = [...document.querySelectorAll("#palette-list .palette-group-title")].map((title) => title.textContent);
+			const hits = document.querySelectorAll("#palette-list [data-testid=palette-hit]").length;
+			await press("Enter");
+			await until(() => location.hash.startsWith("#/threads/") && !open());
+			return { stage: "search", groups, hits, hash: location.hash };
+		`);
+		expect(searched.hits).toBeGreaterThan(0);
+		expect(searched.groups).toEqual(expect.arrayContaining(["Threads", "Sessions"]));
+		expect(searched.hash).toMatch(/^#\/threads\//);
+
+		// A memory hit opens the file, not just the section; Escape steps back one stage first.
+		const memory = await evaluatePage<{ path: string; shown: boolean }>(`
+			${KEYS}
+			const open = () => !document.getElementById("palette").hidden;
+			document.activeElement?.blur();
+			location.hash = "#/inbox";
+			await until(() => !open());
+			await press("k", submitChord());
+			await until(open);
+			const commands = document.getElementById("palette-input");
+			commands.value = "search";
+			commands.dispatchEvent(new Event("input", { bubbles: true }));
+			await sleep(40);
+			await press("Enter");
+			await until(() => document.activeElement?.id === "palette-search-input");
+			const search = document.getElementById("palette-search-input");
+			search.value = "decisions";
+			search.dispatchEvent(new Event("input", { bubbles: true }));
+			await until(() => document.querySelector("#palette-list [data-hit-kind=memory]") !== null);
+			// Escape goes back to the commands before it closes the palette.
+			await press("Escape");
+			await until(() => document.activeElement?.id === "palette-input" && open());
+			commands.value = "search";
+			commands.dispatchEvent(new Event("input", { bubbles: true }));
+			await sleep(40);
+			await press("Enter");
+			await until(() => document.activeElement?.id === "palette-search-input");
+			search.value = "decisions";
+			search.dispatchEvent(new Event("input", { bubbles: true }));
+			await until(() => document.querySelector("#palette-list [data-hit-kind=memory]") !== null);
+			const hit = document.querySelector("#palette-list [data-hit-kind=memory]");
+			hit.click();
+			await until(() => location.hash.startsWith("#/memory/files/") && !open());
+			await until(() => !document.getElementById("memory-file-view").hidden);
+			return { path: document.getElementById("memory-path").textContent, shown: !document.getElementById("memory-file-view").hidden };
+		`);
+		expect(memory.shown).toBe(true);
+		expect(memory.path).toBe("notes/pana.md");
+	});
 	it("UX-09 a working session shows live in its thread and its rows, then clears when the reply lands", async () => {
 		const { t } = await start();
 		const threadId = seeded!.capital.threadId;

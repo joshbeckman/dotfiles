@@ -10,7 +10,8 @@ import { sessionRuntime, setSessionState, type SessionStateEvent } from "../src/
 import { snippetOf } from "../src/threads/index.ts";
 import { subscribeEvents } from "../src/web/events.ts";
 import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
-import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection } from "../web/keys.js";
+import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection, sequenceLabel } from "../web/keys.js";
+import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits, rankBy } from "../web/palette.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
 import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, SESSION_COLORS, threadRow, workingOf } from "../web/views.js";
 
@@ -269,6 +270,91 @@ describe("UX-08 the keymap", () => {
 		expect(moveSelection(2, 3, "next")).toBe(2);
 		expect(moveSelection(0, 3, "previous")).toBe(0);
 		expect(moveSelection(0, 0, "next")).toBe(-1);
+	});
+});
+
+describe("UX-15 the command palette", () => {
+	it("UX-15 Cmd+K opens the palette from the page and from a text box", () => {
+		const keys = createKeyReader();
+		expect(keys.press({ key: "k", metaKey: true }, { apple: true })).toBe("palette");
+		expect(keys.press({ key: "k", ctrlKey: true }, { apple: false })).toBe("palette");
+		// A half-written reply is no reason to keep the palette away.
+		expect(keys.press({ key: "k", metaKey: true }, { inInput: true, inForm: true, apple: true })).toBe("palette");
+		// Alt and Shift are not part of the chord, and plain k is still the previous row.
+		expect(keys.press({ key: "k", ctrlKey: true, altKey: true }, { apple: false })).toBeNull();
+		expect(keys.press({ key: "k" }, { apple: false })).toBe("previous");
+		// Mod+Enter still submits the form it is in.
+		expect(keys.press({ key: "Enter", metaKey: true }, { inForm: true, apple: true })).toBe("submit");
+
+		expect(sequenceLabel(["Mod+k"], true)).toBe("⌘ K");
+		expect(sequenceLabel(["Mod+k"], false)).toBe("Ctrl K");
+		// Both keymaps bind it, so the help overlay says so inside a text box too.
+		for (const map of [KEYMAP, INPUT_KEYMAP]) {
+			const binding = map.find((entry) => entry.action === "palette");
+			expect(binding?.sequences, JSON.stringify(map.length)).toEqual([["Mod+k"]]);
+		}
+	});
+
+	it("UX-15 the fuzzy match reads letters in order and prefers word starts", () => {
+		expect(fuzzyScore("Go to Inbox", "")).toBe(0);
+		expect(fuzzyScore("Go to Inbox", "zzz")).toBeNull();
+		expect(fuzzyScore("Go to Inbox", "gib")).not.toBeNull();
+		expect(fuzzyScore("Go to Inbox", "gi")).toBeGreaterThan(fuzzyScore("Go to Inbox", "oi")!);
+		// Order is what makes it fuzzy rather than a filter: "ig" is not in "Go to Inbox".
+		expect(fuzzyScore("Go to Inbox", "ig")).toBeNull();
+		expect(fuzzyScore(undefined, "a")).toBeNull();
+
+		const items = [{ label: "Go to Threads" }, { label: "Go to Inbox" }, { label: "Show keyboard shortcuts" }];
+		expect(rankBy(items, "").map((entry) => entry.item.label)).toEqual(items.map((item) => item.label));
+		expect(rankBy(items, "zzz")).toEqual([]);
+		// An equal score goes to the shorter label, which is the more specific answer.
+		expect(rankBy(items, "gt").map((entry) => entry.item.label)).toEqual(["Go to Inbox", "Go to Threads"]);
+	});
+
+	it("UX-15 the palette lists what the page can do right now", () => {
+		const ids = (context: Record<string, unknown>) => paletteCommands(context).map((command) => command.id);
+		expect(new Set(COMMANDS.map((command) => command.id)).size).toBe(COMMANDS.length);
+		expect(ids({})).toEqual(expect.arrayContaining(["palette:search", "go:inbox", "go:compose", "back", "help", "push"]));
+		expect(ids({})).not.toContain("archive-thread");
+		expect(ids({ thread: { id: "T" } })).toContain("archive-thread");
+		expect(ids({})).not.toContain("session:stop");
+		expect(ids({ session: { id: "S" } })).toEqual(expect.arrayContaining(["session:stop", "session:compact", "session:archive"]));
+		expect(ids({})).not.toContain("open");
+		expect(ids({ selection: {} })).toContain("open");
+		expect(ids({ push: { subscribed: true } })).not.toContain("push");
+
+		// Typing narrows the list by the same fuzzy match, and Enter on the first row searches.
+		expect(matchCommands(paletteCommands({}), "gi")[0]!.id).toBe("go:inbox");
+		expect(matchCommands(paletteCommands({}), "zzz")).toEqual([]);
+	});
+
+	it("UX-15 the search stage maps three stores and ranks each group", () => {
+		const bodies = {
+			threads: {
+				threads: [
+					{ threadId: "T1", threadUrl: "pana://d/threads/T1", subject: "Deploy notes", snippet: "the deploy steps", createdAt: 5, unreadCount: 0, archived: false },
+					{ threadId: "T2", threadUrl: "pana://d/threads/T2", subject: "Lunch", snippet: "we deploy after lunch", createdAt: 6, unreadCount: 1, archived: false },
+				],
+			},
+			sessions: { sessions: [{ sessionId: "S1", sessionUrl: "pana://d/sessions/01ABC9Z1", snippet: "…deployed it…" }] },
+			memory: { results: [{ path: "ops/deploy.md", line: 3, text: "deploy steps" }] },
+		};
+		const groups = paletteHits(bodies, "deploy");
+		expect(groups.map((group) => group.title)).toEqual(["Threads", "Sessions", "Memory"]);
+		// A subject match outranks a body match, and a hit whose text the query cannot reach keeps
+		// its place at the end rather than vanishing.
+		expect(groups[0]!.hits.map((hit) => hit.id)).toEqual(["T1", "T2"]);
+		expect(paletteHits({ threads: { threads: [{ threadId: "T3", subject: "Lunch", snippet: "deploy" }] } }, "zzz")[0]!.hits[0]!.id).toBe("T3");
+		expect(groups[1]!.hits[0]).toEqual({ kind: "session", id: "S1", label: "…deployed it…", meta: "session ABC9Z1", at: undefined });
+		expect(groups[2]!.hits[0]).toEqual({ kind: "memory", id: "ops/deploy.md", label: "ops/deploy.md", meta: "3: deploy steps" });
+		// A store that matched nothing is left out, and no store answers with more than its share.
+		expect(paletteHits({}, "deploy")).toEqual([]);
+		const many = { results: Array.from({ length: 9 }, (_, at) => ({ path: `note-${at}.md`, line: 1, text: `deploy ${at}` })) };
+		expect(paletteHits({ memory: many }, "deploy")[0]!.hits).toHaveLength(HITS_PER_STORE);
+
+		expect(hitHash({ kind: "thread", id: "T1" })).toBe("#/threads/T1");
+		expect(hitHash({ kind: "session", id: "S1" })).toBe("#/sessions/S1");
+		expect(hitHash({ kind: "memory", id: "ops/a b.md" })).toBe("#/memory/files/ops/a%20b.md");
 	});
 });
 

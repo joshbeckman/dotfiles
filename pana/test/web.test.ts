@@ -125,7 +125,7 @@ describe("PWA shell and static assets", () => {
 		expect(page.headers["content-security-policy"]).not.toContain("unsafe-eval");
 
 		// The shell does not need the token, but unknown paths still do (API-04).
-		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js"]) {
+		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js", "/palette.js"]) {
 			expect((await request({ host: "127.0.0.1", port }, "GET", path)).status, path).toBe(200);
 		}
 		expect((await request({ host: "127.0.0.1", port }, "GET", "/nope")).status).toBe(403);
