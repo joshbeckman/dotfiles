@@ -1,0 +1,54 @@
+#!/bin/sh
+# pana:session-scoped-chrome-devtools
+#
+# Give every session its own chrome-devtools daemon (ISO-06).
+#
+# The CLI scopes a daemon with a hidden global `--sessionId`: the socket, the pid file, and the
+# headless Chrome are all keyed by it. Unscoped, every session and every checkout on this machine
+# drives one browser and one page selection, so a sibling session's `new_page` steals the page
+# under evaluation and its `close_page` can close the tab. pana puts this directory first on a
+# session's PATH (ISO-03) and exports `PANA_BROWSER_SESSION`, so a plain `chrome-devtools …` is
+# scoped, and so is every test harness that shells out to it.
+#
+# An explicit `--sessionId`, or a shell with no `PANA_BROWSER_SESSION`, runs the CLI unchanged.
+# Only shell builtins run here: a broken PATH must not turn dispatch into a loop.
+set -u
+
+case $0 in
+	*/*) self=${0%/*} ;;
+	*) self=. ;;
+esac
+
+# Line 2 of this file marks a copy of this shim. pana's bin can appear twice on one PATH, and
+# dispatching into the other copy would run this script again with the same PATH, forever.
+is_shim() {
+	[ -f "$1" ] || return 1
+	l1= l2=
+	{ IFS= read -r l1; IFS= read -r l2; } <"$1" 2>/dev/null || true
+	case ${l2:-} in *pana:session-scoped-chrome-devtools*) return 0 ;; esac
+	return 1
+}
+
+real=${CHROME_DEVTOOLS_REAL:-}
+if [ -z "$real" ]; then
+	old_ifs=$IFS
+	IFS=:
+	for dir in $PATH; do
+		[ "$dir" = "$self" ] && continue
+		candidate=$dir/chrome-devtools
+		[ -x "$candidate" ] && [ ! -d "$candidate" ] || continue
+		is_shim "$candidate" && continue
+		real=$candidate
+		break
+	done
+	IFS=$old_ifs
+fi
+[ -n "$real" ] || { echo "chrome-devtools: not found on PATH" >&2; exit 127; }
+
+for arg in "$@"; do
+	case $arg in
+		--sessionId|--sessionId=*) exec "$real" "$@" ;;
+	esac
+done
+[ -n "${PANA_BROWSER_SESSION:-}" ] || exec "$real" "$@"
+exec "$real" --sessionId "$PANA_BROWSER_SESSION" "$@"

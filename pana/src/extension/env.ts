@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { memoryFor } from "../memory/handlers.ts";
 import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { browserScope } from "./browser.ts";
 
 /** The only variables a pana session's commands see, besides git's own env-config pair. */
 export const PANA_ENV_NAMES = [
@@ -25,6 +26,7 @@ export const PANA_ENV_NAMES = [
 	"PANA_SESSION",
 	"PANA_STATE",
 	"PANA_SCRATCH",
+	"PANA_BROWSER_SESSION",
 	"GIT_CONFIG_COUNT",
 	"GIT_CONFIG_KEY_0",
 	"GIT_CONFIG_VALUE_0",
@@ -63,7 +65,11 @@ export function panaShellEnv(options: PanaEnvOptions): Record<string, string> {
 		GIT_CONFIG_KEY_0: "core.hooksPath",
 		GIT_CONFIG_VALUE_0: options.hooksDir,
 	};
-	if (options.sessionId) env.PANA_SESSION = options.sessionId;
+	if (options.sessionId) {
+		env.PANA_SESSION = options.sessionId;
+		// ISO-06: `bin/chrome-devtools` names this session's browser daemon with it.
+		env.PANA_BROWSER_SESSION = browserScope(options.sessionId);
+	}
 	if (options.stateDir) env.PANA_STATE = options.stateDir;
 	if (options.scratchDir) env.PANA_SCRATCH = options.scratchDir;
 	return env;

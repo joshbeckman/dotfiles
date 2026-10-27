@@ -7,12 +7,14 @@
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { Registry } from "@earendil-works/pi-durable";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPanaRegistry, runPanaCli } from "../src/extension/index.ts";
-import { PANA_ENV_NAMES } from "../src/extension/env.ts";
+import { PANA_BIN, PANA_ENV_NAMES, panaShellEnv } from "../src/extension/env.ts";
+import { BROWSER_IDLE_MS, browserScope, sweepBrowsers } from "../src/extension/browser.ts";
+import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAUX_MODEL, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { seedThread, type Fixture } from "./harness/wake-fixture.ts";
 import { captureExtension, contextOf, conversationOf, fakeApi, promptSections, promptText, runTool } from "./fixtures/extension.ts";
@@ -134,7 +136,7 @@ describe("extension isolation", () => {
 		}
 	});
 
-	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_STATE, PANA_SCRATCH, and GIT_CONFIG_*", async () => {
+	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_STATE, PANA_SCRATCH, PANA_BROWSER_SESSION, and GIT_CONFIG_*", async () => {
 		const seeded = await start({ capture: true });
 		const first = seeded.sessions[0]!;
 		const conversation = await conversationOf(t!, first.conversationId);
@@ -151,6 +153,7 @@ describe("extension isolation", () => {
 
 		expect(env.TERM).toBe("dumb");
 		expect(env.PANA_SESSION).toBe(first.id);
+		expect(env.PANA_BROWSER_SESSION).toBe(browserScope(first.id));
 		expect(env.PANA_STATE).toBe(t!.runtime.paths.dir);
 		expect(env.PANA_SCRATCH).toBe(join(t!.runtime.paths.scratch, first.id));
 		expect(env.GIT_CONFIG_COUNT).toBe("1");
@@ -179,6 +182,121 @@ describe("extension isolation", () => {
 			if (saved === undefined) delete process.env.OPENAI_API_KEY;
 			else process.env.OPENAI_API_KEY = saved;
 		}
+	});
+});
+
+describe("browser isolation", () => {
+	/** A stand-in for the installed chrome-devtools CLI: it prints the argv it was given. */
+	function stubCli(dir: string): string {
+		writeFileSync(join(dir, "chrome-devtools"), "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", { mode: 0o755 });
+		return dir;
+	}
+
+	/** Run pana's shim itself, with only a PATH and the variables a case names. */
+	function runShim(args: string[], path: string, env: Record<string, string> = {}): string {
+		return execFileSync(join(PANA_BIN, "chrome-devtools"), args, { encoding: "utf8", env: { PATH: path, ...env } }).trim();
+	}
+
+	it("ISO-06 bin/chrome-devtools runs the CLI with this session's --sessionId", () => {
+		// ISO-03 puts pana's bin first on a session's PATH, so the shim is what `chrome-devtools` means.
+		const env = panaShellEnv({ cwd: tmpdir(), hooksDir: tmpdir(), sessionId: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
+		expect(env.PATH?.split(":")[0]).toBe(PANA_BIN);
+		expect(existsSync(join(PANA_BIN, "chrome-devtools"))).toBe(true);
+		expect(env.PANA_BROWSER_SESSION).toBe("pana-01HZZZZZZZZZZZZZZZZZZZZZZZ");
+
+		const stub = stubCli(tempDir("pana-cli-"));
+		const path = `${stub}:/usr/bin:/bin`;
+		const scope = env.PANA_BROWSER_SESSION!;
+
+		expect(runShim(["list_pages"], path)).toBe("list_pages");
+		expect(runShim(["list_pages"], path, { PANA_BROWSER_SESSION: scope })).toBe(`--sessionId ${scope} list_pages`);
+		// A call that names its own daemon keeps it.
+		expect(runShim(["list_pages", "--sessionId", "mine"], path, { PANA_BROWSER_SESSION: scope })).toBe(
+			"list_pages --sessionId mine",
+		);
+
+		// pana's bin can appear twice on one PATH; the second copy is not the CLI.
+		const other = tempDir("pana-bin-");
+		copyFileSync(join(PANA_BIN, "chrome-devtools"), join(other, "chrome-devtools"));
+		expect(runShim(["list_pages"], `${other}:${path}`, { PANA_BROWSER_SESSION: scope })).toBe(
+			`--sessionId ${scope} list_pages`,
+		);
+
+		// No CLI on PATH is an error, not a loop.
+		expect(() => runShim(["list_pages"], "/usr/bin:/bin", { PANA_BROWSER_SESSION: scope })).toThrow();
+	});
+
+	/** A session row, last changed `idleMs` ago. Not wakeable: the sweeper only reads state. */
+	async function seedSession(state: string, idleMs = 0): Promise<string> {
+		const id = t!.runtime.newId();
+		const now = t!.clock.now();
+		await t!.runtime.db.write(async (tx) => {
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, t!.runtime.url({ kind: "session", id }), now);
+			await tx.run(
+				"INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+				id,
+				state,
+				now - idleMs,
+				now - idleMs,
+			);
+		});
+		return id;
+	}
+
+	it("ISO-07 the sweep stops archived, idle, and orphan daemons and keeps a working one", async () => {
+		t = await startTestPanad({ script: [] });
+		const now = t.clock.now();
+		const archived = await seedSession("archived");
+		const idle = await seedSession("idle", BROWSER_IDLE_MS + 1);
+		const recent = await seedSession("idle", 1000);
+		const running = await seedSession("running", BROWSER_IDLE_MS * 10);
+		const orphan = t.runtime.newId();
+		const browsers = [archived, idle, recent, running, orphan].map((session) => ({
+			session,
+			scope: browserScope(session),
+			socket: `/tmp/chrome-devtools-mcp-${browserScope(session)}-0.sock`,
+		}));
+
+		const stopped: string[] = [];
+		const stops = await sweepBrowsers(t.runtime, {
+			browsers,
+			now,
+			stop: async (scope) => {
+				stopped.push(scope);
+			},
+		});
+		expect(stops.map((stop) => [stop.session, stop.reason])).toEqual([
+			[archived, "archived"],
+			[idle, "idle"],
+			[orphan, "orphan"],
+		]);
+		expect(stopped).toEqual([archived, idle, orphan].map((session) => browserScope(session)));
+	});
+
+	it("ISO-07 archiving a session stops its daemon now", async () => {
+		const seeded = await start();
+		const id = seeded.sessions[0]!.id;
+		const scope = browserScope(id);
+		// The CLI keeps an XDG daemon at <dir>/chrome-devtools-mcp-<scope>/server.sock.
+		const xdg = tempDir("pana-xdg-");
+		mkdirSync(join(xdg, `chrome-devtools-mcp-${scope}`), { recursive: true });
+		writeFileSync(join(xdg, `chrome-devtools-mcp-${scope}`, "server.sock"), "");
+		const argv = join(tempDir("pana-argv-"), "argv");
+		const bin = tempDir("pana-stub-");
+		writeFileSync(join(bin, "chrome-devtools"), `#!/bin/sh\nprintf '%s' "$*" >> "${argv}"\n`, { mode: 0o755 });
+
+		const savedPath = process.env.PATH;
+		const savedXdg = process.env.XDG_RUNTIME_DIR;
+		process.env.PATH = `${bin}:${savedPath ?? "/usr/bin:/bin"}`;
+		process.env.XDG_RUNTIME_DIR = xdg;
+		try {
+			await sessionRuntime(t!.runtime).archive(id);
+		} finally {
+			process.env.PATH = savedPath;
+			if (savedXdg === undefined) delete process.env.XDG_RUNTIME_DIR;
+			else process.env.XDG_RUNTIME_DIR = savedXdg;
+		}
+		expect(readFileSync(argv, "utf8")).toBe(`--sessionId ${scope} stop`);
 	});
 });
 
