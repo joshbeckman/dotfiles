@@ -234,7 +234,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 ### Git hooks
 
 - [x] **HOK-01** `bash` sets `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0=core.hooksPath`, and `GIT_CONFIG_VALUE_0=<state>/hooks`.
-- [x] **HOK-02** A commit made through `bash` carries exactly one `Co-authored-by: AI pana://<domain>/sessions/<ulid> <<ulid>@<domain>>`.
+- [x] **HOK-02** A commit made through `bash` carries exactly one `Co-authored-by: AI pana://<domain>/sessions/<ulid> <user.email>`, with the address from git config.
 - [x] **HOK-03** `git commit --amend` and a second commit do not duplicate the trailer.
 - [x] **HOK-04** Every standard hook name in `<state>/hooks` runs the repo's own hook of that name, looked up from local `core.hooksPath`, then global `core.hooksPath`, then `$(git rev-parse --git-path hooks)`. Its exit code is preserved.
 - [x] **HOK-05** A repo with a failing `pre-commit` still blocks the commit.

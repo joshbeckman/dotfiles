@@ -171,7 +171,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 	// The session's commit in its repo carries exactly one pana trailer.
 	const body = git("log", "-1", "--format=%B");
 	expect(body).toContain("Record the answer");
-	const trailer = `Co-authored-by: AI ${sessionUrl} <${sessionId}@${DOMAIN}>`;
+	const trailer = `Co-authored-by: AI ${sessionUrl} <tester@${DOMAIN}>`;
 	expect(body.split("\n").filter((line) => line === trailer)).toHaveLength(1);
 
 	const show = await pana(env, ["session", "show", sessionId]);

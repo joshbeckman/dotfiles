@@ -43,9 +43,14 @@ export const STANDARD_HOOKS = [
 export const HOOK_RUNNER = "_pana-hook.sh";
 export const HOOK_DOMAIN_FILE = "_pana_domain";
 
-/** The trailer a pana session's commits carry (HOK-02). */
-export function commitTrailer(domain: string, sessionId: string): string {
-	return `Co-authored-by: AI pana://${domain}/sessions/${sessionId} <${sessionId}@${domain}>`;
+/**
+ * The trailer a pana session's commits carry (HOK-02). The address is the user's own git
+ * `user.email`, which GitHub parses for coauthor credit; a pana session has no mailbox of its
+ * own. An empty email omits the address rather than inventing one.
+ */
+export function commitTrailer(domain: string, sessionId: string, email: string): string {
+	const address = email === "" ? "" : ` <${email}>`;
+	return `Co-authored-by: AI pana://${domain}/sessions/${sessionId}${address}`;
 }
 
 function shim(name: string): string {
@@ -110,8 +115,16 @@ if [ "$status" -eq 0 ] && [ "$name" = "prepare-commit-msg" ] && [ -n "\${PANA_SE
 	domain=$(cat "$pana_dir/${HOOK_DOMAIN_FILE}")
 	message=\${1:-}
 	if [ -n "$domain" ] && [ -n "$message" ] && [ -f "$message" ]; then
+		# The address is the user's own, from git config: a session is attributed by its URL,
+		# and GitHub parses the address for coauthor credit. Inventing a session mailbox here
+		# would name an address nobody can receive mail at.
+		email=$(git config --get user.email 2>/dev/null) || email=""
+		trailer="Co-authored-by: AI pana://$domain/sessions/$PANA_SESSION"
+		if [ -n "$email" ]; then
+			trailer="$trailer <$email>"
+		fi
 		git interpret-trailers --if-exists addIfDifferent --in-place \\
-			--trailer "Co-authored-by: AI pana://$domain/sessions/$PANA_SESSION <$PANA_SESSION@$domain>" "$message" || status=$?
+			--trailer "$trailer" "$message" || status=$?
 	fi
 fi
 

@@ -197,9 +197,10 @@ describe("WP9 attribution", () => {
 		await exec("/bin/bash", [join(repo, "bin", "gsw"), "pr", "edit", "1", "--body", "Pana description."], { env });
 		expect(readFileSync(capture, "utf8")).toBe(`Pana description.\n\n${trailer}\n`);
 
-		// The commit form in pana/README.md takes the matching mailbox, so the same
-		// session is attributable in Git history.
-		const email = await exec("/bin/bash", [join(repo, "bin", "agent-trailer"), "--email"], { env });
-		expect(email.stdout.trim()).toBe(`${trailer} <${session}@test.example>`);
+		// The commit form in pana/README.md takes the matching mailbox: the user's own
+		// git user.email, so the same session is attributable in Git history.
+		writeFileSync(join(home, ".gitconfig"), "[user]\n\temail = tester@test.example\n");
+		const email = await exec("/bin/bash", [join(repo, "bin", "agent-trailer"), "--email"], { env, cwd: home });
+		expect(email.stdout.trim()).toBe(`${trailer} <tester@test.example>`);
 	});
 });

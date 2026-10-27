@@ -185,10 +185,11 @@ Every pana tool wraps one CLI command with the same arguments, output, and exit 
 
 ### Commit attribution
 
-Every commit a session authors carries this trailer:
+Every commit a session authors carries this trailer, whose address is your own `user.email`
+from git config (GitHub parses that field for coauthor credit; a session has no mailbox):
 
 ```
-Co-authored-by: AI pana://<domain>/sessions/<ulid> <<ulid>@<domain>>
+Co-authored-by: AI pana://<domain>/sessions/<ulid> <user.email>
 ```
 
 The `bash` tool sets `core.hooksPath` through `GIT_CONFIG_COUNT` to pana's hook directory. Pana's `prepare-commit-msg` adds the trailer with `git interpret-trailers --if-exists addIfDifferent`. Each pana hook then runs the repo's own hook of the same name, so repo hooks still run.

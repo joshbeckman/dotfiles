@@ -109,14 +109,26 @@ describe("git hooks", () => {
 	});
 
 	it("HOK-02 a commit made through bash carries exactly one pana trailer", async () => {
-		const { env } = setup();
+		const { env, repo, home } = setup();
 		writeFileSync(join(env.cwd, "a.txt"), "one\n");
 		expect((await run(env, ["git", "add", "a.txt"])).exitCode).toBe(0);
 		expect((await commit(env, "first")).exitCode).toBe(0);
 
 		const message = (await run(env, ["git", "log", "-1", "--format=%B"])).stdout;
 		expect(countTrailers(message)).toBe(1);
-		expect(message).toContain(commitTrailer(DOMAIN, SESSION));
+		// The address is the configured git user.email, not a session mailbox.
+		expect(message).toContain(commitTrailer(DOMAIN, SESSION, `tester@${DOMAIN}`));
+		expect(message).not.toContain(`${SESSION}@${DOMAIN}`);
+
+		// With no repo-local identity, the address comes from the user's own ~/.gitconfig.
+		plainGit(repo, ["config", "--local", "--unset", "user.email"]);
+		writeFileSync(join(home, ".gitconfig"), `[user]\n\temail = josh@${DOMAIN}\n`);
+		writeFileSync(join(repo, "b.txt"), "two\n");
+		await run(env, ["git", "add", "b.txt"]);
+		expect((await commit(env, "second")).exitCode).toBe(0);
+		const fromGlobal = (await run(env, ["git", "log", "-1", "--format=%B"])).stdout;
+		expect(fromGlobal).toContain(commitTrailer(DOMAIN, SESSION, `josh@${DOMAIN}`));
+		expect(fromGlobal).not.toContain(`${SESSION}@${DOMAIN}`);
 	});
 
 	it("HOK-03 git commit --amend and a second commit do not duplicate the trailer", async () => {
