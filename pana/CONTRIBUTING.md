@@ -16,6 +16,10 @@ npx tsc --noEmit   # must be clean before you report
 
 Node 22.18 or newer runs the `.ts` sources directly, so there is no build step. `bin/pana` and `bin/panad` import `src/cli/index.ts` and `src/server/index.ts`.
 
+## UI changes
+
+A change to the PWA shows its effect in the PR: a screenshot of the before and after, or a short video, taken from the browser test domain. `node test/browser/screens.ts DIR LABEL` shoots every section; a single feature takes its own script the way `test/browser/palette-shots.ts` does. Put the PNGs in `pana/docs/` and reference them from the PR body, as #79 does.
+
 ## Layout
 
 One directory per work package, so parallel agents rarely edit the same file.
