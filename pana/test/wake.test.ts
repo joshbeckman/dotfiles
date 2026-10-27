@@ -58,6 +58,13 @@ async function wakeEntries(sessionId: string): Promise<Array<{ kind: string; dat
 	return transcript.body.entries.filter((entry) => entry.kind === "pana.wake");
 }
 
+/** The pending wakes `pana schedule list --kind wake` shows, by id and state. */
+async function listedWakes(): Promise<Array<{ id: string; state: string }>> {
+	const listed = await runPanaCommand("schedule list", { kind: "wake" }, { endpoint: { socketPath: t!.panad.socketPath } });
+	const body = listed.body as { schedules: Array<{ id: string; state: string }> };
+	return body.schedules.map((schedule) => ({ id: schedule.id, state: schedule.state }));
+}
+
 describe("WAK-01 scheduling a wake", () => {
 	it("WAK-01 a session wakes itself with --in; only the user names another session", async () => {
 		await start([{ text: "watching" }, { text: "watching" }]);
@@ -134,6 +141,38 @@ describe("WAK-03 a missed wake", () => {
 		t = await startTestPanad({ stateDir: dir, clock, model, config: { defaultModel: "faux/faux-1", timezone: "UTC" } });
 		expect(await settled(created.session.id)).toBe("idle");
 		expect(await wakeEntries(created.session.id)).toHaveLength(1);
+	});
+});
+
+describe("WAK-07 a wake that fires is spent", () => {
+	it("WAK-07 a delivered wake is deleted, so the list shows only pending wakes", async () => {
+		await start([{ text: "I will check back" }, { text: "CI is green" }]);
+		const created = await session();
+		const scheduled = await wake(created.session.id, { in: "10m", note: "Check CI on PR 75" });
+		const id = (scheduled.body as { schedule: { id: string } }).schedule.id;
+
+		expect(await listedWakes()).toHaveLength(1);
+		await t!.clock.advance(10 * MINUTE);
+		expect(await settled(created.session.id)).toBe("idle");
+		expect(await wakeEntries(created.session.id)).toHaveLength(1);
+
+		expect(await listedWakes()).toEqual([]);
+		expect((await t!.client.get(`/schedules/${id}`)).status).toBe(404);
+		expect((await t!.client.delete(`/schedules/${id}`)).status).toBe(404);
+		expect(await t!.runtime.db.get("SELECT state, next_at FROM schedules WHERE id = ?", id)).toEqual({ state: "deleted", next_at: null });
+	});
+
+	it("WAK-07 a wake that reached no session keeps its row as done", async () => {
+		await start([{ text: "ok" }]);
+		const created = await session();
+		await t!.client.post(`/sessions/${created.session.id}/stop`);
+		const scheduled = await wake(undefined, { in: "5m", note: "x", session: created.session.id });
+		const id = (scheduled.body as { schedule: { id: string } }).schedule.id;
+
+		await t!.clock.advance(5 * MINUTE);
+		await settled(created.session.id);
+		expect(await wakeEntries(created.session.id)).toEqual([]);
+		expect(await listedWakes()).toEqual([{ id, state: "done" }]);
 	});
 });
 
