@@ -274,6 +274,7 @@ The `default` profile applies when `--profile` is absent. With no `--cwd` and no
 ### Rules
 
 - A thread has a participant set. Every message goes to every participant. `--cc` adds participants.
+- Sessions may read any same-domain thread or message by reference, even when they are not participants. Reading does not join the thread, subscribe to future messages, or change anyone else's read state. Responding still requires participation, and another session's inbox remains private.
 - Threads are append-only. `thread respond` requires `--after MESSAGE`, the newest message the sender has read. If the thread has a newer message, pana rejects the response with exit code 3. The sender reads the new messages, revises, and retries.
 - Edits and deletes are appended as `message.revised` and `message.redacted` events. Readers show the latest revision. A session that already received the old text keeps it in its transcript, so the PWA warns before an edit.
 - The subject starts as the first line of the first message. A small model replaces it asynchronously. Regenerating keeps the old subjects in history.

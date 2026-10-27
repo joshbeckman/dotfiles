@@ -130,6 +130,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **THR-08** `--cc C` adds C as a participant. C receives this message and later ones, not earlier ones.
 - [x] **THR-09** A caller who is not a participant cannot respond (403), except the user, who may respond to any thread and becomes a participant.
 - [x] **THR-10** `thread read` returns messages in order with sender URLs, timestamps, and current revisions, and marks them read for the caller.
+- [x] **THR-11** A session may read any same-domain thread or message by reference without being a participant. Reads show current revisions and redactions, do not add participation or deliveries (including for future messages), and only mark the reader's own deliveries read. Nonmember replies remain forbidden (THR-09), and sessions cannot read another session's inbox or mark its deliveries read (INB-03). Unknown references return 404.
 
 ### Edits and redactions
 
