@@ -274,6 +274,30 @@ describe("browser isolation", () => {
 		return id;
 	}
 
+	it("ISO-07 temporary test domains never stop the calling session's browser as an orphan", async () => {
+		const xdg = tempDir("pana-xdg-");
+		const scope = browserScope("01AAAAAAAAAAAAAAAAAAAAAAAA");
+		mkdirSync(join(xdg, `chrome-devtools-mcp-${scope}`), { recursive: true });
+		writeFileSync(join(xdg, `chrome-devtools-mcp-${scope}`, "server.sock"), "");
+		const argv = join(tempDir("pana-argv-"), "argv");
+		writeFileSync(argv, "");
+		const bin = tempDir("pana-stub-");
+		writeFileSync(join(bin, "chrome-devtools"), `#!/bin/sh\nprintf '%s' "$*" >> "${argv}"\n`, { mode: 0o755 });
+		const savedPath = process.env.PATH;
+		const savedXdg = process.env.XDG_RUNTIME_DIR;
+		process.env.PATH = `${bin}:${savedPath ?? "/usr/bin:/bin"}`;
+		process.env.XDG_RUNTIME_DIR = xdg;
+		try {
+			t = await startTestPanad();
+			await t.stop(); // also waits for the startup sweep
+			expect(readFileSync(argv, "utf8")).toBe("");
+		} finally {
+			process.env.PATH = savedPath;
+			if (savedXdg === undefined) delete process.env.XDG_RUNTIME_DIR;
+			else process.env.XDG_RUNTIME_DIR = savedXdg;
+		}
+	});
+
 	it("ISO-07 the sweep stops archived, idle, and orphan daemons and keeps a working one", async () => {
 		t = await startTestPanad({ script: [] });
 		const now = t.clock.now();

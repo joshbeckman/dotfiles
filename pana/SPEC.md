@@ -260,7 +260,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **MEM-10** `GET /memory/commits/:hash` returns a commit's hash, message, author, time, parents, and each changed file's status, line counts, and unified patch. An unknown hash is 404; a value that is not a hash is 400 and never reaches git as an option.
 - [x] **MEM-11** The Memory view shows one thing at a time: a browse view with the file list and the log, one rendered file with a Source toggle and an Edit button, one commit, or the editor. A file view does not show the file list or an edit pane, and a log row opens its commit view.
 - [x] **MEM-12** Editing or creating a memory file opens a full-view CodeMirror editor with line numbers and Markdown highlighting, loaded only when editing. The save chord in the form commits as the user, and a new file names its path first.
-- [ ] **MEM-13** A memory file has an explicit Delete action with confirmation and cancellation. Confirming commits its removal as the user through the normal publish path, returns to the file list, and preserves Git history. `DELETE /memory/files/*` rejects missing files, unsafe paths, and dirty/unpublished writer worktrees; clean stale worktrees fast-forward before deletion.
+- [x] **MEM-13** A memory file has an explicit Delete action with confirmation and cancellation. Confirming commits its removal as the user through the normal publish path, returns to the file list, and preserves Git history. `DELETE /memory/files/*` rejects missing files, unsafe paths, and dirty/unpublished writer worktrees; clean stale worktrees fast-forward before deletion.
 
 ---
 

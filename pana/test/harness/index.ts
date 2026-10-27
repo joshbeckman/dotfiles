@@ -100,6 +100,8 @@ export async function startTestPanad(options: TestPanadOptions = {}): Promise<Te
 		tcpPort: 0,
 		tailscaleNames: options.tailscaleNames,
 		wake: options.wake,
+		// A temporary domain must never reap the calling session's real browser as an orphan.
+		browserSweep: { browsers: [] },
 		onFatal: (error) => fatal.push(error),
 		onReport: (error, what) => reports.push({ error, what }),
 	});

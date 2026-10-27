@@ -27,7 +27,7 @@ import { createProviderModels, hasModel } from "./models.ts";
 import { detectTailscaleNames } from "./tailscale.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 import { startScratchSweeper } from "../scratch/index.ts";
-import { startBrowserSweeper } from "../extension/browser.ts";
+import { startBrowserSweeper, type SweepBrowsersOptions } from "../extension/browser.ts";
 
 export interface StartOptions {
 	/** State directory; default `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
@@ -47,6 +47,8 @@ export interface StartOptions {
 	tailscaleNames?: readonly string[];
 	/** Replaces the WP3 wake submitter. */
 	wake?: (runtime: () => Runtime) => WakeSubmitter;
+	/** Override browser discovery/stopping for isolated test domains. Defaults to the real CLI. */
+	browserSweep?: SweepBrowsersOptions;
 	/** Memory may be ahead of disk (see src/db/atomic.ts). Default: log and exit 1. */
 	onFatal?: (error: unknown) => void;
 	onRequest?: (entry: RequestLogEntry) => void;
@@ -167,7 +169,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		const sweeper = startScratchSweeper(runtime, report);
 		cleanup.unshift(() => sweeper.close());
 		// ISO-07: stop the browser daemons of sessions that are archived or idle.
-		const browsers = startBrowserSweeper(runtime, report);
+		const browsers = startBrowserSweeper(runtime, report, options.browserSweep);
 		cleanup.unshift(() => browsers.close());
 
 		if (existsSync(paths.socket)) unlinkSync(paths.socket);

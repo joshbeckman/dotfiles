@@ -1166,7 +1166,7 @@ describeBrowser("pana in a browser", () => {
 			document.getElementById("memory-delete").click();
 			document.getElementById("memory-delete-confirm").click();
 			await until(() => location.hash === "#/memory" && !document.getElementById("memory-browse").hidden);
-			await until(() => !document.querySelector('[data-testid="memory-file-item"][data-id="delete me.md"]'));
+			await until(() => document.getElementById("memory-files").textContent.includes("Memory is empty."));
 			return true;
 		`);
 		expect(result).toBe(true);
