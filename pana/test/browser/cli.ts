@@ -69,6 +69,11 @@ export async function screenshot(filePath: string, fullPage = false): Promise<vo
 	await command(["take_screenshot", "--filePath", filePath, ...(fullPage ? ["--fullPage", "true"] : [])]);
 }
 
+/** Emulate a phone: `viewport` is `WIDTHxHEIGHTxDPR[,mobile][,touch]`, or "" to clear. */
+export async function emulateViewport(viewport: string): Promise<void> {
+	await command(["emulate", "--viewport", viewport]);
+}
+
 export async function emulateColorScheme(scheme: "dark" | "light" | "auto"): Promise<void> {
 	await command(["emulate", "--colorScheme", scheme]);
 }

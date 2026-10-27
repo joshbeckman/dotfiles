@@ -1126,7 +1126,8 @@ async function openSession(id) {
 	state.session = body.session;
 	// REF-08: the session's own ID is a link to the session view, and the parent is a link to its.
 	const title = $("session-title");
-	title.replaceChildren(refLink(state.session.url ?? state.session.id, "session", state.session.id));
+	// MOB-03: the short label, as everywhere else; the full ID is in the pana:// URL just below.
+	title.replaceChildren(refLink(state.session.url ?? state.session.id, "session", refLabel(state.session.url ?? "") || state.session.id));
 	const meta = $("session-meta");
 	meta.replaceChildren(badge(state.session.state ?? "unknown"));
 	const details = document.createElement("span");

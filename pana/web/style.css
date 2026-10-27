@@ -220,6 +220,7 @@ main {
 .hint {
 	color: var(--c-text-alt);
 	font-size: 0.875rem;
+	overflow-wrap: anywhere;
 }
 
 /* ---- Sections ---------------------------------------------------------------------------- */
@@ -250,10 +251,12 @@ main {
 	gap: var(--s3);
 	min-height: var(--control-h);
 }
+/* MOB-03: break-word, not anywhere. anywhere lets the title shrink to one character a line
+   beside the controls; break-word keeps a session ID whole until it needs the full row. */
 .view-header h2 {
 	flex: 1;
 	min-width: 0;
-	overflow-wrap: anywhere;
+	overflow-wrap: break-word;
 }
 .header-actions {
 	display: flex;
@@ -285,6 +288,12 @@ main {
 	gap: var(--s2) var(--s4);
 	color: var(--c-text-alt);
 	font-size: 0.875rem;
+}
+/* MOB-02: a model ID, a path, or a pana:// URL is one long word; let it break inside the row. */
+.meta-line,
+.meta-line > * {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 .panel {
 	border: 1px solid var(--c-border);
@@ -673,6 +682,9 @@ button.quiet:hover,
 	gap: var(--s3);
 	margin-left: auto;
 }
+.message .body {
+	overflow-wrap: anywhere;
+}
 .message .body > :first-child {
 	margin-top: 0;
 }
@@ -993,6 +1005,17 @@ kbd {
 	}
 	#nav {
 		order: 3;
+		flex-basis: 100%;
+		gap: var(--s3);
+	}
+	#nav a {
+		font-size: 0.85rem;
+	}
+	/* MOB-03: the title and Back share the first row; the controls take their own row below. */
+	.view-header {
+		flex-wrap: wrap;
+	}
+	.view-header .header-actions {
 		flex-basis: 100%;
 	}
 	main,

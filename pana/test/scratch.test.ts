@@ -76,7 +76,14 @@ describe("SCR-01 a scratch directory per session", () => {
 		expect(env.panaEnv.PANA_SCRATCH).toBe(dir);
 		expect(existsSync(dir)).toBe(true);
 
-		await sessionRuntime(t!.runtime).idle();
+		// The first run must settle before the backdate; settling later would refresh updated_at.
+		for (let i = 0; i < 400; i++) {
+			await t!.clock.settle();
+			await sessionRuntime(t!.runtime).idle();
+			const row = await t!.runtime.db.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", id);
+			if ((await t!.model.calls()) >= 1 && row && row.state !== "running" && row.state !== "waiting") break;
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
 		await t!.runtime.db.run("UPDATE sessions SET state = 'idle', updated_at = ? WHERE id = ?", t!.clock.now() - 9 * DAY_MS, id);
 		await sweepScratch(t!.runtime);
 		expect(existsSync(dir)).toBe(false);
