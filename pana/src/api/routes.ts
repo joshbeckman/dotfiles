@@ -35,6 +35,7 @@ export const ROUTES = [
 	{ method: "GET", pattern: "/memory/search", name: "memory.search", wp: "WP5" },
 	{ method: "POST", pattern: "/memory/commit", name: "memory.commit", wp: "WP5" },
 	{ method: "GET", pattern: "/memory/log", name: "memory.log", wp: "WP5" },
+	{ method: "GET", pattern: "/memory/commits/:hash", name: "memory.commit.show", wp: "WP5" },
 	{ method: "GET", pattern: "/memory/files/*", name: "memory.files.read", wp: "WP5" },
 	{ method: "POST", pattern: "/memory/files/*", name: "memory.files.write", wp: "WP5" },
 	{ method: "GET", pattern: "/memory/files", name: "memory.files.list", wp: "WP10" },

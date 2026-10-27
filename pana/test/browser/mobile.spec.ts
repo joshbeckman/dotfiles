@@ -82,6 +82,9 @@ describeBrowser("MOB the PWA at phone width", () => {
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
 		await emulateViewport(PHONE);
 		await evaluatePage(`await until(() => document.querySelectorAll("#inbox-list .item").length >= 3); return true;`);
+		// The memory views a phone will open, each its own route (MEM-11, MEM-12).
+		const memoryLog = await t.client.get<{ commits: Array<{ hash: string }> }>("/memory/log");
+		const memoryCommit = memoryLog.body.commits[0]!.hash;
 
 		const views: Array<[string, string, string]> = [
 			["inbox", "#/inbox", `document.querySelectorAll("#inbox-list .item").length >= 3`],
@@ -90,7 +93,11 @@ describeBrowser("MOB the PWA at phone width", () => {
 			["compose", "#/compose", `!document.getElementById("view-compose").hidden`],
 			["sessions", "#/sessions", `document.querySelectorAll("#sessions-list .item").length >= 2`],
 			["session", `#/sessions/${seeded.capital.sessionId}`, `document.querySelectorAll("#transcript [data-testid=entry]").length >= 2`],
-			["memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1`],
+			["memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1 && document.querySelectorAll("#memory-log .item").length >= 2`],
+			["memory-file", "#/memory/files/notes/pana.md", `!document.getElementById("memory-file-view").hidden && document.getElementById("memory-file").textContent.includes("Decisions")`],
+			["memory-commit", `#/memory/commits/${memoryCommit}`, `!document.getElementById("memory-commit-view").hidden && document.querySelectorAll("#memory-commit-files .commit-file").length >= 1`],
+			["memory-edit", "#/memory/edit/notes/pana.md", `!document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor && document.querySelector("#memory-editor .cm-editor") !== null`],
+			["memory-new", "#/memory/new", `!document.getElementById("memory-edit-view").hidden && window.__pana.memoryEditor && !document.getElementById("memory-path-field").hidden`],
 			["schedules", "#/schedules", `document.querySelectorAll("#schedules-list .item").length >= 2`],
 		];
 		const failures: string[] = [];

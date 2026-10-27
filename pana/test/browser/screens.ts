@@ -52,7 +52,8 @@ try {
 			`document.querySelector("#thread-messages [data-testid=message-edit]")?.click(); await sleep(100);`,
 		);
 		await shot("sessions", "#/sessions", `document.querySelectorAll("#sessions-list .item").length >= 3`);
-		await shot("memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1`, `document.querySelector("#memory-files .item")?.click(); await sleep(200);`);
+		await shot("memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1 && document.querySelectorAll("#memory-log .item").length >= 2`);
+		await shot("memory-file", "#/memory/files/notes/pana.md", `!document.getElementById("memory-file-view").hidden && document.getElementById("memory-file").textContent.includes("Decisions")`);
 		await shot("schedules", "#/schedules", `document.querySelectorAll("#schedules-list .item").length >= 2`);
 		await shot(
 			"help",

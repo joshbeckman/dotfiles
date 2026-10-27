@@ -192,42 +192,78 @@
 			</section>
 
 			<section class="view" id="view-memory" data-testid="memory" hidden>
-				<header class="view-header">
-					<h2>Memory</h2>
-					<div class="header-actions">
-						<button type="button" class="quiet" data-action="create-worktree" data-testid="memory-create">New worktree</button>
+				<div id="memory-browse">
+					<header class="view-header">
+						<h2>Memory</h2>
+						<div class="header-actions">
+							<a class="button quiet" id="memory-new" data-testid="memory-new" href="#/memory/new">New file</a>
+							<button type="button" class="quiet" data-action="create-worktree" data-testid="memory-create">New worktree</button>
+						</div>
+					</header>
+					<p id="memory-worktree" data-testid="memory-worktree" class="hint"></p>
+					<form id="memory-search" class="search">
+						<label for="memory-query" class="visually-hidden">Search memory</label>
+						<input id="memory-query" data-testid="memory-query" type="search" placeholder="Search memory on main" />
+						<button type="submit">Search</button>
+					</form>
+					<div id="memory-results" data-testid="memory-results" class="list" role="list"></div>
+					<div class="columns memory-columns">
+						<section class="column" aria-labelledby="memory-files-title">
+							<h3 id="memory-files-title">Files</h3>
+							<div id="memory-files" data-testid="memory-files" class="list" role="list"></div>
+						</section>
+						<section class="column" aria-labelledby="memory-log-title">
+							<h3 id="memory-log-title">Log</h3>
+							<div id="memory-log" data-testid="memory-log" class="list" role="list"></div>
+						</section>
 					</div>
-				</header>
-				<p id="memory-worktree" data-testid="memory-worktree" class="hint"></p>
-				<form id="memory-search" class="search">
-					<label for="memory-query" class="visually-hidden">Search memory</label>
-					<input id="memory-query" data-testid="memory-query" type="search" placeholder="Search memory on main" />
-					<button type="submit">Search</button>
-				</form>
-				<div id="memory-results" data-testid="memory-results" class="list" role="list"></div>
-				<div class="columns">
-					<section class="column" aria-labelledby="memory-files-title">
-						<h3 id="memory-files-title">Files</h3>
-						<div id="memory-files" data-testid="memory-files" class="list" role="list"></div>
-					</section>
-					<section id="memory-open" class="column panel" aria-labelledby="memory-path" hidden>
-						<h3 id="memory-path"></h3>
-						<pre id="memory-file" data-testid="memory-file" class="file-body" hidden></pre>
-						<form id="memory-edit-form">
-							<div class="field">
-								<label for="memory-edit">Edit</label>
-								<textarea id="memory-edit" data-testid="memory-edit" rows="10"></textarea>
-							</div>
-							<div class="form-actions">
-								<p class="hint">Saving commits to main as you.</p>
-								<span class="chord" data-chord></span>
-								<button type="submit" class="primary" id="memory-save" data-testid="memory-save">Save</button>
-							</div>
-						</form>
-					</section>
 				</div>
-				<h3>Log</h3>
-				<div id="memory-log" data-testid="memory-log" class="list" role="list"></div>
+
+				<article id="memory-file-view" class="memory-detail" hidden>
+					<header class="view-header">
+						<a class="back" id="memory-file-back" href="#/memory">Memory</a>
+						<h2 id="memory-path"></h2>
+						<div class="header-actions">
+							<button type="button" class="quiet" id="memory-source" data-testid="memory-source" hidden>Source</button>
+							<a class="button primary" id="memory-edit-link" data-testid="memory-edit" href="#">Edit</a>
+						</div>
+					</header>
+					<p id="memory-file-meta" data-testid="memory-file-meta" class="meta-line"></p>
+					<div id="memory-file" data-testid="memory-file" class="file-body memory-markdown"></div>
+					<section id="memory-file-history-section" hidden>
+						<h3>History</h3>
+						<div id="memory-file-log" data-testid="memory-file-log" class="list" role="list"></div>
+					</section>
+				</article>
+
+				<article id="memory-edit-view" class="memory-detail" hidden>
+					<header class="view-header">
+						<a class="back" id="memory-edit-back" href="#/memory">Cancel</a>
+						<h2 id="memory-edit-title">New file</h2>
+						<div class="header-actions">
+							<span class="chord" data-chord></span>
+							<button type="submit" form="memory-edit-form" class="primary" id="memory-save" data-testid="memory-save">Save</button>
+						</div>
+					</header>
+					<form id="memory-edit-form">
+						<div class="field" id="memory-path-field">
+							<label for="memory-path-input">Path</label>
+							<input id="memory-path-input" data-testid="memory-path-input" type="text" placeholder="notes/topic.md" autocomplete="off" autocapitalize="off" spellcheck="false" />
+						</div>
+						<div id="memory-editor" data-testid="memory-editor" class="memory-editor"></div>
+						<p class="hint">Saving commits to main as you.</p>
+					</form>
+				</article>
+
+				<article id="memory-commit-view" class="memory-detail" hidden>
+					<header class="view-header">
+						<a class="back" id="memory-commit-back" href="#/memory">Memory</a>
+						<h2 id="memory-commit-subject" data-testid="memory-commit-subject"></h2>
+					</header>
+					<p id="memory-commit-meta" data-testid="memory-commit-meta" class="meta-line"></p>
+					<pre id="memory-commit-message" data-testid="memory-commit-message" class="commit-message" hidden></pre>
+					<div id="memory-commit-files" data-testid="memory-commit-files" class="commit-files"></div>
+				</article>
 			</section>
 
 			<section class="view" id="view-schedules" data-testid="schedules" hidden>

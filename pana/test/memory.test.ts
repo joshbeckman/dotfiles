@@ -270,6 +270,64 @@ describe("memory", () => {
 
 		expect((await t.tcp.get("/memory/files/knowledge/missing.md")).status).toBe(404);
 		expect((await t.tcp.post("/memory/files/%2e%2e%2fescape.md", { content: "nope" })).status).toBe(400);
+		// A control character would split `git show`'s patch headers; it is not a path.
+		expect((await t.tcp.post("/memory/files/a%0Ab.md", { content: "nope" })).status).toBe(400);
+	});
+
+	it("MEM-10 a commit view has its message, author, file statuses, and patch", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/notes.md", { content: "one\ntwo\n", message: "first notes" });
+		t.clock.advance(60_000);
+		const written = await t.tcp.post<{ commit: { hash: string } }>("/memory/files/notes.md", {
+			content: "one\nTWO\nthree\n",
+			message: "second notes",
+		});
+		expect(written.status).toBe(201);
+		const hash = written.body.commit.hash;
+
+		const shown = await t.tcp.get<{
+			hash: string;
+			short: string;
+			subject: string;
+			message: string;
+			authorUrl: string;
+			time: string;
+			parents: string[];
+			truncated: boolean;
+			files: Array<{ path: string; status: string; additions: number; deletions: number; binary: boolean; patch: string; truncated: boolean }>;
+		}>(`/memory/commits/${hash}`);
+		expect(shown.status).toBe(200);
+		expect(shown.body).toMatchObject({
+			hash,
+			short: hash.slice(0, 8),
+			subject: "second notes",
+			message: "second notes",
+			authorUrl: t.runtime.userUrl,
+			truncated: false,
+		});
+		expect(new Date(shown.body.time).getTime()).toBe(FAKE_EPOCH + 60_000);
+		expect(shown.body.parents).toHaveLength(1);
+		expect(shown.body.files).toHaveLength(1);
+		expect(shown.body.files[0]).toMatchObject({
+			path: "notes.md",
+			status: "modified",
+			additions: 2,
+			deletions: 1,
+			binary: false,
+			truncated: false,
+		});
+		expect(shown.body.files[0]!.patch).toContain("-two");
+		expect(shown.body.files[0]!.patch).toContain("+TWO");
+		expect(shown.body.files[0]!.patch).toContain("+three");
+
+		// An abbreviated hash resolves to the same commit, since that is what a log row shows.
+		const short = await t.tcp.get<{ hash: string }>(`/memory/commits/${hash.slice(0, 8)}`);
+		expect(short.status).toBe(200);
+		expect(short.body.hash).toBe(hash);
+
+		expect((await t.tcp.get("/memory/commits/deadbeef")).status).toBe(404);
+		// Not a hash, but never a git option either.
+		expect((await t.tcp.get("/memory/commits/--help")).status).toBe(400);
 	});
 });
 

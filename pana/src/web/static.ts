@@ -29,6 +29,8 @@ const ASSETS: Record<string, StaticAsset> = {
 	"/style.css": { file: "style.css", contentType: "text/css; charset=utf-8" },
 	"/fonts.css": { file: "fonts.css", contentType: "text/css; charset=utf-8" },
 	"/vendor.js": { file: "vendor.js", contentType: "text/javascript; charset=utf-8" },
+	// CodeMirror, lazily loaded by the memory editor (loaded only when editing a memory file).
+	"/memory-editor-vendor.js": { file: "memory-editor-vendor.js", contentType: "text/javascript; charset=utf-8" },
 	"/mermaid-vendor.js": { file: "mermaid-vendor.js", contentType: "text/javascript; charset=utf-8" },
 	"/sw.js": { file: "sw.js", contentType: "text/javascript; charset=utf-8" },
 	"/manifest.webmanifest": { file: "manifest.webmanifest", contentType: "application/manifest+json" },

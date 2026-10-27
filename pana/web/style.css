@@ -225,10 +225,12 @@ main {
 
 /* ---- Sections ---------------------------------------------------------------------------- */
 .view,
+#memory-browse,
 #threads-browse,
 #sessions-browse,
 #thread,
-#session {
+#session,
+.memory-detail {
 	display: flex;
 	flex-direction: column;
 	gap: var(--s4);
@@ -921,6 +923,15 @@ button.quiet:hover,
 }
 
 /* ---- Memory ------------------------------------------------------------------------------ */
+/* MEM-11: the browse view is files and the log side by side; anything opened takes the page. */
+.memory-columns {
+	align-items: start;
+}
+@media (min-width: 48rem) {
+	.columns.memory-columns {
+		grid-template-columns: 1fr 1fr;
+	}
+}
 .file-body {
 	margin: 0;
 	overflow-x: auto;
@@ -931,9 +942,182 @@ button.quiet:hover,
 	font-size: 0.85rem;
 	white-space: pre-wrap;
 }
-#memory-edit {
+/* A non-Markdown memory file is source: monospace, wrapping, no prose treatment. */
+#memory-file.raw {
+	font-family: var(--font-mono);
+}
+/* A Markdown file read view is prose, not a preformatted code box. */
+#memory-file.memory-markdown {
+	padding: 0;
+	background: none;
+	border: 0;
+	font-size: 1rem;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+#memory-file.memory-markdown > :first-child {
+	margin-top: 0;
+}
+#memory-file.memory-markdown > :last-child {
+	margin-bottom: 0;
+}
+#memory-file.memory-markdown pre {
+	overflow-x: auto;
+	padding: var(--s2) var(--s3);
+	background: var(--c-bg-alt);
+	border-radius: var(--radius);
+	font-size: 0.85rem;
+}
+#memory-file.memory-markdown table {
+	border-collapse: collapse;
+}
+#memory-file.memory-markdown th,
+#memory-file.memory-markdown td {
+	border: 1px solid var(--c-border);
+	padding: var(--s1) var(--s2);
+}
+#memory-file.memory-markdown img {
+	max-width: 100%;
+	height: auto;
+	border: 1px solid var(--c-border);
+}
+#memory-file-history-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+}
+.commit-hash {
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	color: var(--c-text-alt);
+}
+.commit-message {
+	margin: 0;
+	overflow-x: auto;
+	padding: var(--s3);
+	background: var(--c-bg-alt);
+	border: 1px solid var(--c-border);
+	border-radius: var(--radius);
 	font-family: var(--font-mono);
 	font-size: 0.85rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.commit-files {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s4);
+}
+.commit-file {
+	border: 1px solid var(--c-border);
+	border-radius: var(--radius);
+	overflow: hidden;
+}
+.commit-file-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--s1) var(--s3);
+	padding: var(--s2) var(--s3);
+	background: var(--c-bg-alt);
+	border-bottom: 1px solid var(--c-border);
+}
+.commit-file-path {
+	font-family: var(--font-mono);
+	font-size: 0.85rem;
+	overflow-wrap: anywhere;
+}
+.commit-stat {
+	margin-left: auto;
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	color: var(--c-text-alt);
+	font-variant-numeric: tabular-nums;
+}
+.patch {
+	margin: 0;
+	overflow-x: auto;
+	padding: var(--s2) 0;
+	background: var(--c-bg);
+	font-size: 0.82rem;
+	line-height: 1.5;
+	tab-size: 4;
+}
+.patch-line {
+	display: block;
+	min-height: 1.5em;
+	padding: 0 var(--s3);
+	white-space: pre;
+}
+.patch-line.meta {
+	color: var(--c-text-alt);
+}
+.patch-line.hunk {
+	color: var(--p-blue);
+	background: var(--c-bg-alt);
+}
+.patch-line.add {
+	color: var(--p-green);
+	background: color-mix(in srgb, var(--p-green) 10%, transparent);
+}
+.patch-line.del {
+	color: var(--p-red);
+	background: color-mix(in srgb, var(--p-red) 10%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+	.patch-line.hunk {
+		color: #7fa4ff;
+	}
+	.patch-line.add {
+		color: #6fcf97;
+	}
+	.patch-line.del {
+		color: #ff8a8a;
+	}
+}
+/* The editor (MEM-12): CodeMirror in a pana bundle, sized to the viewport and the phone alike. */
+.memory-editor {
+	height: 60vh;
+	height: 60dvh;
+	min-height: 16rem;
+	max-height: 48rem;
+	overflow: hidden;
+	border: 1px solid var(--c-border);
+	border-radius: var(--radius);
+	background: var(--c-bg);
+}
+.memory-editor .cm-editor {
+	height: 100%;
+	background: var(--c-bg);
+	color: var(--c-text);
+}
+.memory-editor .cm-editor.cm-focused {
+	outline: none;
+}
+.memory-editor .cm-scroller {
+	font-family: var(--font-mono);
+	font-size: 0.9rem;
+	line-height: 1.55;
+}
+.memory-editor .cm-gutters {
+	background: var(--c-bg-alt);
+	color: var(--c-text-alt);
+	border-right: 1px solid var(--c-border);
+}
+.memory-editor .cm-activeLine,
+.memory-editor .cm-activeLineGutter {
+	background: var(--c-bg-alt);
+}
+.memory-editor .cm-content {
+	padding: var(--s2) 0;
+	caret-color: var(--c-text);
+}
+.memory-editor .cm-line {
+	padding: 0 var(--s3);
+}
+.memory-editor .cm-selectionBackground,
+.memory-editor.cm-focused .cm-selectionBackground {
+	background: var(--c-selected) !important;
 }
 
 /* ---- Help overlay (UX-08) ---------------------------------------------------------------- */
@@ -1044,5 +1228,13 @@ kbd {
 	}
 	.chord {
 		display: none;
+	}
+	.patch-line {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.memory-editor {
+		height: 55vh;
+		height: 55dvh;
 	}
 }

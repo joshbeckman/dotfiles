@@ -95,6 +95,29 @@ export function elapsedLabel(ms: number): string;
 export function liveActivityLabel(live: { activity?: string; since?: number } | null | undefined, now: number): string;
 export function commitView(commit: any): { hash: string; short: string; author: string; at: string; message: string };
 export function memoryHitView(hit: any): { path: string; text: string };
+export function memoryFileView(file: any): { path: string; content: string; commit: string };
+export interface MemoryCommitFileView {
+	path: string;
+	status: string;
+	additions: number;
+	deletions: number;
+	binary: boolean;
+	patch: string;
+	truncated: boolean;
+}
+export function memoryCommitFileView(file: any): MemoryCommitFileView;
+export interface MemoryCommitDetailView {
+	hash: string;
+	short: string;
+	author: string;
+	at: unknown;
+	subject: string;
+	body: string;
+	parents: string[];
+	files: MemoryCommitFileView[];
+	truncated: boolean;
+}
+export function memoryCommitView(commit: any): MemoryCommitDetailView;
 export function scheduleWhen(schedule: { cron?: string | null; at?: number | null }): string;
 export function scheduleBody(
 	form: { kind?: string; when?: string; text?: string; to?: string },

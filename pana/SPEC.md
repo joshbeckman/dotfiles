@@ -253,6 +253,9 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **MEM-07** `pana memory search T` runs a case-insensitive `git grep` over `main` and returns path, line, and text.
 - [x] **MEM-08** `pana memory log [PATH]` returns commits with author URL, time, and message.
 - [x] **MEM-09** Memory edits from the PWA commit as the user through the same path as MEM-03.
+- [x] **MEM-10** `GET /memory/commits/:hash` returns a commit's hash, message, author, time, parents, and each changed file's status, line counts, and unified patch. An unknown hash is 404; a value that is not a hash is 400 and never reaches git as an option.
+- [x] **MEM-11** The Memory view shows one thing at a time: a browse view with the file list and the log, one rendered file with a Source toggle and an Edit button, one commit, or the editor. A file view does not show the file list or an edit pane, and a log row opens its commit view.
+- [x] **MEM-12** Editing or creating a memory file opens a full-view CodeMirror editor with line numbers and Markdown highlighting, loaded only when editing. The save chord in the form commits as the user, and a new file names its path first.
 
 ---
 

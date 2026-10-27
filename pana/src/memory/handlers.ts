@@ -57,6 +57,10 @@ export const handlers: Handlers = {
 		const commits = await memoryFor(ctx.runtime).log({ path: path ?? undefined, limit: optionalNumber(ctx.query.get("limit")) });
 		return { status: 200, body: { tree: "main", path, commits } };
 	},
+	"memory.commit.show": async (ctx: RequestContext) => {
+		const commit = await memoryFor(ctx.runtime).showCommit(ctx.params.hash ?? "");
+		return { status: 200, body: commit };
+	},
 	"memory.files.read": async (ctx: RequestContext) => {
 		const path = normalizeMemoryPath(ctx.params.rest ?? "");
 		const file = await memoryFor(ctx.runtime).readFile(path);

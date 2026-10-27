@@ -12,6 +12,7 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 | `push.js` | permission → subscribe → post the subscription, and the cause and fix for each failure (UX-01) |
 | `keys.js` | the keymap, the key reader, and the help overlay's rows (UX-02, UX-08) |
 | `sw.js` | push display and notification click |
+| `memory-editor-vendor.js` | the memory editor bundle: CodeMirror 6 with line numbers and Markdown highlighting, loaded only when editing (MEM-12) |
 | `style.css`, `fonts.css`, `fonts/` | the site style guide: IBM Plex Sans, IBM Plex Mono (Berkeley Mono when installed), and the palette black `#0D0D0D`, white, blue `#002FA7`, orange `#FF7900`, purple `#903465`, green `#237F52`, red `#BD2024`, yellow `#FFCC00`; one spacing scale, `--s1` to `--s6` |
 | `manifest.webmanifest`, `favicon.svg` | installability |
 
@@ -19,7 +20,9 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 
 `renderers.js` and `mermaid-renderer.js` are copied from [`apps/agent-mail-web`](../../../apps/agent-mail-web), together with the prebuilt `vendor.js` (marked + DOMPurify) and `mermaid-vendor.js` (Mermaid). `THIRD_PARTY_LICENSES.txt` and `fonts/LICENSE.txt` come with them. To update a bundle, rebuild it there with `npm ci --ignore-scripts && npm run build`, then copy the output here. Do not edit the bundles by hand.
 
-`vendor.js` loads from `app.js` rather than a `<script defer>` tag, so the renderer is certainly present before the first message renders. `mermaid-vendor.js` loads only when a message contains a `language-mermaid` block, as agent-mail-web does.
+`vendor.js` loads from `app.js` rather than a `<script defer>` tag, so the renderer is certainly present before the first message renders. `mermaid-vendor.js` loads only when a message contains a `language-mermaid` block, as agent-mail-web does. `memory-editor-vendor.js` is the same idea for the memory editor: built in agent-mail-web from a small `memory-editor.js` entry (esbuild, IIFE, global `PanaMemoryEditor`) and fetched by `app.js` on the first edit, so browsing memory never pays for CodeMirror.
+
+The Memory section is one view at a time (MEM-11): `#/memory` lists files and the log, `#/memory/files/<path>` is a rendered file with a Source toggle, `#/memory/commits/<hash>` is `git show`, and `#/memory/edit/<path>` (or `#/memory/new`) is the full-view editor.
 
 ## Authorize a window
 

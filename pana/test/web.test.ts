@@ -13,6 +13,9 @@ import {
 	appHref,
 	CONFIRM_EDIT,
 	CONFIRM_REDACT,
+	memoryCommitHref,
+	memoryEditHref,
+	memoryFileHref,
 	newDraft,
 	notificationTarget,
 	referenceFor,
@@ -180,7 +183,15 @@ describe("PWA shell and static assets", () => {
 		expect(html).toContain('id="compose-form"');
 		expect(html).toContain('id="reply-form"');
 		expect(html).toContain('id="memory-search"');
+		expect(html).toContain('data-testid="memory-editor"');
+		expect(html).toContain('id="memory-commit-view"');
 		expect(html).toContain('id="schedule-form"');
+		// MEM-11: a file and a commit are their own routes, and a memory path keeps its segments.
+		expect(routeFromHash("#/memory/files/notes/pana.md")).toMatchObject({ section: "memory", id: "files", rest: ["notes", "pana.md"] });
+		expect(routeFromHash("#/memory/commits/abc123")).toMatchObject({ section: "memory", id: "commits", rest: ["abc123"] });
+		expect(routeFromHash("#/memory/new")).toMatchObject({ section: "memory", id: "new", rest: [] });
+		// The full-view editor is a lazily loaded bundle in the static allowlist (MEM-12).
+		expect((await t.tcp.get("/memory-editor-vendor.js")).status).toBe(200);
 		// FIL-06: the composers' attach controls ride along with the shell.
 		expect(html).toContain('data-testid="compose-attach"');
 		expect(html).toContain('data-testid="reply-attach"');
@@ -218,6 +229,11 @@ describe("PWA shell and static assets", () => {
 		expect(appHref("https://example.com/x", domain)).toBe("https://example.com/x");
 		expect(appHref("#/inbox", domain)).toBe("#/inbox");
 		expect(appHref(undefined, domain)).toBeUndefined();
+		// MEM-11: memory routes encode each path segment once.
+		expect(memoryFileHref("notes/pana.md")).toBe("#/memory/files/notes/pana.md");
+		expect(memoryFileHref("two words/a b.md")).toBe("#/memory/files/two%20words/a%20b.md");
+		expect(memoryEditHref("notes/pana.md")).toBe("#/memory/edit/notes/pana.md");
+		expect(memoryCommitHref("abc123")).toBe("#/memory/commits/abc123");
 	});
 
 	it("FIL-06 a composer references an upload the way the CLI does", () => {
