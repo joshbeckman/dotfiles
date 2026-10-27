@@ -39,3 +39,16 @@ npm run test:web  # drives the installed Chrome through the chrome-devtools CLI
 The browser suite starts a real test `panad` with the scripted faux model, seeds it through the API, and asserts each section end to end, checking results through the API too. It needs `chrome-devtools` on `PATH`; without it the suite skips instead of downloading a browser. `test/integration.test.ts` also runs `views.js` against real handler output under `npm test`.
 
 `node test/browser/screens.ts DIR LABEL` seeds a domain (`test/browser/seed.ts`) and saves a full-page screenshot of every section to `DIR/LABEL-<section>.png`, for reviewing a visual change.
+
+### Message typography
+
+Thread messages and rendered transcript text opt into `.prose`; the app's headings,
+raw/tool output, and memory keep their own styles. Wide Markdown tables retain semantic
+`table` elements inside keyboard-focusable, locally scrolling regions. The specimen in
+`test/fixtures/message-prose.md` covers heading levels, paragraph rhythm, nested content,
+code, images, and table overflow. Run its desktop/390px light/dark browser regression with:
+
+```sh
+npm run test:web -- test/browser/prose.spec.ts
+PANA_PROSE_SHOTS=docs npm run test:web -- test/browser/prose.spec.ts
+```

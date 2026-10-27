@@ -1038,7 +1038,7 @@ async function messageElement(message, { focus }) {
 	article.append(header);
 
 	const body = document.createElement("div");
-	body.className = "body";
+	body.className = "body prose";
 	const { marked, DOMPurify } = window.MailRenderers ?? {};
 	if (view.redacted) {
 		body.textContent = "[redacted]";
@@ -1382,7 +1382,7 @@ function entryElement(entry) {
 /** UX-11: the model's text, as Markdown sanitized the same way as a thread message. */
 function markdownElement(text, testid) {
 	const node = document.createElement("div");
-	node.className = "body markdown";
+	node.className = "body markdown prose";
 	if (testid) node.dataset.testid = testid;
 	const { marked, DOMPurify } = window.MailRenderers ?? {};
 	// The HTML is in place when this returns; only images and diagrams finish later.

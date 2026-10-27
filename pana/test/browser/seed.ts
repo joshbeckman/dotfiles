@@ -67,11 +67,11 @@ async function session(t: TestPanad, prompt: string): Promise<Created> {
 	return res.body;
 }
 
-export async function seedDomain(): Promise<Seeded> {
+export async function seedDomain({ capitalReply = "Paris." } = {}): Promise<Seeded> {
 	const t = await startTestPanad({
 		config: { defaultModel: "faux/faux-1", timezone: "UTC" },
 		script: [
-			{ text: "Paris." },
+			{ text: capitalReply },
 			{ text: LONG_REPLY },
 			{ text: "We kept the faux model and capped it at 50 ms." },
 			{ text: "Paris. The release note is a different question." },
