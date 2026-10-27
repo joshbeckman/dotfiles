@@ -41,6 +41,7 @@ try {
 		await resizePage(width, height);
 		await shot(`inbox${suffix}`, "#/inbox", `document.querySelectorAll("#inbox-list .item").length >= 3`);
 		await shot(`thread${suffix}`, `#/threads/${seeded.group.threadId}`, `document.querySelectorAll("#thread-messages [data-testid=message]").length >= 4`);
+		await shot(`session${suffix}`, `#/sessions/${seeded.capital.sessionId}`, `document.querySelectorAll("#transcript [data-testid=entry]").length >= 2`);
 		if (suffix) continue;
 		await shot("compose", "#/compose", `!document.getElementById("view-compose").hidden`);
 		await shot("threads", "#/threads", `!document.getElementById("threads-list").hidden && document.querySelectorAll("#threads-list .item").length >= 3`);
@@ -51,7 +52,6 @@ try {
 			`document.querySelector("#thread-messages [data-testid=message-edit]")?.click(); await sleep(100);`,
 		);
 		await shot("sessions", "#/sessions", `document.querySelectorAll("#sessions-list .item").length >= 3`);
-		await shot("session", `#/sessions/${seeded.capital.sessionId}`, `document.querySelectorAll("#transcript [data-testid=entry]").length >= 2`);
 		await shot("memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1`, `document.querySelector("#memory-files .item")?.click(); await sleep(200);`);
 		await shot("schedules", "#/schedules", `document.querySelectorAll("#schedules-list .item").length >= 2`);
 		await shot(

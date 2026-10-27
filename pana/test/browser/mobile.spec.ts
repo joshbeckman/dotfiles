@@ -1,0 +1,123 @@
+// MOB-01..03 in a real browser at phone width: no view scrolls sideways, long unbroken text wraps,
+// and the session header keeps its ID readable. Set PANA_MOBILE_SHOTS=DIR to save a screenshot of
+// each view for review.
+
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { loopbackOrigin } from "../../src/web/static.ts";
+import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, screenshot } from "./cli.ts";
+import { seedDomain, type Seeded } from "./seed.ts";
+
+const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
+// An iPhone-sized viewport. The window itself cannot shrink below about 500 px, so the page emulates one.
+const PHONE = "390x844x3,mobile,touch";
+const LONG = `pana://lantern.example.org/threads/${"0123456789ABCDEFGHJKMNPQRS".repeat(3)}/and/a/long/path/fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017`;
+
+let seeded: Seeded | undefined;
+let page: number | undefined;
+
+afterEach(async () => {
+	if (page !== undefined) {
+		await evaluatePage(`localStorage.clear(); sessionStorage.clear(); return true;`).catch(() => undefined);
+		await emulateViewport("").catch(() => undefined);
+		await closePage(page);
+	}
+	page = undefined;
+	await seeded?.t.close();
+	seeded = undefined;
+});
+
+interface Overflow {
+	scrollWidth: number;
+	innerWidth: number;
+	/** The outermost elements that reach past the right edge, for a readable failure. */
+	offenders: string[];
+}
+
+const MEASURE = `
+	const describe = (el) => el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + (el.dataset.testid ? "[" + el.dataset.testid + "]" : "") + (typeof el.className === "string" && el.className ? "." + el.className.trim().split(/\\s+/).join(".") : "");
+	const offenders = [];
+	for (const el of document.querySelectorAll("body *")) {
+		if (el.closest("[hidden]") || el.offsetParent === null && getComputedStyle(el).position !== "fixed") continue;
+		const rect = el.getBoundingClientRect();
+		if (rect.width === 0 || rect.right <= innerWidth + 1) continue;
+		// A scroll container may hold wide content, such as a code block; that is not overflow. A
+		// clipping one is: its text is cut off.
+		let clipped = false;
+		for (let up = el.parentElement; up && up !== document.body; up = up.parentElement) {
+			const style = getComputedStyle(up);
+			if (/(auto|scroll)/.test(style.overflowX) && up.getBoundingClientRect().right <= innerWidth + 1) { clipped = true; break; }
+		}
+		if (clipped) continue;
+		if (el.parentElement && offenders.some((o) => o.el.contains(el))) continue;
+		offenders.push({ el, text: describe(el) + " right=" + Math.round(rect.right) });
+	}
+	return { scrollWidth: document.documentElement.scrollWidth, innerWidth, offenders: offenders.map((o) => o.text).slice(0, 8) };
+`;
+
+async function view(name: string, hash: string, ready: string): Promise<Overflow> {
+	const overflow = await evaluatePage<Overflow>(`
+		location.hash = ${JSON.stringify(hash)};
+		try { await until(() => ${ready}, 15000); } catch { throw new Error(${JSON.stringify(name)} + " never got ready: " + document.getElementById("status").textContent + " failed requests=" + JSON.stringify(performance.getEntriesByType("resource").filter((e) => e.responseStatus >= 400).map((e) => e.name + " " + e.responseStatus))); }
+		await sleep(300);
+		${MEASURE}
+	`);
+	const dir = process.env.PANA_MOBILE_SHOTS;
+	if (dir) await screenshot(join(dir, `${name}.png`));
+	return overflow;
+}
+
+describeBrowser("MOB the PWA at phone width", () => {
+	it("MOB-01 MOB-02 no view scrolls sideways, even with long URLs, paths, and IDs", async () => {
+		seeded = await seedDomain();
+		const { t } = seeded;
+		// A message body made of one long unbroken token, like a pasted URL.
+		const thread = await t.client.get<{ messages: Array<{ id: string }> }>(`/threads/${seeded.group.threadId}`);
+		const posted = await t.client.post(`/threads/${seeded.group.threadId}/messages`, {
+			after: thread.body.messages.at(-1)!.id,
+			body: `See ${LONG}`,
+		});
+		expect(posted.status, JSON.stringify(posted.body)).toBe(200);
+
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await emulateViewport(PHONE);
+		await evaluatePage(`await until(() => document.querySelectorAll("#inbox-list .item").length >= 3); return true;`);
+
+		const views: Array<[string, string, string]> = [
+			["inbox", "#/inbox", `document.querySelectorAll("#inbox-list .item").length >= 3`],
+			["thread", `#/threads/${seeded.group.threadId}`, `!document.getElementById("thread").hidden && document.querySelectorAll("#thread-messages [data-testid=message]").length >= 7`],
+			["threads", "#/threads", `document.querySelectorAll("#threads-list .item").length >= 3`],
+			["compose", "#/compose", `!document.getElementById("view-compose").hidden`],
+			["sessions", "#/sessions", `document.querySelectorAll("#sessions-list .item").length >= 2`],
+			["session", `#/sessions/${seeded.capital.sessionId}`, `document.querySelectorAll("#transcript [data-testid=entry]").length >= 2`],
+			["memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1`],
+			["schedules", "#/schedules", `document.querySelectorAll("#schedules-list .item").length >= 2`],
+		];
+		const failures: string[] = [];
+		for (const [name, hash, ready] of views) {
+			const overflow = await view(name, hash, ready);
+			if (overflow.scrollWidth > overflow.innerWidth || overflow.offenders.length > 0) {
+				failures.push(`${name}: scrollWidth ${overflow.scrollWidth} > ${overflow.innerWidth}; ${overflow.offenders.join(", ")}`);
+			}
+		}
+		expect(failures).toEqual([]);
+	});
+
+	it("MOB-03 the session header keeps the session ID on one line and its controls below it", async () => {
+		seeded = await seedDomain();
+		const { t } = seeded;
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await emulateViewport(PHONE);
+		const layout = await evaluatePage<{ titleLines: number; actionsBelow: boolean }>(`
+			location.hash = "#/sessions/${seeded.capital.sessionId}";
+			await until(() => document.querySelectorAll("#transcript [data-testid=entry]").length >= 2);
+			await sleep(200);
+			const title = document.getElementById("session-title");
+			const lineHeight = parseFloat(getComputedStyle(title).lineHeight) || 24;
+			const actions = document.querySelector("#session .header-actions").getBoundingClientRect();
+			return { titleLines: Math.round(title.getBoundingClientRect().height / lineHeight), actionsBelow: actions.top >= title.getBoundingClientRect().bottom - 1 };
+		`);
+		expect(layout.titleLines).toBeLessThanOrEqual(1);
+		expect(layout.actionsBelow).toBe(true);
+	});
+});
