@@ -456,6 +456,23 @@ export async function claimSchedule(runtime: Runtime, id: string, state: "active
 	});
 }
 
+/**
+ * WAK-07: retire a schedule that has finished its work, hidden from `list` and from
+ * `GET /schedules/:id` the same way a user's delete is. The row stays in the table, so a spent
+ * wake is still answerable from the database when someone asks whether it fired.
+ */
+export async function finishSchedule(runtime: Runtime, id: string): Promise<void> {
+	const now = runtime.clock.now();
+	await runtime.db.write(async (tx) => {
+		await tx.run(
+			"UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ? AND state <> 'deleted'",
+			now,
+			id,
+		);
+	});
+	notifySchedulesChanged(runtime);
+}
+
 /** SCH-05: move an active cron schedule to its next future time without firing it. */
 export async function skipScheduleTo(runtime: Runtime, id: string, nextAt: number | null): Promise<void> {
 	const now = runtime.clock.now();

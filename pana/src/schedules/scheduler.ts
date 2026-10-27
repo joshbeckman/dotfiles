@@ -18,6 +18,7 @@ import {
 	claimSchedule,
 	creatorAddress,
 	dueSchedules,
+	finishSchedule,
 	nextCronAt,
 	nextDueAt,
 	skipScheduleTo,
@@ -130,34 +131,39 @@ class ScheduleLoop implements Scheduler {
 		const keepsRunning = row.cron !== null && nextAt !== null;
 		const claimed = await claimSchedule(this.#runtime, row.id, keepsRunning ? "active" : "done", nextAt);
 		if (!claimed) return;
+		let delivered = false;
 		try {
-			await this.#run(row);
+			delivered = await this.#run(row);
 		} catch (error) {
 			this.#report(error, `schedule ${row.id}`);
 			await this.#notify(row, `Scheduled ${row.kind} ${this.#runtime.url({ kind: "schedule", id: row.id })} failed: ${messageOf(error)}`);
 			return;
 		}
+		// WAK-07: a wake is spent once its session has it. Anything else keeps its row, so a
+		// `done` schedule is exactly one whose outcome is unknown or refused, never a normal fire.
+		if (delivered) await finishSchedule(this.#runtime, row.id);
 		if (!keepsRunning && row.cron !== null) {
 			await this.#notify(row, `Scheduled ${row.kind} ${this.#runtime.url({ kind: "schedule", id: row.id })} is done: ${row.cron} has no future run.`);
 		}
 	}
 
-	async #run(row: ScheduleRow): Promise<void> {
+	/** Run one claimed schedule. Returns true when the schedule has done its whole job. */
+	async #run(row: ScheduleRow): Promise<boolean> {
 		const creator = await this.#caller(row.creator_id);
 		const payload = JSON.parse(row.payload) as Record<string, unknown>;
 		if (row.kind === "session") {
 			await this.#createSession(creator, payload);
-			return;
+			return false;
 		}
 		if (row.kind === "wake") {
-			await wakeScheduled(this.#runtime, { scheduleId: row.id, sessionId: String(payload.session), note: String(payload.note) });
-			return;
+			return wakeScheduled(this.#runtime, { scheduleId: row.id, sessionId: String(payload.session), note: String(payload.note) });
 		}
 		await createThread(this.#runtime, creator, {
 			to: payload.to,
 			body: payload.body,
 			subject: payload.subject,
 		});
+		return false;
 	}
 
 	/** SES-01: the session is created through the registered handler, as the schedule's creator. */
