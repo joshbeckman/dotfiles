@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { statusToExitCode } from "../src/api/errors.ts";
+import * as gitModule from "../src/memory/git.ts";
 import { runGit } from "../src/memory/git.ts";
 import { FAKE_EPOCH, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 
@@ -272,6 +273,28 @@ describe("memory", () => {
 		expect((await t.tcp.post("/memory/files/%2e%2e%2fescape.md", { content: "nope" })).status).toBe(400);
 		// A control character would split `git show`'s patch headers; it is not a path.
 		expect((await t.tcp.post("/memory/files/a%0Ab.md", { content: "nope" })).status).toBe(400);
+	});
+
+	it("MEM-09 reads return content and revision from one snapshot even if main advances mid-read", async () => {
+		t = await startTestPanad();
+		await t.tcp.post("/memory/files/snapshot.md", { content: "before\n" });
+		const before = await git(["-C", repo(), "rev-parse", "main"]);
+		const original = gitModule.runGit;
+		let advanced = false;
+		const spy = vi.spyOn(gitModule, "runGit").mockImplementation(async (args, options) => {
+			if (!advanced && args.includes("cat-file") && args.at(-1)?.endsWith(":snapshot.md")) {
+				advanced = true;
+				expect((await t!.tcp.post("/memory/files/snapshot.md", { content: "after\n" })).status).toBe(201);
+			}
+			return original(args, options);
+		});
+		try {
+			const read = await t.tcp.get<{ commit: string; content: string }>("/memory/files/snapshot.md");
+			expect(advanced).toBe(true);
+			expect(read.body).toMatchObject({ commit: before, content: "before\n" });
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it("MEM-09 UI save fast-forwards a clean stale worktree before editing a session-created file", async () => {

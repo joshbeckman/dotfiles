@@ -121,6 +121,49 @@ describeBrowser("pana in a browser", () => {
 		expect((await t!.client.get<{ content: string }>("/memory/files/profile.md")).body.content).toBe("newer session correction\n");
 	});
 
+	it("MEM-09 switching editor routes cannot pair an old asynchronous load with the new file path", async () => {
+		await start();
+		await t!.client.post("/memory/files/a.md", { content: "file A\n" });
+		await t!.client.post("/memory/files/b.md", { content: "file B\n" });
+		await open();
+		const result = await evaluatePage<{ content: string; title: string; disabled: boolean }>(`
+			await until(() => window.__pana && document.getElementById("authorize").hidden);
+			const original = window.fetch;
+			let release;
+			const gate = new Promise(resolve => { release = resolve; });
+			let pending = false;
+			window.fetch = async (path, options) => {
+				const response = await original(path, options);
+				if (path === "/memory/files/a.md" && options.method === "GET") {
+					pending = true;
+					await gate;
+				}
+				return response;
+			};
+			try {
+				location.hash = "#/memory/edit/a.md";
+				await until(() => pending);
+				const disabled = document.getElementById("memory-save").disabled;
+				location.hash = "#/memory/edit/b.md";
+				await until(() => window.__pana.memoryEditor?.value() === "file B\\n" && !document.getElementById("memory-save").disabled);
+				release();
+				await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+				const content = window.__pana.memoryEditor.value();
+				const title = document.getElementById("memory-edit-title").textContent;
+				window.__pana.memoryEditor.load("edited B\\n");
+				document.getElementById("memory-save").click();
+				await until(() => location.hash === "#/memory/files/b.md" && document.getElementById("memory-file").textContent.includes("edited B"));
+				return { content, title, disabled };
+			} finally {
+				release();
+				window.fetch = original;
+			}
+		`);
+		expect(result).toEqual({ content: "file B\n", title: "b.md", disabled: true });
+		expect((await t!.client.get<{ content: string }>("/memory/files/a.md")).body.content).toBe("file A\n");
+		expect((await t!.client.get<{ content: string }>("/memory/files/b.md")).body.content).toBe("edited B\n");
+	});
+
 	it("WEB-02 a 403 shows the authorize panel, and a pasted launch URL stores the token", async () => {
 		await start();
 		await postNotice(t!.runtime, { body: "A rendered thread" });
