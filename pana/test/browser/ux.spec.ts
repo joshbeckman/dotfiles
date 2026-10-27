@@ -566,21 +566,39 @@ describeBrowser("pana usability in a browser", () => {
 		expect(back.afterGo).toEqual(["#/threads", "#/sessions", "#/memory", "#/compose", "#/schedules", "#/inbox"]);
 		expect(back.search).toBe(true);
 
-		// e archives the open thread, and the selected one in a list.
-		await evaluatePage(`
+		// e archives the open thread and returns to the list it was opened from.
+		const leftThread = await evaluatePage<string>(`
 			${KEYS}
 			location.hash = "#/threads/${group.threadId}";
 			await until(() => window.__pana.state.threadId === "${group.threadId}" && !document.getElementById("thread").hidden);
 			document.activeElement?.blur();
 			await press("e");
-			await until(() => document.getElementById("thread-archive").dataset.archived === "true");
-			return true;
+			await until(() => document.getElementById("thread").hidden && !document.getElementById("threads-list").hidden && location.hash === "#/threads");
+			return location.hash;
 		`);
+		expect(leftThread).toBe("#/threads");
 		expect((await t.client.get<{ archived: boolean }>(`/threads/${group.threadId}`)).body.archived).toBe(true);
+
+		// A thread opened from the inbox goes back to the inbox, the list it was opened from.
+		const inboxLeft = await evaluatePage<string>(`
+			${KEYS}
+			location.hash = "#/inbox";
+			await until(() => !document.getElementById("view-inbox").hidden && document.querySelectorAll("#inbox-list .item").length >= 2);
+			document.activeElement?.blur();
+			await press("j");
+			const thread = selectedThread();
+			await press("Enter");
+			await until(() => location.hash === "#/threads/" + thread && !document.getElementById("thread").hidden);
+			document.activeElement?.blur();
+			await press("e");
+			await until(() => location.hash === "#/inbox" && !document.getElementById("view-inbox").hidden);
+			return location.hash;
+		`);
+		expect(inboxLeft).toBe("#/inbox");
 		const listArchived = await evaluatePage<string | undefined>(`
 			${KEYS}
 			location.hash = "#/inbox";
-			await until(() => document.querySelectorAll("#inbox-list .item").length >= 2 && !document.querySelector("#inbox-list .item[data-thread='${group.threadId}']"));
+			await until(() => document.querySelectorAll("#inbox-list .item").length >= 1 && !document.querySelector("#inbox-list .item[data-thread='${group.threadId}']"));
 			document.activeElement?.blur();
 			await press("j");
 			const thread = selectedThread();

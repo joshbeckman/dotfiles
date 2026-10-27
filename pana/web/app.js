@@ -862,15 +862,24 @@ function rowAction(testid, label, onClick) {
 	return button;
 }
 
-/** REF-07: archive or unarchive one thread, then refresh whatever list is showing. */
-async function archiveThread(threadId, archived) {
+/**
+ * REF-07: archive or unarchive one thread, then refresh whatever list is showing. `leave` is for
+ * the thread that is open: rather than redraw it, go back to the list it was opened from, the way
+ * `u` would.
+ */
+async function archiveThread(threadId, archived, { leave = false } = {}) {
 	try {
 		await api("POST", `/threads/${threadId}/${archived ? "archive" : "unarchive"}`, {});
 		status(archived ? "Archived." : "Unarchived.");
-		if (state.section === "threads" && state.thread?.id === threadId && !$("thread").hidden) await openThread(threadId);
+		const open = state.section === "threads" && state.thread?.id === threadId && !$("thread").hidden;
 		await refreshUnread().catch(() => {});
-		if (state.section === "inbox") await loadInbox();
-		else if (state.section === "threads" && $("thread").hidden) await searchThreads();
+		if (open && leave) {
+			location.hash = state.lastList;
+			return;
+		}
+		if (open) await openThread(threadId);
+		else if (state.section === "inbox") await loadInbox();
+		else if (state.section === "threads") await searchThreads();
 	} catch (error) {
 		fail(error);
 	}
@@ -1879,7 +1888,8 @@ function focusReply() {
 
 function archiveKey() {
 	if (state.section === "threads" && !$("thread").hidden && state.thread) {
-		void archiveThread(state.thread.id, !state.threadArchived);
+		// UX-08: archiving the open thread leaves it for the list, instead of redrawing it archived.
+		void archiveThread(state.thread.id, !state.threadArchived, { leave: !state.threadArchived });
 		return;
 	}
 	const row = selected();
