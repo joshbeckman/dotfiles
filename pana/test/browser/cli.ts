@@ -57,15 +57,6 @@ export async function newPage(url: string): Promise<number> {
 	return selected.id;
 }
 
-/**
- * Make `id` the page `evaluate_script`, screenshots, and emulation act on. Every session on this
- * machine drives one chrome-devtools daemon, so a suite that opens a page must name it again
- * before each call: another session's `new_page` takes the selection away.
- */
-export async function selectPage(id: number): Promise<void> {
-	await command(["select_page", String(id)]);
-}
-
 export async function closePage(id: number): Promise<void> {
 	await command(["close_page", String(id)]).catch(() => undefined);
 }
