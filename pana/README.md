@@ -181,7 +181,7 @@ Sections that change every run, such as the current time, stay out of the prompt
 
 ### Tools
 
-Every pana tool wraps one CLI command with the same arguments, output, and exit codes. A session can use either. The tools are `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, and `pana_memory_commit`.
+Every pana tool wraps one CLI command with the same arguments, output, and exit codes. A session can use either. The tools are `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake`.
 
 ### Commit attribution
 
@@ -321,13 +321,25 @@ pana scratch prune [--dry-run]     # runs the sweep now and lists what it remove
 pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT
 pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT
 pana schedule thread create --at 2026-10-25T18:26:14Z --to ADDRS --body-file PATH
-pana schedule list [--kind session|thread]
+pana schedule wake --in 10m --note TEXT [--session SESSION]
+pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT
+pana schedule list [--kind session|thread|wake]
 pana schedule delete SCHEDULE
 ```
 
 - Cron uses the domain's local timezone.
 - A run missed while the machine was off is skipped.
 - A failed scheduled session mails the schedule's creator.
+
+### Wakeups
+
+A session waits for things outside its run (CI, a review, a deploy, another session) by scheduling a wake and ending its run, not by sleeping in `bash`.
+
+- `pana schedule wake` (the `pana_schedule_wake` tool) takes `--in` (`90s`, `10m`, `2h`, `1d`) or `--at`, and a `--note`. A session wakes only itself; the user may wake any session with `--session`. Wakes take no `--cron`, so nothing wakes a session forever.
+- When it fires, the note reaches the session as a new input, as a message would, and the session runs. A stopped or archived session is not woken.
+- Nothing is posted automatically at the end of a wakeup run. The note says which thread to reply in, and the session replies with `pana_reply` if it has news.
+- A wake that came due while `panad` was down fires when it starts, because a session is waiting on it. Other one-offs are marked missed.
+- `bash` refuses a command that sleeps 60 seconds or more, and its error names `pana schedule wake`. Shorter sleeps, such as waiting for a local server the command started, still work.
 
 ## UI
 

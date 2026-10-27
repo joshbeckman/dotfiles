@@ -24,6 +24,7 @@ const PANA_TOOLS = [
 	"pana_session_create",
 	"pana_memory_search",
 	"pana_memory_commit",
+	"pana_schedule_wake",
 ];
 
 const dirs: string[] = [];
@@ -324,7 +325,7 @@ describe("system prompt", () => {
 });
 
 describe("pana tools", () => {
-	it("TOL-01 the six pana tools are installed", async () => {
+	it("TOL-01 the pana tools are installed", async () => {
 		t = await startTestPanad({ script: [] });
 		const pana = t.runtime.registry.snapshot().extension("pana");
 		expect(pana?.tools?.map((tool) => tool.name)).toEqual(PANA_TOOLS);

@@ -218,6 +218,31 @@ export const MIGRATIONS: readonly Migration[] = [
 			ALTER TABLE sessions ADD COLUMN scratch_removed_bytes INTEGER;
 		`,
 	},
+	{
+		version: 7,
+		name: "wake schedules",
+		// WAK-01: a schedule can wake an existing session. SQLite cannot alter a CHECK, so the
+		// table is rebuilt with the same columns and rows.
+		sql: `
+			CREATE TABLE schedules_new (
+				id          TEXT PRIMARY KEY,
+				kind        TEXT NOT NULL CHECK (kind IN ('session', 'thread', 'wake')),
+				state       TEXT NOT NULL CHECK (state IN ('active', 'done', 'missed', 'deleted')),
+				cron        TEXT,
+				at          INTEGER,
+				timezone    TEXT,
+				creator_id  TEXT NOT NULL REFERENCES participants(id),
+				payload     TEXT NOT NULL,
+				next_at     INTEGER,
+				created_at  INTEGER NOT NULL,
+				updated_at  INTEGER NOT NULL
+			);
+			INSERT INTO schedules_new SELECT id, kind, state, cron, at, timezone, creator_id, payload, next_at, created_at, updated_at FROM schedules;
+			DROP TABLE schedules;
+			ALTER TABLE schedules_new RENAME TO schedules;
+			CREATE INDEX schedules_state ON schedules(state, next_at);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

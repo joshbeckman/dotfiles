@@ -896,6 +896,26 @@ describeBrowser("pana in a browser", () => {
 		);
 	});
 
+	it("WAK-04 the schedules list shows a wake's note and session, with Delete and no Edit", async () => {
+		await start([{ text: "watching" }]);
+		const seeded = await seedSession("watch PR 75");
+		const wake = await t!.client.post("/schedules", { kind: "wake", in: "10m", note: "Check CI on PR 75" }, { caller: seeded.session.id });
+		expect(wake.status, JSON.stringify(wake.body)).toBe(201);
+		await open();
+		const row = await evaluatePage<{ text: string; actions: string[]; link: string }>(`
+			location.hash = "#/schedules";
+			const row = await until(() => [...document.querySelectorAll("#schedules-list .item")].find((el) => el.textContent.includes("wake")));
+			return {
+				text: row.textContent,
+				actions: [...row.querySelectorAll("button")].map((button) => button.textContent),
+				link: [...row.querySelectorAll("a")].map((a) => a.getAttribute("href")).find((href) => href.includes("/sessions/")) ?? "",
+			};
+		`);
+		expect(row.text).toContain("Check CI on PR 75");
+		expect(row.actions).toEqual(["Delete"]);
+		expect(row.link).toContain(seeded.session.id);
+	});
+
 	it("PSH-02 the shell registers a service worker and offers notifications", async () => {
 		await start();
 		await open();

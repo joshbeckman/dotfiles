@@ -14,6 +14,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS } from "../config/index.ts";
 import { scratchPath } from "../scratch/index.ts";
+import { MAX_SLEEP_SEC } from "./bash.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 /** `pana/prompt.md`, loaded only by pana. */
@@ -43,6 +44,7 @@ export function fillPrompt(template: string, values: PromptValues): string {
 		.replaceAll("{{scratch_ttl_days}}", String(values.scratchTtlDays ?? DEFAULTS.scratch.ttlDays))
 		.replaceAll("{{scratch_note}}", values.scratchRemoved ? `\n${scratchNote(values.scratchRemoved)}\n` : "")
 		.replaceAll("{{domain}}", values.domain)
+		.replaceAll("{{max_sleep}}", String(MAX_SLEEP_SEC))
 		.replaceAll("{{bash_timeout}}", String(values.bashTimeoutSec ?? DEFAULTS.tools.bashTimeoutSec));
 }
 

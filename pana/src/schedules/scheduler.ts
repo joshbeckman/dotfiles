@@ -10,6 +10,7 @@
 
 import type { Caller, Handlers } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { wakeScheduled } from "../sessions/wake.ts";
 import { createThread, postNotice } from "../threads/index.ts";
 import { registerScheduler, unregisterScheduler } from "./registry.ts";
 import {
@@ -148,6 +149,10 @@ class ScheduleLoop implements Scheduler {
 			await this.#createSession(creator, payload);
 			return;
 		}
+		if (row.kind === "wake") {
+			await wakeScheduled(this.#runtime, { scheduleId: row.id, sessionId: String(payload.session), note: String(payload.note) });
+			return;
+		}
 		await createThread(this.#runtime, creator, {
 			to: payload.to,
 			body: payload.body,
@@ -210,6 +215,12 @@ class ScheduleLoop implements Scheduler {
 				continue;
 			}
 			if (row.next_at !== null && row.next_at > now) continue;
+			// WAK-03: a session is waiting on its wake, so a late one still fires. Skipping it
+			// would leave the session asleep with nothing to wake it.
+			if (row.kind === "wake") {
+				await this.#fire(row, now);
+				continue;
+			}
 			if (await claimSchedule(this.#runtime, row.id, "missed", null)) {
 				await this.#notify(
 					row,
