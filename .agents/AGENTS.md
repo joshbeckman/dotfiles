@@ -19,7 +19,7 @@ Proceed by default. Do not ask permission for routine reading, editing, refactor
 
 If your system prompt has not assigned a name, do **not** invent one: this computer is probably missing `~/.config/agent-realm`, and an ad-hoc name could reuse a public identity. Ask Josh to configure a realm or run `agent-identity-backfill --realm NAME`.
 
-Use an assigned name in scratch filenames, branch names, tmux titles, and notification titles. Don't announce it unprompted. To launch an unrelated agent from a parent's shell, clear the hint with `env -u AGENT_SURNAME …`.
+When a name is assigned, use it in scratch filenames, branch names, tmux titles, and notification titles; when none is, omit it rather than substituting a session id or URL. Don't announce a name unprompted. To launch an unrelated agent from a parent's shell, clear the hint with `env -u AGENT_SURNAME …`.
 
 ## Scratchpad
 
