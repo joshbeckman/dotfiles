@@ -66,6 +66,18 @@ async function seed(panad: TestPanad, body: string, options: { subject?: boolean
 	return { threadId, messageId };
 }
 
+async function appendMessages(panad: TestPanad, threadId: string, bodies: string[]): Promise<string[]> {
+	const ids: string[] = [];
+	await panad.runtime.db.write(async tx => {
+		for (const [index, body] of bodies.entries()) {
+			const id = panad.runtime.newId(); ids.push(id);
+			await tx.run("INSERT INTO messages (id, thread_id, seq, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+				id, threadId, index + 2, TEST_USER, body, panad.runtime.clock.now());
+		}
+	});
+	return ids;
+}
+
 async function currentSubject(panad: TestPanad, threadId: string): Promise<string | null | undefined> {
 	const row = await panad.runtime.db.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", threadId);
 	return row?.subject;
@@ -159,6 +171,66 @@ describe("SUB subjects", () => {
 		// Search follows the newest subject; an old one is no longer indexed.
 		expect((await searchThreads(panad.runtime, "Second model subject")).map((h) => h.threadId)).toContain(seeded.threadId);
 		expect(await searchThreads(panad.runtime, "First model subject")).toEqual([]);
+	});
+
+	it("regeneration reads the conversation in order with revisions, never redacted or superseded text", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Current topic" }] });
+		const panad = t;
+		const seeded = await seed(panad, "Hello");
+		const [revised, redacted] = await appendMessages(panad, seeded.threadId, ["superseded wording", "private removed content", "Current substantive discussion"]);
+		await panad.runtime.db.write(async tx => {
+			for (const [id, kind, body] of [[revised, "message.revised", "Corrected discussion"], [redacted, "message.redacted", null]] as const) {
+				await tx.run("INSERT INTO message_events (id, message_id, kind, body, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+					panad.runtime.newId(), id!, kind, body, TEST_USER, panad.runtime.clock.now());
+			}
+		});
+		const ask = vi.spyOn(panad.runtime.models, "completeSimple"); restores.push(() => ask.mockRestore());
+		const result = await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(result.status).toBe(200);
+		const context = ask.mock.calls[0]![1];
+		const input = String(context.messages[0]!.content);
+		expect(input).toContain("Hello");
+		expect(input).toContain("Corrected discussion");
+		expect(input).toContain("Current substantive discussion");
+		expect(input.indexOf("Hello")).toBeLessThan(input.indexOf("Corrected discussion"));
+		expect(input.indexOf("Corrected discussion")).toBeLessThan(input.indexOf("Current substantive discussion"));
+		expect(input).not.toContain("superseded wording");
+		expect(input).not.toContain("private removed content");
+	});
+
+	it("regeneration works after the greeting is redacted and rejects entirely redacted threads", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Later discussion" }] });
+		const panad = t;
+		const seeded = await seed(panad, "Hello");
+		await panad.runtime.db.write(tx => tx.run("INSERT INTO message_events (id, message_id, kind, body, created_by, created_at) VALUES (?, ?, 'message.redacted', NULL, ?, ?)",
+			panad.runtime.newId(), seeded.messageId, TEST_USER, panad.runtime.clock.now()));
+		const empty = await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(empty.status).toBe(400);
+		expect(panad.model.calls()).toBe(0);
+		await appendMessages(panad, seeded.threadId, ["A later substantive discussion"]);
+		const result = await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(result.status).toBe(200);
+		expect(await currentSubject(panad, seeded.threadId)).toBe("Later discussion");
+	});
+
+	it("regeneration bounds input size and message count while retaining recent context", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Recent topic" }, { text: "Latest topic" }] });
+		const panad = t;
+		const seeded = await seed(panad, "Old greeting");
+		await appendMessages(panad, seeded.threadId, Array.from({ length: 120 }, (_, i) => `Discussion number ${i}`));
+		const ask = vi.spyOn(panad.runtime.models, "completeSimple"); restores.push(() => ask.mockRestore());
+		await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		const input = String(ask.mock.calls[0]![1].messages[0]!.content);
+		expect(input).not.toContain("Old greeting");
+		expect(input).toContain("Discussion number 119");
+		expect(input.split("\n")).toHaveLength(101);
+		const huge = await seed(panad, "a".repeat(100000));
+		await appendMessages(panad, huge.threadId, Array.from({ length: 20 }, (_, i) => "b".repeat(10000) + ` recent-${i}`));
+		await panad.client.post(`/threads/${huge.threadId}/subject`, { regenerate: true });
+		const bounded = String(ask.mock.calls[1]![1].messages[0]!.content);
+		expect(bounded.length).toBeLessThanOrEqual(32000);
+		expect(bounded).toContain("recent-19");
+		expect(bounded).toContain("[message truncated]");
 	});
 
 	it("SUB-04 reads the current subject and its history without regenerating", async () => {

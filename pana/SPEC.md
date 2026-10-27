@@ -286,7 +286,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **SUB-01** A new thread's subject is the first line of its first message, trimmed to 80 characters.
 - [x] **SUB-02** With `subjectModel` set, a background job replaces the subject. Thread create does not wait for it.
 - [x] **SUB-03** A failed subject job leaves the first-line subject and logs the failure.
-- [x] **SUB-04** `thread subject --regenerate` makes a new subject and keeps the old ones in `subjects`.
+- [x] **SUB-04** `thread subject --regenerate` reads the current conversation, makes a new subject, and keeps the old ones in `subjects`. It respects revisions and redactions; long conversations use up to 100 recent readable messages and a 32,000-character input budget, truncating individual messages to preserve recent context. Initial background naming still uses the first message.
 - [x] **SRC-01** `thread search --query Q` searches subjects and message bodies with FTS5 and returns thread, message, and a snippet.
 - [x] **SRC-02** Redacted text is removed from the index. Revised text replaces the old text.
 - [x] **SRC-03** `session search --query Q` searches user and assistant text of transcripts, indexed when each run settles.
