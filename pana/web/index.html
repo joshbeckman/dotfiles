@@ -25,6 +25,13 @@
 			</nav>
 			<div class="topbar-tools">
 				<button id="enable-push" data-testid="enable-push" class="quiet" type="button">Notifications</button>
+				<button id="open-palette" data-testid="open-palette" class="quiet palette-open" type="button" aria-label="Command palette" title="Command palette">
+					<span class="palette-key" data-palette-key></span>
+					<svg class="palette-icon" aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
+						<circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+						<path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+					</svg>
+				</button>
 				<button id="show-help" data-testid="show-help" class="quiet" type="button" aria-label="Keyboard shortcuts">?</button>
 			</div>
 		</header>
@@ -308,6 +315,39 @@
 					<button type="button" id="help-close" class="quiet" data-testid="help-close">Close</button>
 				</header>
 				<table id="help-keys" data-testid="help-keys"></table>
+			</div>
+		</div>
+
+		<div id="palette" data-testid="palette" class="overlay palette" role="dialog" aria-modal="true" aria-labelledby="palette-title" hidden>
+			<div class="overlay-card palette-card">
+				<h2 id="palette-title" class="visually-hidden">Command palette</h2>
+				<input
+					id="palette-input"
+					data-testid="palette-input"
+					type="text"
+					role="combobox"
+					autocomplete="off"
+					spellcheck="false"
+					aria-expanded="true"
+					aria-controls="palette-list"
+					aria-autocomplete="list"
+					placeholder="Type a command"
+				/>
+				<input
+					id="palette-search-input"
+					data-testid="palette-search-input"
+					type="search"
+					role="combobox"
+					autocomplete="off"
+					spellcheck="false"
+					aria-expanded="true"
+					aria-controls="palette-list"
+					aria-autocomplete="list"
+					placeholder="Search threads, sessions, and memory"
+					hidden
+				/>
+				<div id="palette-list" data-testid="palette-list" class="list" role="listbox" aria-labelledby="palette-title"></div>
+				<p id="palette-note" data-testid="palette-note" class="hint"></p>
 			</div>
 		</div>
 	</body>

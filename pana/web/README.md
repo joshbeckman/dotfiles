@@ -11,6 +11,7 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 | `render.js` | Markdown, `pana://` links, authenticated images, Mermaid |
 | `push.js` | permission → subscribe → post the subscription, and the cause and fix for each failure (UX-01) |
 | `keys.js` | the keymap, the key reader, and the help overlay's rows (UX-02, UX-08) |
+| `palette.js` | the command palette's commands, fuzzy match, and the three stores' hits as rows (UX-15) |
 | `sw.js` | push display and notification click |
 | `memory-editor-vendor.js` | the memory editor bundle: CodeMirror 6 with line numbers and Markdown highlighting, loaded only when editing (MEM-12) |
 | `style.css`, `fonts.css`, `fonts/` | the site style guide: IBM Plex Sans, IBM Plex Mono (Berkeley Mono when installed), and the palette black `#0D0D0D`, white, blue `#002FA7`, orange `#FF7900`, purple `#903465`, green `#237F52`, red `#BD2024`, yellow `#FFCC00`; one spacing scale, `--s1` to `--s6` |

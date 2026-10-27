@@ -18,12 +18,15 @@ export const KEYMAP = [
 	{ action: "archive", sequences: [["e"]], description: "Archive the open or selected thread" },
 	{ action: "back", sequences: [["u"], ["Escape"]], description: "Go back" },
 	{ action: "help", sequences: [["?"]], description: "Show or hide this help" },
+	// UX-15: the palette opens from anywhere, including a text box, so it has its own chord.
+	{ action: "palette", sequences: [["Mod+k"]], description: "Open the command palette" },
 ];
 
 /** Bindings that work inside text inputs. `Mod` is Cmd on macOS and Ctrl elsewhere. */
 export const INPUT_KEYMAP = [
 	{ action: "submit", sequences: [["Mod+Enter"]], description: "Submit the form" },
 	{ action: "leave-input", sequences: [["Escape"]], description: "Leave the text input" },
+	{ action: "palette", sequences: [["Mod+k"]], description: "Open the command palette" },
 ];
 
 /** How long a prefix such as `g` waits for its second key, in milliseconds. */
@@ -56,11 +59,29 @@ export function isSubmitChord(event, apple) {
 export function sequenceLabel(sequence, apple) {
 	return sequence
 		.map((key) => {
-			if (key === "Mod+Enter") return apple ? "⌘ Enter" : "Ctrl Enter";
+			if (key.startsWith("Mod+")) {
+				const rest = key.slice("Mod+".length);
+				return `${apple ? "⌘" : "Ctrl"} ${rest.length === 1 ? rest.toUpperCase() : rest}`;
+			}
 			if (key === "Escape") return "Esc";
 			return key;
 		})
 		.join(" then ");
+}
+
+/**
+ * The `Mod+` chord a key event is, such as `Mod+k`, or null when it is a plain key. A binding may
+ * also be pressed as a literal `Mod+k` key, which is how the tests and a sequence label name it.
+ */
+export function chordOf(event) {
+	const key = String(event.key ?? "");
+	if (/^Mod\+/i.test(key)) return `Mod+${key.slice("Mod+".length).toLowerCase()}`;
+	if (event.altKey || event.shiftKey) return null;
+	// Cmd on macOS and Ctrl elsewhere, but either opens the palette: reaching for the other one
+	// means the same thing, and a browser may report either.
+	if (!event.metaKey && !event.ctrlKey) return null;
+	if (key.length !== 1) return null;
+	return `Mod+${key.toLowerCase()}`;
 }
 
 /** The overlay's rows, in keymap order: one row per binding, its sequences joined by "or". */
@@ -100,6 +121,15 @@ export function createKeyReader({ keymap = KEYMAP, timeout = SEQUENCE_TIMEOUT } 
 		if (isSubmitChord(event, Boolean(context.apple))) {
 			pending = [];
 			return context.inForm ? "submit" : null;
+		}
+		// UX-15: a chord is one key, so it runs before the text-input and modifier guards.
+		const chord = chordOf(event);
+		if (chord) {
+			const binding = keymap.find((candidate) => candidate.sequences.some((sequence) => sequence.length === 1 && sequence[0] === chord));
+			if (binding) {
+				pending = [];
+				return binding.action;
+			}
 		}
 		if (context.inInput) {
 			pending = [];

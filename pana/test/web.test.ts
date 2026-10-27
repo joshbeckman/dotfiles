@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,18 @@ describe("PWA shell and static assets", () => {
 		expect(manifest.icons.map((icon: { src: string; purpose: string }) => `${icon.src} ${icon.purpose}`)).toContain("/icon-maskable-512.png maskable");
 	});
 
+	it("WEB-01 every module under web/ parses", async () => {
+		// `app.js` is plain JavaScript that no other test loads, so a stray `const` once shipped a
+		// blank page. Parsing each module is cheap and catches exactly that.
+		const dir = fileURLToPath(new URL("../web/", import.meta.url));
+		const files = readdirSync(dir).filter((file) => file.endsWith(".js"));
+		expect(files).toEqual(expect.arrayContaining(["app.js", "keys.js", "palette.js", "views.js"]));
+		for (const file of files) {
+			const parsed = spawnSync(process.execPath, ["--check", join(dir, file)], { encoding: "utf8" });
+			expect(parsed.status, `${file}: ${parsed.stderr}`).toBe(0);
+		}
+	});
+
 	it("WEB-01 panad serves the PWA at / on TCP and prints a launch URL with the token in the fragment", async () => {
 		t = await startTestPanad();
 		const port = t.panad.tcpPort!;
@@ -125,7 +137,7 @@ describe("PWA shell and static assets", () => {
 		expect(page.headers["content-security-policy"]).not.toContain("unsafe-eval");
 
 		// The shell does not need the token, but unknown paths still do (API-04).
-		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js"]) {
+		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js", "/palette.js"]) {
 			expect((await request({ host: "127.0.0.1", port }, "GET", path)).status, path).toBe(200);
 		}
 		expect((await request({ host: "127.0.0.1", port }, "GET", "/nope")).status).toBe(403);

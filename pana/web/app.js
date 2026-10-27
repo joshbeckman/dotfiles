@@ -22,6 +22,7 @@ import {
 } from "./links.js";
 import { browserEnv, explainPush, subscribeToPush } from "./push.js";
 import { nextCursor, pagePath, showMore } from "./pages.js";
+import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
 	commitView,
@@ -2181,11 +2182,260 @@ function toggleHelp(show = $("help").hidden) {
 	if (show) $("help-close").focus();
 }
 
+// ---- Command palette (UX-15) ------------------------------------------------------------------
+
+/** How long a keystroke in the search stage waits for the next one, in milliseconds. */
+const PALETTE_DEBOUNCE = 120;
+/** The shortest query the search stage sends: one letter is noise to full-text search (SRC-01). */
+const PALETTE_MIN_QUERY = 2;
+
+const palette = {
+	open: false,
+	stage: "commands",
+	/** The rows in view: `{kind, command, hit, row}`, `command` for a command, `hit` for a result. */
+	rows: [],
+	index: 0,
+	/** What had focus when the palette opened; closing gives it back, draft and all. */
+	restore: undefined,
+	/** The newest search: a slow answer for an older query is dropped instead of drawn. */
+	search: 0,
+	timer: undefined,
+};
+
+/** What the page can do right now, as plain data for `paletteCommands`. */
+function paletteContext() {
+	const thread = state.section === "threads" && !$("thread").hidden ? state.thread : undefined;
+	const session = state.section === "sessions" && !$("session").hidden ? state.session : undefined;
+	return { thread, session, selection: Boolean(selected()), push: state.push };
+}
+
+function openPalette() {
+	if (palette.open) return;
+	palette.open = true;
+	palette.restore = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+	$("palette").hidden = false;
+	paletteStage("commands");
+}
+
+function closePalette() {
+	if (!palette.open) return;
+	palette.open = false;
+	clearTimeout(palette.timer);
+	palette.search += 1;
+	palette.rows = [];
+	palette.index = 0;
+	$("palette-list").replaceChildren();
+	$("palette-note").textContent = "";
+	$("palette").hidden = true;
+	const restore = palette.restore;
+	palette.restore = undefined;
+	// UX-15: the palette may have opened over a half-written reply, which keeps its place.
+	if (restore?.isConnected) restore.focus();
+}
+
+/** Show one of the palette's two inputs, empty, and draw its list. */
+function paletteStage(stage) {
+	palette.stage = stage;
+	palette.rows = [];
+	palette.index = 0;
+	clearTimeout(palette.timer);
+	palette.search += 1;
+	$("palette-input").hidden = stage !== "commands";
+	$("palette-search-input").hidden = stage !== "search";
+	$("palette-input").value = "";
+	$("palette-search-input").value = "";
+	$("palette-list").replaceChildren();
+	$("palette-note").textContent = "";
+	if (stage === "search") {
+		$("palette-note").textContent = "Type two or more characters.";
+		$("palette-search-input").focus();
+		return;
+	}
+	renderPaletteCommands();
+	$("palette-input").focus();
+}
+
+/** A command's own key, set to the right of its row the way the help overlay writes one. */
+function paletteKeyHint(hint) {
+	const aside = document.createElement("div");
+	aside.className = "item-aside";
+	const kbd = document.createElement("kbd");
+	kbd.textContent = hint;
+	aside.append(kbd);
+	return aside;
+}
+
+/** One palette row, built like every other list row so it reads the same (REF-07, UX-07). */
+function paletteRow({ command, hit }) {
+	const label = command ? command.label : hit.label || "(untitled)";
+	const entry = { kind: command ? "command" : "hit", command, hit, row: undefined };
+	const row = item(label, command ? [] : [hit.meta].filter(Boolean), () => runPaletteRow(entry), {
+		testid: command ? "palette-command" : "palette-hit",
+		id: command ? command.id : hit.id,
+		aside: command?.hint ? paletteKeyHint(command.hint) : undefined,
+	});
+	entry.row = row;
+	// The palette keeps its own selection; j and k still move the page's list behind it.
+	delete row.dataset.selectable;
+	row.setAttribute("role", "option");
+	row.setAttribute("aria-selected", "false");
+	row.id = `palette-row-${palette.rows.length}`;
+	row.dataset.kind = entry.kind;
+	if (command) row.dataset.command = command.id;
+	if (hit) row.dataset.hitKind = hit.kind;
+	palette.rows.push(entry);
+	return row;
+}
+
+function renderPaletteCommands() {
+	const list = $("palette-list");
+	list.replaceChildren();
+	palette.rows = [];
+	palette.index = 0;
+	const commands = matchCommands(paletteCommands(paletteContext()), $("palette-input").value);
+	for (const command of commands) list.append(paletteRow({ command }));
+	$("palette-note").textContent = commands.length === 0 ? "No command matches that." : "";
+	paletteSelect(0);
+}
+
+/** The search stage: one group per store that matched, its best hits first (UX-15). */
+function renderPaletteHits(groups, query) {
+	const list = $("palette-list");
+	list.replaceChildren();
+	palette.rows = [];
+	palette.index = 0;
+	groups.forEach((group, at) => {
+		const box = document.createElement("div");
+		box.setAttribute("role", "group");
+		const title = document.createElement("p");
+		title.className = "palette-group-title";
+		title.id = `palette-group-${at}`;
+		title.textContent = group.title;
+		box.setAttribute("aria-labelledby", title.id);
+		box.append(title);
+		for (const hit of group.hits) box.append(paletteRow({ hit }));
+		list.append(box);
+	});
+	$("palette-note").textContent = groups.length === 0 ? `Nothing matches “${query}”.` : "";
+	paletteSelect(0);
+}
+
+/** Mark the row the input is on, and put it in reach. */
+function paletteSelect(index) {
+	palette.index = index;
+	const current = palette.rows[index]?.row;
+	for (const entry of palette.rows) {
+		const on = entry.row === current;
+		entry.row.classList.toggle("focus", on);
+		entry.row.setAttribute("aria-selected", on ? "true" : "false");
+	}
+	const input = palette.stage === "search" ? $("palette-search-input") : $("palette-input");
+	if (!current) return input.removeAttribute("aria-activedescendant");
+	input.setAttribute("aria-activedescendant", current.id);
+	current.scrollIntoView({ block: "nearest" });
+}
+
+function paletteMove(delta) {
+	if (palette.rows.length === 0) return;
+	paletteSelect(moveSelection(palette.index, palette.rows.length, delta > 0 ? "next" : "previous"));
+}
+
+/** Run a row: a command closes the palette and then acts; a hit navigates to its own view. */
+function runPaletteRow(entry) {
+	if (!entry) return;
+	if (entry.command && entry.command.id === "palette:search") return paletteStage("search");
+	closePalette();
+	if (entry.command) return runPaletteCommand(entry.command.id);
+	location.hash = hitHash(entry.hit);
+}
+
+function runPaletteCommand(id) {
+	if (id.startsWith("go:")) {
+		location.hash = `#/${id.slice("go:".length)}`;
+		return;
+	}
+	if (id.startsWith("session:")) return runSessionCommand(id.slice("session:".length));
+	switch (id) {
+		case "open":
+			return openSelection();
+		case "archive-thread":
+			return archiveKey();
+		case "back":
+			return goBack();
+		case "help":
+			return toggleHelp(true);
+		case "push":
+			return void enablePush();
+	}
+}
+
+function runSessionCommand(action) {
+	if (action === "archive") return askArchiveSession();
+	if (action === "reload") return void openSession(state.session?.id).catch(fail);
+	return void sessionAction(action);
+}
+
+/** A keystroke in either input: commands filter at once, a search waits for a pause. */
+function onPaletteInput() {
+	if (palette.stage === "commands") return renderPaletteCommands();
+	const query = $("palette-search-input").value.trim();
+	clearTimeout(palette.timer);
+	const search = (palette.search += 1);
+	if (query.length < PALETTE_MIN_QUERY) {
+		$("palette-list").replaceChildren();
+		palette.rows = [];
+		palette.index = 0;
+		$("palette-note").textContent = query.length === 0 ? "Type two or more characters." : "Type one more character.";
+		return;
+	}
+	$("palette-note").textContent = "Searching…";
+	palette.timer = setTimeout(() => void paletteSearch(query, search), PALETTE_DEBOUNCE);
+}
+
+/** The search stage asks the three stores at once and draws whatever stays newest. */
+async function paletteSearch(query, search) {
+	try {
+		const [threads, sessions, memory] = await Promise.all([
+			api("GET", pagePath(`/threads?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
+			api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
+			api("GET", `/memory/search?query=${encodeURIComponent(query)}&limit=${HITS_PER_STORE}`),
+		]);
+		if (!palette.open || palette.stage !== "search" || search !== palette.search) return;
+		renderPaletteHits(paletteHits({ threads, sessions, memory }, query), query);
+	} catch (error) {
+		if (search !== palette.search) return;
+		$("palette-note").textContent = error?.body?.error?.message ?? error?.message ?? String(error);
+	}
+}
+
+/** The palette's own keys: the input keeps its letters, so moving and choosing are arrows and Enter. */
+function onPaletteKeydown(event) {
+	if (event.key === "Escape") {
+		event.preventDefault();
+		if (palette.stage === "search") return paletteStage("commands");
+		return closePalette();
+	}
+	if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+		event.preventDefault();
+		return paletteMove(event.key === "ArrowUp" ? -1 : 1);
+	}
+	if (event.key === "Enter") {
+		event.preventDefault();
+		return runPaletteRow(palette.rows[palette.index]);
+	}
+}
+
 function runKey(action, { target, form }) {
 	if (action === "submit") return form?.requestSubmit();
 	if (action === "leave-input") return target?.blur?.();
 	if (action === "help") return toggleHelp();
 	if (action === "back") return goBack();
+	// UX-15: the palette opens over whatever is in front, help included, and the same chord closes it.
+	if (action === "palette") {
+		if (palette.open) return closePalette();
+		if (!$("help").hidden) toggleHelp(false);
+		return openPalette();
+	}
 	if (!$("help").hidden) toggleHelp(false);
 	if (action.startsWith("go:")) {
 		location.hash = `#/${action.slice(3)}`;
@@ -2308,6 +2558,18 @@ async function boot() {
 // ---- Wiring ---------------------------------------------------------------------------------
 
 for (const hint of document.querySelectorAll("[data-chord]")) hint.textContent = sequenceLabel(["Mod+Enter"], APPLE);
+// UX-15: the palette's button names its own key, and a phone shows a magnifier instead.
+const paletteKey = document.querySelector("[data-palette-key]");
+if (paletteKey) paletteKey.textContent = APPLE ? "⌘K" : "Ctrl K";
+$("open-palette").title = `Command palette (${sequenceLabel(["Mod+k"], APPLE)})`;
+$("open-palette").addEventListener("click", () => openPalette());
+$("palette").addEventListener("click", (event) => {
+	if (event.target === $("palette")) closePalette();
+});
+for (const input of [$("palette-input"), $("palette-search-input")]) {
+	input.addEventListener("input", onPaletteInput);
+	input.addEventListener("keydown", onPaletteKeydown);
+}
 
 $("authorize-form").addEventListener("submit", (event) => {
 	event.preventDefault();
@@ -2406,6 +2668,7 @@ window.__pana = {
 			confirm: state.confirm?.action,
 			selected: current ? { testid: current.dataset.testid, id: current.dataset.id, thread: current.dataset.thread } : undefined,
 			help: !$("help").hidden,
+			palette: palette.open ? { stage: palette.stage, rows: palette.rows.length, index: palette.index } : undefined,
 			push: state.push,
 			apple: APPLE,
 			memoryPath: memoryEditingPath || undefined,
