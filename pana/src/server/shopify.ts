@@ -24,6 +24,7 @@ type Entry = {
 	endpoints?: Endpoint[]; providers?: PriceRow[];
 	capabilities?: { vision?: boolean; input_modalities?: string[]; reasoning?: boolean; reasoning_options?: Effort[] };
 	limits?: Limits;
+	cap?: { context_window?: number; max_output_tokens?: number };
 	router?: { apis?: Record<string, { limits?: Limits; reasoning_options?: Effort[] }> };
 };
 type Limits = { context_window: number; max_output_tokens: number };
@@ -73,14 +74,14 @@ export function priceRoutedMessage(message: AssistantMessage, headers: Record<st
 	return message;
 }
 
-function pricedStream(source: AssistantMessageEventStream, getHeaders: () => Record<string, string>, catalogPath: string, requestedModel: string): AssistantMessageEventStream {
+export function pricedStream(source: AssistantMessageEventStream, getHeaders: () => Record<string, string>, catalogPath: string, model: Model<Api>): AssistantMessageEventStream {
 	const result = new AssistantMessageEventStream();
 	void (async () => {
 		for await (const event of source) {
 			if (event.type === "done" || event.type === "error") {
 				try {
 					const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as Catalog;
-					priceRoutedMessage(event.type === "done" ? event.message : event.error, getHeaders(), catalog, requestedModel);
+					priceRoutedMessage(event.type === "done" ? event.message : event.error, getHeaders(), catalog, model.id);
 				} catch (error) {
 					console.error("panad: could not read router prices:", error instanceof Error ? error.message : String(error));
 				}
@@ -90,15 +91,23 @@ function pricedStream(source: AssistantMessageEventStream, getHeaders: () => Rec
 		result.end(await source.result());
 	})().catch((error) => {
 		console.error("panad: router stream failed:", error instanceof Error ? error.message : String(error));
-		result.end();
+		const failure: AssistantMessage = {
+			role: "assistant", api: model.api, provider: model.provider, model: model.id,
+			content: [], stopReason: "error", timestamp: Date.now(),
+			errorMessage: error instanceof Error ? error.message : String(error),
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		};
+		result.push({ type: "error", reason: "error", error: failure });
+		result.end(failure);
 	});
 	return result;
 }
 
 /** Register every catalog chat model, choosing a supported transport in preference order.
-	* Embedding/audio/image-only entries have no agent chat transport and are excluded.
-	* The catalog is a local snapshot; restart panad after refreshing it.
-	*/
+ * Embedding/audio/image-only entries have no agent chat transport and are excluded.
+ * The catalog is a local snapshot; restart panad after refreshing it.
+ */
 export function registerShopifyProvider(models: MutableModels, env: ProviderEnv): void {
 	if (!env.SHOPIFY_PROXY_KEY?.trim()) return;
 	const catalogPath = env.SHOPIFY_PI_LLM_CATALOG_PATH ?? join(homedir(), ".pi/agent/llm-catalog/catalog.json");
@@ -120,8 +129,13 @@ export function registerShopifyProvider(models: MutableModels, env: ProviderEnv)
 		const routerApi = entry.router?.apis?.[endpoint.api!];
 		const limits = routerApi?.limits ?? entry.limits;
 		if (!Number.isSafeInteger(limits?.context_window) || limits!.context_window <= 0 ||
-						!Number.isSafeInteger(limits?.max_output_tokens) || limits!.max_output_tokens <= 0) {
+			!Number.isSafeInteger(limits?.max_output_tokens) || limits!.max_output_tokens <= 0) {
 			throw new Error(`Missing chat limits for Shopify proxy model ${entry.id}`);
+		}
+		for (const cap of [entry.cap?.context_window, entry.cap?.max_output_tokens]) {
+			if (cap !== undefined && (!Number.isSafeInteger(cap) || cap <= 0)) {
+				throw new Error(`Invalid chat cap for Shopify proxy model ${entry.id}`);
+			}
 		}
 		const efforts = (routerApi?.reasoning_options ?? entry.capabilities?.reasoning_options)
 			?.find(option => option.type === "effort")?.values ?? [];
@@ -141,7 +155,8 @@ export function registerShopifyProvider(models: MutableModels, env: ProviderEnv)
 			...(api === "anthropic-messages" && efforts.length ? { compat: { forceAdaptiveThinking: true } } : {}),
 			input: entry.capabilities?.vision || entry.capabilities?.input_modalities?.includes("image") ? ["text", "image"] : ["text"],
 			cost: { input: perMillion(rate?.input), output: perMillion(rate?.output), cacheRead: perMillion(rate?.cached_input), cacheWrite: perMillion(rate?.cache_write) },
-			contextWindow: limits!.context_window, maxTokens: limits!.max_output_tokens,
+			contextWindow: Math.min(limits!.context_window, entry.cap?.context_window ?? Infinity),
+			maxTokens: Math.min(limits!.max_output_tokens, entry.cap?.max_output_tokens ?? Infinity),
 		});
 		ids.add(entry.id);
 	}
@@ -157,7 +172,7 @@ export function registerShopifyProvider(models: MutableModels, env: ProviderEnv)
 					await options?.onResponse?.(response, responseModel);
 				},
 			});
-			return pricedStream(source, () => headers, catalogPath, model.id);
+			return pricedStream(source, () => headers, catalogPath, model);
 		},
 		streamSimple(model, context, options) {
 			let headers: Record<string, string> = {};
@@ -169,7 +184,7 @@ export function registerShopifyProvider(models: MutableModels, env: ProviderEnv)
 					await options?.onResponse?.(response, responseModel);
 				},
 			});
-			return pricedStream(source, () => headers, catalogPath, model.id);
+			return pricedStream(source, () => headers, catalogPath, model);
 		},
 	};
 

@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createProviderModels } from "../src/server/models.ts";
-import { priceRoutedMessage } from "../src/server/shopify.ts";
+import { priceRoutedMessage, pricedStream } from "../src/server/shopify.ts";
 
 const dirs: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -75,6 +75,23 @@ describe("Shopify proxy catalog", () => {
 		const models = await load([luna, luna, { ...luna, id: "image", task: "images" }, entry("unsupported", "other", "/v1/other")]);
 		expect(models.getModels("shopify-router-openai").map(m => m.id)).toEqual(["gpt-6-luna"]);
 	});
+	it("honors bounded catalog variants without inflating their context windows", async () => {
+		const models = await load([{ ...luna, cap: { context_window: 25000, max_output_tokens: 5000 } }]);
+		expect(models.getModel("shopify-router-openai", "gpt-6-luna")).toMatchObject({ contextWindow: 25000, maxTokens: 5000 });
+		await expect(load([{ ...luna, cap: { context_window: -1 } }])).rejects.toThrow("Invalid chat cap");
+	});
+	it("terminates exceptional streams with a resolved error result", async () => {
+		const models = await load([luna]);
+		const source = { async *[Symbol.asyncIterator]() { throw new Error("source failed"); } } as unknown as AssistantMessageEventStream;
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const result = pricedStream(source, () => ({}), "/unused", models.getModel("shopify-router-openai", "gpt-6-luna")!);
+			await expect(result.result()).resolves.toMatchObject({ stopReason: "error", errorMessage: "source failed", model: "gpt-6-luna" });
+			const events = []; for await (const event of result) events.push(event);
+			expect(events).toMatchObject([{ type: "error", reason: "error" }]);
+		} finally { log.mockRestore(); }
+	});
+
 	it("does not require a catalog without a proxy key", async () => {
 		const models = await createProviderModels({ SHOPIFY_PI_LLM_CATALOG_PATH: "/does/not/exist" });
 		expect(models.getProvider("shopify-router-openai")).toBeUndefined();
