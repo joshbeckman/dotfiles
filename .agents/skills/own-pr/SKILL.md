@@ -10,13 +10,7 @@ Opening a PR starts the ownership loop. It does not finish the task. Unless Josh
 
 ## Record ownership
 
-`gw pr create`, `gsw pr create`, and `gsw submit` automatically register new PRs with `agent-pr-monitor`. For an inherited PR, or if automatic registration warned, run:
-
-```sh
-agent-pr-monitor own PR_URL
-```
-
-The monitor records machine-readable state and maintains `$AGENT_SCRATCHPAD/prs/<owner>-<repo>-<number>.md`. Keep agent-written reviewer and evidence notes below its managed status block. If the monitor is unavailable, create and update the checklist manually after every state transition and before sleeping or handing off:
+Create a PR checklist in your pana scratch directory. Update it after every state transition and before ending a run or handing off. Record the pana thread for updates so scheduled wakeups know where to reply.
 
 ```markdown
 # [PR title](full URL)
@@ -25,6 +19,8 @@ The monitor records machine-readable state and maintains `$AGENT_SCRATCHPAD/prs/
 - Head SHA:
 - Last checked:
 - Next check:
+- Update thread:
+- Pending wake schedule:
 - [ ] Draft opened and Josh assigned
 - [ ] PR linked from every issue it solves
 - [ ] CI and automated reviews passed
@@ -42,7 +38,7 @@ The monitor records machine-readable state and maintains `$AGENT_SCRATCHPAD/prs/
 
 This checklist is an ephemeral execution log, not a second project tracker. When `run-project` applies, native issue state remains the durable source of project progress; do not copy this checklist into the root issue.
 
-Before winding down, transfer any incomplete PR to another live agent with `agent-mail` and this checklist; a handoff file alone does not transfer ownership.
+Before ending a run with an incomplete PR, schedule the next check with `pana schedule wake` as described below, or transfer ownership to another session through a pana thread with this checklist. A handoff file alone does not transfer ownership; the replacement must accept it.
 
 `own-pr` owns lifecycle state and transitions. Use `pr-description-discipline` for the body, `binks-pr-review` for applicable local preflight, `get-pr-green` for CI/review repair, `get-pr-merged` only after explicit merge authority, and `run-project` for project metadata. None releases lifecycle ownership.
 
@@ -54,8 +50,8 @@ Use the PR surface required by the repository. For GitHub writes, use `gw`; for 
 2. After the PR has a stable URL, comment on every issue it claims to solve. The comment must say that work has opened and link the PR by its full title and URL, so issue readers can find current and historical implementation work. Write the comment to a scratchpad file and post it with `gw issue comment ISSUE_URL --body-file FILE`. Do not duplicate an existing link, comment on issues listed only as related context, or expose a private PR from a more-public issue. If visibility is unclear, ask Josh first.
 3. When inheriting a PR, read each source issue with `gw view-md`; backfill a missing PR comment before continuing.
 4. Trigger required CI and repository-required automated reviews.
-5. Let `agent-pr-monitor` watch checks, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Use the manual polling cadence below only when the monitor is unavailable.
-6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean. Run `agent-pr-monitor ack PR_URL` after handling a monitor event.
+5. Check CI, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Schedule the next check with `pana schedule wake` when waiting on external progress.
+6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean. Update the checklist after handling each change.
 7. Rebase when the branch conflicts with or is too stale against its base. Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
 
 ## 2. Ask Josh to review
@@ -97,14 +93,24 @@ After merge:
 
 1. Get the merge commit.
 2. Use `verify-conveyor-deployment` when available; it is the source of truth for Conveyor commands, help-first checks, unsupported repositories, affected zones, and commit-ancestry fallback. For other deployment systems, use the repository's supported status surface or ask Josh when none exists.
-3. If the PR is registered with a healthy `agent-pr-monitor` deployment checker, park and wait for its `agent-mail` notification. The monitor already checks merged PRs every 30 minutes; do not add a sleep loop, background watcher, or conversational poll. Use direct deployment checks every 30 minutes only when monitoring is unavailable or unhealthy. Do not assume merged means deployed.
+3. Check deployment directly. If it is pending, schedule another check with `pana schedule wake` and end the run. Start with 30 minutes between deployment checks and back off when unchanged. Do not assume merged means deployed.
 4. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
 5. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
-Only then is the PR lifecycle complete. Run `agent-pr-monitor release PR_URL`; the clean worktree is then eligible for cleanup, provided no other assigned or open work remains.
+Only then is the PR lifecycle complete. Mark the checklist complete and cancel any pending wake for this PR with `pana schedule delete SCHEDULE`. The clean worktree is then eligible for cleanup, provided no other assigned or open work remains.
 
-## Polling cadence
+## Scheduled checks
 
-When registered, the shared monitor polls without model turns and sends only state changes through `agent-mail`; do not duplicate it with conversational polling or a per-session background job. When monitoring is unavailable or unhealthy, poll active CI or merge queues every 2-5 minutes, deployment every 30 minutes, and human review less often. Stop fallback polling when healthy monitoring resumes.
+Never wait inside a run for CI, reviews, the merge queue, deployment, or another session. Check the current state once, record it, schedule a wake, and end the run. Do not use sleep loops, background watchers, or repeated conversational polling.
 
-Keep monitoring until ownership is transferred or complete. If the session cannot remain active, mail a replacement agent and leave the PR checklist with the current phase, latest head SHA, known blockers, and next check time. Do not stop until the replacement acknowledges ownership.
+```sh
+pana schedule wake --in 5m --note "Check PR_URL: CI, reviews, queue, and conflicts; update CHECKLIST_PATH. Reply in THREAD_URL with new results or a blocker. If still pending, schedule another wake and end the run."
+```
+
+Use real URLs and paths in the note. Include the current phase, head SHA, known blockers, and the specific next check. A wake resumes the session; it does not itself check the PR or post the run's final response. On wake, read the update thread, check the PR, and use `pana thread respond --thread THREAD_URL --after NEWEST_MESSAGE --body-file UPDATE_FILE` when there is new information to report.
+
+Start active CI or merge-queue checks at 5 minutes. If unchanged, back off to 15 minutes, then 1 hour. Start deployment checks at 30 minutes and human-review checks less often; back off when unchanged. Check sooner after pushing a fix when useful, but schedule the wait rather than staying in a loop.
+
+Keep at most one pending wake for this PR. Use `pana schedule list --kind wake` to find it and `pana schedule delete SCHEDULE` to cancel it when replacing it, completing the work, or handing ownership to another session. Record the schedule ID and next check time in the checklist. If scheduling fails, report the exact error and the uncovered next check; do not silently drop ownership.
+
+Keep monitoring until ownership is transferred or complete. For a transfer, send the checklist and current context through a pana thread and obtain the replacement's acceptance before canceling your wake. Shared memory can retain durable decisions, but neither memory nor a handoff file transfers ownership by itself.

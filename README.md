@@ -79,7 +79,7 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.
 
 ### Scripts (`bin/`)
 
-Many small utilities. [Agent teams](.agents/skills/agent-teams/SKILL.md) documents `agent-team`, shared scratchpads, roster broadcasts through `agent-mail`, and membership in `agent-find`.
+Many small utilities. [Agent coordination](.agents/skills/agent-teams/SKILL.md) documents delegation, shared context, and handoffs through pana sessions and threads.
 
 Run any script with `--help` or read the source — they're short.
 
