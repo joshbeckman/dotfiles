@@ -5,8 +5,10 @@
 // Credentials are read from panad's environment only, through pi-ai's auth context. A session's
 // `bash` never inherits that environment (ISO-03, ISO-04), and pana writes no key to disk.
 
+import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
@@ -35,6 +37,14 @@ export async function createProviderModels(env: ProviderEnv = process.env): Prom
 		},
 	});
 	for (const provider of builtinProviders()) models.setProvider(provider);
+	// Keep machine-specific provider code outside the public checkout's tracked files.
+	const localModule = join(import.meta.dirname, "provider.local.ts");
+	if (existsSync(localModule)) {
+		const { registerLocalProvider } = (await import(localModule)) as {
+			registerLocalProvider: (models: MutableModels, env: ProviderEnv) => void | Promise<void>;
+		};
+		await registerLocalProvider(models, env);
+	}
 	for (const provider of models.getProviders()) {
 		const auth = await models.checkAuth(provider.id).catch(() => undefined);
 		if (!auth) models.deleteProvider(provider.id);
