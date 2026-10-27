@@ -133,9 +133,7 @@ To try pana from this checkout without installing the service, run `pana/scripts
 ## Non-goals
 
 - Cross-domain messaging in v1. URLs carry the domain so federation stays possible later.
-- Multiple humans per domain in v1.
-- A bridge to interactive pi. Pana replaces it.
-- Migrating agent-mail history. Pana starts empty.
+- Multiple humans per domain (in v1).
 
 ## Concepts
 
