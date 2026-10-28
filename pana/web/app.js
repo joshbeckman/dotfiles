@@ -953,14 +953,22 @@ async function submitCompose(event) {
 
 async function searchThreads(event, cursor) {
 	event?.preventDefault();
+	if (event) status("");
 	const query = $("threads-query").value.trim();
 	const params = new URLSearchParams();
 	if (query) params.set("query", query);
 	const participant = $("threads-participant").value.trim();
 	if (participant) params.set("participant", participant);
 	const suffix = params.toString();
-	const body = await api("GET", pagePath(`/threads${suffix ? `?${suffix}` : ""}`, cursor));
 	const list = $("threads-list");
+	let body;
+	try {
+		body = await api("GET", pagePath(`/threads${suffix ? `?${suffix}` : ""}`, cursor));
+	} catch (error) {
+		// A failed filter must not leave unrelated rows looking like successful matches.
+		if (!cursor) empty(list, "Unable to load threads.");
+		throw error;
+	}
 	if (!cursor) list.replaceChildren();
 	const threads = asList(body, ["threads"]);
 	if (threads.length === 0 && !cursor) return empty(list, query ? `No threads match “${query}”.` : "No threads yet.");
@@ -2660,7 +2668,7 @@ $("authorize-form").addEventListener("submit", (event) => {
 $("compose-form").addEventListener("submit", (event) => void submitCompose(event));
 wireAttach("compose-form", "compose-attach", "compose-files", "compose-body");
 wireAttach("reply-form", "reply-attach", "reply-files", "reply-body");
-$("threads-search").addEventListener("submit", (event) => void searchThreads(event));
+$("threads-search").addEventListener("submit", (event) => void searchThreads(event).catch(fail));
 $("sessions-search").addEventListener("submit", (event) => {
 	event.preventDefault();
 	void loadSessionList($("sessions-query").value.trim());

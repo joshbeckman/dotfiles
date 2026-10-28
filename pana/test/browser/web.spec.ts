@@ -752,6 +752,34 @@ describeBrowser("pana in a browser", () => {
 		expect(result.requests.some(request => new URL(request, "http://test.example").searchParams.get("participant") === seeded.session.url)).toBe(true);
 	});
 
+	it("SRC-04 participant validation failures show errors instead of stale domain-wide results and allow recovery", async () => {
+		await start();
+		await postNotice(t!.runtime, { body: "Visible domain announcement" });
+		await open();
+		const result = await evaluatePage<{ errors: string[]; stale: number[]; recovered: number; status: string }>(`
+			await until(() => window.__pana && document.getElementById("authorize").hidden);
+			location.hash = "#/threads";
+			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
+			const errors = [], stale = [];
+			for (const address of ["unknown-participant", "pana://foreign.example/users/tester"]) {
+				document.getElementById("threads-participant").value = address;
+				document.getElementById("threads-search").requestSubmit();
+				await until(() => document.getElementById("status").classList.contains("error") && document.getElementById("status").textContent);
+				errors.push(document.getElementById("status").textContent);
+				stale.push(document.querySelectorAll("#threads-list .item").length);
+			}
+			document.getElementById("threads-participant").value = "tester";
+			document.getElementById("threads-search").requestSubmit();
+			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
+			return { errors, stale, recovered: document.querySelectorAll("#threads-list .item").length, status: document.getElementById("status").textContent };
+		`);
+		expect(result.errors[0]).toContain("participant unknown-participant");
+		expect(result.errors[1]).toContain("foreign.example");
+		expect(result.stale).toEqual([0, 0]);
+		expect(result.recovered).toBe(1);
+		expect(result.status).toBe("");
+	});
+
 	it("REF-06 REF-07 unread counts stay in the inbox; archive controls do not hide threads from browse or search", async () => {
 		await start([{ text: "Paris." }]);
 		const seeded = await seedSession("What is the capital of France?");
