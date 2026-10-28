@@ -9,6 +9,7 @@ import { UsageDoc, type ConversationId, type UsageState } from "@earendil-works/
 import type { SqliteValue } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
 import { decodeCursor, decodeOffset, pageOf, type Page } from "../api/pagination.ts";
+import { sessionWakes, type ScheduleView } from "../schedules/store.ts";
 import { searchSessions } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { usageCost } from "./budget.ts";
@@ -37,6 +38,8 @@ export interface SessionView {
 }
 
 export interface SessionDetail extends SessionView {
+	/** Active wake schedules targeting this session, ordered by next dispatch time. */
+	wakes: ScheduleView[];
 	usage: UsageState;
 	/** UX-12: the work in progress, so a window that opens mid-run shows it before any event. */
 	live: LiveView | null;
@@ -82,7 +85,7 @@ export async function showSession(runtime: Runtime, id: string): Promise<Session
 	const plain: UsageState = usage ? (JSON.parse(JSON.stringify(usage)) as UsageState) : { models: {}, tools: {} };
 	const live = await currentLive(runtime, row.conversation_id);
 	const path = scratchPath(runtime, id);
-	return { ...view, costUsd: usageCost(plain), usage: plain, live, scratch: { path, bytes: await directoryBytes(path) } };
+	return { ...view, costUsd: usageCost(plain), usage: plain, live, wakes: await sessionWakes(runtime, id), scratch: { path, bytes: await directoryBytes(path) } };
 }
 
 export interface SearchSessionsInput {

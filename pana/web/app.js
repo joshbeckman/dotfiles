@@ -1302,6 +1302,7 @@ async function openSession(id) {
 		state.session.parent ? refLink(state.session.parentUrl ?? state.session.parent, "session", `parent ${state.session.parent}`) : undefined,
 		cost(state.session.costUsd),
 		scratchSize(state.session.scratch),
+		`scheduled wakes: ${state.session.wakes?.length ?? 0}`,
 	]) {
 		if (part === undefined || part === null || part === "") continue;
 		if (details.childNodes.length > 0) details.append(" · ");
@@ -1317,6 +1318,7 @@ async function openSession(id) {
 		url.append(copyLink(state.session.url, "session"));
 		meta.append(" ", url);
 	}
+	renderSessionWakes();
 	const archive = $("session-archive");
 	if (archive) {
 		archive.hidden = state.session.state === "archived";
@@ -1331,6 +1333,30 @@ async function openSession(id) {
 	rememberLive(state.session.id, body.session.live);
 	renderLive();
 	scrollToLatest();
+}
+
+function renderSessionWakes() {
+	const section = $("session-wakes");
+	section.replaceChildren();
+	const wakes = state.session?.wakes ?? [];
+	if (wakes.length === 0) {
+		section.append(span("No scheduled wakes.", "hint"));
+		return;
+	}
+	const heading = document.createElement("h3");
+	heading.textContent = `Scheduled wakes (${wakes.length})`;
+	const list = document.createElement("ul");
+	for (const wake of wakes) {
+		const row = document.createElement("li");
+		row.append(refLink(wake.url, "schedule", wake.subject || "Untitled wake"), " · ");
+		const time = document.createElement("time");
+		time.dateTime = new Date(wake.nextAt).toISOString();
+		time.textContent = when(wake.nextAt);
+		row.append(time);
+		if (wake.cron) row.append(span(` · recurring (${wake.cron})`, "hint"));
+		list.append(row);
+	}
+	section.append(heading, list);
 }
 
 function cost(usd) {
@@ -1878,6 +1904,10 @@ async function loadSchedules(focus, cursor) {
 	let body;
 	try {
 		body = await api("GET", pagePath(kind ? `/schedules?kind=${kind}` : "/schedules", cursor));
+		if (focus && !asList(body, ["schedules"]).some((schedule) => schedule.id === focus)) {
+			const shown = await api("GET", `/schedules/${encodeURIComponent(focus)}`);
+			body.schedules.unshift(shown.schedule);
+		}
 	} catch (error) {
 		if (request === schedulesRequest) throw error;
 		return;
@@ -1887,6 +1917,8 @@ async function loadSchedules(focus, cursor) {
 	const schedules = asList(body, ["schedules"]);
 	if (schedules.length === 0 && !cursor) return empty(list, kind ? `No ${kind} schedules yet.` : "No schedules yet.");
 	for (const schedule of schedules) {
+		// A focused schedule can have been fetched ahead of its normal list page.
+		if ([...list.children].some((row) => row.dataset.id === schedule.id)) continue;
 		const payload = schedule.payload ?? {};
 		const checkView = scheduleCheckView(schedule, when);
 		const meta = [
