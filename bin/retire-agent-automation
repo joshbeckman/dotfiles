@@ -9,7 +9,7 @@ case "$(uname -s)" in
                  org.joshbeckman.agent-mail-web org.joshbeckman.agent-pr-monitor; do
       # A persistent override prevents a retained local plist from returning at login.
       launchctl disable "$domain/$label"
-      if launchctl list "$label" >/dev/null 2>&1; then
+      if launchctl print "$domain/$label" >/dev/null 2>&1; then
         launchctl bootout "$domain/$label"
       fi
       path="$HOME/Library/LaunchAgents/$label.plist"
@@ -46,6 +46,11 @@ case "$(uname -s)" in
     fi
     for unit in agent-mail-verify.timer agent-mail-verify.service agent-mail-web.service; do
       if [ -L "$units/$unit" ]; then rm "$units/$unit"; fi
+      # An absent unit can still have dangling enablement/dependency links.
+      # Remove only symlinks for these exact retired names, never regular files.
+      for link in "$units"/*.wants/"$unit" "$units"/*.requires/"$unit"; do
+        if [ -L "$link" ]; then rm "$link"; fi
+      done
     done
     systemctl --user daemon-reload
     ;;

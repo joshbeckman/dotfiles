@@ -19,7 +19,7 @@ if name == 'uname':
     print(os.environ['HOST'])
 elif name == 'id':
     print('123')
-elif name == 'launchctl' and args[0] == 'list':
+elif name == 'launchctl' and args[0] == 'print':
     sys.exit(0 if args[1].endswith('agent-session-wake') else 1)
 elif name == 'systemctl':
     if args[1] == 'show-environment' and os.environ.get('NO_BUS'):
@@ -29,7 +29,7 @@ elif name == 'systemctl':
         print('ActiveState=' + ('active' if os.environ.get('ACTIVE') else 'inactive'))
         if os.environ.get('NO_UNIT'):
             sys.exit(4)
-if os.environ.get('FAIL') == name and args[0] != 'list' and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
+if os.environ.get('FAIL') == name and args[0] != 'print' and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
     sys.exit(7)
 '''
 
@@ -75,6 +75,8 @@ class RetirementTest(unittest.TestCase):
             self.assertIn(['launchctl', 'disable', f'gui/123/org.joshbeckman.{name}'], calls)
         self.assertEqual([c for c in calls if c[1] == 'bootout'],
                          [['launchctl', 'bootout', 'gui/123/org.joshbeckman.agent-session-wake']] * 2)
+        self.assertIn(['launchctl', 'print', 'gui/123/org.joshbeckman.agent-session-wake'], calls)
+        self.assertFalse(any(c[0] == 'launchctl' and c[1] == 'list' for c in calls))
         self.assertEqual(regular.read_text(), 'local settings')
         self.assertFalse(link.is_symlink())
         self.assertEqual(self.history.read_text(), 'preserved')
@@ -104,10 +106,19 @@ class RetirementTest(unittest.TestCase):
         self.assertIn('no user systemd bus', result.stderr)
         self.assertFalse(any('disable' in c for c in self.calls()))
 
-    def test_absent_linux_units_are_not_disabled(self):
+    def test_absent_linux_units_lose_stale_enablement_links(self):
+        units = self.home / '.config/systemd/user'
+        wants = units / 'timers.target.wants'
+        wants.mkdir(parents=True)
+        retired = wants / 'agent-mail-verify.timer'
+        retired.symlink_to('../agent-mail-verify.timer')
+        unrelated = wants / 'dotfiles-refresh.timer'
+        unrelated.symlink_to('../dotfiles-refresh.timer')
         result = self.run_migration('Linux', NO_UNIT='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any('disable' in c for c in self.calls()))
+        self.assertFalse(retired.is_symlink())
+        self.assertTrue(unrelated.is_symlink())
 
     def test_removed_but_running_linux_units_are_stopped(self):
         result = self.run_migration('Linux', NO_UNIT='1', ACTIVE='1')
