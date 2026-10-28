@@ -7,7 +7,24 @@
   "enableInstallTelemetry": false,
   "theme": "solarized-light",
   "extensions": [
-    "~/.agents/pi/extensions"
+    "~/.agents/pi/extensions/attention.ts",
+    "~/.agents/pi/extensions/coauthor.ts",
+    "~/.agents/pi/extensions/compact-and.ts",
+    "~/.agents/pi/extensions/dotfiles-safety.ts",
+    "~/.agents/pi/extensions/josh-notes-mcp/index.ts",
+    "~/.agents/pi/extensions/josh-status-mcp/index.ts",
+    "~/.agents/pi/extensions/model-switch.ts",
+    "~/.agents/pi/extensions/oracle.ts",
+    "~/.agents/pi/extensions/personal-tools.ts",
+    "~/.agents/pi/extensions/resource-pressure.ts",
+    "~/.agents/pi/extensions/session-reload.ts",
+    "~/.agents/pi/extensions/session-title.ts",
+    "~/.agents/pi/extensions/shell-escape.ts",
+    "~/.agents/pi/extensions/shopify-dev-mcp/index.ts",
+    "~/.agents/pi/extensions/solarized-theme.ts",
+    "~/.agents/pi/extensions/status.ts",
+    "~/.agents/pi/extensions/thinking-loop-breaker.ts",
+    "~/.agents/pi/extensions/tmux-external-editor.ts"
   ],
   "skills": [
     "~/.local/share/val-town-plugins/plugin/skills"

@@ -408,89 +408,24 @@ process.stdout.write(result.content.map((p) => p.text).join("\\n"));
   eq("settling without a request sends nothing", pi.sent.length, 0);
 }
 
-// --- wake thresholds ---------------------------------------------------------
+// --- task titles without legacy identity -------------------------------------
 
-// The poll interval has to be shorter than the quiet threshold, or the threshold is never
-// reached: a check on a 60s tick cannot see a 30s window. That relationship is the reason
-// the interval moved with the threshold, so it is pinned rather than left in a comment.
 {
-  const source = readFileSync(join(EXTENSIONS, "agent-name.ts"), "utf8");
-  const number = (re) => Number((re.exec(source)?.[1] ?? "0").replace(/_/g, ""));
-  const interval = number(/\},\s*(\d[\d_]*)\);/);
-  const quiet = number(/Date\.now\(\) - userAt < (\d[\d_]*)/);
-  check(
-    "mail notices tell replies to keep the source thread",
-    source.includes("response stays in this thread"),
-  );
-  check(
-    "the wake poll interval is shorter than the quiet threshold",
-    interval > 0 && quiet > 0 && interval < quiet,
-    `interval ${interval}ms, threshold ${quiet}ms`,
-  );
-  check(
-    "a turn in flight is tracked as active",
-    /pi\.on\("agent_start"[\s\S]*?turnInFlight = true/.test(source)
-      && /pi\.on\("agent_end"[\s\S]*?turnInFlight = false/.test(source)
-      && /if \(turnInFlight\) return/.test(source),
-  );
-}
-
-// --- mail notice under the SQLite store --------------------------------------
-
-// With no inbox directory to list, the notice asks agent-mail, and only when the mailbox's
-// doorbell has changed or a minute has passed: every 15s tick in every session must not
-// start a process. The marker is read with the same grammar as bin/agent-mail.
-{
-  const mail = await import(pathToFileURL(join(EXTENSIONS, "agent-name.ts")).href);
-  const state = mkdtempSync(join(tmpdir(), "mail-state-"));
-  const bin = join(state, "bin");
-  mkdirSync(join(state, "doorbells"), { recursive: true });
-  mkdirSync(bin);
-  const calls = join(state, "calls");
-  writeFileSync(join(bin, "agent-mail"),
-    `#!/bin/sh\necho "$*" >> ${calls}\nprintf '%s' '{"version":1,"messages":[{"message_id":"01ABC-hello","from":"josh","subject":"Hello","date":"2026-10-22T12:00:00Z"},{"message_id":"01ABD","from":"pr-monitor","subject":"(no subject)","date":"2026-10-22T12:01:00Z"}],"next":null}'\n`,
-    { mode: 0o755 });
-  const path = process.env.PATH;
-  process.env.PATH = `${bin}:${path}`;
-  const count = () => { try { return readFileSync(calls, "utf8").trim().split("\n").length; } catch { return 0; } };
-
-  for (const [content, expected] of [["sqlite\n", "sqlite"], ["both\n\n", "both"], ["sqlite\njunk", "maildir"], ["sqlite\0\n", "maildir"], [" both", "maildir"]]) {
-    writeFileSync(join(state, "store"), content);
-    eq(`the marker ${JSON.stringify(content)} reads as ${expected}`, mail.storeMode(state), expected);
+  const sessionTitle = (await import(pathToFileURL(join(EXTENSIONS, "session-title.ts")).href)).default;
+  const pi = fakePi();
+  let title;
+  pi.api.getSessionName = () => title;
+  pi.api.setSessionName = (value) => { title = value; };
+  sessionTitle(pi.api);
+  const inheritedName = process.env.AGENT_NAME;
+  process.env.AGENT_NAME = "Legacy Inherited Name";
+  try {
+    await pi.tools.retitle_session.execute("title", { title: "  Check current task  " });
+    eq("retitling uses the task, not an inherited legacy name", title, "Check current task");
+  } finally {
+    if (inheritedName === undefined) delete process.env.AGENT_NAME;
+    else process.env.AGENT_NAME = inheritedName;
   }
-  const first = mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_000_000);
-  eq("unread mail comes from agent-mail scan", JSON.stringify(first.map((m) => m.file)), JSON.stringify(["01ABC-hello.md", "01ABD.md"]));
-  eq("the placeholder subject is dropped", first[1].subject, "");
-  check("scan is asked for this mailbox as JSON", readFileSync(calls, "utf8").includes("scan --to pine-miller-of-beacon-01a1039e --json"));
-  mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_010_000);
-  eq("an unchanged doorbell within a minute starts no process", count(), 1);
-  writeFileSync(join(state, "doorbells", "pine-miller-of-beacon-01a1039e"), "");
-  mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_020_000);
-  eq("a ring re-reads at once", count(), 2);
-  mail.sqliteUnread("pine-miller-of-beacon-01a1039e", state, 1_090_000);
-  eq("a minute later it re-reads without a ring, since a read rings nothing", count(), 3);
-  process.env.PATH = path;
-}
-
-// --- a name written before realms existed ------------------------------------
-
-// createScratchpad derives the transport address from the session name, and the resolver
-// treats that address as the mailbox. A stored name without the realm therefore builds a
-// second pad beside the realm-suffixed claim, and one seat's mail forks in two. The
-// suffixing happens at read time rather than by rewriting the registry, so a record is
-// never silently renamed and the repair repeats on every resume.
-{
-  const mail = await import(pathToFileURL(join(EXTENSIONS, "agent-name.ts")).href);
-  eq("a bare name gains the realm", mail.withRealm("Skullcap Currier", "Lantern"), "Skullcap Currier of Lantern");
-  eq("a name that already carries the realm is unchanged", mail.withRealm("Coral Tanner of Lantern", "Lantern"), "Coral Tanner of Lantern");
-  eq("the check ignores case", mail.withRealm("Coral Tanner of lantern", "Lantern"), "Coral Tanner of lantern");
-  eq("no realm leaves the name alone", mail.withRealm("Skullcap Currier", undefined), "Skullcap Currier");
-  eq("no name stays no name", mail.withRealm(undefined, "Lantern"), undefined);
-  const source = readFileSync(join(EXTENSIONS, "agent-name.ts"), "utf8");
-  check(
-    "the scratchpad name flows from the realm-suffixed name",
-    /withRealm\(assignedName\(sessionId\)[\s\S]{0,200}createScratchpad\(name, sessionId, ctx\)/.test(source),
-  );
 }
 
 // --- thinking loop breaker ---------------------------------------------------

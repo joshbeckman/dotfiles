@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+// Validate startup configuration without launching clients, contacting services,
+// or touching the caller's home. These settings apply on macOS and Linux.
+import assert from "node:assert/strict";
+import { existsSync, readFileSync, readdirSync, readlinkSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (path) => readFileSync(join(root, path), "utf8");
+const pi = JSON.parse(read(".agents/pi/settings.json"));
+const claude = JSON.parse(read(".claude/settings.json"));
+const extensionRoot = ".agents/pi/extensions";
+const entrypoints = readdirSync(join(root, extensionRoot), { recursive: true })
+  .filter((path) => path.endsWith(".ts"))
+  .map((path) => `~/${extensionRoot}/${path}`)
+  .sort();
+assert.deepEqual([...pi.extensions].sort(), entrypoints,
+  "Pi must explicitly load each retained extension, not a directory of stale files");
+for (const entrypoint of pi.extensions) {
+  const source = read(entrypoint.replace(/^~\//, ""));
+  assert.doesNotMatch(source, /agent-mail|agent-session|park_session|agent-realm|identities\/by-/,
+    `${entrypoint} must not activate legacy coordination`);
+}
+for (const removed of [
+  `${extensionRoot}/agent-name.ts`,
+  `${extensionRoot}/session-park.ts`,
+  ".claude/hooks/session-registry.sh",
+  ".claude/hooks/attention.sh",
+]) {
+  assert.equal(existsSync(join(root, removed)), false, `${removed} must be retired`);
+}
+for (const retained of ["coauthor.ts", "attention.ts", "session-title.ts", "resource-pressure.ts"]) {
+  assert.ok(pi.extensions.includes(`~/${extensionRoot}/${retained}`), `${retained} stays available`);
+}
+assert.doesNotMatch(JSON.stringify(claude.hooks), /session-registry|attention\.sh|agent-mail|agent-session/);
+assert.deepEqual(claude.hooks, {
+  SessionStart: [{ matcher: "*", hooks: [{
+    type: "command", command: "~/.claude/hooks/skills-update.mjs", timeout: 10000,
+  }] }],
+}, "the unrelated machine-provided skills hook stays intact");
+assert.equal(claude.statusLine.command, "bash ~/.claude/statusline-command.sh");
+assert.equal(claude.includeCoAuthoredBy, true);
+assert.equal(readlinkSync(join(root, ".claude/CLAUDE.md")), "../.agents/AGENTS.md");
+const instructions = read(".agents/AGENTS.md");
+assert.match(instructions, /Reply in the current conversation/);
+assert.match(instructions, /Do not invent a name or require a realm/);
+assert.match(instructions, /Do not send Agent Mail or start legacy wake automation unless Josh explicitly asks/);
+assert.doesNotMatch(instructions, /agent-mail send|agent-identity-backfill|agent-team` manages|## Mail to Josh/);
+console.log("direct client config tests passed");
