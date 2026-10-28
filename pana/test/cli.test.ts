@@ -28,7 +28,8 @@ const README_COMMANDS = [
 	"pana thread subject THREAD [--regenerate]",
 	"pana thread archive THREAD",
 	"pana thread unarchive THREAD",
-	"pana thread search [--query TEXT] [--archived] [--unread]",
+	"pana thread list [--participant ADDR]",
+	"pana thread search --query TEXT [--participant ADDR]",
 	"pana memory",
 	"pana memory search TEXT",
 	"pana memory commit -m MSG",
@@ -284,7 +285,7 @@ describe("pana CLI", () => {
 			[["session"], "needs a command"],
 			[["thread", "search", "--bogus"], "unknown flag --bogus"],
 			[["thread", "search", "-x"], "unknown flag -x"],
-			[["thread", "search"], "give --query TEXT, --archived, or --unread"],
+			[["thread", "search"], "missing required flag --query TEXT"],
 			[["session", "show"], "missing SESSION"],
 			[["memory", "search"], "missing TEXT"],
 			[["thread", "read", "A", "B"], "unexpected argument B"],
@@ -571,6 +572,33 @@ describe("pana CLI routes", () => {
 		// Thread hits arrive in the shape WP7 returns, so the JSON mode is a passthrough.
 		const asJson = await run(["--json", "thread", "search", "--query", "paris"], t);
 		expect(JSON.parse(asJson.stdout)).toEqual({ threads: [threadHit] });
+	});
+
+	it("SRC-04 SRC-05 thread list and search forward participant filters and pagination, rejecting personal filters", async () => {
+		const seen: Array<Record<string, string>> = [];
+		const response = { threads: [{ threadId: "thread-id", subject: "Shared thread", participants: [] }], nextCursor: "next-page" };
+		const t = await start({ handlers: { "threads.search": (ctx) => {
+			seen.push(Object.fromEntries(ctx.query));
+			return { status: 200, body: response };
+		} } });
+		const participant = `pana://${TEST_DOMAIN}/users/${TEST_USER}`;
+		for (const args of [["list"], ["search", "--query", "lantern"]]) {
+			const result = await run(["--json", "thread", ...args, "--participant", participant, "--limit", "2", "--cursor", "page"], t);
+			expect(result.code).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual(response);
+			for (const obsolete of ["--archived", "--unread"]) {
+				const rejected = await run(["thread", ...args, obsolete], t);
+				expect(rejected.code).toBe(2);
+				expect(rejected.stderr).toContain(`unknown flag ${obsolete}`);
+			}
+		}
+		expect(seen).toEqual([
+			{ participant, limit: "2", cursor: "page" },
+			{ query: "lantern", participant, limit: "2", cursor: "page" },
+		]);
+		const bare = await run(["thread", "list"], t);
+		expect(bare.code).toBe(0);
+		expect(bare.stdout).toContain("Shared thread");
 	});
 
 	it("runs thread create, respond, and a stale respond end to end", async () => {

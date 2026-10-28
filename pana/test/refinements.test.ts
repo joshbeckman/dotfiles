@@ -141,7 +141,7 @@ describe("REF-02 session archive", () => {
 });
 
 describe("REF-03 per-participant thread archive", () => {
-	it("REF-03 thread archive hides the thread for one participant, archived=1 lists it, and unarchive restores it", async () => {
+	it("REF-03 thread archive only hides the thread from one participant inbox, and unarchive restores it", async () => {
 		await start();
 		const seeded = await seededThread();
 		const sessionReply = await t!.client.post<{ message: MessageBody }>(
@@ -160,10 +160,8 @@ describe("REF-03 per-participant thread archive", () => {
 		// The inbox can show the archived threads instead, which is where Unarchive lives (REF-07).
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toHaveLength(1);
 		const listed = await t!.client.get<{ threads: Array<{ threadId: string }> }>("/threads");
-		expect(listed.body.threads).toEqual([]);
-		const archivedList = await t!.client.get<{ threads: Array<{ threadId: string; archived: boolean }> }>("/threads?archived=1");
-		expect(archivedList.body.threads).toEqual([expect.objectContaining({ threadId: seeded.threadId, archived: true })]);
-		const viaCli = await command("thread search", { archived: true });
+		expect(listed.body.threads).toEqual([expect.objectContaining({ threadId: seeded.threadId })]);
+		const viaCli = await command("thread list", {});
 		expect((viaCli.body as { threads: Array<{ threadId: string }> }).threads.map((row) => row.threadId)).toEqual([seeded.threadId]);
 
 		// Archiving is per participant: the session still sees its inbox and thread.
@@ -174,7 +172,7 @@ describe("REF-03 per-participant thread archive", () => {
 		expect(unarchived.status).toBe(200);
 		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toHaveLength(1);
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toHaveLength(1);
-		expect((await t!.client.get<{ threads: unknown[] }>("/threads?archived=1")).body.threads).toEqual([]);
+		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toEqual([]);
 	});
 });
 
@@ -183,7 +181,7 @@ describe("REF-04 a delivery unarchives the thread", () => {
 		await start();
 		const seeded = await seededThread();
 		await t!.client.post(`/threads/${seeded.threadId}/archive`, {});
-		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toEqual([]);
+		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toEqual([]);
 
 		const appended = await t!.client.post<{ message: MessageBody }>(
 			`/threads/${seeded.threadId}/messages`,
@@ -196,14 +194,14 @@ describe("REF-04 a delivery unarchives the thread", () => {
 		expect(inbox.body.deliveries.map((delivery) => delivery.body)).toEqual(["new mail"]);
 		const listed = await t!.client.get<{ threads: Array<{ threadId: string }> }>("/threads");
 		expect(listed.body.threads.map((thread) => thread.threadId)).toEqual([seeded.threadId]);
-		expect((await t!.client.get<{ threads: unknown[] }>("/threads?archived=1")).body.threads).toEqual([]);
+		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toEqual([]);
 	});
 
 	it("REF-04 a notice to a participant unarchives the thread too", async () => {
 		await start();
 		const notice = await postNotice(t!.runtime, { body: "a notice" });
 		await t!.client.post(`/threads/${notice.thread.id}/archive`, {});
-		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toEqual([]);
+		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toEqual([]);
 		await postNotice(t!.runtime, { body: "a second notice", thread: notice.thread.id });
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries).toHaveLength(2);
 		expect((await t!.client.get<{ threads: Array<{ threadId: string }> }>("/threads")).body.threads.map((row) => row.threadId)).toEqual([
@@ -213,7 +211,7 @@ describe("REF-04 a delivery unarchives the thread", () => {
 });
 
 describe("REF-05 unread counts", () => {
-	it("REF-05 inbox items and thread list items carry the caller's unreadCount, and unread=1 returns only unread threads", async () => {
+	it("REF-05 unread counts belong to inbox items, not thread discovery", async () => {
 		await start();
 		const seeded = await seededThread();
 		const quiet = await t!.client.post<{ thread: { id: string }; message: { id: string } }>("/threads", {
@@ -233,19 +231,16 @@ describe("REF-05 unread counts", () => {
 			expect.objectContaining({ threadId: seeded.threadId, unreadCount: 1, read: false }),
 		]);
 
-		const listed = await t!.client.get<{ threads: unknown[] }>("/threads");
-		const rows = listed.body.threads.map(threadRow);
-		expect(rows.find((row) => row.id === seeded.threadId)).toMatchObject({ unreadCount: 1, archived: false });
-		expect(rows.find((row) => row.id === quiet.body.thread.id)).toMatchObject({ unreadCount: 0 });
+		const listed = await t!.client.get<{ threads: Array<{ threadId: string }> }>("/threads");
+		expect(listed.body.threads.map(row => row.threadId)).toEqual(expect.arrayContaining([seeded.threadId, quiet.body.thread.id]));
+		for (const row of listed.body.threads) {
+			expect(row).not.toHaveProperty("unreadCount");
+			expect(row).not.toHaveProperty("archived");
+		}
 
-		const unread = await t!.client.get<{ threads: Array<{ threadId: string; unreadCount: number }> }>("/threads?unread=1");
-		expect(unread.body.threads).toEqual([expect.objectContaining({ threadId: seeded.threadId, unreadCount: 1 })]);
-		const viaCli = await command("thread search", { unread: true });
-		expect((viaCli.body as { threads: Array<{ threadId: string }> }).threads.map((row) => row.threadId)).toEqual([seeded.threadId]);
-
-		// Reading the thread clears the count.
+		// Reading the thread clears the inbox count, without changing discovery results.
 		await t!.client.get(`/threads/${seeded.threadId}`);
-		expect((await t!.client.get<{ threads: Array<{ unreadCount: number }> }>("/threads?unread=1")).body.threads).toEqual([]);
+		expect((await t!.client.get("/threads")).body).toEqual(listed.body);
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox")).body.deliveries.map(inboxRow)).toEqual([
 			expect.objectContaining({ unreadCount: 0, read: true }),
 		]);

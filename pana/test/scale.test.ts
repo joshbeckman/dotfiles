@@ -202,7 +202,7 @@ describe("list pagination", () => {
 		}
 	});
 
-	it("SCALE-03 the archived and unread filters page, and the inbox counts unread deliveries past its page", async () => {
+	it("SCALE-03 thread pages ignore personal state, and the inbox counts unread deliveries past its page", async () => {
 		await seed();
 		const all = (await walk("/threads", "threads", 4)).ids;
 		// Archive every third thread, and read one other, as the user.
@@ -212,11 +212,7 @@ describe("list pagination", () => {
 		expect((await t!.client.get(`/threads/${read}`)).status).toBe(200);
 
 		const shown = await walk("/threads", "threads", 4);
-		expect(shown.ids).toEqual(all.filter((id) => !archived.includes(id)));
-		expect((await walk("/threads?archived=1", "threads", 4)).ids).toEqual(archived);
-		const unread = await walk("/threads?unread=1", "threads", 4);
-		expect(unread.ids).not.toContain(read);
-		expect(unread.ids.every((id) => shown.ids.includes(id))).toBe(true);
+		expect(shown.ids).toEqual(all);
 
 		const inbox = await t!.client.get<{ deliveries: Array<{ readAt: number | null }>; unreadTotal: number }>("/inbox?limit=2");
 		expect(inbox.body.deliveries).toHaveLength(2);
@@ -232,6 +228,7 @@ describe("list pagination", () => {
 			[["schedule", "list"], "schedules"],
 			[["session", "search"], "sessions"],
 			[["thread", "search", "--query", "thread"], "threads"],
+			[["thread", "list"], "threads"],
 		];
 		for (const [argv, key] of commands) {
 			const first = await runPanaCli([...argv, "--limit", "3"], endpoint);

@@ -297,8 +297,13 @@ pana thread read --message MESSAGE
 pana thread subject THREAD [--regenerate]
 pana thread archive THREAD
 pana thread unarchive THREAD
-pana thread search [--query TEXT] [--archived] [--unread]
+pana thread list [--participant ADDR]
+pana thread search --query TEXT [--participant ADDR]
 ```
+
+Listing and searching cover all same-domain threads, regardless of archive or read state. `--participant` selects threads that a user or session participates in, not messages they authored; use a username, session ULID, or same-domain participant URL. Both commands accept `--limit N`, `--cursor CURSOR`, and `--json`; results include `nextCursor` for pagination. Lists are newest-created first; searches return subject matches first, then message matches by relevance. Neither command marks messages read or joins threads.
+
+Archiving only organizes a participant's inbox. It does not hide threads from discovery or stop delivery; a new delivered message unarchives the thread for its recipient.
 
 ## Memory
 
@@ -405,7 +410,7 @@ A session waits for things outside its run (CI, a review, a deploy, another sess
 The PWA has these sections:
 
 - **Inbox.** One row per thread the user is in, latest activity first: subject, the other participants, the newest message's snippet and time, and the unread count. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
-- **Threads.** New starts a session and its thread. Browse and search all threads, including archived ones, with an archive-state label and unread count on each row. An Unread filter narrows the list. Archive or unarchive from an open thread you participate in, not from the browse list. Edit or redact a message, with a warning.
+- **Threads.** New starts a session and its thread. Browse and search all same-domain threads, independent of personal archive/read state. A participant filter narrows results by thread membership. Archive or unarchive from an open thread you participate in, not from the browse list. Edit or redact a message, with a warning.
 - **Sessions.** Live and past sessions. A session opens at its newest entry, with its header (`pana://` URL, state, model, directory, cost, and controls) pinned while the transcript scrolls. It shows the whole transcript (thinking, tool calls and results, usage), model, cost, lineage, and state. Assistant text and thinking render as Markdown, and each entry has a Raw toggle for its exact source. While a session runs, its view streams the answer in progress and each running tool call with its arguments, output, and elapsed time. Stop, compact, archive, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.

@@ -3,7 +3,8 @@
 // Reads go straight to `runtime.db`; only writes need the `atomically`/`write` queue (see
 // src/db/atomic.ts).
 
-import { formatUrl } from "../ids/index.ts";
+import { ApiError } from "../api/errors.ts";
+import { formatUrl, parseRef, RefError } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 25;
@@ -18,10 +19,6 @@ export interface ThreadHit {
 	snippet: string;
 	matched: "subject" | "message";
 	createdAt: number;
-	/** The reader's unread messages in this thread (REF-05). */
-	unreadCount: number;
-	/** True when the reader has this thread archived (REF-03). */
-	archived: boolean;
 }
 
 export interface SessionHit {
@@ -35,10 +32,6 @@ export interface ThreadSummary {
 	threadUrl: string;
 	subject: string | null;
 	createdAt: number;
-	/** The reader's unread messages in this thread (REF-05). */
-	unreadCount: number;
-	/** True when the reader has this thread archived (REF-03). */
-	archived: boolean;
 }
 
 export interface SearchOptions {
@@ -48,60 +41,34 @@ export interface SearchOptions {
 }
 
 export interface ThreadSearchOptions extends SearchOptions {
-	/** The reader. Its archive state hides threads and its deliveries count as unread. */
+	/** Only threads this identity participates in; independent of the reader. */
 	participantId?: string;
-	/** Only archived threads. Default: only threads this participant has not archived (REF-03). */
-	archived?: boolean;
-	/** Include both archive states, unless archived-only was requested. */
-	includeArchived?: boolean;
-	/** Only threads with unread messages for this participant (REF-05). */
-	unread?: boolean;
 	/** The ID of the last thread of the previous page; a list continues with older threads (SCALE-03). */
 	before?: string;
 }
 
-/** True for `?archived=1`-style query values. */
-export function flag(value: string | null | undefined): boolean {
-	return value === "1" || value === "true" || value === "yes";
-}
-
-/**
- * The reader's view of a thread: its unread count and whether it is archived. Both are
- * subqueries on the outer `threads t`, so a list and a search share them.
- */
-const READER_COLUMNS =
-	"(SELECT COUNT(*) FROM deliveries d WHERE d.thread_id = t.id AND d.recipient_id = ? AND d.read_at IS NULL) AS unreadCount, " +
-	"(SELECT COUNT(*) FROM thread_archives a WHERE a.thread_id = t.id AND a.participant_id = ?) AS archived";
-
-const NO_READER_COLUMNS = "0 AS unreadCount, 0 AS archived";
-
-/** The `AND ...` clauses that hide a participant's archived threads and filter for unread ones. */
-function readerFilter(options: ThreadSearchOptions): { sql: string; params: string[] } {
-	const clauses: string[] = [];
-	const params: string[] = [];
-	if (options.participantId === undefined) {
-		if (options.archived) clauses.push("0");
-		if (options.unread) clauses.push("0");
-	} else {
-		if (options.archived || !options.includeArchived) {
-			const not = options.archived ? "" : "NOT ";
-			clauses.push(
-				`${not}EXISTS (SELECT 1 FROM thread_archives a WHERE a.thread_id = t.id AND a.participant_id = ?)`,
-			);
-			params.push(options.participantId);
-		}
-		if (options.unread) {
-			clauses.push(
-				`EXISTS (SELECT 1 FROM deliveries d WHERE d.thread_id = t.id AND d.recipient_id = ? AND d.read_at IS NULL)`,
-			);
-			params.push(options.participantId);
-		}
+/** Resolve a discovery filter without creating participants or changing personal state. */
+export async function participantFilterId(runtime: Runtime, address: string): Promise<string> {
+	let ref;
+	try {
+		ref = parseRef(address, runtime.config.domain);
+	} catch (error) {
+		if (error instanceof RefError) throw ApiError.badRequest(error.code, error.message);
+		throw error;
 	}
-	return { sql: clauses.map((clause) => `AND ${clause}`).join(" "), params };
+	if (ref.kind !== "user" && ref.kind !== "session" && ref.kind !== "domain") {
+		throw ApiError.badRequest("invalid_participant", `${address} is not a participant address`);
+	}
+	const participant = await runtime.db.get<{ id: string }>("SELECT id FROM participants WHERE id = ? AND kind = ?", ref.id, ref.kind);
+	if (!participant) throw ApiError.notFound(`participant ${ref.id}`);
+	return participant.id;
 }
 
-function readerParams(options: ThreadSearchOptions): string[] {
-	return options.participantId === undefined ? [] : [options.participantId, options.participantId];
+/** Membership, not message authorship, scopes both subjects and message hits. */
+function participantFilter(options: ThreadSearchOptions): { sql: string; params: string[] } {
+	return options.participantId === undefined
+		? { sql: "", params: [] }
+		: { sql: "AND EXISTS (SELECT 1 FROM thread_participants tp WHERE tp.thread_id = t.id AND tp.participant_id = ?)", params: [options.participantId] };
 }
 
 /**
@@ -124,25 +91,21 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 	if (!match) return [];
 	// Subject hits come first, so a page past them needs the subject hits before it counted too.
 	const limit = (options.limit ?? DEFAULT_SEARCH_LIMIT) + (options.offset ?? 0);
-	const filter = readerFilter(options);
-	const columns = options.participantId === undefined ? NO_READER_COLUMNS : READER_COLUMNS;
+	const filter = participantFilter(options);
 
 	const subjectRows = await runtime.db.all<{
 		threadId: string;
 		subject: string | null;
 		snippet: string;
 		createdAt: number;
-		unreadCount: number;
-		archived: number;
 	}>(
 		`SELECT subjects_fts.thread_id AS threadId, t.subject AS subject,
-		        snippet(subjects_fts, 0, '[', ']', '…', 12) AS snippet, t.created_at AS createdAt, ${columns}
+		        snippet(subjects_fts, 0, '[', ']', '…', 12) AS snippet, t.created_at AS createdAt
 		 FROM subjects_fts
 		 JOIN threads t ON t.id = subjects_fts.thread_id
 		 WHERE subjects_fts MATCH ? ${filter.sql}
-		 ORDER BY rank
+		 ORDER BY rank, t.id DESC
 		 LIMIT ?`,
-		...(options.participantId === undefined ? [] : [options.participantId, options.participantId]),
 		match,
 		...filter.params,
 		limit,
@@ -154,18 +117,15 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 		subject: string | null;
 		snippet: string;
 		createdAt: number;
-		unreadCount: number;
-		archived: number;
 	}>(
 		`SELECT messages_fts.thread_id AS threadId, messages_fts.message_id AS messageId, t.subject AS subject,
-		        snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet, m.created_at AS createdAt, ${columns}
+		        snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet, m.created_at AS createdAt
 		 FROM messages_fts
 		 JOIN messages m ON m.id = messages_fts.message_id
 		 JOIN threads t ON t.id = messages_fts.thread_id
 		 WHERE messages_fts MATCH ? ${filter.sql}
-		 ORDER BY rank
+		 ORDER BY rank, m.id DESC
 		 LIMIT ?`,
-		...(options.participantId === undefined ? [] : [options.participantId, options.participantId]),
 		match,
 		...filter.params,
 		limit,
@@ -179,8 +139,6 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 			snippet: row.snippet,
 			matched: "subject" as const,
 			createdAt: row.createdAt,
-			unreadCount: row.unreadCount,
-			archived: Boolean(row.archived),
 		})),
 		...messageRows.map((row) => ({
 			threadId: row.threadId,
@@ -191,8 +149,6 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 			snippet: row.snippet,
 			matched: "message" as const,
 			createdAt: row.createdAt,
-			unreadCount: row.unreadCount,
-			archived: Boolean(row.archived),
 		})),
 	];
 	return hits.slice(options.offset ?? 0, limit);
@@ -219,26 +175,22 @@ export async function searchSessions(runtime: Runtime, query: string, options: S
 }
 
 /**
- * Every thread this reader can see, newest first. `GET /threads` without a query serves this.
+ * Every same-domain thread, newest-created first. `GET /threads` without a query serves this.
  * Thread IDs are ULIDs made on the runtime clock when the thread is, so ID order is creation
  * order and the primary key index serves each page (SCALE-03).
  */
 export async function listThreads(runtime: Runtime, options: ThreadSearchOptions = {}): Promise<ThreadSummary[]> {
-	const filter = readerFilter(options);
-	const columns = options.participantId === undefined ? NO_READER_COLUMNS : READER_COLUMNS;
+	const filter = participantFilter(options);
 	const rows = await runtime.db.all<{
 		id: string;
 		subject: string | null;
 		createdAt: number;
-		unreadCount: number;
-		archived: number;
 	}>(
-		`SELECT t.id AS id, t.subject AS subject, t.created_at AS createdAt, ${columns}
+		`SELECT t.id AS id, t.subject AS subject, t.created_at AS createdAt
 		   FROM threads t
 		  WHERE 1 = 1 ${filter.sql} ${options.before === undefined ? "" : "AND t.id < ?"}
 		  ORDER BY t.id DESC
 		  LIMIT ?`,
-		...readerParams(options),
 		...filter.params,
 		...(options.before === undefined ? [] : [options.before]),
 		options.limit ?? DEFAULT_SEARCH_LIMIT,
@@ -248,7 +200,5 @@ export async function listThreads(runtime: Runtime, options: ThreadSearchOptions
 		threadUrl: formatUrl({ kind: "thread", id: row.id }, runtime.config.domain),
 		subject: row.subject,
 		createdAt: row.createdAt,
-		unreadCount: row.unreadCount,
-		archived: Boolean(row.archived),
 	}));
 }

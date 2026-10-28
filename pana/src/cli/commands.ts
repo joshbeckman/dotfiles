@@ -423,7 +423,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["thread", "archive"],
 		usage: "pana thread archive THREAD",
-		summary: "Hide a thread from your inbox and default thread list",
+		summary: "Hide a thread from your inbox",
 		flags: [],
 		positionals: [{ name: "THREAD", param: "id", required: true }],
 		request: (params) => ({ method: "POST", path: `/threads/${segment(text(params, "id"), "thread")}/archive` }),
@@ -437,29 +437,28 @@ export const COMMANDS: readonly CommandSpec[] = [
 		request: (params) => ({ method: "POST", path: `/threads/${segment(text(params, "id"), "thread")}/unarchive` }),
 	},
 	{
+		path: ["thread", "list"],
+		usage: "pana thread list [--participant ADDR]",
+		summary: "List all same-domain threads, newest-created first",
+		flags: [string("participant", "--participant ADDR", "Only threads this identity participates in"), ...PAGE_FLAGS],
+		positionals: [],
+		request: (params) => ({ method: "GET", path: "/threads", query: { participant: text(params, "participant"), ...pageQuery(params) } }),
+	},
+	{
 		path: ["thread", "search"],
-		usage: "pana thread search [--query TEXT] [--archived] [--unread]",
-		summary: "Search thread subjects and bodies",
+		usage: "pana thread search --query TEXT [--participant ADDR]",
+		summary: "Search all same-domain thread subjects and bodies",
 		flags: [
-			string("query", "--query TEXT", "What to search for; omit to list threads"),
-			bool("archived", "--archived", "Only threads you archived"),
-			bool("unread", "--unread", "Only threads with unread messages"),
+			string("query", "--query TEXT", "What to search for", { required: true }),
+			string("participant", "--participant ADDR", "Only threads this identity participates in"),
 			...PAGE_FLAGS,
 		],
 		positionals: [],
-		validate: (params) =>
-			params.query === undefined && params.archived !== true && params.unread !== true
-				? "give --query TEXT, --archived, or --unread"
-				: undefined,
+		validate: (params) => text(params, "query")?.trim() ? undefined : "give --query TEXT",
 		request: (params) => ({
 			method: "GET",
 			path: "/threads",
-			query: {
-				query: text(params, "query"),
-				archived: params.archived === true ? "1" : undefined,
-				unread: params.unread === true ? "1" : undefined,
-				...pageQuery(params),
-			},
+			query: { query: text(params, "query"), participant: text(params, "participant"), ...pageQuery(params) },
 		}),
 	},
 	{
