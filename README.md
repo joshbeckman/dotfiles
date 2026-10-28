@@ -55,7 +55,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Background jobs
 
-- **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh, the Agent Mail web bridge ([details](apps/agent-mail-web/README.md#installed-app-and-notifications)), and `panad`, the pana daemon
+- **`Library/LaunchAgents/`** — per-user launchd jobs: the two-hour dotfiles refresh and `panad`, the pana daemon
 
 - **`.config/systemd/user/`** — the two-hour refresh as a user timer and `panad.service` as a service, both linked and enabled by `setup` on Linux
 
@@ -64,6 +64,8 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 ```sh
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.plist
 ```
+
+Legacy mail wake jobs, the mail web supervisor, and the mail verifier timer are retired. `setup` runs `bin/retire-agent-automation` to stop and disable existing installations. Mail, transcripts, scratchpads, and manual archive commands remain available; nothing in this migration deletes history. The web archive can still be opened explicitly with `agent-mail web`.
 
 ### Tools
 

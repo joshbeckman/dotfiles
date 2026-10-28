@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Sandbox the retirement migration; never contact live service managers."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+STUB = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ['LOG'], 'a') as out:
+    out.write(json.dumps([name, *args]) + '\\n')
+if name == 'uname':
+    print(os.environ['HOST'])
+elif name == 'id':
+    print('123')
+elif name == 'launchctl' and args[0] == 'list':
+    sys.exit(0 if args[1].endswith('agent-session-wake') else 1)
+elif name == 'systemctl':
+    if args[1] == 'show-environment' and os.environ.get('NO_BUS'):
+        sys.exit(1)
+    if args[1] == 'show':
+        print('LoadState=' + ('not-found' if os.environ.get('NO_UNIT') else 'loaded'))
+        print('ActiveState=' + ('active' if os.environ.get('ACTIVE') else 'inactive'))
+        if os.environ.get('NO_UNIT'):
+            sys.exit(4)
+if os.environ.get('FAIL') == name and args[0] != 'list' and (not os.environ.get('FAIL_ARG') or os.environ['FAIL_ARG'] in args):
+    sys.exit(7)
+'''
+
+
+class RetirementTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name) / 'home with spaces'
+        self.bin = self.home / 'bin'
+        self.bin.mkdir(parents=True)
+        (self.bin / 'python3').symlink_to(sys.executable)
+        for name in ('uname', 'id', 'launchctl', 'systemctl'):
+            p = self.bin / name
+            p.write_text(STUB)
+            p.chmod(0o700)
+        self.log = self.home / 'commands'
+        self.history = self.home / '.local/state/agent-mail/history'
+        self.history.parent.mkdir(parents=True)
+        self.history.write_text('preserved')
+
+    def run_migration(self, host='Darwin', **env):
+        return subprocess.run(['/bin/bash', str(ROOT / 'bin/retire-agent-automation')],
+                              env={'HOME': str(self.home), 'PATH': f'{self.bin}:/usr/bin:/bin',
+                                   'LOG': str(self.log), 'HOST': host, **env},
+                              text=True, capture_output=True, timeout=10)
+
+    def calls(self):
+        return [json.loads(s) for s in self.log.read_text().splitlines()]
+
+    def test_mac_disables_all_old_supervisors_and_unloads_only_loaded_jobs(self):
+        agents = self.home / 'Library/LaunchAgents'
+        agents.mkdir(parents=True)
+        regular = agents / 'org.joshbeckman.agent-session-wake.plist'
+        regular.write_text('local settings')
+        link = agents / 'org.joshbeckman.agent-mail-wake.plist'
+        link.symlink_to('/missing/retired.plist')
+        for _ in range(2):
+            result = self.run_migration()
+            self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        for name in ('agent-session-wake', 'agent-mail-wake', 'agent-mail-web', 'agent-pr-monitor'):
+            self.assertIn(['launchctl', 'disable', f'gui/123/org.joshbeckman.{name}'], calls)
+        self.assertEqual([c for c in calls if c[1] == 'bootout'],
+                         [['launchctl', 'bootout', 'gui/123/org.joshbeckman.agent-session-wake']] * 2)
+        self.assertEqual(regular.read_text(), 'local settings')
+        self.assertFalse(link.is_symlink())
+        self.assertEqual(self.history.read_text(), 'preserved')
+        self.assertFalse(any(c[0] == 'systemctl' for c in calls))
+
+    def test_linux_stops_units_before_removing_links(self):
+        config = self.home / 'custom config'
+        units = config / 'systemd/user'
+        units.mkdir(parents=True)
+        timer = units / 'agent-mail-verify.timer'
+        timer.symlink_to('/missing/retired.timer')
+        service = units / 'agent-mail-verify.service'
+        service.write_text('local settings')
+        result = self.run_migration('Linux', XDG_CONFIG_HOME=str(config))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for unit in ('agent-mail-verify.timer', 'agent-mail-verify.service', 'agent-mail-web.service'):
+            self.assertIn(['systemctl', '--user', 'disable', '--now', unit], self.calls())
+        self.assertIn(['systemctl', '--user', 'daemon-reload'], self.calls())
+        self.assertFalse(timer.is_symlink())
+        self.assertEqual(service.read_text(), 'local settings')
+        self.assertEqual(self.history.read_text(), 'preserved')
+        self.assertFalse(any(c[0] == 'launchctl' for c in self.calls()))
+
+    def test_linux_without_bus_defers_cleanup_with_warning(self):
+        result = self.run_migration('Linux', NO_BUS='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('no user systemd bus', result.stderr)
+        self.assertFalse(any('disable' in c for c in self.calls()))
+
+    def test_absent_linux_units_are_not_disabled(self):
+        result = self.run_migration('Linux', NO_UNIT='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any('disable' in c for c in self.calls()))
+
+    def test_removed_but_running_linux_units_are_stopped(self):
+        result = self.run_migration('Linux', NO_UNIT='1', ACTIVE='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['systemctl', '--user', 'stop', 'agent-mail-verify.service'], self.calls())
+        self.assertFalse(any('disable' in c for c in self.calls()))
+
+    def test_linux_inspection_failure_is_not_treated_as_absent(self):
+        result = self.run_migration('Linux', FAIL='systemctl', FAIL_ARG='show')
+        self.assertEqual(result.returncode, 7)
+        self.assertIn('could not inspect', result.stderr)
+        self.assertFalse(any('disable' in c for c in self.calls()))
+
+    def test_manager_failure_is_not_hidden(self):
+        result = self.run_migration(FAIL='launchctl')
+        self.assertEqual(result.returncode, 7)
+        self.assertFalse(any('bootout' in c for c in self.calls()))
+
+    def test_unknown_host_fails_without_mutation(self):
+        result = self.run_migration('Other')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.calls(), [['uname', '-s']])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

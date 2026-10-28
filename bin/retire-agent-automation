@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Stop obsolete background coordination without touching mail or session history.
+set -euo pipefail
+
+case "$(uname -s)" in
+  Darwin)
+    domain="gui/$(id -u)"
+    for label in org.joshbeckman.agent-session-wake org.joshbeckman.agent-mail-wake \
+                 org.joshbeckman.agent-mail-web org.joshbeckman.agent-pr-monitor; do
+      # A persistent override prevents a retained local plist from returning at login.
+      launchctl disable "$domain/$label"
+      if launchctl list "$label" >/dev/null 2>&1; then
+        launchctl bootout "$domain/$label"
+      fi
+      path="$HOME/Library/LaunchAgents/$label.plist"
+      # dfm links may now dangle. Leave regular, locally installed plists in place:
+      # the disable override is enough, and they may contain useful local settings.
+      if [ -L "$path" ]; then rm "$path"; fi
+    done
+    ;;
+  Linux)
+    units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+      for unit in agent-mail-verify.timer agent-mail-verify.service agent-mail-web.service; do
+        # Missing units are normal on new installs. Some systemd versions return
+        # nonzero for them; accept only an explicit not-found result, not an
+        # arbitrary manager error. Stop active units even if their source is gone.
+        rc=0
+        properties=$(systemctl --user show "$unit" --property=LoadState --property=ActiveState) || rc=$?
+        if [ "$rc" -ne 0 ] && ! grep -qx 'LoadState=not-found' <<<"$properties"; then
+          echo "retire-agent-automation: could not inspect $unit" >&2
+          exit "$rc"
+        fi
+        if grep -qx 'LoadState=not-found' <<<"$properties"; then
+          if ! grep -qx 'ActiveState=inactive' <<<"$properties"; then
+            systemctl --user stop "$unit"
+          fi
+        else
+          systemctl --user disable --now "$unit"
+        fi
+      done
+    else
+      echo 'retire-agent-automation: no user systemd bus; stop/disable agent-mail-verify.timer, agent-mail-verify.service and agent-mail-web.service when available' >&2
+      # Keep unit links until they can be stopped and disabled successfully.
+      exit 0
+    fi
+    for unit in agent-mail-verify.timer agent-mail-verify.service agent-mail-web.service; do
+      if [ -L "$units/$unit" ]; then rm "$units/$unit"; fi
+    done
+    systemctl --user daemon-reload
+    ;;
+  *)
+    echo 'retire-agent-automation: unsupported host' >&2
+    exit 1
+    ;;
+esac

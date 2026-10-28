@@ -26,7 +26,6 @@ HTTPS certificates have to be enabled for the tailnet first, and iOS needs HTTPS
 the app to the home screen at all.
 
 ```sh
-launchctl kickstart -k "gui/$(id -u)/org.joshbeckman.agent-mail-web"   # restart on the new code
 tailscale serve --bg 8765                                              # https://<machine>.<tailnet>.ts.net
 tailscale serve --https=443 off                                        # undo
 ```
@@ -34,44 +33,9 @@ tailscale serve --https=443 off                                        # undo
 The bridge detects its own tailnet name from `tailscale status` rather than being told, so a
 renamed tailnet or a new machine needs no configuration. It answers to that name in addition
 to loopback, and prints both launch URLs at startup; the tailnet one is what a phone uses.
-On Linux, supervise it with a systemd user unit instead of the plist, and enable lingering so
-it runs without a login session:
-
-```ini
-# ~/.config/systemd/user/agent-mail-web.service
-[Unit]
-Description=Agent Mail web bridge (loopback)
-[Service]
-# PATH matters for what the bridge shells out to: agent-mail resolves notify-josh
-# through it, so a mail sent from the app still reaches the notification ladder.
-Environment=PATH=%h/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/dotfiles/bin/agent-mail-web --no-open
-Restart=on-failure
-[Install]
-WantedBy=default.target
-```
-
-```sh
-systemctl --user enable --now agent-mail-web
-loginctl enable-linger "$USER"
-```
-
-If you are enabling this from a process that is not a login session — an agent running as a
-system service, for instance — `systemctl --user` fails with `$DBUS_SESSION_BUS_ADDRESS and
-$XDG_RUNTIME_DIR not defined`, because there is no user bus to talk to. Target the
-logged-in user's bus instead:
-
-```sh
-systemctl --machine="$USER@.host" --user enable --now agent-mail-web
-```
-
-One caveat on the user unit, observed on the first Linux machine to run this: it has twice
-lost its `default.target.wants` symlink across a reboot there. The directory survives, the
-symlink does not, `is-enabled` reports disabled afterwards, and the root cause was never
-found. That failure is silent in the worst way: the service works until a reboot and then
-does not come back, with no error anywhere. So check `systemctl --user is-enabled
-agent-mail-web` after a reboot. The fallback that machine has needed is a system unit under
-`/etc/systemd/system` instead of a user unit.
+Automatic supervision is retired. Start the archive explicitly with `agent-mail web`
+and stop that foreground process when finished; `setup` disables the old launchd
+supervisor and Linux user service without deleting stored mail.
 
 Verify a new bridge from the command line before trusting it, and mind the header name: the
 bridge reads `X-Agent-Mail-Token`, so a request carrying `Authorization: Bearer` gets the same 403
@@ -90,17 +54,6 @@ not. A 404 reading `Unknown endpoint` for a route that exists in `bin/agent-mail
 case: the process predates the pull that added it, so restart the bridge rather than looking for a
 typo.
 
-On a systemd host, check the bridge two ways, because the two fail independently: something
-listening on the port means it is up, and the `default.target.wants` symlink means it comes back
-after a reboot. A running-but-disabled bridge looks healthy from the inbox right up until the next
-reboot. Read the socket and the symlink directly rather than asking `systemctl --user`, which
-cannot reach the user bus from a service context:
-
-```sh
-ss -ltn | grep 8765
-ls ~/.config/systemd/user/default.target.wants/agent-mail-web.service
-```
-
 Two consequences worth knowing. The token is per machine, so each bridge's launch URL
 authorizes that machine only, and each is a separate origin: one installed app per machine.
 And reaching the bridge over the tailnet makes the token the only check on any device that
@@ -109,11 +62,8 @@ devices you do not control.
 
 ### Installed app and notifications
 
-`Library/LaunchAgents/org.joshbeckman.agent-mail-web.plist` keeps the bridge running in the background; `dfm install` links it. Load it after stopping any manual bridge on port 8765:
-
-```sh
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.agent-mail-web.plist
-```
+Run `agent-mail web` when you need the archive. No background job is installed or
+enabled, so an installed browser app needs that manual bridge to be running.
 
 Open the launch URL once, then install: in Chrome, use the install button in the address bar; in Safari, use File › Add to Dock. Safari needs one more step, because a Safari web app starts with its own empty storage container. Copy the token to the clipboard and paste it into the app's **Authorize this app** panel:
 
