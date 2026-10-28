@@ -32,10 +32,6 @@ export function pressureAction(toolName: string, level: MemoryPressureLevel | un
 	return undefined;
 }
 
-export function shouldSuppressMailWake(level: MemoryPressureLevel | undefined): boolean {
-	return level === 4;
-}
-
 export default function (pi: ExtensionAPI) {
 	const warnedBgRuns = new Set<string>();
 

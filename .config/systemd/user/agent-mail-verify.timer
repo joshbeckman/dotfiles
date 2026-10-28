@@ -1,7 +1,0 @@
-[Unit]
-Description=Check hourly that the mirrored mail store has not drifted
-[Timer]
-OnCalendar=hourly
-Persistent=true
-[Install]
-WantedBy=timers.target

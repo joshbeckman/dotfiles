@@ -59,46 +59,6 @@
   },
   "model": "opus",
   "hooks": {
-    "Notification": [
-      {
-        "matcher": "permission_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh permission; echo \"$INPUT\" | ~/.claude/hooks/attention.sh set_permission"
-          }
-        ]
-      },
-      {
-        "matcher": "elicitation_dialog",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh question; echo \"$INPUT\" | ~/.claude/hooks/attention.sh set_question"
-          }
-        ]
-      },
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/session-registry.sh idle"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh stopped; echo \"$INPUT\" | ~/.claude/hooks/attention.sh clear"
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "*",
@@ -107,43 +67,6 @@
             "type": "command",
             "command": "~/.claude/hooks/skills-update.mjs",
             "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/session-registry.sh start"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh end; echo \"$INPUT\" | ~/.claude/hooks/attention.sh clear"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/attention.sh clear"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "INPUT=$(cat); echo \"$INPUT\" | ~/.claude/hooks/session-registry.sh running; echo \"$INPUT\" | ~/.claude/hooks/attention.sh clear"
           }
         ]
       }
