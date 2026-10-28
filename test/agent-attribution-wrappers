@@ -18,6 +18,8 @@ SH
 cat >"$tmp/bin/capture-body" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"$CALLS"
+trap 'printf "%s\n" "${FAKE_STDOUT:-}"; printf "%s" "${FAKE_STDERR:-}" >&2; exit "${FAKE_STATUS:-0}"' EXIT
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[i]}" in
@@ -47,6 +49,14 @@ chmod +x "$tmp/bin/agent-trailer" "$tmp/bin/capture-body"
 
 export PATH="$tmp/bin:$PATH"
 export CAPTURE="$tmp/captured"
+export CALLS="$tmp/calls"
+cat >"$tmp/bin/agent-pr-monitor" <<'SH'
+#!/bin/sh
+echo called >>"$MONITOR_CALLS"
+exit 99
+SH
+chmod +x "$tmp/bin/agent-pr-monitor"
+export MONITOR_CALLS="$tmp/monitor-calls"
 trailer='Co-authored-by: AI Test Agent @+test-agent'
 
 assert_capture() {
@@ -150,5 +160,39 @@ assert_capture "Updated under pana.
 
 $pana_trailer
 "
+
+# Creating/submitting under an agent must preserve attribution and the CLI's
+# output/status without invoking the retired monitor or doing follow-up reads.
+export FAKE_STDOUT='https://github.com/example/repo/pull/123'
+export FAKE_STDERR='CLI diagnostic'
+for operation in gw-create gsw-create gsw-submit gsw-stack; do
+  : >"$CALLS"
+  case "$operation" in
+    gw-create) command=("$root/bin/gw" pr create) ;;
+    gsw-create) command=("$root/bin/gsw" pr create) ;;
+    gsw-submit) command=("$root/bin/gsw" submit) ;;
+    gsw-stack) command=("$root/bin/gsw" submit --stack) ;;
+  esac
+  run_pana "${command[@]}" --body 'New PR.' >"$tmp/out" 2>"$tmp/err"
+  assert_capture "New PR.
+
+$pana_trailer
+"
+  grep -Fxq "$FAKE_STDOUT" "$tmp/out"
+  grep -Fq "$FAKE_STDERR" "$tmp/err"
+  [[ $(wc -l <"$CALLS") -eq 1 ]]
+  [[ ! -e "$MONITOR_CALLS" ]]
+
+  # A successful write without a URL must not trigger a fallback lookup.
+  FAKE_STDOUT='' run_pana "${command[@]}" --body 'New PR.' >"$tmp/out" 2>"$tmp/err"
+  [[ $(wc -l <"$CALLS") -eq 2 ]]
+  ! grep -q 'monitor' "$tmp/err"
+
+  rc=0
+  FAKE_STATUS=7 run_pana "${command[@]}" --body 'New PR.' >"$tmp/out" 2>"$tmp/err" || rc=$?
+  [[ $rc -eq 7 ]]
+  [[ $(wc -l <"$CALLS") -eq 3 ]]
+  [[ ! -e "$MONITOR_CALLS" ]]
+done
 
 echo 'agent attribution wrapper tests passed'
