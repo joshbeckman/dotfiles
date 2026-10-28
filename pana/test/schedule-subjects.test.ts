@@ -94,7 +94,8 @@ it("SCH-16 migration preserves legacy actions and list/show lazily name each leg
 	const dir = t.dir;
 	await t.stop();
 	const raw = await openNodeSqliteDatabase(join(dir, "pana.sqlite"));
-	await raw.exec("ALTER TABLE schedules DROP COLUMN subject; ALTER TABLE schedules DROP COLUMN subject_source; PRAGMA user_version = 8;");
+	// Recreate the v8 shape, including removing indexes from later migrations.
+	await raw.exec("DROP INDEX thread_participants_participant_thread; ALTER TABLE schedules DROP COLUMN subject; ALTER TABLE schedules DROP COLUMN subject_source; PRAGMA user_version = 8;");
 	await raw.close();
 	t = await startTestPanad({ stateDir: dir, script: [{ text: "Legacy task summary" }] });
 	expect(t.model.calls()).toBe(0); // Migration performs no model calls.

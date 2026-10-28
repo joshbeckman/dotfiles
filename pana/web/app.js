@@ -979,13 +979,22 @@ async function submitCompose(event) {
 
 async function searchThreads(event, cursor) {
 	event?.preventDefault();
+	if (event) status("");
 	const query = $("threads-query").value.trim();
-	const params = new URLSearchParams({ includeArchived: "1" });
+	const params = new URLSearchParams();
 	if (query) params.set("query", query);
-	if ($("threads-unread")?.checked) params.set("unread", "1");
+	const participant = $("threads-participant").value.trim();
+	if (participant) params.set("participant", participant);
 	const suffix = params.toString();
-	const body = await api("GET", pagePath(`/threads${suffix ? `?${suffix}` : ""}`, cursor));
 	const list = $("threads-list");
+	let body;
+	try {
+		body = await api("GET", pagePath(`/threads${suffix ? `?${suffix}` : ""}`, cursor));
+	} catch (error) {
+		// A failed filter must not leave unrelated rows looking like successful matches.
+		if (!cursor) empty(list, "Unable to load threads.");
+		throw error;
+	}
 	if (!cursor) list.replaceChildren();
 	const threads = asList(body, ["threads"]);
 	if (threads.length === 0 && !cursor) return empty(list, query ? `No threads match “${query}”.` : "No threads yet.");
@@ -1002,11 +1011,11 @@ async function searchThreads(event, cursor) {
 		aside.append(timeEl(thread.at));
 		const row = item(
 			thread.subject,
-			[thread.unreadCount > 0 ? unreadBadge(thread.unreadCount) : undefined, badge(thread.archived ? "Archived" : "Not archived"), thread.snippet],
+			[thread.snippet],
 			() => {
 				location.hash = `#/threads/${thread.id}`;
 			},
-			{ testid: "thread-item", threadId: thread.id, unread: thread.unreadCount > 0, archived: thread.archived, aside },
+			{ testid: "thread-item", threadId: thread.id, aside },
 		);
 		// UX-09: a row marks the thread while one of its sessions works.
 		rememberWorking(thread.id, thread.working);
@@ -2504,7 +2513,7 @@ function onPaletteInput() {
 async function paletteSearch(query, search) {
 	try {
 		const [threads, sessions, memory] = await Promise.all([
-			api("GET", pagePath(`/threads?includeArchived=1&query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
+			api("GET", pagePath(`/threads?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", `/memory/search?query=${encodeURIComponent(query)}&limit=${HITS_PER_STORE}`),
 		]);
@@ -2686,7 +2695,7 @@ $("authorize-form").addEventListener("submit", (event) => {
 $("compose-form").addEventListener("submit", (event) => void submitCompose(event));
 wireAttach("compose-form", "compose-attach", "compose-files", "compose-body");
 wireAttach("reply-form", "reply-attach", "reply-files", "reply-body");
-$("threads-search").addEventListener("submit", (event) => void searchThreads(event));
+$("threads-search").addEventListener("submit", (event) => void searchThreads(event).catch(fail));
 $("sessions-search").addEventListener("submit", (event) => {
 	event.preventDefault();
 	void loadSessionList($("sessions-query").value.trim());
@@ -2712,7 +2721,6 @@ $("session-confirm-no").addEventListener("click", () => {
 	$("session-confirm").hidden = true;
 });
 $("inbox-archived").addEventListener("change", () => void loadInbox());
-$("threads-unread").addEventListener("change", () => void searchThreads());
 $("memory-delete").addEventListener("click", () => {
 	$("memory-delete-path").textContent = $("memory-delete").dataset.path || "";
 	$("memory-delete-confirmation").hidden = false;

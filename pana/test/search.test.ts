@@ -354,23 +354,107 @@ describe("SRC search", () => {
 });
 
 
-it("REF-03 includes both archive states in browse and search, preserving caller state and pagination", async () => {
+it("SRC-05 browse and search include archived threads by default, omit personal state, and paginate", async () => {
 	t = await startTestPanad();
 	const older = await seed(t, "Lantern older");
 	await t.clock.advance(1);
 	const newer = await seed(t, "Lantern newer");
 	await t.client.post(`/threads/${newer.threadId}/archive`, {});
-	const get = async (url: string) => (await t!.client.get<{ threads: Array<{ threadId: string; archived: boolean }>; nextCursor?: string }>(url)).body;
-	expect((await get("/threads")).threads.map(r => r.threadId)).toEqual([older.threadId]);
-	const page = await get("/threads?includeArchived=1&limit=1");
-	expect(page.threads).toMatchObject([{ threadId: newer.threadId, archived: true }]);
-	expect((await get(`/threads?includeArchived=1&limit=1&cursor=${encodeURIComponent(page.nextCursor!)}`)).threads).toMatchObject([{ threadId: older.threadId, archived: false }]);
+	const get = async (url: string) => (await t!.client.get<{ threads: Array<{ threadId: string }>; nextCursor: string | null }>(url)).body;
+	expect((await get("/threads")).threads.map(r => r.threadId)).toEqual([newer.threadId, older.threadId]);
+	const page = await get("/threads?limit=1");
+	expect(page.threads).toMatchObject([{ threadId: newer.threadId }]);
+	expect((await get(`/threads?limit=1&cursor=${encodeURIComponent(page.nextCursor!)}`)).threads).toMatchObject([{ threadId: older.threadId }]);
 	for (const query of ["Lantern", "older", "newer"]) {
-		const all = await get(`/threads?includeArchived=1&query=${query}`);
+		const all = await get(`/threads?query=${query}`);
 		expect(all.threads.length).toBeGreaterThan(0);
-		expect(all.threads.every(r => r.archived === (r.threadId === newer.threadId))).toBe(true);
+		for (const row of all.threads) {
+			expect(row).not.toHaveProperty("archived");
+			expect(row).not.toHaveProperty("unreadCount");
+			expect(row).toHaveProperty("participants");
+		}
 	}
-	expect((await get("/threads?includeArchived=1&archived=1")).threads).toMatchObject([{ threadId: newer.threadId, archived: true }]);
-	expect((await get("/threads?includeArchived=1&unread=1")).threads).toEqual([]);
+	for (const filter of ["archived=1", "includeArchived=1", "unread=1", "archived=0"]) {
+		expect((await t.client.get(`/threads?${filter}`)).status).toBe(400);
+	}
+	const before = await get("/threads");
+	await t.client.get(`/threads/${newer.threadId}`);
+	expect(await get("/threads")).toEqual(before);
 	expect((await t.client.get<{ canArchive: boolean }>(`/threads/${newer.threadId}`)).body.canArchive).toBe(true);
+});
+
+it("SRC-04 participant membership scopes domain-wide listing and both subject/message search with pagination", async () => {
+	t = await startTestPanad();
+	const first = await seed(t, "Lantern first");
+	const excluded = await seed(t, "Lantern excluded");
+	const last = await seed(t, "Lantern last");
+	const member = t.runtime.newId();
+	const outsider = t.runtime.newId();
+	await t.runtime.db.write(async tx => {
+		for (const id of [member, outsider]) {
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, t!.runtime.url({ kind: "session", id }), t!.clock.now());
+			await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", id, t!.clock.now(), t!.clock.now());
+		}
+		for (const thread of [first, last]) await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", thread.threadId, member, t!.clock.now());
+	});
+	const url = t.runtime.url({ kind: "session", id: member });
+	for (const caller of [undefined, outsider]) {
+		for (const ref of [member, url]) {
+			const options = caller ? { caller } : undefined;
+			const list = await t.client.get<{ threads: Array<{ threadId: string; participants: Array<{ id: string }> }>; nextCursor: string }>(`/threads?participant=${encodeURIComponent(ref)}&limit=1`, options);
+			expect(list.status).toBe(200);
+			expect(list.body.threads.map(r => r.threadId)).toEqual([last.threadId]);
+			expect(list.body.threads[0]!.participants.map(p => p.id)).toEqual(expect.arrayContaining([member, TEST_USER]));
+			const next = await t.client.get<{ threads: Array<{ threadId: string }>; nextCursor: null }>(`/threads?participant=${member}&limit=1&cursor=${encodeURIComponent(list.body.nextCursor)}`, options);
+			expect(next.body.threads.map(r => r.threadId)).toEqual([first.threadId]);
+			expect(next.body.nextCursor).toBeNull();
+			const hits: Array<{ threadId: string; matched: string }> = [];
+			let cursor: string | null = null;
+			do {
+				const page: { status: number; body: { threads: typeof hits; nextCursor: string | null } } = await t.client.get<{ threads: typeof hits; nextCursor: string | null }>(`/threads?query=Lantern&participant=${encodeURIComponent(ref)}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, options);
+				expect(page.status).toBe(200);
+				hits.push(...page.body.threads);
+				cursor = page.body.nextCursor;
+			} while (cursor);
+			expect(hits).toHaveLength(4);
+			expect(new Set(hits.map(r => r.threadId))).toEqual(new Set([first.threadId, last.threadId]));
+			expect(hits.map(r => r.matched)).toEqual(["subject", "subject", "message", "message"]);
+		}
+		const all = await t.client.get<{ threads: Array<{ threadId: string }> }>("/threads", caller ? { caller } : undefined);
+		expect(all.body.threads.map(r => r.threadId)).toContain(excluded.threadId);
+	}
+	for (const ref of [TEST_USER, t.runtime.url({ kind: "user", id: TEST_USER })]) {
+		expect((await t.client.get<{ threads: unknown[] }>(`/threads?participant=${encodeURIComponent(ref)}`)).body.threads).toHaveLength(3);
+	}
+	for (const ref of ["", `pana://${TEST_DOMAIN}/users/%`, `pana://${TEST_DOMAIN}/users/%C0%AF`, `pana://elsewhere/sessions/${member}`, t.runtime.url({ kind: "thread", id: first.threadId })]) {
+		expect((await t.client.get(`/threads?participant=${encodeURIComponent(ref)}`)).status).toBe(400);
+	}
+	for (const ref of ["unknown-user", t.runtime.newId()]) expect((await t.client.get(`/threads?participant=${ref}`)).status).toBe(404);
+	// Discovery does not join an outsider or create unknown participants.
+	expect(await t.runtime.db.get("SELECT * FROM thread_participants WHERE participant_id = ?", outsider)).toBeUndefined();
+	expect(await t.runtime.db.get("SELECT * FROM participants WHERE id = 'unknown-user'")).toBeUndefined();
+});
+
+
+it("SRC-04 SRC-05 discovery query plans retain ranked FTS top-N and indexed sparse membership paging", async () => {
+	t = await startTestPanad();
+	await seed(t, "Lantern query plans");
+	const all = vi.spyOn(t.runtime.db, "all");
+	await searchThreads(t.runtime, "Lantern", { participantId: TEST_USER, limit: 1 });
+	await listThreads(t.runtime, { participantId: TEST_USER, limit: 1 });
+	const calls = [...all.mock.calls];
+	all.mockRestore();
+	expect(calls).toHaveLength(3);
+	for (const [sql, ...params] of calls) {
+		const plan = await t.runtime.db.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, ...params);
+		const details = plan.map(row => row.detail).join("\n");
+		expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+		if (sql.includes(" MATCH ")) {
+			// FTS5 bit 32 means it consumes ORDER BY rank rather than sorting every match.
+			expect(details).toMatch(/VIRTUAL TABLE INDEX 32:/);
+		} else {
+			expect(details).toContain("thread_participants_participant_thread");
+			expect(details).not.toMatch(/SCAN t\b/);
+		}
+	}
 });

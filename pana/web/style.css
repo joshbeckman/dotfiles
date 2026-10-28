@@ -569,13 +569,13 @@ button.quiet:hover,
 	gap: var(--s2);
 	flex: none;
 }
-.item.unread {
+#inbox-list .item.unread {
 	border-left-color: var(--p-orange);
 }
-.item.unread .title {
+#inbox-list .item.unread .title {
 	font-weight: 600;
 }
-.item.archived .title {
+#inbox-list .item.archived .title {
 	color: var(--c-text-alt);
 }
 .item.focus {

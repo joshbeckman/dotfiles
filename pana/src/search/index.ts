@@ -19,7 +19,7 @@ export {
 } from "./indexing.ts";
 export {
 	DEFAULT_SEARCH_LIMIT,
-	flag,
+	participantFilterId,
 	listThreads,
 	matchExpression,
 	searchSessions,

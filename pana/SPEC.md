@@ -71,7 +71,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/sessions/:id/stop`, `/resume`, `/compact`, `/archive` | control |
 | GET | `/inbox` | caller's inbox, with `unreadCount` (`participant` lets a user view a session's inbox; `view=threads` lists one row per thread) |
 | POST | `/threads` | create a thread |
-| GET | `/threads` | search (`query`, `archived`, `includeArchived`, `unread`) |
+| GET | `/threads` | list/search (`query`, `participant`, `limit`, `cursor`) |
 | GET | `/threads/:id` | read |
 | POST | `/threads/:id/messages` | respond |
 | POST | `/threads/:id/subject` | regenerate subject |
@@ -301,6 +301,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **SRC-01** `thread search --query Q` searches subjects and message bodies with FTS5 and returns thread, message, and a snippet.
 - [x] **SRC-02** Redacted text is removed from the index. Revised text replaces the old text.
 - [x] **SRC-03** `session search --query Q` searches user and assistant text of transcripts, indexed when each run settles.
+- [x] **SRC-04** `pana thread list [--participant ADDR]` lists every same-domain thread, newest-created first. `pana thread search --query TEXT [--participant ADDR]` searches the same domain-wide set. Both accept `--limit`, `--cursor`, and `--json`; `GET /threads` backs both commands and returns `threads` and `nextCursor`. The optional participant filter selects thread membership, not message authorship, and accepts a username, session ULID, or same-domain participant URL. Invalid/foreign references return 400; unknown participants return 404. The PWA visibly reports filter failures and clears stale results; correcting the filter restores browsing. Listing/searching does not join threads, mark deliveries read, or authorize replies.
+- [x] **SRC-05** Listing and searching are independent of caller archive/read state: all archive states are always included, and results contain shared metadata (thread ID/URL, subject, creation timestamp, participants, working sessions, plus matching message/snippet for search), never archive state or unread counts. The CLI has no `--archived` or `--unread` option; the API rejects obsolete `archived`, `includeArchived`, and `unread` filters with 400 rather than silently ignoring them.
 
 ---
 
@@ -350,11 +352,11 @@ Each package was built against contracts and fakes. These items prove the packag
 
 - [x] **REF-01** A session with no `--cwd` and no profile `cwd` runs in the panad user's `HOME`, whatever panad's own working directory is. SCR-02 later replaced the HOME default with the session's scratch directory; panad's own working directory is still never used.
 - [x] **REF-02** `pana session archive SESSION` calls `POST /sessions/:id/archive`. Only the user may archive. An archived session follows STA-07. The PWA session view has an Archive button that asks for confirmation.
-- [x] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant: it hides the thread from that participant's inbox and default API/CLI thread list only. `GET /threads?includeArchived=1` includes both archive states in lists and searches; `archived=1` takes precedence. `GET /threads?archived=1` and `pana thread search --archived` list archived threads.
+- [x] **REF-03** `pana thread archive THREAD` and `pana thread unarchive THREAD` call `POST /threads/:id/archive` and `/unarchive`. Archiving is per participant and affects only inbox organization: it hides the thread from that participant's normal inbox. `GET /inbox?archived=1` shows their archived inbox entries. It does not change discovery, direct reads, participation, delivery, or reply permissions.
 - [x] **REF-04** A new message delivered to a participant unarchives the thread for that participant.
-- [x] **REF-05** Inbox items and thread list items carry the caller's `unreadCount`. `GET /threads?unread=1` and `pana thread search --unread` return only threads with unread messages.
-- [x] **REF-06** The PWA marks threads with unread messages and shows their count. The nav shows the inbox unread count. Both update live from `/events`, and opening a thread clears its count.
-- [x] **REF-07** The PWA inbox and open-thread views have Archive and Unarchive buttons. Open-thread controls (including the palette and keyboard) are available only to participants. The Threads browse list and its search always include both archive states, label each row Archived or Not archived, and have no archive checkbox or row action.
+- [x] **REF-05** Inbox items carry the caller's `unreadCount`; listing and searching threads expose no personal read state.
+- [x] **REF-06** The PWA inbox marks threads with unread messages and shows their count. The nav shows the inbox unread count. Both update live from `/events`, and opening a thread clears its count.
+- [x] **REF-07** The PWA inbox and open-thread views have Archive and Unarchive buttons. Open-thread controls (including the palette and keyboard) are available only to participants. The Threads browse list and its search always include every archive state, expose no archive/unread metadata or filters, and have no archive row action. A participant filter narrows both by thread membership.
 - [x] **REF-08** Every ID and `pana://` URL the PWA shows is a link to its view: sessions to the session view, threads to the thread, messages to the thread scrolled to the message, schedules to the schedule, files to the file, and the user to the inbox. That includes senders, participants, headers, and `pana://` URLs inside message bodies and transcripts.
 - [x] **REF-09** The session view shows the complete transcript: thinking blocks (collapsed by default), every tool call with its full arguments, every tool result with its full output (collapsed when long), system and compaction entries, and per-turn usage.
 

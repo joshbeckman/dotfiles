@@ -75,8 +75,6 @@ export function threadRow(thread: any): {
 	subject: string;
 	snippet?: string;
 	at: number;
-	unreadCount: number;
-	archived: boolean;
 	working: WorkingSessionRef[];
 };
 export function messageView(message: any): {

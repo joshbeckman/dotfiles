@@ -7,7 +7,7 @@ import { ApiError } from "../api/errors.ts";
 import { decodeCursor, decodeOffset, pageOf, parseLimit } from "../api/pagination.ts";
 import type { Handlers, RequestContext } from "../api/types.ts";
 import { workingSessions, type WorkingSession } from "../sessions/state.ts";
-import { DEFAULT_SEARCH_LIMIT, flag, listThreads, searchThreads, type ThreadSearchOptions } from "./query.ts";
+import { DEFAULT_SEARCH_LIMIT, participantFilterId, listThreads, searchThreads, type ThreadSearchOptions } from "./query.ts";
 import { regenerateSubject, SubjectError, subjectHistory } from "./subjects.ts";
 
 export const handlers: Handlers = {
@@ -15,24 +15,23 @@ export const handlers: Handlers = {
 		const query = (ctx.query.get("query") ?? "").trim();
 		const limit = parseLimit(ctx.query.get("limit"), DEFAULT_SEARCH_LIMIT);
 		const cursor = ctx.query.get("cursor");
-		// REF-03 and REF-05: archive state and unread counts belong to the caller, so the route
-		// asks for the caller's own view rather than the whole domain's.
-		const options: ThreadSearchOptions = {
-			participantId: ctx.caller.id,
-			archived: flag(ctx.query.get("archived")),
-			includeArchived: flag(ctx.query.get("includeArchived")),
-			unread: flag(ctx.query.get("unread")),
+		for (const name of ["archived", "includeArchived", "unread"]) {
+			if (ctx.query.has(name)) throw ApiError.badRequest("invalid_filter", `${name} is not supported for thread discovery; personal state belongs to inbox views`);
+		}
+		const participant = ctx.query.get("participant");
+		const options: ThreadSearchOptions = participant === null ? {} : {
+			participantId: await participantFilterId(ctx.runtime, participant),
 		};
 		if (!query) {
 			const before = decodeCursor(cursor, ["string"])?.[0] as string | undefined;
 			const rows = await listThreads(ctx.runtime, { ...options, limit: limit + 1, ...(before === undefined ? {} : { before }) });
 			const page = pageOf(rows, limit, (row) => [row.threadId]);
-			return { status: 200, body: { threads: await withWorking(ctx, page.items), nextCursor: page.nextCursor } };
+			return { status: 200, body: { threads: await withSharedMetadata(ctx, page.items), nextCursor: page.nextCursor } };
 		}
 		const offset = decodeOffset(cursor);
 		const hits = await searchThreads(ctx.runtime, query, { ...options, limit: limit + 1, offset });
 		const page = pageOf(hits, limit, () => [offset + limit]);
-		return { status: 200, body: { threads: await withWorking(ctx, page.items), nextCursor: page.nextCursor } };
+		return { status: 200, body: { threads: await withSharedMetadata(ctx, page.items), nextCursor: page.nextCursor } };
 	},
 
 	"threads.subject": async (ctx) => {
@@ -64,10 +63,30 @@ export const handlers: Handlers = {
 	},
 };
 
-/** UX-09: each row names the session participants that are working now, for its small mark. */
-async function withWorking<T extends { threadId: string }>(ctx: RequestContext, rows: readonly T[]): Promise<Array<T & { working: WorkingSession[] }>> {
+interface DiscoveryParticipant {
+	id: string;
+	kind: "user" | "session" | "domain";
+	url: string;
+}
+
+/** Shared membership and UX-09 working-session marks, fetched once per page. */
+async function withSharedMetadata<T extends { threadId: string }>(ctx: RequestContext, rows: readonly T[]): Promise<Array<T & { working: WorkingSession[]; participants: DiscoveryParticipant[] }>> {
 	const working = await workingSessions(ctx.runtime.db, rows.map((row) => row.threadId));
-	return rows.map((row) => ({ ...row, working: working.get(row.threadId) ?? [] }));
+	const participants = new Map<string, DiscoveryParticipant[]>();
+	const ids = [...new Set(rows.map((row) => row.threadId))];
+	if (ids.length > 0) {
+		const people = await ctx.runtime.db.all<DiscoveryParticipant & { threadId: string }>(
+			`SELECT tp.thread_id AS threadId, p.id, p.kind, p.url FROM thread_participants tp
+			 JOIN participants p ON p.id = tp.participant_id
+			 WHERE tp.thread_id IN (${ids.map(() => "?").join(",")}) ORDER BY tp.joined_at, p.id`, ...ids,
+		);
+		for (const { threadId, ...person } of people) {
+			const list = participants.get(threadId) ?? [];
+			list.push(person);
+			participants.set(threadId, list);
+		}
+	}
+	return rows.map((row) => ({ ...row, working: working.get(row.threadId) ?? [], participants: participants.get(row.threadId) ?? [] }));
 }
 
 function wantsRegeneration(body: unknown, query: string | null): boolean {
