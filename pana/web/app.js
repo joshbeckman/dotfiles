@@ -1868,13 +1868,24 @@ async function createWorktree() {
 // ---- Schedules ------------------------------------------------------------------------------
 
 let editingSchedule;
+let schedulesRequest = 0;
 
 async function loadSchedules(focus, cursor) {
-	const body = await api("GET", pagePath("/schedules", cursor));
+	const request = ++schedulesRequest;
+	const kind = $("schedules-kind").value;
 	const list = $("schedules-list");
 	if (!cursor) list.replaceChildren();
+	let body;
+	try {
+		body = await api("GET", pagePath(kind ? `/schedules?kind=${kind}` : "/schedules", cursor));
+	} catch (error) {
+		if (request === schedulesRequest) throw error;
+		return;
+	}
+	// Changing filters invalidates pending responses, including Load more from the old kind.
+	if (request !== schedulesRequest) return;
 	const schedules = asList(body, ["schedules"]);
-	if (schedules.length === 0 && !cursor) return empty(list, "No schedules yet.");
+	if (schedules.length === 0 && !cursor) return empty(list, kind ? `No ${kind} schedules yet.` : "No schedules yet.");
 	for (const schedule of schedules) {
 		const payload = schedule.payload ?? {};
 		const checkView = scheduleCheckView(schedule, when);
@@ -2643,6 +2654,7 @@ async function route() {
 				else await loadMemory();
 				break;
 			case "schedules":
+				$("schedules-kind").value = ["session", "thread", "wake"].includes(query.get("kind")) ? query.get("kind") : "";
 				await loadSchedules(query.get("focus") ?? undefined);
 				break;
 		}
@@ -2742,6 +2754,10 @@ $("memory-path-input").addEventListener("keydown", (event) => {
 	if (event.key !== "Enter") return;
 	event.preventDefault();
 	memoryEditor?.focus();
+});
+$("schedules-kind").addEventListener("change", () => {
+	const kind = $("schedules-kind").value;
+	location.hash = kind ? `#/schedules?kind=${kind}` : "#/schedules";
 });
 $("schedule-form").addEventListener("submit", (event) => void createSchedule(event));
 $("schedule-cancel").addEventListener("click", () => {

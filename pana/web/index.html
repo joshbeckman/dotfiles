@@ -284,6 +284,16 @@
 
 			<section class="view" id="view-schedules" data-testid="schedules" hidden>
 				<header class="view-header"><h2>Schedules</h2></header>
+				<div class="field">
+					<label for="schedules-kind">Show schedules</label>
+					<select id="schedules-kind" data-testid="schedules-kind" aria-describedby="schedules-kind-hint">
+						<option value="">All kinds</option>
+						<option value="session">Sessions</option>
+						<option value="thread">Threads</option>
+						<option value="wake">Wakes</option>
+					</select>
+					<p class="hint" id="schedules-kind-hint">Sessions start new work, threads send messages, and wakes resume sessions. Any kind can be one-shot or recurring.</p>
+				</div>
 				<div id="schedules-list" data-testid="schedules-list" class="list" role="list"></div>
 				<form id="schedule-form" class="panel">
 					<h3 id="schedule-form-title">New schedule</h3>
