@@ -101,10 +101,15 @@ class RetirementTest(unittest.TestCase):
         self.assertFalse(any(c[0] == 'launchctl' for c in self.calls()))
 
     def test_linux_without_bus_defers_cleanup_with_warning(self):
+        units = self.home / '.config/systemd/user'
+        units.mkdir(parents=True)
+        link = units / 'agent-mail-verify.timer'
+        link.symlink_to('/missing/retired.timer')
         result = self.run_migration('Linux', NO_BUS='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('no user systemd bus', result.stderr)
         self.assertFalse(any('disable' in c for c in self.calls()))
+        self.assertTrue(link.is_symlink(), 'defer unlinking until the manager can stop the unit')
 
     def test_absent_linux_units_lose_stale_enablement_links(self):
         units = self.home / '.config/systemd/user'
