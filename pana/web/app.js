@@ -1614,11 +1614,7 @@ function memoryPath(path) {
 async function openMemoryFile(path, showSource = false) {
 	if (!path) return loadMemory();
 	showMemoryDetail("file");
-	// Memory has no pana:// reference kind; share its token-free browser read URL.
-	const fileLink = document.createElement("a");
-	fileLink.href = memoryFileHref(path);
-	fileLink.textContent = path;
-	$("memory-path").replaceChildren(copyingLink(fileLink, new URL(fileLink.href).href));
+	$("memory-path").textContent = path;
 	$("memory-delete").dataset.path = path;
 	$("memory-delete-confirmation").hidden = true;
 	$("memory-edit-link").href = memoryEditHref(path);
@@ -1629,6 +1625,7 @@ async function openMemoryFile(path, showSource = false) {
 	$("memory-file-history-section").hidden = true;
 
 	const file = memoryFileView(await api("GET", `/memory/files/${memoryPath(path)}`));
+	$("memory-path").replaceChildren(copyLink(file.url, "memory", path));
 	const markdown = /\.(?:md|markdown|mdown|mkd|mdx)$/i.test(path);
 	const raw = showSource || !markdown;
 	const body = $("memory-file");

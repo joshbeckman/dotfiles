@@ -203,8 +203,8 @@ describe("memory", () => {
 		expect(res.status).toBe(200);
 		expect(res.body.tree).toBe("main");
 		expect(res.body.results).toEqual([
-			{ path: "notes/greeting.md", line: 1, text: "Hello World" },
-			{ path: "notes/greeting.md", line: 2, text: "second hello line" },
+			{ path: "notes/greeting.md", url: `pana://${TEST_DOMAIN}/memory/files/notes/greeting.md`, line: 1, text: "Hello World" },
+			{ path: "notes/greeting.md", url: `pana://${TEST_DOMAIN}/memory/files/notes/greeting.md`, line: 2, text: "second hello line" },
 		]);
 
 		const none = await t.client.get<{ results: unknown[] }>("/memory/search?query=absent");
@@ -273,6 +273,22 @@ describe("memory", () => {
 		expect((await t.tcp.post("/memory/files/%2e%2e%2fescape.md", { content: "nope" })).status).toBe(400);
 		// A control character would split `git show`'s patch headers; it is not a path.
 		expect((await t.tcp.post("/memory/files/a%0Ab.md", { content: "nope" })).status).toBe(400);
+	});
+
+	it("ID-06 memory read, list, save and search expose the same canonical encoded URL", async () => {
+		t = await startTestPanad();
+		const path = "notes/plan #1? 100% café.md";
+		const encoded = path.split("/").map(encodeURIComponent).join("/");
+		const url = `pana://${TEST_DOMAIN}/memory/files/${encoded}`;
+		const saved = await t.tcp.post(`/memory/files/${encoded}`, { content: "memory-url-specimen" });
+		expect(saved.status).toBe(201);
+		expect(saved.body).toMatchObject({ path, url });
+		const read = await t.tcp.get(`/memory/files/${encoded}`);
+		expect(read.body).toMatchObject({ path, url, content: "memory-url-specimen" });
+		const listed = await t.tcp.get<{ files: unknown[] }>("/memory/files");
+		expect(listed.body.files).toContainEqual({ path, url, size: 19 });
+		const found = await t.tcp.get<{ results: unknown[] }>("/memory/search?query=memory-url-specimen");
+		expect(found.body.results).toContainEqual({ path, url, line: 1, text: "memory-url-specimen" });
 	});
 
 	it("MEM-09 reads return content and revision from one snapshot even if main advances mid-read", async () => {

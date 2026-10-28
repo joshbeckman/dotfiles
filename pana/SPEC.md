@@ -45,10 +45,11 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 ### IDs and URLs
 
 - [x] **ID-01** New IDs are monotonic ULIDs. Two IDs made in the same millisecond sort in creation order.
-- [x] **ID-02** `parseRef` accepts a bare ULID, a bare username, or a `pana://` URL, and returns `{kind, id}` for `session`, `user`, `thread`, `message`, `file`, `schedule`.
+- [x] **ID-02** `parseRef` accepts a bare ULID, a bare username, or a `pana://` URL, and returns `{kind, id}` for `session`, `user`, `thread`, `message`, `file`, `schedule`, `memory` (relative repository path as `id`).
 - [x] **ID-03** In an address list, a 26-character uppercase Crockford string is a session. Any other bare string is a username.
 - [x] **ID-04** A URL with a domain other than the configured one is rejected with code `foreign_domain`.
 - [x] **ID-05** `formatUrl` and `parseRef` round-trip every kind, including `threads/<id>?message=<id>`.
+- [x] **ID-06** Memory files have canonical `pana://<domain>/memory/files/<encoded-path>` URLs. Relative repository paths are encoded segment by segment; parsing and formatting round-trip and reject unsafe paths and foreign domains. File read/list/save and search responses expose their URL, and the PWA resolves it to the memory read view.
 
 ### Schema
 
@@ -382,7 +383,7 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **UX-14** The Notifications button shows only when there is something to do. When this device is subscribed, it is hidden. When the browser blocks notifications, it reads "Notifications blocked", and a click explains the fix. Otherwise it reads "Notifications", and a click asks and subscribes. A window that loads with permission already granted keeps it hidden while the quiet re-subscribe runs, and shows it again if that fails.
 - [x] **UX-15** Cmd+K (Ctrl+K) opens a command palette over whatever is in front, including a half-written reply, and closes back to it. It lists every action the page can take in that state — the sections, New thread, opening the selection, archiving, a session's own controls, notifications, back, help — matched fuzzily as you type, with the arrows and Enter choosing. Its Search command opens a second input that asks threads, sessions, and memory at once and shows the best hits of each in one list, ranked by the same match. A phone has no Cmd, so a magnifier button in the top bar opens it too.
 - [x] **UX-16** The open thread's header has a Regenerate subject button, and the command palette lists the same action while a thread is open. It asks the subject model through `POST /threads/:id/subject` with `regenerate`, swaps the thread's heading for the new subject without reloading the thread, and leaves the old subjects in the thread's history (SUB-04). With no `subjectModel` in config.json it says to set one, rather than showing a generic failure.
-- [x] **UX-17** Clicking an open thread, message, session, schedule, or memory file’s own identifier copies its URL without navigating or editing. Success and clipboard failures are announced; references elsewhere still navigate. Memory shares its token-free browser read URL; other entities share canonical `pana://` URLs.
+- [x] **UX-17** Clicking an open thread, message, session, schedule, or memory file’s own identifier copies its URL without navigating or editing. Success and clipboard failures are announced; references elsewhere still navigate. All five share canonical `pana://` URLs; memory uses `pana://<domain>/memory/files/<encoded-path>`.
 - [x] **MOB-01** At a 390 px phone viewport, no view scrolls sideways or clips text: inbox, thread, threads, compose, sessions, session, memory, and schedules. Wide content scrolls only inside its own block, such as a code block. `test/browser/mobile.spec.ts` emulates the phone and measures every element.
 - [x] **MOB-02** Long unbroken text (a pasted URL, a model ID, a path, a `pana://` URL, a message ID) wraps inside its row instead of widening the page.
 - [x] **MOB-03** On a phone, a view header puts Back and the title on one row and the controls on their own row below. The session title is the session's short label, as everywhere else, and the full ID stays in its `pana://` URL.

@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 (chromeDevtoolsAvailable() ? describe : describe.skip)("copy self URLs", () => {
 	it("UX-17 copies all five self URLs without navigation, preserves reference navigation, and reports clipboard failures", async () => {
-		seeded = await seedDomain();
+		seeded = await seedDomain({ capitalReply: "Paris. [Memory](pana://test.example/memory/files/notes/pana.md)" });
 		const { t, capital } = seeded;
 		const origin = loopbackOrigin(t.panad.tcpPort!);
 		page = await newPage(`${origin}/#${t.panad.webToken}`);
@@ -64,7 +64,14 @@ afterEach(async () => {
 			capital.sessionUrl, capital.sessionUrl,
 		]);
 		expect(copied[4]).toMatch(/^pana:\/\/test.example\/schedules\//);
-		expect(copied[5]).toBe(`${origin}/#/memory/files/notes/pana.md`);
+		expect(copied[5]).toBe("pana://test.example/memory/files/notes/pana.md");
+		await evaluatePage(`
+			location.hash = "#/threads/${capital.threadId}";
+			await until(() => document.querySelector('#thread-messages .body a[href="#/memory/files/notes/pana.md"]'));
+			document.querySelector('#thread-messages .body a[href="#/memory/files/notes/pana.md"]').click();
+			await until(() => location.hash === "#/memory/files/notes/pana.md" && document.querySelector("#memory-path a"));
+			return true;
+		`);
 		const failures = await evaluatePage<string[]>(`
 			const errors = [];
 			for (const value of [{ writeText: async () => { throw new Error("Permission denied"); } }, undefined]) {

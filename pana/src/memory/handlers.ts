@@ -4,6 +4,7 @@
 // the same path as MEM-03" is one code path: the caller decides the writer, never the transport.
 
 import { ApiError } from "../api/errors.ts";
+import { formatUrl } from "../ids/index.ts";
 import type { Caller, Handlers, RequestContext } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { assertWriterId, Memory, normalizeMemoryPath, type MemoryWriter } from "./repo.ts";
@@ -50,7 +51,13 @@ export const handlers: Handlers = {
 	"memory.search": async (ctx: RequestContext) => {
 		const query = ctx.query.get("query") ?? ctx.query.get("q") ?? "";
 		const result = await memoryFor(ctx.runtime).search(query, optionalNumber(ctx.query.get("limit")));
-		return { status: 200, body: result };
+		return {
+			status: 200,
+			body: {
+				...result,
+				results: result.results.map((hit) => ({ ...hit, url: formatUrl({ kind: "memory", id: hit.path }, ctx.runtime.config.domain) })),
+			},
+		};
 	},
 	"memory.log": async (ctx: RequestContext) => {
 		const path = ctx.query.get("path");
@@ -90,7 +97,7 @@ export const handlers: Handlers = {
 		const result = await memoryFor(ctx.runtime).writeFile(writerOf(ctx.caller), path, body.content, message, body.baseCommit as string | null | undefined);
 		return {
 			status: result.committed ? 201 : 200,
-			body: { path, worktree: result.path, branch: result.branch, committed: result.committed, commit: result.commit },
+			body: { path, url: formatUrl({ kind: "memory", id: path }, ctx.runtime.config.domain), worktree: result.path, branch: result.branch, committed: result.committed, commit: result.commit },
 		};
 	},
 };

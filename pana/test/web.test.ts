@@ -237,6 +237,9 @@ describe("PWA shell and static assets", () => {
 		expect(appHref(`pana://${domain}/users/joshbeckman`, domain)).toBe("#/inbox");
 		expect(appHref(`pana://${domain}/schedules/X1`, domain)).toBe("#/schedules?focus=X1");
 		expect(appHref(`pana://${domain}`, domain)).toBe("/");
+		expect(appHref(`pana://${domain}/memory/files/notes/plan%20%231%3F%20100%25%20caf%C3%A9.md`, domain)).toBe("#/memory/files/notes/plan%20%231%3F%20100%25%20caf%C3%A9.md");
+		expect(appHref("pana://other.example/memory/files/a.md", domain)).toBeUndefined();
+		expect(appHref(`pana://${domain}/memory/files`, domain)).toBeUndefined();
 		expect(appHref(`pana://other.example/threads/T1`, domain)).toBeUndefined();
 		expect(appHref("https://example.com/x", domain)).toBe("https://example.com/x");
 		expect(appHref("#/inbox", domain)).toBe("#/inbox");

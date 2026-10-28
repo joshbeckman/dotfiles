@@ -166,7 +166,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 		message: "Remember the capital of France",
 	});
 	const search = await pana(env, ["memory", "search", "capital of france"]);
-	expect(search.json.results).toEqual([{ path: "capitals.md", line: 3, text: "Paris is the capital of France." }]);
+	expect(search.json.results).toEqual([{ path: "capitals.md", url: "pana://test.example/memory/files/capitals.md", line: 3, text: "Paris is the capital of France." }]);
 
 	// The session's commit in its repo carries exactly one pana trailer.
 	const body = git("log", "-1", "--format=%B");

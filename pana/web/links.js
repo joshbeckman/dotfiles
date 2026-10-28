@@ -67,6 +67,8 @@ export function appHref(href, domain) {
 		// REF-08: a user link opens the inbox, which is where the user reads mail.
 		case "users":
 			return "#/inbox";
+		case "memory":
+			return id === "files" && rest.length > 0 ? memoryFileHref(rest.join("/")) : undefined;
 		case "schedules":
 			return id ? `#/schedules?focus=${encodeURIComponent(id)}` : "#/schedules";
 		default:

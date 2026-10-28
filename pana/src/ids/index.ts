@@ -99,11 +99,11 @@ export function ulid(): string {
 
 // --- References and URLs -------------------------------------------------------
 
-export type RefKind = "domain" | "user" | "session" | "thread" | "message" | "file" | "schedule";
+export type RefKind = "domain" | "user" | "session" | "thread" | "message" | "file" | "schedule" | "memory";
 
 export interface Ref {
 	kind: RefKind;
-	/** The record ID: a ULID, or a username for a user, or the domain for a domain ref. */
+	/** The record ID: a ULID, or a username for a user, the domain for a domain ref, or a relative file path for memory. */
 	id: string;
 	/** For a message ref, the thread it belongs to. */
 	thread?: string;
@@ -142,6 +142,8 @@ export function formatUrl(ref: Ref, domain: string): string {
 			return `${base}/files/${ref.id}/${encodeURIComponent(ref.name)}`;
 		case "schedule":
 			return `${base}/schedules/${ref.id}`;
+		case "memory":
+			return `${base}/memory/files/${memorySegments(ref.id).map(encodeURIComponent).join("/")}`;
 	}
 }
 
@@ -162,6 +164,15 @@ export function parseRef(input: string, domain?: string): Ref {
 	// An unknown username is the handler's 404, not a parse error.
 	if (isUlid(value)) return { kind: "session", id: value };
 	return { kind: "user", id: value };
+}
+
+/** A memory identity is a relative repository path, not a record ULID. */
+function memorySegments(path: string): string[] {
+	const parts = path.split("/");
+	if (parts[0] === ".git" || parts.some((part) => !part || part === "." || part === ".." || /[\\\x00-\x1f\x7f]/.test(part))) {
+		throw new RefError("invalid_ref", "memory URL needs a relative file path");
+	}
+	return parts;
 }
 
 function parseUrl(url: string, domain?: string): Ref {
@@ -199,6 +210,16 @@ function parseUrl(url: string, domain?: string): Ref {
 		case "schedules":
 			if (!first) break;
 			return { kind: "schedule", id: first };
+		case "memory": {
+			if (first !== "files" || rest.length === 0) break;
+			let parts: string[];
+			try { parts = rest.map(decodeURIComponent); }
+			catch { throw new RefError("invalid_ref", "malformed memory URL encoding"); }
+			if (parts.some((part) => part.includes("/"))) throw new RefError("invalid_ref", "encoded slash in memory URL");
+			const path = parts.join("/");
+			memorySegments(path);
+			return { kind: "memory", id: path };
+		}
 	}
 	throw new RefError("invalid_ref", `unrecognized pana:// path: ${parsed.pathname}`);
 }

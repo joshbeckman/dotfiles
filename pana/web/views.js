@@ -326,6 +326,7 @@ export function memoryHitView(hit) {
 export function memoryFileView(file) {
 	return {
 		path: String(file?.path ?? ""),
+		url: String(file?.url ?? ""),
 		content: String(file?.content ?? ""),
 		commit: String(file?.commit ?? ""),
 	};
