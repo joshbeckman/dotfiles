@@ -494,6 +494,32 @@ function refLink(value, kind, label, title) {
 	return anchor;
 }
 
+/** Self-identifiers copy their URL; references elsewhere still navigate (UX-17). */
+function copyLink(value, kind, label) {
+	const link = refLink(value, kind, label);
+	if (!(link instanceof HTMLAnchorElement)) return link;
+	return copyingLink(link, value);
+}
+
+function copyingLink(link, url) {
+	link.title = "Copy URL to clipboard";
+	link.setAttribute("aria-label", `Copy URL: ${link.textContent}`);
+	link.dataset.copyUrl = url;
+	link.addEventListener("click", async (event) => {
+		if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+		event.preventDefault();
+		event.stopPropagation();
+		try {
+			if (!navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable in this browser.");
+			await navigator.clipboard.writeText(url);
+			status("URL copied to clipboard.");
+		} catch (error) {
+			status(`Could not copy URL: ${error.message} You can copy the link manually.`, true);
+		}
+	});
+	return link;
+}
+
 /** A participant as a short, colored name that links to its view (REF-08, UX-06). */
 function personLink(person) {
 	const url = typeof person === "string" ? person : person.url;
@@ -1009,7 +1035,7 @@ async function messageElement(message, { focus }) {
 		sender.dataset.testid = "message-sender";
 		sender.classList.add("sender");
 	}
-	const messageLink = refLink(view.url ?? `${view.threadId}`, "thread", `#${String(view.id ?? "").slice(-6)}`);
+	const messageLink = copyLink(view.url ?? `pana://${state.domain}/threads/${view.threadId}?message=${view.id}`, "thread", `#${String(view.id ?? "").slice(-6)}`);
 	if (messageLink instanceof HTMLElement) messageLink.dataset.testid = "message-link";
 	header.append(sender, timeEl(view.at), messageLink);
 	if (view.revised) header.append(span("edited", "badge"));
@@ -1086,7 +1112,7 @@ async function openThread(id, focusMessage) {
 
 	$("thread-subject").textContent = thread?.subject ?? "(no subject)";
 	const threadUrl = $("thread-url");
-	threadUrl.replaceChildren(refLink(thread?.url ?? id, "thread"));
+	threadUrl.replaceChildren(copyLink(thread?.url ?? `pana://${state.domain}/threads/${id}`, "thread"));
 	// REF-08 and UX-06: participants are colored links to their own views.
 	const participants = $("thread-participants");
 	participants.replaceChildren();
@@ -1254,10 +1280,10 @@ async function loadSessionList(query = "", cursor) {
 async function openSession(id) {
 	const [body, transcript] = await Promise.all([api("GET", `/sessions/${id}`), api("GET", `/sessions/${id}/transcript`)]);
 	state.session = body.session;
-	// REF-08: the session's own ID is a link to the session view, and the parent is a link to its.
+	// UX-17: the session's own ID copies its URL; the parent remains a navigation link.
 	const title = $("session-title");
 	// MOB-03: the short label, as everywhere else; the full ID is in the pana:// URL just below.
-	title.replaceChildren(refLink(state.session.url ?? state.session.id, "session", refLabel(state.session.url ?? "") || state.session.id));
+	title.replaceChildren(copyLink(state.session.url ?? `pana://${state.domain}/sessions/${state.session.id}`, "session", refLabel(state.session.url ?? "") || state.session.id));
 	const meta = $("session-meta");
 	meta.replaceChildren(badge(state.session.state ?? "unknown"));
 	const details = document.createElement("span");
@@ -1279,7 +1305,7 @@ async function openSession(id) {
 		const url = document.createElement("span");
 		url.className = "hint";
 		url.dataset.testid = "session-url";
-		url.append(refLink(state.session.url, "session"));
+		url.append(copyLink(state.session.url, "session"));
 		meta.append(" ", url);
 	}
 	const archive = $("session-archive");
@@ -1588,7 +1614,11 @@ function memoryPath(path) {
 async function openMemoryFile(path, showSource = false) {
 	if (!path) return loadMemory();
 	showMemoryDetail("file");
-	$("memory-path").textContent = path;
+	// Memory has no pana:// reference kind; share its token-free browser read URL.
+	const fileLink = document.createElement("a");
+	fileLink.href = memoryFileHref(path);
+	fileLink.textContent = path;
+	$("memory-path").replaceChildren(copyingLink(fileLink, new URL(fileLink.href).href));
 	$("memory-delete").dataset.path = path;
 	$("memory-delete-confirmation").hidden = true;
 	$("memory-edit-link").href = memoryEditHref(path);
@@ -1843,8 +1873,8 @@ async function loadSchedules(focus, cursor) {
 		const payload = schedule.payload ?? {};
 		const checkView = scheduleCheckView(schedule, when);
 		const meta = [
-			// REF-08: a schedule ID is a link to the schedule view, which focuses its row.
-			refLink(schedule.url ?? schedule.id, "schedule", schedule.id),
+			// UX-17: a schedule's own ID copies its URL without starting an edit.
+			copyLink(schedule.url ?? `pana://${state.domain}/schedules/${schedule.id}`, "schedule", schedule.id),
 			// WAK-04: a wake names the session it wakes.
 			schedule.kind === "wake" && typeof payload.session === "string" ? refLink(payload.session, "session", `wakes ${payload.session.slice(-6)}`) : undefined,
 			`${schedule.kind} · ${schedule.cron ?? when(schedule.at)} · ${schedule.state}`,
