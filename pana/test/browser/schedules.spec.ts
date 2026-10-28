@@ -207,3 +207,90 @@ describeBrowser("schedule run conditions", () => {
 		expect(stored.every(row => row.revision === 0 && row.next_at > t!.clock.now())).toBe(true);
 	});
 });
+
+describeBrowser("schedule kind filters", () => {
+	it("SCH-20 filters schedule kinds independently of timing and keeps filtered pagination and mutations honest", async () => {
+		t = await startTestPanad({ script: [{ text: "Ready." }], config: { defaultModel: "faux/faux-1", timezone: "UTC" } });
+		for (let i = 0; i < 51; i++) {
+			const made = await t.client.post("/schedules", { kind: "session", subject: `Session ${i}`, prompt: "Check later", cron: "0 9 * * *" });
+			expect(made.status).toBe(201);
+		}
+		expect((await t.client.post("/schedules", { kind: "thread", subject: "One-shot message", at: "2099-01-01T00:00:00Z", to: ["tester"], body: "Hello later" })).status).toBe(201);
+		const session = await t.client.post<{ session: { id: string } }>("/sessions", { prompt: "Wait for checks" });
+		expect(session.status).toBe(201);
+		for (const timing of [{ in: "1h" }, { cron: "0 10 * * *" }]) {
+			expect((await t.client.post("/schedules", { kind: "wake", session: session.body.session.id, subject: "Check results", note: "Check later", ...timing })).status).toBe(201);
+		}
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		const initial = await evaluatePage<number>(`
+			location.hash = "#/schedules";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 50);
+			return document.querySelectorAll("#schedules-kind option").length;
+		`);
+		expect(initial).toBe(4);
+		const wakes = await evaluatePage<string[]>(`
+			const filter = document.getElementById("schedules-kind");
+			filter.value = "wake";
+			filter.dispatchEvent(new Event("change"));
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 2);
+			if (location.hash !== "#/schedules?kind=wake") throw new Error("filter missing from URL");
+			if (document.querySelector("#schedules-list [data-more]")) throw new Error("stale pagination");
+			return [...document.querySelectorAll("#schedules-list .meta")].map(el => el.textContent);
+		`);
+		expect(wakes.every(meta => meta.includes("wake ·"))).toBe(true);
+		expect(wakes.some(meta => meta.includes("0 10 * * *"))).toBe(true);
+		expect(wakes.some(meta => !meta.includes("0 10 * * *"))).toBe(true);
+		await evaluatePage(`
+			location.hash = "#/schedules?kind=thread";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 1);
+			if (document.getElementById("schedules-kind").value !== "thread") throw new Error("URL filter not restored");
+			if (!document.querySelector("#schedules-list .meta").textContent.includes("thread ·")) throw new Error("wrong kind");
+			document.querySelector("[data-testid=schedule-edit]").click();
+			document.getElementById("schedule-subject").value = "Renamed message";
+			document.getElementById("schedule-form").requestSubmit();
+			await until(() => document.querySelector("#schedules-list .title")?.textContent === "Renamed message");
+			if (document.querySelectorAll("#schedules-list .item").length !== 1) throw new Error("edit lost filter");
+			document.querySelector("[data-testid=schedule-delete]").click();
+			await until(() => document.getElementById("schedules-list").textContent === "No thread schedules yet.");
+			if (document.getElementById("schedules-kind").value !== "thread") throw new Error("delete lost filter");
+			location.hash = "#/schedules?kind=session";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 50);
+			document.querySelector("#schedules-list [data-more]").click();
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 51);
+			if (document.querySelector("#schedules-list [data-more]")) throw new Error("extra page");
+			if (![...document.querySelectorAll("#schedules-list .meta")].every(el => el.textContent.includes("session ·"))) throw new Error("pagination lost filter");
+			return true;
+		`);
+		// Hold an old kind's Load more response until the new filter has rendered.
+		await evaluatePage(`
+			location.hash = "#/inbox";
+			await until(() => !document.getElementById("view-inbox").hidden);
+			location.hash = "#/schedules?kind=session";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 50);
+			const originalFetch = window.fetch;
+			window.fetch = async (...args) => {
+				const response = await originalFetch(...args);
+				if (String(args[0]).includes("/schedules?") && String(args[0]).includes("cursor=")) {
+					await new Promise(resolve => { window.releaseSchedulePage = resolve; });
+				}
+				return response;
+			};
+			document.querySelector("#schedules-list [data-more]").click();
+			await until(() => window.releaseSchedulePage);
+			location.hash = "#/schedules?kind=wake";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 2);
+			window.releaseSchedulePage();
+			window.fetch = originalFetch;
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			if (document.querySelectorAll("#schedules-list .item").length !== 2) throw new Error("stale page appended");
+			location.hash = "#/schedules?kind=unknown";
+			await until(() => document.querySelectorAll("#schedules-list .item").length === 50);
+			if (document.getElementById("schedules-kind").value !== "") throw new Error("invalid filter did not reset");
+			return true;
+		`);
+		phone = true;
+		await emulateViewport("390x844x1,mobile,touch");
+		const overflow = await evaluatePage<number>(`return document.documentElement.scrollWidth - innerWidth;`);
+		expect(overflow).toBeLessThan(2);
+	});
+});
