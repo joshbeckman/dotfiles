@@ -140,9 +140,6 @@ export function threadRow(thread) {
 		subject: thread.subject ?? "(no subject)",
 		snippet: thread.snippet,
 		at: thread.createdAt,
-		// REF-05 and REF-03.
-		unreadCount: count(thread.unreadCount),
-		archived: Boolean(thread.archived),
 		working: workingOf(thread),
 	};
 }

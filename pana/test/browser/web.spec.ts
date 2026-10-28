@@ -687,7 +687,72 @@ describeBrowser("pana in a browser", () => {
 		expect((await t!.client.get<{ archived: boolean }>(`/threads/${id}`)).body.archived).toBe(false);
 	});
 
-	it("REF-06 REF-07 unread counts mark threads and the inbox, follow /events, and the archive buttons hide and restore a thread", async () => {
+	it("REF-03 participant membership filters domain-wide thread browsing and text search", async () => {
+		await start([{ text: "Ready." }]);
+		const seeded = await seedSession("A participant thread");
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		const made = await t!.client.post<{ thread: { id: string } }>("/threads", {
+			to: [seeded.session.id], body: "Session-only discussion",
+		}, { caller: seeded.session.id });
+		expect(made.status).toBe(201);
+		const notice = await postNotice(t!.runtime, { body: "Domain announcement" });
+		await t!.client.post(`/threads/${notice.thread.id}/archive`, {});
+		await open();
+		const result = await evaluatePage<{ all: string[]; member: string[]; hits: string[]; user: string[]; requests: string[]; paletteHit: boolean }>(`
+			await until(() => window.__pana && document.getElementById("authorize").hidden);
+			const requests = [];
+			const originalFetch = window.fetch;
+			window.fetch = (...args) => {
+				if (String(args[0]).includes("/threads")) requests.push(String(args[0]));
+				return originalFetch(...args);
+			};
+			location.hash = "#/threads";
+			const ids = () => [...document.querySelectorAll("#threads-list .item")].map(row => row.dataset.thread);
+			await until(() => ids().length === 3);
+			const all = ids();
+			if (document.getElementById("threads-unread") || document.querySelector("#threads-list .archived, #threads-list .unread, #threads-list .badge, #threads-list .unread-count")) throw new Error("personal state in browse");
+			document.getElementById("threads-participant").value = "${seeded.session.id}";
+			document.getElementById("threads-search").requestSubmit();
+			await until(() => ids().length === 2);
+			const member = ids();
+			document.getElementById("threads-participant").value = "${seeded.session.url}";
+			document.getElementById("threads-query").value = "Session-only";
+			document.getElementById("threads-search").requestSubmit();
+			await until(() => ids().length === 1 && ids()[0] === "${made.body.thread.id}");
+			const hits = ids();
+			document.getElementById("threads-participant").value = "tester";
+			document.getElementById("threads-query").value = "";
+			document.getElementById("threads-search").requestSubmit();
+			await until(() => ids().length === 2 && !ids().includes("${made.body.thread.id}"));
+			const user = ids();
+			document.getElementById("open-palette").click();
+			await until(() => !document.getElementById("palette").hidden);
+			const commands = document.getElementById("palette-input");
+			commands.value = "search";
+			commands.dispatchEvent(new Event("input", { bubbles: true }));
+			commands.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+			await until(() => document.activeElement?.id === "palette-search-input");
+			const search = document.getElementById("palette-search-input");
+			search.value = "Domain announcement";
+			search.dispatchEvent(new Event("input", { bubbles: true }));
+			await until(() => document.querySelector("#palette-list [data-testid=palette-hit]"));
+			return { all, member, hits, user, requests, paletteHit: document.getElementById("palette-list").textContent.includes("Domain announcement") };
+		`);
+		expect(result.all.sort()).toEqual([seeded.thread.id, made.body.thread.id, notice.thread.id].sort());
+		expect(result.member.sort()).toEqual([seeded.thread.id, made.body.thread.id].sort());
+		expect(result.hits).toEqual([made.body.thread.id]);
+		expect(result.user.sort()).toEqual([seeded.thread.id, notice.thread.id].sort());
+		expect(result.paletteHit).toBe(true);
+		expect(result.requests.length).toBeGreaterThanOrEqual(5);
+		for (const request of result.requests) {
+			const params = new URL(request, "http://test.example").searchParams;
+			expect(params.has("includeArchived")).toBe(false);
+			expect(params.has("unread")).toBe(false);
+		}
+		expect(result.requests.some(request => new URL(request, "http://test.example").searchParams.get("participant") === seeded.session.url)).toBe(true);
+	});
+
+	it("REF-06 REF-07 unread counts stay in the inbox; archive controls do not hide threads from browse or search", async () => {
 		await start([{ text: "Paris." }]);
 		const seeded = await seedSession("What is the capital of France?");
 		// A stopped session queues mail without waking, so an append below is only a delivery.
@@ -708,8 +773,9 @@ describeBrowser("pana in a browser", () => {
 		`);
 		expect(marked.hidden).toBe(false);
 		expect(marked.nav).toBe("1");
-		expect(marked.unread).toBe(true);
-		expect(marked.count).toContain("1 unread");
+		expect(marked.unread).toBe(false);
+		expect(marked.count).not.toContain("unread");
+		expect(marked.count).not.toContain("archived");
 
 		// The Threads list has no archive actions; archive from the open thread instead.
 		const archived = await evaluatePage<{ items: number; navHidden: boolean }>(`
@@ -719,12 +785,12 @@ describeBrowser("pana in a browser", () => {
 			document.getElementById("thread-archive").click();
 			await until(() => document.querySelector("[data-testid=thread-unarchive]"));
 			location.hash = "#/threads";
-			await until(() => !document.getElementById("threads-list").hidden && document.querySelector("#threads-list .archived"));
+			await until(() => !document.getElementById("threads-list").hidden && document.querySelector("#threads-list .item"));
 			return { items: document.querySelectorAll("#threads-list .item").length, navHidden: document.getElementById("nav-inbox-count").hidden };
 		`);
 		expect(archived.items).toBe(1);
 		expect(archived.navHidden).toBe(true);
-		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toEqual([]);
+		expect((await t!.client.get<{ threads: unknown[] }>("/threads")).body.threads).toHaveLength(1);
 
 		// The inbox hides it too, and its row has an Archive button.
 		const inboxHidden = await evaluatePage<number>(`
@@ -735,19 +801,20 @@ describeBrowser("pana in a browser", () => {
 		expect(inboxHidden).toBe(0);
 		expect(await t!.client.get<{ deliveries: unknown[] }>("/inbox")).toMatchObject({ body: { deliveries: [] } });
 
-		// Searching also finds archived threads without a checkbox, with a clear state label.
+		// Searching also finds archived threads, with no caller-specific state label.
 		const restored = await evaluatePage<number>(`
 			location.hash = "#/threads";
 			await until(() => !document.getElementById("threads-list").hidden);
 			document.getElementById("threads-query").value = "France";
 			document.getElementById("threads-search").requestSubmit();
-			await until(() => document.querySelector("#threads-list .archived .meta")?.textContent.includes("Archived"));
+			await until(() => document.querySelector("#threads-list .meta")?.textContent.includes("France"));
+			if (document.querySelector("#threads-list .archived, #threads-list .unread, #threads-list .unread-count")) throw new Error("personal state in browse");
 			location.hash = "#/threads/${seeded.thread.id}";
 			await until(() => !document.getElementById("thread").hidden);
 			document.getElementById("thread-archive").click();
 			await until(() => document.querySelector("[data-testid=thread-archive]"));
 			location.hash = "#/threads";
-			await until(() => !document.getElementById("threads-list").hidden && document.querySelector("#threads-list .meta")?.textContent.includes("Not archived"));
+			await until(() => !document.getElementById("threads-list").hidden && document.querySelector("#threads-list .item"));
 			return document.querySelectorAll("#threads-list .item").length;
 		`);
 		expect(restored).toBe(1);

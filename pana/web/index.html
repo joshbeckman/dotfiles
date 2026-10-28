@@ -101,7 +101,8 @@
 					<form id="threads-search" class="search">
 						<label for="threads-query" class="visually-hidden">Search threads</label>
 						<input id="threads-query" data-testid="threads-query" type="search" placeholder="Search subjects and bodies" />
-						<label class="check"><input id="threads-unread" data-testid="threads-unread" type="checkbox" /> Unread</label>
+						<label for="threads-participant" class="visually-hidden">Filter by participant</label>
+						<input id="threads-participant" data-testid="threads-participant" type="search" placeholder="Participant identity (optional)" />
 						<button type="submit">Search</button>
 					</form>
 					<div id="threads-list" data-testid="threads-list" class="list" role="list"></div>
