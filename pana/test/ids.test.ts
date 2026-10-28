@@ -83,6 +83,7 @@ describe("IDs and URLs", () => {
 			{ kind: "file", id: A, name: "notes.md" },
 			{ kind: "file", id: A, name: "Q3 plan (final).pdf" },
 			{ kind: "schedule", id: A },
+			{ kind: "memory", id: "notes/plan #1? 100% café.md" },
 		];
 		for (const ref of refs) {
 			const url = formatUrl(ref, DOMAIN);
@@ -90,5 +91,21 @@ describe("IDs and URLs", () => {
 			expect(parseRef(url, DOMAIN)).toEqual(ref);
 		}
 		expect(formatUrl({ kind: "message", id: B, thread: A }, DOMAIN)).toBe(`pana://${DOMAIN}/threads/${A}?message=${B}`);
+	});
+});
+
+describe("memory URLs", () => {
+	it("ID-06 gives memory files canonical, domain-scoped URLs with segment-wise encoding", () => {
+		const ref: Ref = { kind: "memory", id: "notes/plan #1? 100% café.md" };
+		const url = `pana://${DOMAIN}/memory/files/notes/plan%20%231%3F%20100%25%20caf%C3%A9.md`;
+		expect(formatUrl(ref, DOMAIN)).toBe(url);
+		expect(parseRef(url, DOMAIN)).toEqual(ref);
+		expect(() => parseRef(url, "other.example")).toThrow(/domain/);
+		for (const path of ["", "/notes.md", "notes//a", "notes/../a", "notes/./a", ".git/config", "a\\b", "a\n.md"]) {
+			expect(() => formatUrl({ kind: "memory", id: path }, DOMAIN)).toThrow(RefError);
+		}
+		for (const path of ["", "notes/%", "notes/%2Fescape", "%2e%2e%2Fescape", ".git/config", "a%00.md", "notes/../a.md", "notes/%2e%2e/a.md", "notes/./a.md", "notes//a.md", "notes/%2e/a.md"]) {
+			expect(() => parseRef(`pana://${DOMAIN}/memory/files/${path}`, DOMAIN)).toThrow(RefError);
+		}
 	});
 });

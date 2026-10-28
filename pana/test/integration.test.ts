@@ -211,7 +211,7 @@ describe("INT-02 the PWA reads the real handler shapes", () => {
 
 		await t!.tcp.post("/memory/files/notes.md", { content: "hello memory\n" });
 		const files = await t!.tcp.get<{ files: Array<{ path: string; size: number }> }>("/memory/files");
-		expect(files.body.files).toEqual([{ path: "notes.md", size: 13 }]);
+		expect(files.body.files).toEqual([{ path: "notes.md", size: 13, url: "pana://test.example/memory/files/notes.md" }]);
 		const log = await t!.tcp.get<{ commits: unknown[] }>("/memory/log");
 		const logged = commitView(log.body.commits[0]);
 		expect(logged).toMatchObject({ author: t!.runtime.userUrl, message: "Update notes.md" });

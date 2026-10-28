@@ -40,6 +40,16 @@ export function appHref(href, domain) {
 		return undefined;
 	}
 	if (url.host.toLowerCase() !== String(domain).toLowerCase()) return undefined;
+	// Memory paths must be checked before URL normalizes dots or empty segments.
+	const rawPath = /^pana:\/\/[^/?#]+([^?#]*)/.exec(href)?.[1] ?? "";
+	if (rawPath.startsWith("/memory/")) {
+		if (!rawPath.startsWith("/memory/files/")) return undefined;
+		let parts;
+		try { parts = rawPath.slice("/memory/files/".length).split("/").map(decodeURIComponent); }
+		catch { return undefined; }
+		if (parts[0] === ".git" || parts.some((part) => !part || part === "." || part === ".." || /[/\\\x00-\x1f\x7f]/.test(part))) return undefined;
+		return memoryFileHref(parts.join("/"));
+	}
 	// URL has already percent-encoded the path, so decode before building the app URL, which
 	// encodes each segment once.
 	const parts = url.pathname

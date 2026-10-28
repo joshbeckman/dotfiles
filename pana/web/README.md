@@ -23,6 +23,8 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 
 `vendor.js` loads from `app.js` rather than a `<script defer>` tag, so the renderer is certainly present before the first message renders. `mermaid-vendor.js` loads only when a message contains a `language-mermaid` block, as agent-mail-web does. `memory-editor-vendor.js` is the same idea for the memory editor: built in agent-mail-web from a small `memory-editor.js` entry (esbuild, IIFE, global `PanaMemoryEditor`) and fetched by `app.js` on the first edit, so browsing memory never pays for CodeMirror.
 
+Memory files have canonical `pana://<domain>/memory/files/<path>` URLs, with each relative repository path segment percent-encoded. They resolve to the latest published file on `main`, not a writer worktree or a historical revision. The file API exposes these URLs and clicking an open file’s heading copies its URL, just like thread, message, session, and schedule self-identifiers (UX-17).
+
 The Memory section is one view at a time (MEM-11): `#/memory` lists files and the log, `#/memory/files/<path>` is a rendered file with a Source toggle, `#/memory/commits/<hash>` is `git show`, and `#/memory/edit/<path>` (or `#/memory/new`) is the full-view editor.
 
 ## Authorize a window

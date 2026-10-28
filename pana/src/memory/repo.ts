@@ -107,6 +107,7 @@ export interface CommitDetail {
 
 export interface MemoryFile {
 	path: string;
+	url: string;
 	content: string;
 	/** The `main` commit the content was read from. */
 	commit: string;
@@ -350,7 +351,8 @@ export class Memory {
 	 *
 	 * `git grep -z` writes NUL only after the path and the line number, so a single call cannot be
 	 * split reliably; listing matching files first and re-running grep per file does, because the
-	 * known `main:<path>:` prefix can be stripped exactly.
+	 * known `main:<path>\0` prefix can be stripped exactly. NUL separators also prevent Git
+	 * from C-quoting filenames containing Unicode or special characters.
 	 */
 	async search(term: string, limit?: number): Promise<SearchResult> {
 		const query = term.trim();
@@ -375,6 +377,7 @@ export class Memory {
 				"-C",
 				gitDir,
 				"grep",
+				"-z",
 				"-n",
 				"-i",
 				"-F",
@@ -387,11 +390,11 @@ export class Memory {
 				`:(literal)${file}`,
 			]);
 			if (grep.code !== 0) continue;
-			const prefix = `${MAIN}:${file}:`;
+			const prefix = `${MAIN}:${file}\0`;
 			for (const line of grep.stdout.split("\n")) {
 				if (!line.startsWith(prefix)) continue;
 				const rest = line.slice(prefix.length);
-				const colon = rest.indexOf(":");
+				const colon = rest.indexOf("\0");
 				if (colon === -1) continue;
 				const number = Number(rest.slice(0, colon));
 				if (!Number.isFinite(number)) continue;
@@ -546,17 +549,18 @@ export class Memory {
 	}
 
 	/** Every file on `main` with its size in bytes, sorted by path, for the PWA's Memory view. */
-	async listFiles(): Promise<Array<{ path: string; size: number }>> {
+	async listFiles(): Promise<Array<{ path: string; size: number; url: string }>> {
 		await this.ensureRepo();
 		const out = await gitOrThrow(["-C", this.options.gitDir, "ls-tree", "-r", "-l", "-z", MAIN]);
-		const files: Array<{ path: string; size: number }> = [];
+		const files: Array<{ path: string; size: number; url: string }> = [];
 		for (const record of out.stdout.split("\0")) {
 			// `<mode> blob <hash> <size>\t<path>`
 			const tab = record.indexOf("\t");
 			if (tab === -1) continue;
 			const [, type, , size] = record.slice(0, tab).trim().split(/\s+/);
 			if (type !== "blob") continue;
-			files.push({ path: record.slice(tab + 1), size: Number(size) });
+			const path = record.slice(tab + 1);
+			files.push({ path, size: Number(size), url: formatUrl({ kind: "memory", id: path }, this.options.domain) });
 		}
 		return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	}
@@ -569,7 +573,7 @@ export class Memory {
 		if (commit === undefined) return undefined;
 		const blob = await runGit(["-C", this.options.gitDir, "cat-file", "blob", `${commit}:${path}`]);
 		if (blob.code !== 0) return undefined;
-		return { path, content: blob.stdout, commit };
+		return { path, url: formatUrl({ kind: "memory", id: path }, this.options.domain), content: blob.stdout, commit };
 	}
 
 	/** UI saves start from main, not the writer's potentially stale checkout. */

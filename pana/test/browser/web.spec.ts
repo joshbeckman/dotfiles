@@ -958,9 +958,9 @@ describeBrowser("pana in a browser", () => {
 		);
 		expect(thread.files).toEqual([`/files/${upload.body.file.url.split("/")[4]}/note.txt`]);
 
-		// A message header link opens the thread scrolled to that message.
+		// The message URL still opens the thread scrolled to that message.
 		const focused = await evaluatePage<{ focus: boolean; hash: string }>(`
-			document.querySelector("[data-testid=message-link]").click();
+			location.hash = document.querySelector("[data-testid=message-link]").getAttribute("href");
 			await until(() => document.querySelector("#thread-messages [data-testid=message].focus"));
 			return { focus: Boolean(document.querySelector("#thread-messages [data-testid=message].focus")), hash: location.hash };
 		`);
@@ -983,14 +983,14 @@ describeBrowser("pana in a browser", () => {
 		expect(sessions.list).toContain(`#/sessions/${seeded.session.id}`);
 		expect(sessions.title).toBe(`#/sessions/${seeded.session.id}`);
 
-		// Schedules: the ID links to the schedule view, which focuses that row.
+		// The schedule URL still opens the schedule view and focuses that row.
 		const schedules = await evaluatePage<{ href: string; focus: boolean }>(`
 			location.hash = "#/schedules";
 			await until(() => !document.getElementById("view-schedules").hidden);
 			await until(() => document.querySelectorAll("#schedules-list .item").length === 1);
 			const link = document.querySelector("#schedules-list [data-testid=ref-link]");
 			const href = link.getAttribute("href");
-			link.click();
+			location.hash = href;
 			await until(() => document.querySelector("#schedules-list .item.focus"));
 			return { href, focus: Boolean(document.querySelector("#schedules-list .item.focus")) };
 		`);

@@ -97,7 +97,7 @@ export function elapsedLabel(ms: number): string;
 export function liveActivityLabel(live: { activity?: string; since?: number } | null | undefined, now: number): string;
 export function commitView(commit: any): { hash: string; short: string; author: string; at: string; message: string };
 export function memoryHitView(hit: any): { path: string; text: string };
-export function memoryFileView(file: any): { path: string; content: string; commit: string };
+export function memoryFileView(file: any): { path: string; url: string; content: string; commit: string };
 export interface MemoryCommitFileView {
 	path: string;
 	status: string;
