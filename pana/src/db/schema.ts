@@ -262,6 +262,12 @@ export const MIGRATIONS: readonly Migration[] = [
 			ALTER TABLE schedules ADD COLUMN subject_source TEXT CHECK (subject_source IN ('first-line', 'model', 'manual'));
 		`,
 	},
+	{
+		version: 10,
+		name: "participant thread discovery",
+		// SRC-04: sparse membership filters must page the participant's threads, not scan the domain.
+		sql: `CREATE INDEX thread_participants_participant_thread ON thread_participants(participant_id, thread_id);`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

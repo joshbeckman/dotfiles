@@ -54,6 +54,7 @@ export async function participantFilterId(runtime: Runtime, address: string): Pr
 		ref = parseRef(address, runtime.config.domain);
 	} catch (error) {
 		if (error instanceof RefError) throw ApiError.badRequest(error.code, error.message);
+		if (error instanceof URIError) throw ApiError.badRequest("invalid_ref", "malformed participant URL encoding");
 		throw error;
 	}
 	if (ref.kind !== "user" && ref.kind !== "session" && ref.kind !== "domain") {
@@ -104,7 +105,7 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 		 FROM subjects_fts
 		 JOIN threads t ON t.id = subjects_fts.thread_id
 		 WHERE subjects_fts MATCH ? ${filter.sql}
-		 ORDER BY rank, t.id DESC
+		 ORDER BY rank
 		 LIMIT ?`,
 		match,
 		...filter.params,
@@ -124,7 +125,7 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 		 JOIN messages m ON m.id = messages_fts.message_id
 		 JOIN threads t ON t.id = messages_fts.thread_id
 		 WHERE messages_fts MATCH ? ${filter.sql}
-		 ORDER BY rank, m.id DESC
+		 ORDER BY rank
 		 LIMIT ?`,
 		match,
 		...filter.params,
@@ -180,18 +181,19 @@ export async function searchSessions(runtime: Runtime, query: string, options: S
  * order and the primary key index serves each page (SCALE-03).
  */
 export async function listThreads(runtime: Runtime, options: ThreadSearchOptions = {}): Promise<ThreadSummary[]> {
-	const filter = participantFilter(options);
+	const member = options.participantId !== undefined;
+	const id = member ? "tp.thread_id" : "t.id";
 	const rows = await runtime.db.all<{
 		id: string;
 		subject: string | null;
 		createdAt: number;
 	}>(
 		`SELECT t.id AS id, t.subject AS subject, t.created_at AS createdAt
-		   FROM threads t
-		  WHERE 1 = 1 ${filter.sql} ${options.before === undefined ? "" : "AND t.id < ?"}
-		  ORDER BY t.id DESC
+		   FROM ${member ? "thread_participants tp JOIN threads t ON t.id = tp.thread_id" : "threads t"}
+		  WHERE ${member ? "tp.participant_id = ?" : "1 = 1"} ${options.before === undefined ? "" : `AND ${id} < ?`}
+		  ORDER BY ${id} DESC
 		  LIMIT ?`,
-		...filter.params,
+		...(member ? [options.participantId!] : []),
 		...(options.before === undefined ? [] : [options.before]),
 		options.limit ?? DEFAULT_SEARCH_LIMIT,
 	);

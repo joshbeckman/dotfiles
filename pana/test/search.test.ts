@@ -426,11 +426,35 @@ it("SRC-04 participant membership scopes domain-wide listing and both subject/me
 	for (const ref of [TEST_USER, t.runtime.url({ kind: "user", id: TEST_USER })]) {
 		expect((await t.client.get<{ threads: unknown[] }>(`/threads?participant=${encodeURIComponent(ref)}`)).body.threads).toHaveLength(3);
 	}
-	for (const ref of ["", `pana://elsewhere/sessions/${member}`, t.runtime.url({ kind: "thread", id: first.threadId })]) {
+	for (const ref of ["", `pana://${TEST_DOMAIN}/users/%`, `pana://${TEST_DOMAIN}/users/%C0%AF`, `pana://elsewhere/sessions/${member}`, t.runtime.url({ kind: "thread", id: first.threadId })]) {
 		expect((await t.client.get(`/threads?participant=${encodeURIComponent(ref)}`)).status).toBe(400);
 	}
 	for (const ref of ["unknown-user", t.runtime.newId()]) expect((await t.client.get(`/threads?participant=${ref}`)).status).toBe(404);
 	// Discovery does not join an outsider or create unknown participants.
 	expect(await t.runtime.db.get("SELECT * FROM thread_participants WHERE participant_id = ?", outsider)).toBeUndefined();
 	expect(await t.runtime.db.get("SELECT * FROM participants WHERE id = 'unknown-user'")).toBeUndefined();
+});
+
+
+it("SRC-04 SRC-05 discovery query plans retain ranked FTS top-N and indexed sparse membership paging", async () => {
+	t = await startTestPanad();
+	await seed(t, "Lantern query plans");
+	const all = vi.spyOn(t.runtime.db, "all");
+	await searchThreads(t.runtime, "Lantern", { participantId: TEST_USER, limit: 1 });
+	await listThreads(t.runtime, { participantId: TEST_USER, limit: 1 });
+	const calls = [...all.mock.calls];
+	all.mockRestore();
+	expect(calls).toHaveLength(3);
+	for (const [sql, ...params] of calls) {
+		const plan = await t.runtime.db.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, ...params);
+		const details = plan.map(row => row.detail).join("\n");
+		expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+		if (sql.includes(" MATCH ")) {
+			// FTS5 bit 32 means it consumes ORDER BY rank rather than sorting every match.
+			expect(details).toMatch(/VIRTUAL TABLE INDEX 32:/);
+		} else {
+			expect(details).toContain("thread_participants_participant_thread");
+			expect(details).not.toMatch(/SCAN t\b/);
+		}
+	}
 });
