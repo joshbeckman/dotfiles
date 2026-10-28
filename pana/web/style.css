@@ -1382,3 +1382,20 @@ kbd {
 	font: inherit;
 	margin-bottom: 0;
 }
+
+/* Keep wakes outside the sticky header: a long list must not hide the transcript. */
+#session-wakes {
+	margin: var(--s3) 0;
+	overflow-wrap: anywhere;
+}
+#session-wakes h3 {
+	font-size: 1rem;
+	margin: 0 0 var(--s2);
+}
+#session-wakes ul {
+	margin: 0;
+	padding-left: var(--s4);
+}
+#session-wakes li + li {
+	margin-top: var(--s1);
+}

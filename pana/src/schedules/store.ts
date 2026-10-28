@@ -341,6 +341,19 @@ export async function showSchedule(runtime: Runtime, id: string): Promise<Schedu
 	return scheduleView(row, runtime);
 }
 
+/** Pending dispatches for this target session, not schedules merely created by it.
+ * Include overdue active wakes: a restart or a readiness check may still dispatch them.
+ */
+export async function sessionWakes(runtime: Runtime, sessionId: string): Promise<ScheduleView[]> {
+	const rows = await runtime.db.all<ScheduleJoinRow>(
+		`${SELECT_SCHEDULE} WHERE s.kind = 'wake' AND s.state = 'active'
+		 AND s.next_at IS NOT NULL AND json_extract(s.payload, '$.session') = ?
+		 ORDER BY s.next_at, s.id`,
+		sessionId,
+	);
+	return rows.map((row) => scheduleView(row, runtime));
+}
+
 export const SCHEDULE_LIMIT = 100;
 
 /** The list order, as a row value, so a cursor can resume strictly after one row (SCALE-03). */
