@@ -143,7 +143,7 @@ export function formatUrl(ref: Ref, domain: string): string {
 		case "schedule":
 			return `${base}/schedules/${ref.id}`;
 		case "memory":
-			return `${base}/memory/files/${memorySegments(ref.id).map(encodeURIComponent).join("/")}`;
+			return `${base}/memory/files/${memorySegments(ref.id).map(encodeMemorySegment).join("/")}`;
 	}
 }
 
@@ -166,6 +166,13 @@ export function parseRef(input: string, domain?: string): Ref {
 	return { kind: "user", id: value };
 }
 
+/** Escape free-text link delimiters too, so a copied URL is unambiguous in prose. */
+function encodeMemorySegment(part: string): string {
+	return encodeURIComponent(part)
+		.replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+		.replace(/\.+$/, (dots) => "%2E".repeat(dots.length));
+}
+
 /** A memory identity is a relative repository path, not a record ULID. */
 function memorySegments(path: string): string[] {
 	const parts = path.split("/");
@@ -185,6 +192,19 @@ function parseUrl(url: string, domain?: string): Ref {
 	const host = parsed.hostname || parsed.host;
 	if (domain !== undefined && host !== domain) {
 		throw new RefError("foreign_domain", `URL domain ${host} is not ${domain}`);
+	}
+	// Validate the original path: URL normalizes dot segments before pathname is exposed.
+	const rawPath = /^pana:\/\/[^/?#]+([^?#]*)/.exec(url)?.[1] ?? "";
+	if (rawPath.startsWith("/memory/")) {
+		const encoded = rawPath.slice("/memory/files/".length);
+		if (!rawPath.startsWith("/memory/files/") || !encoded) throw new RefError("invalid_ref", "memory URL needs a file path");
+		let parts: string[];
+		try { parts = encoded.split("/").map(decodeURIComponent); }
+		catch { throw new RefError("invalid_ref", "malformed memory URL encoding"); }
+		if (parts.some((part) => part.includes("/"))) throw new RefError("invalid_ref", "encoded slash in memory URL");
+		const path = parts.join("/");
+		memorySegments(path);
+		return { kind: "memory", id: path };
 	}
 	const segments = parsed.pathname.split("/").filter((s) => s.length > 0);
 
@@ -210,16 +230,6 @@ function parseUrl(url: string, domain?: string): Ref {
 		case "schedules":
 			if (!first) break;
 			return { kind: "schedule", id: first };
-		case "memory": {
-			if (first !== "files" || rest.length === 0) break;
-			let parts: string[];
-			try { parts = rest.map(decodeURIComponent); }
-			catch { throw new RefError("invalid_ref", "malformed memory URL encoding"); }
-			if (parts.some((part) => part.includes("/"))) throw new RefError("invalid_ref", "encoded slash in memory URL");
-			const path = parts.join("/");
-			memorySegments(path);
-			return { kind: "memory", id: path };
-		}
 	}
 	throw new RefError("invalid_ref", `unrecognized pana:// path: ${parsed.pathname}`);
 }

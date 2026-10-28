@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
 import { matchRoute } from "../src/api/routes.ts";
 import { publish, subscriberCount } from "../src/web/events.ts";
+import { formatUrl } from "../src/ids/index.ts";
 import { launchUrl, loopbackOrigin } from "../src/web/static.ts";
 import {
 	appendReference,
 	appHref,
+	panaLinkSegments,
 	CONFIRM_EDIT,
 	CONFIRM_REDACT,
 	memoryCommitHref,
@@ -240,6 +242,9 @@ describe("PWA shell and static assets", () => {
 		expect(appHref(`pana://${domain}/memory/files/notes/plan%20%231%3F%20100%25%20caf%C3%A9.md`, domain)).toBe("#/memory/files/notes/plan%20%231%3F%20100%25%20caf%C3%A9.md");
 		expect(appHref("pana://other.example/memory/files/a.md", domain)).toBeUndefined();
 		expect(appHref(`pana://${domain}/memory/files`, domain)).toBeUndefined();
+		for (const path of ["notes/../a.md", "notes/%2e%2e/a.md", "notes/./a.md", "notes//a.md", "notes/%2e/a.md", "notes/a%2Fb.md", "notes/%", ".git/config", "a%00.md"]) {
+			expect(appHref(`pana://${domain}/memory/files/${path}`, domain)).toBeUndefined();
+		}
 		expect(appHref(`pana://other.example/threads/T1`, domain)).toBeUndefined();
 		expect(appHref("https://example.com/x", domain)).toBe("https://example.com/x");
 		expect(appHref("#/inbox", domain)).toBe("#/inbox");
@@ -410,4 +415,12 @@ describe("Web Push", () => {
 		listed = await t.tcp.get<{ subscriptions: Array<{ endpoint: string }> }>("/push/subscriptions");
 		expect(listed.body.subscriptions.map((row) => row.endpoint)).toEqual(["https://push.example/flaky"]);
 	});
+});
+
+it("ID-06 canonical memory URLs survive free-text linkification with punctuation filenames", () => {
+	for (const path of ["notes/plan(final).md", "notes/bang!", "notes/quote's.md", "notes/star*.md", "notes/trailing."]) {
+		const url = formatUrl({ kind: "memory", id: path }, TEST_DOMAIN);
+		const segments = panaLinkSegments(`Read ${url} next.`, TEST_DOMAIN);
+		expect(segments.find((segment) => segment.href)).toEqual({ text: url, href: memoryFileHref(path) });
+	}
 });

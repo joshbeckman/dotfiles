@@ -104,7 +104,7 @@ describe("memory URLs", () => {
 		for (const path of ["", "/notes.md", "notes//a", "notes/../a", "notes/./a", ".git/config", "a\\b", "a\n.md"]) {
 			expect(() => formatUrl({ kind: "memory", id: path }, DOMAIN)).toThrow(RefError);
 		}
-		for (const path of ["", "notes/%", "notes/%2Fescape", "%2e%2e%2Fescape", ".git/config", "a%00.md"]) {
+		for (const path of ["", "notes/%", "notes/%2Fescape", "%2e%2e%2Fescape", ".git/config", "a%00.md", "notes/../a.md", "notes/%2e%2e/a.md", "notes/./a.md", "notes//a.md", "notes/%2e/a.md"]) {
 			expect(() => parseRef(`pana://${DOMAIN}/memory/files/${path}`, DOMAIN)).toThrow(RefError);
 		}
 	});
