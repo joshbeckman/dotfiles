@@ -8,8 +8,6 @@ Resolve these links under `$HOME/.agents/`; harnesses symlink this file into oth
 |------|------|
 | Need user details (username, email, editor) | [USER.md](USER.md) |
 | Writing, reviewing, refactoring, debugging, committing, or reviewing a PR | [CODING_STANDARDS.md](CODING_STANDARDS.md) |
-| Delegating work or coordinating sessions | [skills/agent-teams/SKILL.md](skills/agent-teams/SKILL.md) |
-| Explicitly inspecting historical Agent Mail | [AGENT_MAIL.md](AGENT_MAIL.md) |
 | GitHub commands, PRs, issues, attribution | [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) |
 
 ## Autonomy
@@ -18,13 +16,11 @@ Proceed by default. Do not ask permission for routine reading, editing, refactor
 
 ## Identity and scratch
 
-Use the identity and scratch directory assigned by the running harness. Pana sessions use their session URL as identity. Do not invent a name or require a realm for a direct Pi or Claude session. If no scratch directory is assigned, use a temporary directory outside the repository.
+Use the identity and scratch directory assigned by the running harness. Do not invent a name. If no scratch directory is assigned, use a temporary directory outside the repository.
 
-## Replies and coordination
+## Replies
 
-Reply in the current conversation. Pana handles session messages, delegation, and wakeups; follow its runtime instructions when running there. Direct Pi and Claude sessions need no mailbox, registry, parking lease, or mail delivery step. Do not send Agent Mail or start legacy wake automation unless Josh explicitly asks to inspect or use the legacy tools.
-
-Use the `agent-teams` skill for coordination through pana sessions and threads. Coordination does not grant publication or merge authority.
+Reply in the current conversation. Follow the running harness's instructions for coordination and notifications. Coordination does not grant publication or merge authority.
 
 ## Artifact Ownership
 
@@ -45,13 +41,13 @@ Do not bypass a memory pressure block by launching equivalent child agents or ba
 
 ## Notifications
 
-Deliver requested results in the current conversation or the specified Pana thread. Do not also send Agent Mail. For an explicitly requested one-shot alert outside a conversation, use `bin/notify-josh` with a succinct topic title. Pass `--push` or `--local` only when you know better than its detection.
+Deliver requested results in the current conversation or the destination Josh specifies. For an explicitly requested one-shot alert outside a conversation, use `bin/notify-josh` with a succinct topic title. Pass `--push` or `--local` only when you know better than its detection.
 
 ## Attribution
 
 **Shared instructions are an exception.** Never append a concrete author identity or attribution trailer to shared instructions, including `AGENTS.md`, `CLAUDE.md`, coding standards, prompts, agent definitions, and skills. Keep contributor attribution in Git commits instead. Attribution examples should use placeholders.
 
-**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory. Pana messages are the exception: their transport identifies the sender. Do not strip trailers from quoted history or an embedded artifact that needs one on its destination surface. See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for automatic attribution on GitHub surfaces.
+**Elsewhere, attribute yourself by hand.** Anything you write that a person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory. Conversation messages are the exception when the harness identifies their sender. Do not strip trailers from quoted history or an embedded artifact that needs one on its destination surface. See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for automatic attribution on GitHub surfaces.
 
 ```sh
 agent-trailer   # => Co-authored-by: AI <identity supplied by the harness, if any>
