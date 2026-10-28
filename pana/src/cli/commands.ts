@@ -400,11 +400,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 		flags: [string("message", "--message MESSAGE", "Read one message instead of a thread")],
 		positionals: [{ name: "THREAD", param: "thread" }],
 		validate: (params) =>
-			(params.thread === undefined) === (params.message === undefined)
+			Boolean(text(params, "thread")?.trim()) === Boolean(text(params, "message")?.trim())
 				? "give either a THREAD or --message MESSAGE"
 				: undefined,
 		request: (params) =>
-			params.message !== undefined
+			text(params, "message")?.trim()
 				? { method: "GET", path: `/messages/${segment(text(params, "message"), "message")}` }
 				: { method: "GET", path: `/threads/${segment(text(params, "thread"), "thread")}` },
 	},

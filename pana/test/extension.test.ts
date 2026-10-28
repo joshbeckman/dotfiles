@@ -624,6 +624,43 @@ describe("pana tools", () => {
 		}
 	});
 
+	it("TOL-02 thread reads ignore blank unused selectors and reject missing or conflicting selectors", async () => {
+		const api = fakeApi();
+		await start({ capture: true, handlers: api.handlers });
+		const first = session();
+		const thread = "01THREAD0000000000000000AA";
+		const message = "01MESSAGE00000000000000AAA";
+		const options = { endpoint: { socketPath: t!.panad.socketPath }, caller: first.id };
+		for (const blank of [undefined, "", " \t "]) {
+			for (const single of [false, true]) {
+				const args = single ? { message, thread: blank } : { thread, message: blank };
+				const cli = single
+					? ["thread", "read", ...(blank === undefined ? [] : [blank]), "--message", message]
+					: ["thread", "read", thread, ...(blank === undefined ? [] : ["--message", blank])];
+				const before = api.calls.length;
+				const outcome = await runTool(t!, first.conversationId, "pana_thread_read", args);
+				const cliOutcome = await runPanaCli(cli, options);
+				expect(outcome.isError).toBe(false);
+				expect(outcome.structuredOutput).toEqual({ exitCode: 0, body: cliOutcome.body });
+				const calls = api.calls.slice(before);
+				expect(calls).toHaveLength(2);
+				expect(calls[0]!.route).toBe(single ? "messages.show" : "threads.read");
+				expect(calls[1]).toEqual(calls[0]);
+			}
+		}
+		const before = api.calls.length;
+		for (const args of [{}, { thread: "", message: " \t " }, { thread, message }]) {
+			const outcome = await runTool(t!, first.conversationId, "pana_thread_read", args);
+			expect(outcome.isError).toBe(true);
+			expect(outcome.structuredOutput).toMatchObject({ exitCode: 2 });
+			expect(JSON.stringify(outcome.diagnostics)).toContain("give either a THREAD or --message MESSAGE");
+		}
+		for (const cli of [["thread", "read"], ["thread", "read", "", "--message", " "], ["thread", "read", thread, "--message", message]]) {
+			await expect(runPanaCli(cli, options)).resolves.toMatchObject({ exitCode: 2 });
+		}
+		expect(api.calls).toHaveLength(before);
+	});
+
 	it("SCH-15 the wake tool forwards an optional display subject", async () => {
 		let received: unknown;
 		await start({ capture: true, handlers: { "schedules.create": request => {
