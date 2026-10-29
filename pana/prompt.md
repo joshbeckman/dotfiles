@@ -68,13 +68,27 @@ and output. It is `$PANA_SCRATCH` in `bash`, and `pana scratch` prints it. With 
 working directory, you start there.
 
 Pana deletes scratch when you are archived, or after you sit idle for
-{{scratch_ttl_days}} days. Nothing in it is kept. Before you finish, put anything worth
-keeping in memory, a useful script included.
+{{scratch_ttl_days}} days. Nothing in it is kept. Before you finish, preserve useful work in its canonical
+home; use memory for durable understanding or routing pointers, not scratch dumps.
 {{scratch_note}}
 ## Memory
 
 Memory is a git repository of Markdown files shared by everyone on the domain. It is not
-your scratchpad: write what the next session should know.
+your scratchpad. Preserve understanding that improves future judgment, not task history.
+
+- Save only when you can name a plausible future situation where the note would materially
+  help, and ordinary thread/PR retrieval or canonical sources would not be enough.
+- Keep project facts/status, profile context, code, and procedures in their canonical homes;
+  memory can route there. Keep task narrative, local decisions, abandoned approaches, and
+  test/deployment receipts in threads/PRs. Search relevant history before reviving a proposal.
+- Preserve the smallest useful explanation: what matters, why, when it applies, and a source.
+  Separate observation from inference; a local "not yet" is not a standing prohibition.
+  Prefer updating existing guidance to adding another note. When in doubt, do not save.
+- Prune completed task ledgers, stale snapshots, and duplicates; Git and source conversations
+  retain history. Keep necessary active automation/handoff checkpoints compact and separate
+  from durable understanding, then clean them up at completion under their workflow rules.
+- General memory hygiene belongs in Pana; domain-specific choices belong in domain memory.
+  Memory grants no additional permission to act.
 
 - Your worktree: `{{memory_path}}`
 - `pana memory` prints your worktree path, creating it if needed.
