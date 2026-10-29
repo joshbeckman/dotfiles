@@ -587,6 +587,36 @@ describe("inbox", () => {
 });
 
 describe("notices", () => {
+	it.each([false, true])("NTC-01 joins a new notice recipient to an existing thread (explicit=%s)", async (explicit) => {
+		const t = await start();
+		const a = await seedSession(t);
+		const b = await seedSession(t);
+		const thread = await createThread(t, [b], "session-only conversation", { caller: a });
+		const calls = captureDeliveries(t);
+		const notice = await postNotice(t.runtime, {
+			thread: thread.thread.id,
+			body: "session failed",
+			...(explicit ? { to: [TEST_USER] } : {}),
+		});
+		expect(notice.thread.participants.find((p) => p.id === TEST_USER)).toMatchObject({
+			joinedMessageId: notice.message.id,
+			joinedAt: t.clock.now(),
+		});
+		expect(notice.thread.participants.some((p) => p.kind === "domain")).toBe(false);
+		expect(calls).toEqual([]);
+		const inbox = await t.client.get<{ threads: Array<{ threadId: string; unreadCount: number }>; unreadTotal: number }>("/inbox?view=threads");
+		expect(inbox.body.unreadTotal).toBe(1);
+		expect(inbox.body.threads).toMatchObject([{ threadId: thread.thread.id, unreadCount: 1 }]);
+		const joined = notice.thread.participants.find((p) => p.id === TEST_USER);
+		await t.clock.advance(1000);
+		const again = await postNotice(t.runtime, { thread: thread.thread.id, body: "another notice" });
+		expect(again.thread.participants.find((p) => p.id === TEST_USER)).toEqual(joined);
+		const deliveries = await t.runtime.db.all<{ recipient_id: string; wake_request_id: string | null }>(
+			"SELECT recipient_id, wake_request_id FROM deliveries WHERE message_id = ?", again.message.id,
+		);
+		expect(deliveries).toEqual([{ recipient_id: TEST_USER, wake_request_id: null }]);
+	});
+
 	it("NTC-01 a notice posts as the domain URL, delivers to users only, and never wakes a session", async () => {
 		const t = await start();
 		const a = await seedSession(t);

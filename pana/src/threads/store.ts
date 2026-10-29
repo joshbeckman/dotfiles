@@ -1113,6 +1113,15 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 		await indexMessage(tx, { id: messageId, threadId, body });
 		if (existing === undefined) await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
 		for (const recipient of recipients.values()) {
+			// A fallback or explicitly addressed user may not belong to an existing thread.
+			// The thread inbox lists memberships, not deliveries, so join them atomically.
+			await tx.run(
+				"INSERT OR IGNORE INTO thread_participants (thread_id, participant_id, joined_at, joined_message_id) VALUES (?, ?, ?, ?)",
+				threadId,
+				recipient.id,
+				now,
+				messageId,
+			);
 			await tx.run(
 				"INSERT INTO deliveries (id, message_id, thread_id, recipient_id, created_at) VALUES (?, ?, ?, ?, ?)",
 				runtime.newId(),
