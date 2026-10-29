@@ -1,4 +1,4 @@
-// The clean environment a session's `bash` runs in (ISO-03, ISO-04, HOK-01).
+// The clean environment a session's `bash` runs in (ISO-03, ISO-04).
 //
 // pi-durable's `bash` always passes `inheritEnv: true`, which merges panad's `process.env`
 // (provider credentials included) under the call's own variables. `PanaExecutionEnv` overrides
@@ -16,7 +16,7 @@ import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { browserScope } from "./browser.ts";
 
-/** The only variables a pana session's commands see, besides git's own env-config pair. */
+/** The only variables a pana session's commands see. Git config is left to the repository. */
 export const PANA_ENV_NAMES = [
 	"PATH",
 	"HOME",
@@ -27,17 +27,12 @@ export const PANA_ENV_NAMES = [
 	"PANA_STATE",
 	"PANA_SCRATCH",
 	"PANA_BROWSER_SESSION",
-	"GIT_CONFIG_COUNT",
-	"GIT_CONFIG_KEY_0",
-	"GIT_CONFIG_VALUE_0",
 ] as const;
 
 export interface PanaEnvOptions {
 	cwd: string;
 	/** The session's ULID, exported as `PANA_SESSION`; absent for a conversation that is not a session. */
 	sessionId?: string;
-	/** Pana's hook directory, set as `core.hooksPath` through `GIT_CONFIG_*` (HOK-01). */
-	hooksDir: string;
 	/**
 	 * panad's state directory, exported as `PANA_STATE` so `pana` inside `bash` reaches this
 	 * panad's socket even when it does not run on the default state directory.
@@ -61,9 +56,6 @@ export function panaShellEnv(options: PanaEnvOptions): Record<string, string> {
 		USER: process.env.USER ?? fallbackUser(),
 		LANG: process.env.LANG ?? "C.UTF-8",
 		TERM: "dumb",
-		GIT_CONFIG_COUNT: "1",
-		GIT_CONFIG_KEY_0: "core.hooksPath",
-		GIT_CONFIG_VALUE_0: options.hooksDir,
 	};
 	if (options.sessionId) {
 		env.PANA_SESSION = options.sessionId;
@@ -147,7 +139,6 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 			cwd: target.cwd ?? scratch ?? homedir(),
 			sessionId: row?.id,
 			scratchDir: scratch,
-			hooksDir: runtime.paths.hooks,
 			stateDir: runtime.paths.dir,
 		});
 	};

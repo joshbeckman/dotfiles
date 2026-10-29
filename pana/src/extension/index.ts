@@ -11,7 +11,6 @@ import { createPanaSections } from "./prompt.ts";
 import { createPanaTools } from "./tools.ts";
 
 export { createPanaEnv, PanaExecutionEnv, panaShellEnv, PANA_ENV_NAMES } from "./env.ts";
-export { HOOK_DOMAIN_FILE, HOOK_RUNNER, STANDARD_HOOKS, commitTrailer, installGitHooks } from "./hooks.ts";
 // The command layer lives in src/cli/commands.ts so the CLI and the pana tools share one
 // definition. Re-exported here, where WP4's callers already look for it.
 export {

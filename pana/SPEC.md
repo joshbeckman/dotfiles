@@ -20,7 +20,7 @@ The README says what pana is. This file says how to check that it works. If they
 | WP1 | `panad` server, transports, CLI framework | WP0 |
 | WP2 | Threads, messages, deliveries, inbox, files | WP0 |
 | WP3 | Session runtime: lifecycle, delivery, replies, limits | WP0, WP2 |
-| WP4 | `pana` extension: system prompt, tools, isolation, git hooks | WP0, WP1 |
+| WP4 | `pana` extension: system prompt, tools, isolation, commit attribution | WP0, WP1 |
 | WP5 | Memory | WP0 |
 | WP6 | Scheduling | WP2, WP3 |
 | WP7 | Subjects and search | WP2 |
@@ -39,7 +39,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 - [x] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
 - [x] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
 - [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600), `scratch.ttlDays` (8), `scratch.maxTotalMB` (none).
-- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `hooks/`, `web-token`. `web-token` has mode 0600.
+- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `web-token`. `web-token` has mode 0600.
 - [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
 ### IDs and URLs
@@ -107,11 +107,11 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **SRV-01** `panad` starts, listens on both transports, and logs one JSONL line per request to `<state>/panad.log` with route, caller, status, and duration. Bodies are never logged.
 - [x] **SRV-02** On SIGTERM, `panad` stops accepting requests, closes the Harness, and exits 0. Runs in progress resume at the next start.
 - [x] **SRV-03** After a crash mid-run, the next start calls `harness.resume()` and the run finishes.
-- [x] **CLI-01** `pana` talks only to the socket. If `panad` is not running, it exits 1 with `panad is not running`.
+- [x] **CLI-01** Server commands talk only to the socket. `pana git commit` is a local operation using Git and local config, without a daemon. If `panad` is not running, server commands exit 1 with `panad is not running`.
 - [x] **CLI-02** `pana` sends `Pana-Caller` from `PANA_SESSION` when set.
-- [x] **CLI-03** Output is text when stdout is a TTY and JSON otherwise. `--json` forces JSON.
+- [x] **CLI-03** Server-command output is text when stdout is a TTY and JSON otherwise. `--json` forces JSON.
 - [x] **CLI-04** `--body TEXT`, `--body-file PATH`, and `--body -` (stdin) are mutually exclusive. Two of them, or none where a body is required, exit 2.
-- [x] **CLI-05** Exit codes follow API-02.
+- [x] **CLI-05** Server-command exit codes follow API-02; local commits preserve Git failures and return nonzero for attribution verification failure.
 - [x] **CLI-06** `pana --help` and `pana <noun> --help` list every command in the README.
 - [x] **CLI-07** Unknown commands and flags exit 2 with usage.
 
@@ -217,7 +217,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 - [x] **ISO-01** The registry holds only `CodingTools` and `pana`. A test asserts the installed extension names.
 - [x] **ISO-02** A session's system prompt contains nothing from `~/.pi/agent`.
-- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH` (SCR-01), `PANA_BROWSER_SESSION` (ISO-06), and the `GIT_CONFIG_*` variables from HOK-01. A test runs `env` and compares.
+- [x] **ISO-03** `bash` runs with exactly `PATH` (pana's own `bin` first), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH` (SCR-01), `PANA_BROWSER_SESSION` (ISO-06). A test runs `env` and compares.
 - [x] **ISO-04** Provider credentials never appear in `bash` output, the transcript, or `panad.log`.
 - [x] **ISO-06** `bash` exports `PANA_BROWSER_SESSION=pana-<session>`. `bin/chrome-devtools`, first on a session's `PATH` (ISO-03), runs the installed CLI with `--sessionId` that value, so every session drives its own chrome-devtools daemon (socket, pid file, and headless Chrome) instead of the machine-wide one. The first call starts that daemon with `--isolated`, because a daemon the CLI starts implicitly opens the machine-wide Chrome profile and the next session's daemon then cannot ("The browser is already running for …/chrome-devtools-mcp-cli/chrome-profile"); a daemon that is already running is never started again, because `start` restarts it and closes its pages, and `status`/`stop` start nothing. A call that carries its own `--sessionId`, or a shell with no `PANA_BROWSER_SESSION`, runs the CLI unchanged; a second copy of pana's `bin` on the same `PATH` does not re-enter the shim, and no CLI on `PATH` is exit 127, not a loop.
 - [x] **ISO-07** panad stops a session's daemon (`chrome-devtools --sessionId pana-<session> stop`) when it archives the session, and sweeps every five minutes on `runtime.clock` to stop the daemons of archived sessions, of sessions idle for ten minutes or more, and of sessions it has no row for. A running or waiting session keeps its daemon, and the next `chrome-devtools` call starts a fresh one.
@@ -238,14 +238,14 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **TOL-03** A tool error carries the CLI exit code in `structuredOutput.exitCode`.
 - [x] **TOL-04** `pana_reply` requires `after`, as THR-03 does.
 
-### Git hooks
+### Explicit commit attribution
 
-- [x] **HOK-01** `bash` sets `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0=core.hooksPath`, and `GIT_CONFIG_VALUE_0=<state>/hooks`.
-- [x] **HOK-02** A commit made through `bash` carries exactly one `Co-authored-by: AI pana://<domain>/sessions/<ulid> <user.email>`, with the address from git config.
-- [x] **HOK-03** `git commit --amend` and a second commit do not duplicate the trailer.
-- [x] **HOK-04** Every standard hook name in `<state>/hooks` runs the repo's own hook of that name, looked up from local `core.hooksPath`, then global `core.hooksPath`, then `$(git rev-parse --git-path hooks)`. Its exit code is preserved.
-- [x] **HOK-05** A repo with a failing `pre-commit` still blocks the commit.
-- [x] **HOK-06** Commits made outside pana are unchanged.
+- [x] **HOK-01** `bash` does not inject Git config or redirect `core.hooksPath`. Pana installs no hooks.
+- [x] **HOK-02** `pana git commit` adds and verifies exactly one current-session `Co-authored-by: AI pana://<domain>/sessions/<ulid> <user.email>` trailer using native Git. It requires session context; ordinary Git commits are not covered.
+- [x] **HOK-03** Amend and repeated commits do not duplicate the current-session trailer; other coauthors are preserved.
+- [x] **HOK-04** The repository's own hook path is unchanged and Git runs its hooks natively, including local/global custom paths.
+- [x] **HOK-05** A failing repository hook still blocks the commit. A hook that removes attribution causes verification to fail without automatic history repair.
+- [x] **HOK-06** Plain Git commits inside or outside Pana are unchanged. Signing configuration is not disabled by the commit operation.
 
 ---
 

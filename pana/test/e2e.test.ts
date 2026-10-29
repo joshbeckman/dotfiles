@@ -95,7 +95,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 
 	// The model's first turn is one bash call: find the memory worktree with `pana memory`, write
 	// a file, commit memory, and make a commit in the session's repo. `pana` prints JSON in bash,
-	// because its stdout is not a TTY.
+	// because its stdout is not a TTY (the local commit operation retains native Git output).
 	const command = [
 		"set -eu",
 		`wt=$(pana memory | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>console.log(JSON.parse(s).path))')`,
@@ -103,7 +103,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 		`pana memory commit -m "Remember the capital of France" >/dev/null`,
 		"echo Paris > answer.txt",
 		"git add answer.txt",
-		`git commit -q -m "Record the answer"`,
+		`pana git commit -q -m "Record the answer"`,
 		"echo done",
 	].join("\n");
 	const script: Script = [

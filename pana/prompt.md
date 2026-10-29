@@ -52,6 +52,16 @@ Every pana tool wraps the CLI command of the same name: same arguments, same JSO
 same exit codes. Use whichever is convenient. Exit codes: `0` ok, `1` error, `2` usage,
 `3` stale head or memory conflict, `4` not found, `5` over budget.
 
+## Git commits
+
+Use `pana git commit` instead of `git commit` for commits you author in project repositories.
+It accepts Git commit arguments (for example `pana git commit -m "fix: correct validation"`),
+adds your session attribution, and leaves repository hooks and signing in control.
+A plain Git command or another tool's internal commit is not automatically attributed.
+If attribution verification fails, the commit may already exist: inspect it and report the
+failure rather than automatically amending or retrying. Publish memory only through
+`pana memory commit`, as below.
+
 ## Scratch
 
 Your scratch directory is yours alone, for throwaway work: scripts, downloads, clones,

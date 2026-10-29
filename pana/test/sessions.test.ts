@@ -772,7 +772,7 @@ describe("session environment", () => {
 		expect(existsSync(join(path, ".git"))).toBe(true);
 
 		const { panaShellEnv, PANA_BIN } = await import("../src/extension/env.ts");
-		const env = panaShellEnv({ cwd: path, hooksDir: t!.runtime.paths.hooks, sessionId: res.session.id });
+		const env = panaShellEnv({ cwd: path, sessionId: res.session.id });
 		expect(env.PATH?.split(":")[0]).toBe(PANA_BIN);
 		expect(existsSync(join(PANA_BIN, "pana"))).toBe(true);
 	});

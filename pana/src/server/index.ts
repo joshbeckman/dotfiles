@@ -12,7 +12,7 @@ import type { Handlers } from "../api/types.ts";
 import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
-import { createPanaEnv, createPanaRegistry, installGitHooks } from "../extension/index.ts";
+import { createPanaEnv, createPanaRegistry } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
 import { initPush } from "../push/index.ts";
 import { startScheduler } from "../schedules/index.ts";
@@ -129,8 +129,6 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			wake: (options.wake ?? defaultWakeSubmitter)(getRuntime),
 		};
 
-		// The hook directory must exist before any session's bash runs (HOK-01).
-		installGitHooks(paths.hooks, config.domain);
 		// PSH-01: the VAPID pair exists before the first push, not on the first request.
 		initPush(runtime);
 

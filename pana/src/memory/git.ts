@@ -1,9 +1,9 @@
 // A thin, isolated wrapper around the `git` binary. Memory shells out to real git rather than
 // reimplementing refs, rebase, and grep; this file keeps every call deterministic.
 //
-// The environment is built from scratch instead of inherited. A pana session's bash tool runs
-// with its own GIT_CONFIG_* and GIT_DIR variables (HOK-01), and panad may itself be started from
-// such a shell; inheriting them would point memory's git at somebody else's repo. Global and
+// The environment is built from scratch instead of inherited. panad may be started from
+// a shell with GIT_CONFIG_* or GIT_DIR variables; inheriting them could point memory's git
+// at somebody else's repo. Global and
 // system config are disabled so a developer's `core.hooksPath`, `commit.gpgsign`, or identity
 // cannot change a memory commit.
 
