@@ -51,12 +51,12 @@ Use the PR surface required by the repository. For GitHub writes, use `gw`; for 
 3. When inheriting a PR, read each source issue with `gw view-md`; backfill a missing PR comment before continuing.
 4. Trigger required CI and repository-required automated reviews.
 5. Check CI, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Schedule the next check with `pana schedule wake` when waiting on external progress.
-6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean. Update the checklist after handling each change.
-7. Rebase when the branch conflicts with or is too stale against its base. Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
+6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean and green. Update the checklist after handling each change.
+7. Rebase when the branch conflicts with or is too stale against its base (use scheduled wakes to monitor conflicts/staleness with base). Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
 
 ## 2. Ask Josh to review
 
-Only after CI and automated reviews pass, send Josh:
+Only after CI and automated reviews pass, mark the PR ready for review (move out of draft) and send Josh:
 
 - the PR title and full URL;
 - the evidence that it is green;
@@ -64,11 +64,11 @@ Only after CI and automated reviews pass, send Josh:
 
 Choose candidates from ownership files, blame/history of the changed code, and recent related PRs. Do not optimize for availability alone.
 
-Do not mark the PR ready or request human review yet. Josh may comment, request changes, choose reviewers, or mark it ready himself. Continue the loop after every change.
+Josh may comment or request changes. Monitor for them and continue the loop after every change.
 
 ## 3. Human review
 
-Once Josh marks the PR ready or explicitly asks you to do so:
+Once Josh gives the go-ahead for reviewers:
 
 1. Request review from Josh's preferred reviewers; otherwise use the proposed candidates he accepted.
 2. Poll for comments, submitted reviews, new conflicts, and check regressions.
