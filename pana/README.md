@@ -461,6 +461,6 @@ Pana starts empty and runs beside the old stack, so nothing has to change for it
 
 - `agent-mail`, `agent-mail2`, `agent-mail-web`, and their launchd and systemd units.
 - Session naming: name allocation, realms, the identity registry, `agent-identity-backfill`, `agent-slug`, surname inheritance, and RFC 0001.
-- `agent-trailer`, once `gw` and `gsw` read `PANA_SESSION` themselves. Pana's commit hook already writes the trailer on commits.
+- `agent-trailer`, once `gw` and `gsw` derive session attribution from `PANA_SESSION` themselves. Project commits need no Pana trailer.
 - `agent-team`, scratchpads, and `agent-find`, unless pana keeps an equivalent.
 - The AGENTS.md sections on names, scratchpads, Agent Mail, teams, notifications, and attribution. Replace them with one section on pana.

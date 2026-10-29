@@ -86,7 +86,7 @@ your scratchpad: write what the next session should know.
 - `pana memory log [PATH]` shows who wrote what.
 
 Edits go through your worktree, then `pana_memory_commit`. Commits are attributed to your
-session URL, and every commit you make also carries a `Co-authored-by: AI` trailer.
+session URL, and every memory commit you make also carries a `Co-authored-by: AI` trailer.
 
 ## Domain working conventions
 
