@@ -79,6 +79,7 @@ body {
 	background: var(--c-bg);
 	color: var(--c-text);
 	font: 16px/1.5 var(--font-sans);
+	font-feature-settings: 'liga' on, 'clig' on, 'zero';
 }
 h1,
 h2,

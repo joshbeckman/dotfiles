@@ -15,6 +15,12 @@ import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCo
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
 import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, SESSION_COLORS, threadRow, workingOf } from "../web/views.js";
 
+it("enables inherited font disambiguation throughout the UI", () => {
+	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
+	const body = css.match(/(?:^|\n)body\s*\{([^}]+)\}/)?.[1];
+	expect(body).toContain("font-feature-settings: 'liga' on, 'clig' on, 'zero';");
+});
+
 interface Person {
 	id: string;
 	kind: string;
