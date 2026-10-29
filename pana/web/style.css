@@ -136,6 +136,11 @@ kbd,
 pre {
 	font-family: var(--font-mono);
 }
+/* IDs and canonical addresses, not their human-readable surrounding labels. */
+.identifier {
+	font-family: var(--font-mono);
+	letter-spacing: normal;
+}
 .visually-hidden {
 	position: absolute;
 	width: 1px;

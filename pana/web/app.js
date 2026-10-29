@@ -476,6 +476,23 @@ function item(title, meta, onClick, extra = {}) {
 	return row;
 }
 
+/** Machine tokens use mono; surrounding labels keep the UI's proportional font. */
+function referenceText(label) {
+	const fragment = document.createDocumentFragment();
+	const text = String(label);
+	// A canonical address is one token, including its path and query.
+	const tokens = text.startsWith("pana://")
+		? /^pana:\/\/\S+$/g
+		: /\b[0-9A-HJKMNP-TV-Z]{26}\b|(?<=session )[0-9A-HJKMNP-TV-Z]{6}\b|(?<=#)[0-9A-HJKMNP-TV-Z]{6}\b/g;
+	let start = 0;
+	for (const match of text.matchAll(tokens)) {
+		fragment.append(text.slice(start, match.index), span(match[0], "identifier"));
+		start = match.index + match[0].length;
+	}
+	fragment.append(text.slice(start));
+	return fragment;
+}
+
 /** A link to an ID's own view (REF-08), or plain text when the ID has no view here. */
 function refLink(value, kind, label, title) {
 	const text = String(value ?? "");
@@ -484,7 +501,9 @@ function refLink(value, kind, label, title) {
 	if (!href) return document.createTextNode(label ?? text);
 	const anchor = document.createElement("a");
 	anchor.href = href;
-	anchor.textContent = label ?? text;
+	// Usernames are human labels, even if one happens to resemble an ID.
+	if (/\/users\//.test(text) && label !== undefined && label !== text) anchor.textContent = label;
+	else anchor.append(referenceText(label ?? text));
 	if (title) anchor.title = title;
 	anchor.dataset.testid = "ref-link";
 	if (/^https?:/i.test(href)) {
@@ -541,6 +560,7 @@ function linkified(text) {
 		const anchor = document.createElement("a");
 		anchor.href = segment.href;
 		anchor.textContent = segment.text;
+		anchor.classList.add("identifier");
 		anchor.dataset.testid = "ref-link";
 		fragment.append(anchor);
 	}
@@ -850,6 +870,7 @@ function inboxItem(row, showArchived) {
 	snippet.className = "snippet";
 	snippet.dataset.testid = "inbox-snippet";
 	const who = span(`${row.sender.kind === "user" ? "You" : refLabel(row.sender.url)}: `, "snippet-sender");
+	if (row.sender.kind !== "user") who.replaceChildren(referenceText(`${refLabel(row.sender.url)}: `));
 	who.dataset.color = participantColor(row.sender);
 	snippet.append(who, document.createTextNode(row.snippet));
 	const aside = document.createElement("div");
