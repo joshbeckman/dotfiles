@@ -403,7 +403,8 @@ describeBrowser("pana in a browser", () => {
 	it("WEB-04 WEB-05 messages render Markdown, images, Mermaid, and pana:// links", async () => {
 		await start([{ text: "Ready when you are." }]);
 		const seeded = await seedSession("go");
-		const upload = await t!.client.request<{ file: { id: string; url: string } }>("POST", "/files?name=pixel.png", {
+		const name = "Screenshot 2026-10-28 at 4.00.28\u202fPM.png";
+		const upload = await t!.client.request<{ file: { id: string; url: string } }>("POST", `/files?name=${encodeURIComponent(name)}`, {
 			bytes: PNG_1X1,
 			headers: { "content-type": "image/png" },
 		});
@@ -454,8 +455,8 @@ describeBrowser("pana in a browser", () => {
 		expect(rendered.svg).toBe(true);
 		expect(rendered.anchors).toContainEqual({ href: `#/sessions/${seeded.session.id}`, target: null });
 		// FIL-07: an inline image asks for a bounded copy; the original stays behind the link.
-		expect(rendered.files).toContain(`/files/${upload.body.file.id}/pixel.png?w=1024`);
-		expect(upload.body.file.url).toBe(`pana://${TEST_DOMAIN}/files/${upload.body.file.id}/pixel.png`);
+		expect(rendered.files).toContain(`/files/${upload.body.file.id}/${encodeURIComponent(name)}?w=1024`);
+		expect(upload.body.file.url).toBe(`pana://${TEST_DOMAIN}/files/${upload.body.file.id}/${encodeURIComponent(name)}`);
 	});
 
 	it("FIL-06 the composers upload an attachment and append the reference", async () => {
