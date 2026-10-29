@@ -2,7 +2,7 @@
 
 import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
-import { loadFile, uploadFile } from "./files.ts";
+import { inlineDisposition, loadFile, uploadFile } from "./files.ts";
 import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
 import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
@@ -144,7 +144,7 @@ export const handlers: Handlers = {
 			bytes: image.bytes,
 			headers: {
 				"content-type": image.mediaType,
-				"content-disposition": `inline; filename="${loaded.row.name.replace(/["\\]/g, "_")}"`,
+				"content-disposition": inlineDisposition(loaded.row.name),
 			},
 		};
 	},

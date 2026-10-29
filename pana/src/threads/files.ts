@@ -202,3 +202,12 @@ export function appendAttachmentMarkdown(
 	const refs = files.map((file) => attachmentMarkdown(file)).join("\n");
 	return body.length === 0 ? refs : `${body}\n\n${refs}`;
 }
+
+/** RFC 6266/8187: HTTP headers need ASCII; filename* preserves the UTF-8 name. */
+export function inlineDisposition(name: string): string {
+	const fallback = name.replace(/[^\x20-\x7e]|["\\%]/g, "_");
+	const encoded = encodeURIComponent(name).replace(/[!'()*]/g, (character) =>
+		`%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+	return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}

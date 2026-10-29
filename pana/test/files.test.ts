@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { inlineDisposition } from "../src/threads/files.ts";
 import { statusToExitCode } from "../src/api/errors.ts";
 import {
 	appendAttachmentMarkdown,
@@ -106,6 +107,33 @@ async function upload(t: TestPanad, name: string, bytes: Buffer, mediaType = "im
 }
 
 describe("files", () => {
+	it("FIL-04 disposition headers escape unsafe characters and preserve UTF-8 names", () => {
+		expect(inlineDisposition("shot\u202fPM.png")).toBe(`inline; filename="shot_PM.png"; filename*=UTF-8''shot%E2%80%AFPM.png`);
+		expect(inlineDisposition("a!'()*.png")).toBe(`inline; filename="a!'()*.png"; filename*=UTF-8''a%21%27%28%29%2A.png`);
+		for (const name of ['plain.png', '日本語😀.png', 'a"b\\c%\r\n\t\x7f.png', "a!'()*.png"]) {
+			const header = inlineDisposition(name);
+			expect(header).toMatch(/^[\x20-\x7e]+$/);
+			expect(header).toMatch(/^inline; filename="[^"\\%]*"; filename\*=UTF-8''/);
+			expect(decodeURIComponent(header.split("filename*=UTF-8''")[1]!)).toBe(name);
+		}
+	});
+
+	it("FIL-04 FIL-07 Unicode filenames download original and inline bytes without invalid headers", async () => {
+		const t = await start();
+		const bytes = png(200, 100);
+		for (const name of ["Screenshot 2026-10-28 at 4.00.28\u202fPM.png", "日本語😀.png", "café.png", "plain.png", 'quote"name.png']) {
+			const file = await upload(t, name, bytes);
+			for (const query of ["", "?w=64"]) {
+				const res = await t.tcp.get(`/files/${file.id}/${encodeURIComponent(name)}${query}`);
+				expect(res.status, JSON.stringify(res.body)).toBe(200);
+				expect(res.headers["content-type"]).toBe("image/png");
+				expect(res.headers["content-disposition"]).toBe(inlineDisposition(name));
+				if (query && findBackend()) expect(imageSize(res.raw as Buffer)).toEqual({ width: 64, height: 32 });
+				else expect(res.raw).toEqual(bytes);
+			}
+		}
+	});
+
 	it("FIL-01 upload copies the file to files/<ulid>/<basename> and records path, size, media type, and uploader", async () => {
 		const t = await start();
 		const file = await upload(t, "cat.png", BYTES);
