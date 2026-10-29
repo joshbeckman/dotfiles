@@ -225,7 +225,7 @@ who="AI"
 suffix=""
 if [ "$with_email" -eq 1 ]; then
   if [ -n "$pana_id" ]; then
-    # Matches the commit trailer in pana/README.md: the URL names the writer and the
+    # Optional email-form attribution: the URL names the writer and the
     # address is the user's own git user.email, the one field GitHub parses for
     # coauthor credit. A session has no mailbox of its own.
     email="$(git config user.email 2>/dev/null || true)"

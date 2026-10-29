@@ -1,6 +1,5 @@
-// Server commands are defined here once: usage, flags, positionals, and API requests.
-// Local `git commit` is dispatched by index.ts. The CLI parses argv into this layer;
-// the pana tools call it
+// The one command layer: every `pana` command is defined here once, as its usage line, flags,
+// positionals, and the API request it makes. The CLI parses argv into it, the pana tools call it
 // with structured parameters, and both run it through `runPanaCommand`, so a tool and the CLI
 // send the same request and report the same exit code (TOL-02, TOL-03).
 //

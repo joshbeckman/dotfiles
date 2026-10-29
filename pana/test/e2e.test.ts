@@ -95,7 +95,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 
 	// The model's first turn is one bash call: find the memory worktree with `pana memory`, write
 	// a file, commit memory, and make a commit in the session's repo. `pana` prints JSON in bash,
-	// because its stdout is not a TTY (the local commit operation retains native Git output).
+	// because its stdout is not a TTY.
 	const command = [
 		"set -eu",
 		`wt=$(pana memory | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>console.log(JSON.parse(s).path))')`,
@@ -103,7 +103,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 		`pana memory commit -m "Remember the capital of France" >/dev/null`,
 		"echo Paris > answer.txt",
 		"git add answer.txt",
-		`pana git commit -q -m "Record the answer"`,
+		`git commit -q -m "Record the answer"`,
 		"echo done",
 	].join("\n");
 	const script: Script = [
@@ -168,11 +168,10 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 	const search = await pana(env, ["memory", "search", "capital of france"]);
 	expect(search.json.results).toEqual([{ path: "capitals.md", url: "pana://test.example/memory/files/capitals.md", line: 3, text: "Paris is the capital of France." }]);
 
-	// The session's commit in its repo carries exactly one pana trailer.
+	// Project commits stay native; memory above still retains session writer attribution.
 	const body = git("log", "-1", "--format=%B");
-	expect(body).toContain("Record the answer");
-	const trailer = `Co-authored-by: AI ${sessionUrl} <tester@${DOMAIN}>`;
-	expect(body.split("\n").filter((line) => line === trailer)).toHaveLength(1);
+	expect(body.trim()).toBe("Record the answer");
+	expect(body).not.toContain("Co-authored-by: AI");
 
 	const show = await pana(env, ["session", "show", sessionId]);
 	expect(show.json.session).toMatchObject({ state: "idle", cwd: repo });

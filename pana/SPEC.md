@@ -107,11 +107,11 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **SRV-01** `panad` starts, listens on both transports, and logs one JSONL line per request to `<state>/panad.log` with route, caller, status, and duration. Bodies are never logged.
 - [x] **SRV-02** On SIGTERM, `panad` stops accepting requests, closes the Harness, and exits 0. Runs in progress resume at the next start.
 - [x] **SRV-03** After a crash mid-run, the next start calls `harness.resume()` and the run finishes.
-- [x] **CLI-01** Server commands talk only to the socket. `pana git commit` is a local operation using Git and local config, without a daemon. If `panad` is not running, server commands exit 1 with `panad is not running`.
+- [x] **CLI-01** `pana` talks only to the socket. If `panad` is not running, it exits 1 with `panad is not running`.
 - [x] **CLI-02** `pana` sends `Pana-Caller` from `PANA_SESSION` when set.
-- [x] **CLI-03** Server-command output is text when stdout is a TTY and JSON otherwise. `--json` forces JSON.
+- [x] **CLI-03** Output is text when stdout is a TTY and JSON otherwise. `--json` forces JSON.
 - [x] **CLI-04** `--body TEXT`, `--body-file PATH`, and `--body -` (stdin) are mutually exclusive. Two of them, or none where a body is required, exit 2.
-- [x] **CLI-05** Server-command exit codes follow API-02; local commits preserve Git failures and return nonzero for attribution verification failure.
+- [x] **CLI-05** Exit codes follow API-02.
 - [x] **CLI-06** `pana --help` and `pana <noun> --help` list every command in the README.
 - [x] **CLI-07** Unknown commands and flags exit 2 with usage.
 
@@ -238,14 +238,15 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **TOL-03** A tool error carries the CLI exit code in `structuredOutput.exitCode`.
 - [x] **TOL-04** `pana_reply` requires `after`, as THR-03 does.
 
-### Explicit commit attribution
+### Repository-owned Git hooks
 
 - [x] **HOK-01** `bash` does not inject Git config or redirect `core.hooksPath`. Pana installs no hooks.
-- [x] **HOK-02** `pana git commit` adds and verifies exactly one current-session `Co-authored-by: AI pana://<domain>/sessions/<ulid> <user.email>` trailer using native Git. It requires session context; ordinary Git commits are not covered.
-- [x] **HOK-03** Amend and repeated commits do not duplicate the current-session trailer; other coauthors are preserved.
 - [x] **HOK-04** The repository's own hook path is unchanged and Git runs its hooks natively, including local/global custom paths.
-- [x] **HOK-05** A failing repository hook still blocks the commit. A hook that removes attribution causes verification to fail without automatic history repair.
-- [x] **HOK-06** Plain Git commits inside or outside Pana are unchanged. Signing configuration is not disabled by the commit operation.
+- [x] **HOK-05** A failing repository hook still blocks a session's ordinary Git commit.
+- [x] **HOK-06** Ordinary project commits are not automatically attributed, and no special commit command is provided. Memory writer attribution/publication and prose write attribution (GW-01) remain separate and unchanged.
+
+HOK-02/HOK-03 (mandatory project commit trailers and their deduplication) are retired. Session
+provenance is carried on PR descriptions/comments/reviews and discovered through PR lookup.
 
 ---
 
@@ -343,7 +344,7 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **INT-01** `panad` registers every pi-ai provider whose credentials are in its environment. Model IDs are `provider/model-id`. `config.defaultModel` is the model of a session with no model or profile model. A model from an unregistered provider is a 400 that names the provider.
 - [x] **INT-02** The PWA reads the real handler shapes in every view, and `npm run test:web` runs its flows against a real test `panad` with the faux model. Editing a schedule keeps its time: the form shows an `--at` time, and an update with neither `cron` nor `at` keeps the stored time.
 - [x] **INT-03** Every delivery to the user and every notice publishes a Web Push and an `/events` event after its transaction commits. A failed push does not roll back the message. pi-durable commits stream the session transcript through `/events`.
-- [x] **INT-04** One test drives only `pana/bin/pana` against a real `panad` child process with a scripted faux model: `session create`, a `bash` call that runs `pana memory` and `pana memory commit` and makes a git commit, the answer in `thread read`, a second wake from `thread respond --after`, the session URL in `memory log`, and the commit trailer.
+- [x] **INT-04** One test drives only `pana/bin/pana` against a real `panad` child process with a scripted faux model: `session create`, a `bash` call that runs `pana memory` and `pana memory commit` and makes a git commit, the answer in `thread read`, a second wake from `thread respond --after`, the session URL in `memory log`, and an ordinary project commit without a session trailer.
 - [x] **INT-05** `pana/scripts/smoke` starts a throwaway `panad` with the provider keys in its environment, creates a session from the CLI, and prints the thread and the PWA launch URL. `PANA_SMOKE_FAUX=1` runs it with the faux model, and `--keep` leaves `panad` running.
 - [x] **INT-06** README has a "Run it" section: `config.json`, `panad` directly and as a service, the CLI, and the PWA. README and this spec match what the build does.
 

@@ -198,37 +198,28 @@ Sections that change every run, such as the current time, stay out of the prompt
 
 Every pana tool wraps one CLI command with the same arguments, output, and exit codes. A session can use either. The tools are `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake`.
 
-### Commit attribution
+### Attribution
 
-Use the local commit operation for commits a session authors in project repositories:
-
-```sh
-pana git commit [GIT_COMMIT_ARGS...]
-# for example: pana git commit -m "fix: correct validation"
-```
-
-It adds this trailer, whose address is your own `user.email` from Git config
-(GitHub parses that field for coauthor credit; a session has no mailbox):
+Session provenance belongs on PR descriptions, comments, reviews, and other prose writes:
 
 ```
-Co-authored-by: AI pana://<domain>/sessions/<ulid> <user.email>
+Co-authored-by: AI pana://<domain>/sessions/<ulid>
 ```
 
-Pana does not set `core.hooksPath` or install Git hooks. `pana git commit` requires Git 2.32+
-and uses Git's native trailer support, leaving the repository's hooks and signing configuration in control. It
-verifies attribution after committing and never automatically amends a commit to repair it.
-If verification fails, the commit may already exist; inspect it before retrying.
+The `gw` and `gsw` wrappers add this attribution from the session environment for supported
+writes with an explicit body. Direct clients, web edits, and bodyless/editor-generated writes
+are not universally covered; use the required wrappers with `--body` or `--body-file`.
 
-This operation requires `PANA_SESSION` and the local Pana config (`PANA_STATE`), but no running
-daemon. It passes Git commit arguments and native output through, rather than applying Pana's
-global flags or JSON rendering. Plain `git commit` and commits made inside other tools are
-**not automatically attributed**. This is an explicit authoring operation, not a security
-boundary or a publication gate. Memory publication still uses `pana memory commit`.
+Use ordinary Git commands for project commits. Pana does not require commit trailers, provide
+a special commit operation, install Git hooks, or override `core.hooksPath`. Repository hooks
+and signing remain entirely native. Discover a commit's PR with `git pr-for-commit <SHA>`,
+then follow the PR's session attribution. The resolver uses hosting-provider associations or
+a configured PR-number merge trailer, not Pana coauthor trailers. It needs the relevant API
+access or local history/configuration, and fails for missing or ambiguous associations rather
+than guessing. Unpublished commits may have no PR yet.
 
-Common message, amend, pathspec, editor, and signing options are supported. This first version
-rejects dry-run/status-only modes, fixup/squash, custom `--trailer` arguments, abbreviated flags,
-and unknown options before invoking Git. Explicit `--no-verify` retains Git's native meaning;
-Pana does not add a hook bypass itself.
+Memory is different: it has no PR surface. Its existing writer identity, attribution, and
+`pana memory commit` publication behavior are unchanged.
 
 After upgrading from the hook-based implementation, restart `panad` so session shells receive
 the new environment. Old state-directory hook files are left untouched but are no longer
@@ -470,6 +461,6 @@ Pana starts empty and runs beside the old stack, so nothing has to change for it
 
 - `agent-mail`, `agent-mail2`, `agent-mail-web`, and their launchd and systemd units.
 - Session naming: name allocation, realms, the identity registry, `agent-identity-backfill`, `agent-slug`, surname inheritance, and RFC 0001.
-- `agent-trailer`, once `gw` and `gsw` read `PANA_SESSION` themselves. Pana's commit hook already writes the trailer on commits.
+- `agent-trailer`, once `gw` and `gsw` derive session attribution from `PANA_SESSION` themselves. Project commits need no Pana trailer.
 - `agent-team`, scratchpads, and `agent-find`, unless pana keeps an equivalent.
 - The AGENTS.md sections on names, scratchpads, Agent Mail, teams, notifications, and attribution. Replace them with one section on pana.
