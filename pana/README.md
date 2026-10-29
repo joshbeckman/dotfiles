@@ -22,6 +22,7 @@ Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/mai
 - **Change behavior through memory or code.** Keep local knowledge and instructions in domain memory. Make general improvements in pana itself.
 
 [SPEC.md](SPEC.md) lists the behaviors that prove it works, grouped into work packages.
+[CHANGELOG.md](CHANGELOG.md) records notable user-facing changes.
 
 ```sh
 pana session create --prompt "what is the capital of france"

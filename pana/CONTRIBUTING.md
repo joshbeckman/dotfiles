@@ -16,6 +16,19 @@ npx tsc --noEmit   # must be clean before you report
 
 Node 22.18 or newer runs the `.ts` sources directly, so there is no build step. `bin/pana` and `bin/panad` import `src/cli/index.ts` and `src/server/index.ts`.
 
+## Changelog
+
+Update [CHANGELOG.md](CHANGELOG.md) in the same PR as each user-facing change.
+Write a short description of the effect on users under `Unreleased`, grouped by
+`Added`, `Changed`, `Fixed`, or `Removed` as needed. Call out breaking changes and
+any action users must take. Internal refactors and test-only changes need no entry.
+
+When cutting a release, move those entries into a versioned, dated section. Until
+pana has versioned releases, use a `YYYY-MM-DD` section when landing changes. Keep
+newest sections first, retain `Unreleased` at the top, and do not treat a repository
+date as proof of deployment. Link a PR when it adds useful context; do not copy
+commit logs or private machine/domain details.
+
 ## UI changes
 
 A change to the PWA shows its effect in the PR: a screenshot of the before and after, or a short video, taken from the browser test domain. `node test/browser/screens.ts DIR LABEL` shoots every section; a single feature takes its own script the way `test/browser/palette-shots.ts` does. Put the PNGs in `pana/docs/` and reference them from the PR body, as #79 does.
