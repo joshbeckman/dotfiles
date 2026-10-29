@@ -14,7 +14,7 @@ Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/mai
 - **UI second, not second-class.** The UI stays fast and makes common actions easy. Sessions communicate with users through messages and links.
 - **One place to see the work.** Threads, sessions, memory, schedules, tool calls, costs, and state.
 - **Sessions are temporary and run in parallel.** They respond quickly and release resources when a run ends.
-- **Scratch is temporary. Memory lasts.** Each session has its own scratch directory. Keep useful work in shared memory. Git tracks each change and its author.
+- **Scratch is temporary. Memory lasts.** Each session has its own scratch directory. Preserve useful work in its canonical home; shared memory preserves understanding and routing pointers. Git tracks each memory change and its author.
 - **Threads are for communication.** Participants work together through messages. Every participant gets every message. Threads can be read and shared.
 - **Read before you write.** Each new message must name the latest message the sender has read. If the thread has changed, the write fails. Read the new messages and try again. Memory changes must also resolve conflicts before publication.
 - **Messages wake idle sessions.** During a run, user messages arrive after the current tool round. Messages from other sessions wait for the next run.
@@ -339,6 +339,36 @@ pana memory log [PATH]
 
 A session discovers memory through a hint in `pana/prompt.md` and through the `pana_memory_*` tools.
 
+### What belongs in memory
+
+Memory should improve future judgment, not duplicate history. Before saving a note, name a
+plausible future situation where it would materially help and explain why ordinary task
+retrieval or canonical sources would not be enough. When in doubt, leave it in the thread.
+
+- **Threads and PRs:** task narrative, local decisions, abandoned approaches, implementation
+  details, and test/deployment receipts. Search relevant history before reviving a proposal;
+  read original messages for intent and later reversals, not just search snippets.
+- **Canonical sources:** project facts/status, profile context, repository documentation,
+  skills, and code. Read/update the appropriate source under its authorization rules;
+  memory can point there rather than maintain competing copies.
+- **Shared memory:** durable reasons, distinctions, standards of evidence, useful synthesis,
+  hard-to-discover operating knowledge, and concise routing pointers. A synthesis must add
+  understanding, not merely paraphrase conversations or catalogue past answers.
+
+Keep the smallest useful explanation: what matters, why, when it applies, and a source.
+Separate observations from inference. Do not turn a local “not yet” into a permanent ban or
+infer a general preference from one decision. Prefer updating guidance to adding another file.
+
+Prune completed task ledgers, stale snapshots, and duplicates; Git and source conversations
+retain the history without a parallel archive or rejection ledger. Necessary active automation
+and handoff checkpoints are working state, not durable understanding: keep them compact,
+separate, and scoped to their authorized workflows, with cleanup at completion.
+
+These general defaults live in Pana's session prompt, not in a memory file every domain must
+invent or load. Domain memory supplies local choices, canonical-source pointers, and deliberate
+exceptions. These are prompt instructions, not automated quality enforcement or new permission
+to edit canonical sources, change workflows/schedules, or take external actions.
+
 #### Domain working conventions
 
 The session prompt has one generic discovery rule: at the start of each run, consult the
@@ -371,7 +401,7 @@ Scratch is disposable and memory is durable.
 
 - Each session has its own scratch directory, `scratch/<session-id>/`, for throwaway work: scripts, downloads, clones, and output. It is `$PANA_SCRATCH` in `bash`. A session with no other working directory starts there.
 - Pana removes a session's scratch when the session is archived, or when it has been idle for `scratch.ttlDays` (8 by default). A sweep runs when `panad` starts and every 24 hours. With `scratch.maxTotalMB` set, the sweep also removes the longest-idle scratch until the total fits. It never touches a running session's scratch.
-- Nothing in scratch is copied to memory. The prompt tells each session to commit what is worth keeping, a useful script included, before it finishes.
+- Nothing in scratch is copied to memory. The prompt tells each session to preserve useful work in its canonical home before it finishes, and to use memory for durable understanding or routing pointers, not scratch dumps.
 - After a removal, the session's prompt says when it happened and how much was removed, so the note lands in its transcript and a woken session knows its old files are gone. The PWA's session header shows the current scratch size.
 
 ```sh

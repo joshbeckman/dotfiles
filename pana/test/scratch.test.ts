@@ -112,7 +112,7 @@ describe("SCR-01 a scratch directory per session", () => {
 });
 
 describe("SCR-03 the prompt", () => {
-	it("SCR-03 the pana prompt gives the scratch path, says it is deleted, and sends keepers to memory", () => {
+	it("SCR-03 the pana prompt gives the scratch path, says it is deleted, and routes keepers to their canonical home", () => {
 		const text = fillPrompt(promptTemplate(), {
 			sessionUrl: "pana://d/sessions/X",
 			memoryPath: "/m/X",
@@ -123,7 +123,8 @@ describe("SCR-03 the prompt", () => {
 		expect(text).toContain("Your scratch directory: /state/scratch/X");
 		expect(text).toContain("$PANA_SCRATCH");
 		expect(text).toMatch(/idle for\s+8 days/);
-		expect(text).toMatch(/worth\s+keeping in memory/);
+		expect(text).toMatch(/preserve useful work in its canonical\s+home/);
+		expect(text).toContain("not scratch dumps");
 		expect(text).not.toContain("{{");
 		expect(text).not.toContain("removed your scratch");
 	});

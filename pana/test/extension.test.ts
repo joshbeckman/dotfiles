@@ -535,6 +535,27 @@ describe("system prompt", () => {
 		]) expect(text).toContain(rule);
 	});
 
+	it("PRM-07 the rendered prompt supplies memory hygiene without domain guidance", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"Preserve understanding that improves future judgment, not task history",
+			"plausible future situation",
+			"ordinary thread/PR retrieval or canonical sources would not be enough",
+			"memory can route there",
+			"Search relevant history before reviving a proposal",
+			"what matters, why, when it applies, and a source",
+			'Separate observation from inference; a local "not yet" is not a standing prohibition',
+			"When in doubt, do not save",
+			"Prune completed task ledgers, stale snapshots, and duplicates",
+			"active automation/handoff checkpoints compact and separate",
+			"General memory hygiene belongs in Pana; domain-specific choices belong in domain memory",
+			"Memory grants no additional permission to act",
+		]) expect(text).toContain(rule);
+		expect(text).not.toContain("memory-guidance.md");
+	});
+
 	it("PRM-02 project section reads AGENTS.md from the git root down to cwd, root first", async () => {
 		const repo = makeRepo();
 		writeFileSync(join(repo, "AGENTS.md"), "ROOT_AGENTS_PRM02\n");
