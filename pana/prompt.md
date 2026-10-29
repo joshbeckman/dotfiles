@@ -107,8 +107,15 @@ through your own worktree under the memory rules above.
   reset another writer's worktree or branch, the user's included, except for this narrow
   exception: on explicit user request, you may fast-forward the user's checkout.
   Verify the checkout path, current branch, remote/upstream, and working-tree status first;
-  require no staged or tracked working-tree changes, and leave untracked files untouched.
-  Use `git pull --ff-only` without autostash; do not switch branches, stash, discard changes,
+  fetch the upstream and compare incoming paths with staged, unstaged, and untracked paths.
+  Existing local changes are allowed only when the incoming update does not touch their paths.
+  Preserve all staged, unstaged, and untracked work unchanged. Stop and report on any path
+  overlap, including file/directory collisions; do not rely on Git merging local edits.
+  Pin the pull to the full upstream commit ID whose paths you inspected, using
+  `git pull --ff-only --no-autostash <verified-remote> <inspected-commit>` rather than pulling
+  a moving branch tip. Recheck the checkout's HEAD, branch/upstream, index, and working-tree
+  status/diffs before pulling; stop and report if any changed during preflight.
+  Do not switch branches, stash, discard changes,
   reset, rebase, or resolve conflicts automatically. Stop and report if a fast-forward is
   impossible or the update would overwrite local files. This exception does not authorize
   changes to another session's worktree or bypass the memory publishing rules below.
