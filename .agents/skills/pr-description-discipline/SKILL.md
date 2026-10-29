@@ -5,10 +5,12 @@ description: 'Write or tighten a pull request description for high-context revie
 
 # PR descriptions: don't re-narrate the diff
 
-A PR description is meant for busy reviewer with high context in the space
- answers **why this exists** and **anything non-obvious from the diff**
-nothing else. The diff is the source of truth for *what changed*; do not
-duplicate it in prose.
+A PR description is for a busy reviewer with high context. It answers **why
+this exists** and **anything non-obvious from the diff**, with a concise
+receipt of **intent and evidence**. The diff is the source of
+truth for *what changed*; do not duplicate it in prose. State desired behavior,
+behavior that must stay unchanged, and key decisions when they help reviewers
+judge the change. Link selected evidence that supports those claims.
 
 ## The rule
 
@@ -16,7 +18,8 @@ For each prose paragraph, ask:
 
 > **"Could a reviewer with the diff open arrive at this in 5 seconds?"**
 
-If yes, delete it. The PR description's job is to **triage the review**,
+If yes, delete it unless it is a concise behavioral claim or selected evidence
+link that lets the reviewer judge the claim. The PR description's job is to **triage the review**,
 not to **explain the patch**. The patch explains itself; the description
 aims attention.
 
@@ -29,7 +32,7 @@ aims attention.
 | Explaining a conditional log line / small branch | Visible in the diff. |
 | Subtle mechanism explanations ("`IO#close` flushes the buffer, so...") | Goes in the **commit message**, not the PR body. |
 | Load-bearing one-liners explained in prose | Same — commit message material. |
-| A "Tests" section enumerating one test per case | Test files are self-documenting via test names. |
+| A "Tests" section enumerating one test per case | Test files are self-documenting via test names. Keep selected links that prove a behavioral claim, not a test inventory or copy of CI status. |
 | "Why" / "How" / "Summary" headers around 1–3 lines each | Header overhead exceeds content. Use plain prose. |
 
 ## Keep these — they don't fit in code
@@ -45,6 +48,12 @@ aims attention.
   These shape the review.
 - **Worst-case framing** when the bug's blast radius isn't obvious from
   the change itself.
+- **Intent and evidence**: a short behavioral contract with selected proof.
+  Link a specific new/edited test, data query, visual comparison, or measurement
+  where useful. Include relevant performance, observability, or privacy evidence.
+- **Unproven risks and rollout guardrails**: what remains unknown before merge,
+  who will check it, the check and stop threshold, and the response if it fires.
+  Use the evidence that fits the change, not a mandatory section template.
 
 ## Workflow
 
@@ -70,6 +79,7 @@ aims attention.
 
 ## When in doubt
 
-If you're unsure whether a paragraph survives the 5-second test, cut it.
+Keep concise intent, selected evidence, and actionable rollout limits. For other
+prose, if you're unsure whether it survives the 5-second test, cut it.
 The reviewer who actually needs the detail will read the commit message
 or the diff. The reviewer who doesn't was bored by your prose.

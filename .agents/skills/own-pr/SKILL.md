@@ -24,6 +24,7 @@ Create a PR checklist in your pana scratch directory. Update it after every stat
 - [ ] Draft opened and Josh assigned
 - [ ] PR linked from every issue it solves
 - [ ] CI and automated reviews passed
+- [ ] Intent checked against implementation; evidence and rollout limits recorded
 - [ ] Josh reviewed; reviewer preference recorded
 - [ ] Human comments resolved and approvals complete
 - [ ] Material feedback decisions and revisions confirmed with Josh, if any
@@ -31,6 +32,7 @@ Create a PR checklist in your pana scratch directory. Update it after every stat
 - [ ] Deployed
 - [ ] Production proof sent to Josh
 
+## Intent, evidence, and rollout guardrails
 ## Reviewer candidates
 ## Open comments, failures, or conflicts
 ## Deployment and production evidence
@@ -54,9 +56,21 @@ Use the PR surface required by the repository. For GitHub writes, use `gw`; for 
 6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean and green. Update the checklist after handling each change.
 7. Rebase when the branch conflicts with or is too stale against its base (use scheduled wakes to monitor conflicts/staleness with base). Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
 
+### Authorship quality gate
+
+Before requesting review, compare the implementation with the stated intent. Check desired behavior, behavior that must stay unchanged, and key decisions. Probe change-specific boundaries and failure cases. Resolve findings, then verify the fixes. Green CI alone does not prove the intent.
+
+Use `pr-description-discipline` to leave a concise receipt of intent and evidence in the PR:
+
+- State the behavioral contract and decisions reviewers should challenge.
+- Link selected evidence that supports the claims: a specific new/edited test, migration query, visual comparison, or measurement. Check relevant non-functional constraints such as performance, observability, and privacy. Choose evidence that fits the change; do not copy CI status or enumerate every test.
+- Name what cannot be proven before merge. For each ongoing risk, record a verification owner, the rollout check, an actionable guardrail or stop threshold, and the response if it fires. Keep the plan in the PR and link it from the ownership checklist.
+
+This is a review-readiness gate, not a mandatory PR template. The author still owns the outcome when an agent performs the checks. Reviewers should challenge intent, evidence, and missed risks rather than discover the purpose of the change.
+
 ## 2. Ask Josh to review
 
-Only after CI and automated reviews pass, mark the PR ready for review (move out of draft) and send Josh:
+Only after the authorship quality gate is complete and CI and automated reviews pass, mark the PR ready for review (move out of draft) and send Josh:
 
 - the PR title and full URL;
 - the evidence that it is green;
@@ -76,6 +90,7 @@ Once Josh gives the go-ahead for reviewers:
 4. Do not silently accept feedback that materially changes behavior, scope, architecture, interfaces, data handling, rollout, user experience, or the PR's accepted risk and tradeoffs. Before editing, message Josh with the feedback link, what would change, the viable options, and your recommendation; wait for his direction.
 5. After a material revision, message Josh with the new head SHA and a concise before/after summary, then ask him to review the revised direction. Do this even when the reviewer request seemed unambiguous or the implementation is already green.
 6. Return to Josh when reviewers disagree or any decision requires product, design, security, operational, or prioritization judgment.
+7. When review exposes a bug authorship could have caught, record the question that exposed it. Add an appropriate regression test or automated check when in scope. Propose reusable skill or review-lens improvements separately when they need broader authority. Fix the bug and verify it; recording a lesson is not a substitute.
 
 ## 4. Merge queue
 
@@ -94,7 +109,7 @@ After merge:
 1. Get the merge commit.
 2. Use `verify-conveyor-deployment` when available; it is the source of truth for Conveyor commands, help-first checks, unsupported repositories, affected zones, and commit-ancestry fallback. For other deployment systems, use the repository's supported status surface or ask Josh when none exists.
 3. Check deployment directly. If it is pending, schedule another check with `pana schedule wake` and end the run. Start with 30 minutes between deployment checks and back off when unchanged. Do not assume merged means deployed.
-4. Once deployed, inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check.
+4. Once deployed, run the rollout checks recorded before review and inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check. If a guardrail fires, follow the agreed response within your authority and alert Josh immediately; ask before actions outside that authority.
 5. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
 Only then is the PR lifecycle complete. Mark the checklist complete and cancel any pending wake for this PR with `pana schedule delete SCHEDULE`. The clean worktree is then eligible for cleanup, provided no other assigned or open work remains.
