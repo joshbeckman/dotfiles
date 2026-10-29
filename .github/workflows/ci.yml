@@ -4,9 +4,12 @@ on:
   pull_request:
   push:
     branches: [master]
+  schedule:
+    - cron: '17 8 * * 1'
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -15,18 +18,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      pana: ${{ steps.pana.outputs.present }}
+      repo: ${{ steps.select.outputs.repo }}
+      skills: ${{ steps.select.outputs.skills }}
+      pana: ${{ steps.select.outputs.pana }}
     steps:
       - uses: actions/checkout@v4
-      # A job-level `if` cannot read the checkout, so this job reads it once and the pana
-      # jobs ask it. Skipping the whole job, rather than its steps, keeps a branch without
-      # pana from queueing on the scarce macOS runners at all.
-      - id: pana
-        run: |
-          if [ -f pana/package.json ]; then echo "present=true" >>"$GITHUB_OUTPUT"; else echo "present=false" >>"$GITHUB_OUTPUT"; fi
+        with:
+          fetch-depth: 0
+      # Route before allocating macOS runners. Missing history fails open to full
+      # coverage; scheduled/manual runs deliberately exercise every suite.
+      - id: select
+        run: python3 .github/scripts/select-ci.py
+
+  skills:
+    name: skill checks
+    needs: detect
+    if: needs.detect.outputs.skills == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: bin/run-tests agent-skills pana-skills
 
   repo-tests:
     name: repo tests (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.repo == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -81,3 +98,24 @@ jobs:
         run: npx tsc --noEmit
       - working-directory: pana
         run: npm test
+
+  result:
+    name: CI result
+    needs: [detect, skills, repo-tests, pana]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful selected suites
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          needs = json.loads(os.environ['NEEDS'])
+          assert needs['detect']['result'] == 'success', needs
+          selected = needs['detect']['outputs']
+          for job, output in [('skills', 'skills'), ('repo-tests', 'repo'), ('pana', 'pana')]:
+              expected = 'success' if selected[output] == 'true' else 'skipped'
+              assert needs[job]['result'] == expected, needs
+          PY

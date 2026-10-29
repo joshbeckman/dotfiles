@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""CI routing regressions; uses isolated Git history, no GitHub/network access."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = ROOT / '.github/scripts/select-ci.py'
+spec = importlib.util.spec_from_file_location('select_ci', SCRIPT)
+selector = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(selector)
+FULL = {'repo': True, 'skills': False, 'pana': True}
+
+
+class Routing(unittest.TestCase):
+    def test_boundaries(self):
+        cases = [
+            (['.agents/skills/own-pr/SKILL.md', '.agents/skills/pr-description-discipline/SKILL.md'],
+             (False, True, False)),
+            (['.agents/skills/example/references/guide.md'], (False, True, False)),
+            (['pana/src/main.ts'], (False, False, True)),
+            (['pana/package-lock.json', '.agents/skills/a/SKILL.md'], (False, True, True)),
+        ]
+        for paths, expected in cases:
+            with self.subTest(paths=paths):
+                result, _ = selector.select(paths)
+                self.assertEqual(tuple(result[k] for k in ('repo', 'skills', 'pana')), expected)
+
+    def test_unknown_shared_and_routing_changes_are_full(self):
+        for path in ('setup', 'bin/run-tests', 'test/agent-skills', 'AGENTS.md',
+                     '.github/workflows/ci.yml', '.github/scripts/select-ci.py',
+                     '.agents/skills/example/run.sh', '.agents/AGENTS.md',
+                     'pana-other/file', 'new-component/code'):
+            with self.subTest(path=path):
+                self.assertEqual(selector.select(['pana/src/a.ts', path])[0], FULL)
+        self.assertEqual(selector.select([])[0], FULL)
+
+
+class History(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'CI')
+        self.git('config', 'user.email', 'ci@example.invalid')
+        self.write('pana/package.json', '{}')
+        self.write('.agents/skills/a/SKILL.md', 'original')
+        self.base = self.commit()
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.root), *args], stderr=subprocess.PIPE).decode().strip()
+
+    def write(self, path, text):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
+    def commit(self):
+        self.git('add', '-A')
+        self.git('commit', '-qm', 'fixture')
+        return self.git('rev-parse', 'HEAD')
+
+    def run_selector(self, event_name, event):
+        event_path, output = self.root / 'event.json', self.root / 'output'
+        event_path.write_text(json.dumps(event))
+        output.unlink(missing_ok=True)
+        subprocess.run(['python3', str(SCRIPT)], cwd=self.root, check=True,
+                                env={**os.environ, 'GITHUB_EVENT_NAME': event_name,
+                                     'GITHUB_EVENT_PATH': str(event_path), 'GITHUB_OUTPUT': str(output)},
+                                capture_output=True, text=True)
+        return dict(line.split('=') for line in output.read_text().splitlines())
+
+    def push(self, before, after):
+        return self.run_selector('push', {'before': before, 'after': after})
+
+    def test_push_covers_all_commits(self):
+        self.write('shared file\nwith newline', 'unknown')
+        self.commit()
+        self.write('pana/src/a.ts', 'change')
+        head = self.commit()
+        self.assertEqual(self.push(self.base, head)['repo'], 'true')
+
+    def test_pull_request_ignores_unrelated_base_commits(self):
+        self.git('checkout', '-qb', 'topic')
+        self.write('.agents/skills/a/SKILL.md', 'changed')
+        head = self.commit()
+        self.git('checkout', '-qb', 'base', self.base)
+        self.write('unrelated', 'base advanced')
+        base = self.commit()
+        result = self.run_selector('pull_request', {'pull_request': {'base': {'sha': base}, 'head': {'sha': head}}})
+        self.assertEqual(result, {'repo': 'false', 'skills': 'true', 'pana': 'false'})
+
+    def test_cross_boundary_rename_runs_both_suites(self):
+        self.git('mv', '.agents/skills/a/SKILL.md', 'pana/moved.md')
+        result = self.push(self.base, self.commit())
+        self.assertEqual(result, {'repo': 'false', 'skills': 'true', 'pana': 'true'})
+
+    def test_deletion_is_not_lost(self):
+        self.git('rm', '.agents/skills/a/SKILL.md')
+        self.assertEqual(self.push(self.base, self.commit())['skills'], 'true')
+
+    def test_missing_range_or_unknown_event_runs_full(self):
+        for before in ('0' * 40, 'f' * 40):
+            self.assertEqual(self.push(before, self.base), {k: str(v).lower() for k, v in FULL.items()})
+        for event in ('schedule', 'workflow_dispatch', 'unknown'):
+            self.assertEqual(self.run_selector(event, {}), {k: str(v).lower() for k, v in FULL.items()})
+        self.assertEqual(self.run_selector('pull_request', {})['repo'], 'true')
+        self.assertEqual(self.push(self.base, self.base)['repo'], 'true')
+
+    def test_absent_pana_is_not_scheduled(self):
+        self.git('rm', 'pana/package.json')
+        result = self.push(self.base, self.commit())
+        self.assertEqual(result['pana'], 'false')
+
+
+if __name__ == '__main__':
+    unittest.main()
