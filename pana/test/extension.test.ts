@@ -452,14 +452,69 @@ describe("system prompt", () => {
 		for (const rule of [
 			"on explicit user request, you may fast-forward the user's checkout",
 			"Verify the checkout path, current branch, remote/upstream, and working-tree status first",
-			"require no staged or tracked working-tree changes",
-			"leave untracked files untouched",
-			"Use `git pull --ff-only` without autostash",
-			"do not switch branches, stash, discard changes, reset, rebase, or resolve conflicts automatically",
+			"fetch the upstream and compare incoming paths with staged, unstaged, and untracked paths",
+			"Existing local changes are allowed only when the incoming update does not touch their paths",
+			"Preserve all staged, unstaged, and untracked work unchanged",
+			"Stop and report on any path overlap, including file/directory collisions",
+			"do not rely on Git merging local edits",
+			"Pin the pull to the full upstream commit ID whose paths you inspected",
+			"`git pull --ff-only --no-autostash <verified-remote> <inspected-commit>`",
+			"Recheck the checkout's HEAD, branch/upstream, index, and working-tree status/diffs before pulling",
+			"stop and report if any changed during preflight",
+			"Do not switch branches, stash, discard changes, reset, rebase, or resolve conflicts automatically",
 			"Stop and report if a fast-forward is impossible or the update would overwrite local files",
 			"does not authorize changes to another session's worktree or bypass the memory publishing rules below",
 			"Publish memory only with `pana_memory_commit`",
 		]) expect(text).toContain(rule);
+		expect(text).not.toContain("require no staged or tracked working-tree changes");
+	});
+
+	it("PRM-05 Git pulls pinned to the inspected commit preserve unrelated local work even if upstream advances", () => {
+		const upstream = makeRepo();
+		for (const name of ["incoming", "staged", "unstaged"]) writeFileSync(join(upstream, name), "base\n");
+		git(upstream, ["add", "."]);
+		git(upstream, ["commit", "-qm", "base"]);
+		const checkout = tempDir("pana-user-checkout-");
+		git(checkout, ["clone", "-q", upstream, "."]);
+		// The command must override user config rather than silently stashing local work.
+		git(checkout, ["config", "merge.autoStash", "true"]);
+		git(checkout, ["config", "rebase.autoStash", "true"]);
+		writeFileSync(join(checkout, "staged"), "staged edit\n");
+		git(checkout, ["add", "staged"]);
+		writeFileSync(join(checkout, "unstaged"), "unstaged edit\n");
+		writeFileSync(join(checkout, "untracked"), "untracked work\n");
+		const staged = git(checkout, ["diff", "--cached", "--binary"]);
+		const unstaged = git(checkout, ["diff", "--binary"]);
+		const status = git(checkout, ["status", "--porcelain=v1"]);
+		writeFileSync(join(upstream, "incoming"), "upstream update\n");
+		git(upstream, ["commit", "-qam", "update untouched path"]);
+		git(checkout, ["fetch", "-q"]);
+		expect(git(checkout, ["diff", "--name-only", "HEAD..@{upstream}"]).trim()).toBe("incoming");
+		const inspectedCommit = git(checkout, ["rev-parse", "@{upstream}"]).trim();
+		// An uninspected upstream advance could absorb staged work if the pull used a moving tip.
+		writeFileSync(join(upstream, "staged"), "staged edit\n");
+		git(upstream, ["commit", "-qam", "advance after inspection with identical staged content"]);
+		git(checkout, ["pull", "--ff-only", "--no-autostash", "origin", inspectedCommit]);
+		expect(git(checkout, ["rev-parse", "HEAD"]).trim()).toBe(inspectedCommit);
+		expect(git(checkout, ["rev-parse", "HEAD"])).not.toBe(git(upstream, ["rev-parse", "HEAD"]));
+		expect(git(checkout, ["diff", "--cached", "--binary"])).toBe(staged);
+		expect(git(checkout, ["diff", "--binary"])).toBe(unstaged);
+		expect(git(checkout, ["status", "--porcelain=v1"])).toBe(status);
+		expect(readFileSync(join(checkout, "untracked"), "utf8")).toBe("untracked work\n");
+		expect(git(checkout, ["stash", "list"])).toBe("");
+
+		// If incoming work overlaps a local path, neither autostash config may hide it.
+		writeFileSync(join(upstream, "unstaged"), "conflicting upstream edit\n");
+		git(upstream, ["commit", "-qam", "overlapping update"]);
+		const head = git(checkout, ["rev-parse", "HEAD"]);
+		const conflictingCommit = git(upstream, ["rev-parse", "HEAD"]).trim();
+		// This tests Git's last-resort overwrite refusal, not the prompt's stricter path preflight.
+		expect(() => git(checkout, ["pull", "--ff-only", "--no-autostash", "origin", conflictingCommit])).toThrow();
+		expect(git(checkout, ["rev-parse", "HEAD"])).toBe(head);
+		expect(git(checkout, ["diff", "--cached", "--binary"])).toBe(staged);
+		expect(git(checkout, ["diff", "--binary"])).toBe(unstaged);
+		expect(git(checkout, ["status", "--porcelain=v1"])).toBe(status);
+		expect(git(checkout, ["stash", "list"])).toBe("");
 	});
 
 	it("PRM-06 the rendered prompt discovers optional domain conventions from published memory", async () => {
