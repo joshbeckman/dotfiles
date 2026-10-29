@@ -488,7 +488,9 @@ const LISTING = Array.from(
   { length: 900 },
   (_, i) => `-rw-r--r-- josh josh ${4096 + i * 37} Oct 12 08:40 /home/josh/dotfiles/bin/agent-mail-helper-${String(i).padStart(3, "0")}.sh`,
 ).join("\n");
-const PROSE = readFileSync(join(root, ".agents/skills/own-pr/SKILL.md"), "utf8").repeat(20);
+// Freeze this prose control: skill edits must not change compression/length
+// assertions in an unrelated runtime test. Its content is not under test.
+const PROSE = readFileSync(join(root, "test/fixtures/thinking-prose.txt"), "utf8").repeat(20);
 
 {
   const pi = breaker();
