@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ConfigError } from "../src/config/index.ts";
 import { MIGRATIONS, migrate, openSharedDatabase, PanaDatabase, SCHEMA_VERSION, SimulatedCrash, sweepWakes } from "../src/db/index.ts";
 import type { WakeSubmitter } from "../src/db/outbox.ts";
+import { postNotice } from "../src/threads/index.ts";
 import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { appendAndWake, seedThread, type Appended, type Fixture } from "./harness/wake-fixture.ts";
 
@@ -125,6 +126,41 @@ describe("schema", () => {
 		await t.stop();
 		const again = await start({ stateDir: t.dir });
 		expect(await again.runtime.db.get("PRAGMA user_version")).toEqual({ user_version: SCHEMA_VERSION });
+	});
+
+	it("DB-03 repairs historical notice memberships without changing reads, archives, or existing joins", async () => {
+		const t = await start();
+		const notices = [];
+		for (let i = 0; i < 3; i++) {
+			const notice = await postNotice(t.runtime, { body: `notice ${i}`, to: [TEST_USER] });
+			notices.push(notice);
+		}
+		const [missing, archived, existing] = notices;
+		const originalJoin = await t.runtime.db.get("SELECT * FROM thread_participants WHERE thread_id = ? AND participant_id = ?", existing!.thread.id, TEST_USER);
+		await postNotice(t.runtime, { thread: missing!.thread.id, body: "second notice" });
+		await t.runtime.db.write(async (tx) => {
+			for (const notice of [missing!, archived!]) {
+				await tx.run("DELETE FROM thread_participants WHERE thread_id = ? AND participant_id = ?", notice.thread.id, TEST_USER);
+			}
+			await tx.run("UPDATE deliveries SET read_at = ? WHERE message_id = ?", t.clock.now(), archived!.message.id);
+			await tx.run("INSERT INTO thread_archives (thread_id, participant_id, archived_at) VALUES (?, ?, ?)", archived!.thread.id, TEST_USER, t.clock.now());
+			await tx.exec("PRAGMA user_version = 10");
+		});
+		const deliveries = await t.runtime.db.all("SELECT * FROM deliveries ORDER BY id");
+		const archives = await t.runtime.db.all("SELECT * FROM thread_archives");
+		await t.stop();
+		const again = await start({ stateDir: t.dir });
+		expect(await again.runtime.db.all("SELECT * FROM deliveries ORDER BY id")).toEqual(deliveries);
+		expect(await again.runtime.db.all("SELECT * FROM thread_archives")).toEqual(archives);
+		expect(await again.runtime.db.get("SELECT * FROM thread_participants WHERE thread_id = ? AND participant_id = ?", existing!.thread.id, TEST_USER)).toEqual(originalJoin);
+		for (const notice of [missing!, archived!]) {
+			expect(await again.runtime.db.get("SELECT joined_at, joined_message_id FROM thread_participants WHERE thread_id = ? AND participant_id = ?", notice.thread.id, TEST_USER)).toEqual({ joined_at: notice.message.createdAt, joined_message_id: notice.message.id });
+		}
+		const inbox = await again.client.get<{ unreadTotal: number; threads: Array<{ threadId: string }> }>("/inbox?view=threads");
+		expect(inbox.body.unreadTotal).toBe(3);
+		expect(inbox.body.threads.map((row) => row.threadId).sort()).toEqual([missing!.thread.id, existing!.thread.id].sort());
+		expect(await migrate(again.runtime.db)).toBe(SCHEMA_VERSION);
+		expect(await again.runtime.db.all("SELECT * FROM deliveries ORDER BY id")).toEqual(deliveries);
 	});
 
 	it("DB-03 a database newer than the code refuses to open with exit code 1", async () => {

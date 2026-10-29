@@ -268,6 +268,23 @@ export const MIGRATIONS: readonly Migration[] = [
 		// SRC-04: sparse membership filters must page the participant's threads, not scan the domain.
 		sql: `CREATE INDEX thread_participants_participant_thread ON thread_participants(participant_id, thread_id);`,
 	},
+	{
+		version: 11,
+		name: "notice recipient memberships",
+		// Older notices could deliver to a user without joining them to an existing thread.
+		// Restore inbox visibility without changing read state or per-user archives.
+		sql: `
+			INSERT OR IGNORE INTO thread_participants (thread_id, participant_id, joined_at, joined_message_id)
+			SELECT d.thread_id, d.recipient_id, d.created_at, d.message_id
+			  FROM deliveries d
+			  JOIN participants recipient ON recipient.id = d.recipient_id AND recipient.kind = 'user'
+			  JOIN messages m ON m.id = d.message_id
+			  JOIN participants sender ON sender.id = m.sender_id AND sender.kind = 'domain'
+			 WHERE NOT EXISTS (SELECT 1 FROM thread_participants tp
+			                    WHERE tp.thread_id = d.thread_id AND tp.participant_id = d.recipient_id)
+			 ORDER BY d.created_at, m.seq;
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
