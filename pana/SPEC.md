@@ -180,7 +180,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **STA-03** A session asleep on a timer or a child task reports `waiting`.
 - [x] **STA-04** `session stop` aborts the current run and sets `stopped`.
 - [x] **STA-05** `session resume` on a stopped session sets `idle` and delivers queued mail in order.
-- [x] **STA-06** `session search --state S` returns only sessions in state S.
+- [x] **STA-06** `session search --state S` returns only sessions in state S. The PWA sessions list offers all six states and an All states option, preserves descending ULID order when browsing, and combines the state filter with transcript search and pagination.
 - [x] **STA-07** Archived sessions are read-only. Messages to them return 409.
 
 ### Delivery

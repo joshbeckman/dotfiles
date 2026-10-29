@@ -170,6 +170,18 @@
 						<input id="sessions-query" data-testid="sessions-query" type="search" placeholder="Search transcripts" />
 						<button type="submit">Search</button>
 					</form>
+					<div class="field">
+						<label for="sessions-state">Show sessions</label>
+						<select id="sessions-state" data-testid="sessions-state">
+							<option value="">All states</option>
+							<option value="running">Running</option>
+							<option value="waiting">Waiting</option>
+							<option value="idle">Idle</option>
+							<option value="failed">Failed</option>
+							<option value="stopped">Stopped</option>
+							<option value="archived">Archived</option>
+						</select>
+					</div>
 					<div id="sessions-list" data-testid="sessions-list" class="list" role="list"></div>
 				</div>
 
