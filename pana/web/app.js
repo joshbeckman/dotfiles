@@ -1273,12 +1273,22 @@ function cancelAction() {
 
 // ---- Sessions -------------------------------------------------------------------------------
 
-async function loadSessionList(query = "", cursor) {
-	const body = await api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, cursor));
+const SESSION_STATES = ["running", "waiting", "idle", "failed", "stopped", "archived"];
+let sessionListRequest = 0;
+
+async function loadSessionList(query = "", cursor, filter = $("sessions-state").value) {
+	const request = ++sessionListRequest;
+	const params = new URLSearchParams({ query });
+	if (filter) params.set("state", filter);
+	const body = await api("GET", pagePath(`/sessions?${params}`, cursor));
+	if (request !== sessionListRequest) return;
 	const list = document.querySelector("#sessions-list");
 	if (!cursor) list.replaceChildren();
 	const sessions = asList(body, ["sessions"]);
-	if (sessions.length === 0 && !cursor) return empty(list, query ? `No sessions match “${query}”.` : "No sessions yet.");
+	if (sessions.length === 0 && !cursor) {
+		const noun = filter ? `${filter} sessions` : "sessions";
+		return empty(list, query ? `No ${noun} match “${query}”.` : filter ? `No ${noun}.` : "No sessions yet.");
+	}
 	for (const session of sessions) {
 		learnDomain(session.url);
 		const title = document.createDocumentFragment();
@@ -1304,7 +1314,7 @@ async function loadSessionList(query = "", cursor) {
 		);
 		list.append(row);
 	}
-	showMore(list, nextCursor(body), (next) => loadSessionList(query, next).catch(fail));
+	showMore(list, nextCursor(body), (next) => loadSessionList(query, next, filter).catch(fail));
 }
 
 async function openSession(id) {
@@ -2697,7 +2707,10 @@ async function route() {
 				$("sessions-list").hidden = false;
 				$("session").hidden = true;
 				if (id) await openSession(id);
-				else await loadSessionList($("sessions-query").value.trim());
+				else {
+					$("sessions-state").value = SESSION_STATES.includes(query.get("state")) ? query.get("state") : "";
+					await loadSessionList($("sessions-query").value.trim());
+				}
 				break;
 			case "memory":
 				if (id === "files" && rest.length > 0) await openMemoryFile(rest.join("/"), query.get("source") === "1");
@@ -2763,7 +2776,11 @@ wireAttach("reply-form", "reply-attach", "reply-files", "reply-body");
 $("threads-search").addEventListener("submit", (event) => void searchThreads(event).catch(fail));
 $("sessions-search").addEventListener("submit", (event) => {
 	event.preventDefault();
-	void loadSessionList($("sessions-query").value.trim());
+	void loadSessionList($("sessions-query").value.trim()).catch(fail);
+});
+$("sessions-state").addEventListener("change", () => {
+	const filter = $("sessions-state").value;
+	location.hash = filter ? `#/sessions?state=${filter}` : "#/sessions";
 });
 $("reply-form").addEventListener("submit", (event) => void submitReply(event));
 $("reply-body").addEventListener("input", () => {
