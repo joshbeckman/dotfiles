@@ -12,7 +12,6 @@ import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harnes
 
 /** Every command line from README.md's command sections (CLI-06). */
 const README_COMMANDS = [
-	"pana git commit [GIT_COMMIT_ARGS...]",
 	"pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS]",
 	"pana session show SESSION",
 	"pana session search [--query TEXT] [--state STATE] [--parent SESSION]",
@@ -262,7 +261,7 @@ describe("pana CLI", () => {
 		expect(root.code).toBe(0);
 		for (const command of README_COMMANDS) expect(root.stdout, command).toContain(command);
 
-		for (const noun of ["session", "thread", "memory", "schedule", "git"]) {
+		for (const noun of ["session", "thread", "memory", "schedule"]) {
 			const help = await run([noun, "--help"], undefined);
 			expect(help.code).toBe(0);
 			for (const command of README_COMMANDS.filter((line) => line.startsWith(`pana ${noun} `) || line === `pana ${noun}`)) {
@@ -282,6 +281,7 @@ describe("pana CLI", () => {
 
 		const cases: Array<[string[], string]> = [
 			[["nope"], "unknown command"],
+			[["git", "commit"], "unknown command"],
 			[["session", "nope"], "unknown command"],
 			[["session"], "needs a command"],
 			[["thread", "search", "--bogus"], "unknown flag --bogus"],

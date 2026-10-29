@@ -1,17 +1,16 @@
 // The pana CLI (CLI-01..07).
 //
-// Except for local `git commit`, it talks only to the Unix socket (CLI-01),
-// sends the caller from `PANA_SESSION` (CLI-02),
+// It talks only to the Unix socket (CLI-01), sends the caller from `PANA_SESSION` (CLI-02),
 // renders text on a TTY and JSON otherwise (CLI-03), maps API statuses to exit codes (CLI-05,
 // API-02), and exits 2 with a usage line for a bad invocation (CLI-04, CLI-07).
 //
-// Server commands are defined once in `commands.ts`, which the pana tools use too. This file is
+// Every command is defined once in `commands.ts`, which the pana tools use too. This file is
 // only the terminal: parse the globals, resolve the invocation, run it, and render.
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { statusToExitCode } from "../api/errors.ts";
-import { ConfigError, loadConfig, statePaths } from "../config/index.ts";
+import { statePaths } from "../config/index.ts";
 import { parseArgv, UsageError } from "./args.ts";
 import { ApiResponseError, uploadAttachment, type ApiCall } from "./body.ts";
 import {
@@ -24,8 +23,7 @@ import {
 	type CommandOutcome,
 	type CommandSpec,
 } from "./commands.ts";
-import { renderHelp, GIT_COMMIT_HELP } from "./help.ts";
-import { attributedCommit } from "../git/commit.ts";
+import { renderHelp } from "./help.ts";
 import { renderJson, renderText } from "./output.ts";
 
 export interface CliIo {
@@ -60,7 +58,6 @@ async function drain(stream: AsyncIterable<Buffer | string>): Promise<string> {
 
 /** The usage line for a bad invocation: the longest known command prefix names it. */
 function usageLine(argv: readonly string[]): string {
-	if (argv[0] === "git") return "usage: pana git commit [GIT_COMMIT_ARGS...]";
 	const path: string[] = [];
 	for (const token of argv) {
 		if (token.startsWith("-")) break;
@@ -81,24 +78,6 @@ export async function main(argv: readonly string[], overrides: Partial<CliIo> = 
 	const call: ApiCall = callFor(endpoint);
 
 	try {
-		// Git owns its argv: do not let Pana's global parser consume message text or Git flags.
-		if (argv[0] === "git") {
-			if ((argv.length === 2 && (argv[1] === "--help" || argv[1] === "-h")) ||
-				(argv[1] === "commit" && argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h"))) {
-				io.stdout.write(GIT_COMMIT_HELP);
-				return 0;
-			}
-			if (argv[1] !== "commit") throw new UsageError("expected pana git commit [GIT_COMMIT_ARGS...]");
-			const sessionId = callerFrom(io.env);
-			if (!sessionId) throw new UsageError("pana git commit requires PANA_SESSION; use git commit outside a session");
-			const config = loadConfig(stateDirFrom(io.env));
-			return await attributedCommit([...argv.slice(2)], {
-				sessionId, domain: config.domain, env: io.env,
-				// Real CLI invocations inherit descriptors so editors/signers keep their TTY.
-				// Only explicitly injected streams (e.g. tests) need pipe forwarding.
-				stdin: overrides.stdin, stdout: overrides.stdout, stderr: overrides.stderr,
-			});
-		}
 		const parsed = parseArgv(argv, COMMANDS);
 		if (parsed.help) {
 			// A word before any command is a command someone mistyped, not a topic for help.
@@ -149,7 +128,7 @@ export async function main(argv: readonly string[], overrides: Partial<CliIo> = 
 		}
 		const message = error instanceof Error ? error.message : String(error);
 		io.stderr.write(`pana: ${message}\n`);
-		return error instanceof ConfigError ? error.exitCode : 1;
+		return 1;
 	}
 }
 

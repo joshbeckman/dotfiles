@@ -197,8 +197,8 @@ describe("WP9 attribution", () => {
 		await exec("/bin/bash", [join(repo, "bin", "gsw"), "pr", "edit", "1", "--body", "Pana description."], { env });
 		expect(readFileSync(capture, "utf8")).toBe(`Pana description.\n\n${trailer}\n`);
 
-		// The commit form in pana/README.md takes the matching mailbox: the user's own
-		// git user.email, so the same session is attributable in Git history.
+		// The generic attribution helper still supports an explicit email form for other
+		// callers; removing mandatory project-commit attribution does not change it.
 		writeFileSync(join(home, ".gitconfig"), "[user]\n\temail = tester@test.example\n");
 		const email = await exec("/bin/bash", [join(repo, "bin", "agent-trailer"), "--email"], { env, cwd: home });
 		expect(email.stdout.trim()).toBe(`${trailer} <tester@test.example>`);
