@@ -201,13 +201,13 @@ pre {
 #nav-inbox-count {
 	display: inline-block;
 	margin-left: var(--s1);
-	padding: 0 0.35rem;
+	padding: 0.125rem 0.4rem;
+	line-height: 1.2;
 	border-radius: 999px;
 	background: var(--p-orange);
 	color: #0d0d0d;
 	font-size: 0.7rem;
 	font-weight: 600;
-	vertical-align: 0.1em;
 }
 .topbar-tools {
 	display: flex;
