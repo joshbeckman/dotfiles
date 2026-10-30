@@ -197,17 +197,15 @@ pre {
 	--selection-color: var(--p-orange);
 	background: var(--c-selected);
 }
-/* REF-06: the inbox unread count in the navigation. */
+/* REF-06: an unread signal; its tooltip and accessible label retain the total. */
 #nav-inbox-count {
-	display: inline-block;
+	flex: none;
+	width: 0.5rem;
+	height: 0.5rem;
+	border: 1px solid var(--c-text);
 	margin-left: var(--s1);
-	padding: 0 0.35rem;
-	border-radius: 999px;
+	border-radius: 50%;
 	background: var(--p-orange);
-	color: #0d0d0d;
-	font-size: 0.7rem;
-	font-weight: 600;
-	vertical-align: 0.1em;
 }
 .topbar-tools {
 	display: flex;

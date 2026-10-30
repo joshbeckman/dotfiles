@@ -54,6 +54,21 @@ describeBrowser("corner selection", () => {
 					shifted: JSON.stringify(before) !== JSON.stringify(row.getBoundingClientRect().toJSON()),
 					focus: document.activeElement === nav ? 'nav' : 'other' };
 			`);
+			const badge = await evaluatePage<{ width: number; height: number; center: number; text: string; label: string; title: string; role: string; color: string }>(`
+				const badge = document.getElementById('nav-inbox-count');
+				const b = badge.getBoundingClientRect(), n = badge.parentElement.getBoundingClientRect();
+				return { width: b.width, height: b.height, center: Math.abs(b.y + b.height / 2 - n.y - n.height / 2),
+					text: badge.textContent, label: badge.getAttribute('aria-label'), title: badge.parentElement.title,
+					role: badge.getAttribute('role'), color: getComputedStyle(badge).backgroundColor };
+			`);
+			expect(badge.width, name).toBe(8);
+			expect(badge.height, name).toBe(8);
+			expect(badge.center, name).toBeLessThan(1);
+			expect(badge.text).toBe("");
+			expect(badge.label).toMatch(/^\d+ unread messages?$/);
+			expect(badge.title).toBe(badge.label);
+			expect(badge.role).toBe("img");
+			expect(badge.color).toBe("rgb(255, 121, 0)");
 			expect(result.pageWidth, name).toBeLessThanOrEqual(result.width);
 			expect(result.border).toBe("0px");
 			expect(result.corners).toBe(true);

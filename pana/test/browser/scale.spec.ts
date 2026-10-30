@@ -42,7 +42,7 @@ describeBrowser("pana lists in a browser", () => {
 				out[hash] = [first, items(), document.querySelector("#" + list + " [data-more]") === null];
 			}
 			// REF-06's badge counts every unread delivery, not only the first page's.
-			out.badge = [Number(document.getElementById("nav-inbox-count").textContent), 0, true];
+			out.badge = [parseInt(document.getElementById("nav-inbox-count").getAttribute("aria-label")), 0, true];
 			return out;
 		`);
 		expect(counts).toEqual({

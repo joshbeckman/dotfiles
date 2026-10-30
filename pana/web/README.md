@@ -77,3 +77,8 @@ horizontally scrolling row. Exercise desktop/phone light/dark regressions with:
 ```sh
 npm run test:web -- test/browser/selection.spec.ts
 ```
+
+The Inbox navigation uses an orange dot for any unread activity, hidden at zero.
+Its tooltip and accessible image label retain the total unread delivery count
+(including messages beyond the first inbox page). Numeric counts on inbox rows
+are unchanged. This keeps navigation width independent of the count.

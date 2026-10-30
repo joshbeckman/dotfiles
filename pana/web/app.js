@@ -829,7 +829,7 @@ function liveToolElement(tool, live) {
 let unreadGeneration = 0;
 let inboxGeneration = 0;
 
-/** REF-06: the nav badge is the caller's unread delivery count across every thread. */
+/** REF-06: the nav dot signals unread mail; its label includes the total across every thread. */
 async function refreshUnread(archived = false, cursor) {
 	const generation = archived ? -1 : ++unreadGeneration;
 	const body = await api("GET", pagePath(`/inbox?view=threads${archived ? "&archived=1" : ""}`, cursor));
@@ -839,7 +839,10 @@ async function refreshUnread(archived = false, cursor) {
 	const badge = $("nav-inbox-count");
 	// The archived view is not the inbox, so it never rewrites the badge.
 	if (badge && generation === unreadGeneration) {
-		badge.textContent = String(unread);
+		const label = unread === 0 ? "No unread messages" : `${unread} unread ${unread === 1 ? "message" : "messages"}`;
+		badge.setAttribute("aria-label", label);
+		badge.title = label;
+		badge.parentElement.title = label;
 		badge.hidden = unread === 0;
 	}
 	return { items, unread, body };
