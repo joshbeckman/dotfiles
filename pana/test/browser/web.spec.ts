@@ -794,14 +794,14 @@ describeBrowser("pana in a browser", () => {
 			await until(() => document.querySelectorAll("#threads-list .item").length === 1);
 			const row = document.querySelector("#threads-list .item");
 			return {
-				nav: document.getElementById("nav-inbox-count").textContent,
+				nav: document.getElementById("nav-inbox-count").getAttribute("aria-label"),
 				hidden: document.getElementById("nav-inbox-count").hidden,
 				unread: row.classList.contains("unread"),
 				count: row.querySelector(".meta").textContent,
 			};
 		`);
 		expect(marked.hidden).toBe(false);
-		expect(marked.nav).toBe("1");
+		expect(marked.nav).toBe("1 unread message");
 		expect(marked.unread).toBe(false);
 		expect(marked.count).not.toContain("unread");
 		expect(marked.count).not.toContain("archived");
@@ -857,26 +857,26 @@ describeBrowser("pana in a browser", () => {
 			const navHidden = document.getElementById("nav-inbox-count").hidden;
 			location.hash = "#/inbox";
 			await until(() => !document.getElementById("view-inbox").hidden);
-			return { navHidden, live: document.getElementById("nav-inbox-count").textContent };
+			return { navHidden, live: document.getElementById("nav-inbox-count").getAttribute("aria-label") };
 		`);
 		expect(cleared.navHidden).toBe(true);
-		expect(cleared.live).toBe("0");
+		expect(cleared.live).toBe("No unread messages");
 
 		const head = (await messages(seeded.thread.id)).at(-1)!.id;
 		const sent = await t!.client.post(`/threads/${seeded.thread.id}/messages`, { after: head, body: "a live delivery" }, { caller: seeded.session.id });
 		expect(sent.status).toBe(200);
 		// UX-03: the live delivery lands in the thread's one row, which shows the new snippet.
 		const live = await evaluatePage<{ nav: string; items: number; count: string; snippet: string }>(`
-			await until(() => document.getElementById("nav-inbox-count").textContent === "1");
+			await until(() => document.getElementById("nav-inbox-count").getAttribute("aria-label") === "1 unread message");
 			await until(() => document.querySelector("#inbox-list .item .meta")?.textContent.includes("1 unread"));
 			return {
-				nav: document.getElementById("nav-inbox-count").textContent,
+				nav: document.getElementById("nav-inbox-count").getAttribute("aria-label"),
 				items: document.querySelectorAll("#inbox-list .item").length,
 				count: document.querySelector("#inbox-list .item .meta").textContent,
 				snippet: document.querySelector("#inbox-list [data-testid=inbox-snippet]").textContent,
 			};
 		`);
-		expect(live.nav).toBe("1");
+		expect(live.nav).toBe("1 unread message");
 		expect(live.items).toBe(1);
 		expect(live.count).toContain("1 unread");
 		expect(live.snippet).toContain("a live delivery");

@@ -311,7 +311,7 @@ describeBrowser("pana usability in a browser", () => {
 		const paged = await evaluatePage<{ first: number; all: number; badge: string }>(`
 			// Each new notice is a live event that redraws the first page. Let them finish, or a
 			// redraw lands after "Load more" and replaces the page it added.
-			await until(() => document.getElementById("nav-inbox-count").textContent === "${unreadTotal}");
+			await until(() => document.getElementById("nav-inbox-count").getAttribute("aria-label") === "${unreadTotal} unread messages");
 			let last = "";
 			await until(async () => {
 				await sleep(700);
@@ -324,11 +324,11 @@ describeBrowser("pana usability in a browser", () => {
 			const first = document.querySelectorAll("#inbox-list .item").length;
 			document.querySelector("#inbox-list [data-more]").click();
 			await until(() => !document.querySelector("#inbox-list [data-more]"));
-			return { first, all: document.querySelectorAll("#inbox-list .item").length, badge: document.getElementById("nav-inbox-count").textContent };
+			return { first, all: document.querySelectorAll("#inbox-list .item").length, badge: document.getElementById("nav-inbox-count").getAttribute("aria-label") };
 		`);
 		expect(paged.first).toBe(50);
 		expect(paged.all).toBe(api.length + 55);
-		expect(Number(paged.badge)).toBe(unreadTotal);
+		expect(parseInt(paged.badge)).toBe(unreadTotal);
 	});
 
 	it("UX-04 Edit and Redact are small secondary controls on each message", async () => {
