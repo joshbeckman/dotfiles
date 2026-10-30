@@ -24,6 +24,7 @@ import { defaultHandlers } from "./handlers.ts";
 import { acquirePidLock } from "./lock.ts";
 import { createRequestLogger } from "./log.ts";
 import { createProviderModels, hasModel } from "./models.ts";
+import { withAuthRetries } from "./retry.ts";
 import { detectTailscaleNames } from "./tailscale.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 import { startScratchSweeper } from "../scratch/index.ts";
@@ -94,7 +95,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		});
 
 		const { db, storage } = await openSharedDatabase(paths.sqlite, { onFatal });
-		const models = options.models ?? (await createProviderModels(process.env));
+		const models = withAuthRetries(options.models ?? (await createProviderModels(process.env)));
 		const getRuntime = () => runtime;
 		const registry = options.registry ?? createPanaRegistry(getRuntime);
 		const env = options.env ?? createPanaEnv(getRuntime);
@@ -213,12 +214,17 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 export const CONTEXT_RETENTION_MS = 0;
 
 /**
- * The caller's settings with pana's default retention. A getter keeps the caller's getters live,
- * as pi-durable reads settings at every use.
+ * The caller's settings with pana's default retention and bounded model retries. Getters keep
+ * caller settings live, as pi-durable reads them at every use. Fifteen retries means sixteen
+ * attempts total, with the existing 2s exponential backoff capped at 60s.
  */
 export function panaSettings(base: HarnessSettings = {}): HarnessSettings {
 	return Object.create(base, {
 		contextRetentionMs: { enumerable: true, get: () => base.contextRetentionMs ?? CONTEXT_RETENTION_MS },
+		retry: {
+			enumerable: true,
+			get: () => ({ enabled: true, maxRetries: 15, baseDelayMs: 2000, maxAgentDelayMs: 60_000, ...base.retry }),
+		},
 	}) as HarnessSettings;
 }
 

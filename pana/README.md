@@ -242,6 +242,20 @@ An idle session holds no task. `panad` sets pi-durable's `contextRetentionMs` to
 
 A session cannot own a background process that outlives its run.
 
+### Model retries
+
+Transient provider/transport failures and authentication failures (such as HTTP 401) share a
+budget of **16 attempts total** per model generation or compaction request. Retries back off
+for 2, 4, 8, 16, and 32 seconds, then 60 seconds each: up to 11 minutes 2 seconds of backoff,
+plus request time. Backoff and the attempt count survive daemon restarts; the session reports
+`waiting` during backoff, and stopping it cancels the retry.
+
+Authentication retries resolve credentials again but do not refresh a static API key in the
+daemon's environment. A permanently invalid key still requires operator intervention. Billing/
+quota exhaustion, permission-denied responses (403), and malformed requests do not gain retries.
+Once the budget is exhausted, Pana marks the session `failed` and posts one failure notice;
+there is no separate automatic session restart loop. Sending a new message can start another run.
+
 ### Mail delivery
 
 When a message lands in a session's inbox:
