@@ -199,10 +199,13 @@ pre {
 }
 /* REF-06: the inbox unread count in the navigation. */
 #nav-inbox-count {
-	display: inline-block;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: calc(1em + 0.5rem);
 	margin-left: var(--s1);
-	padding: 0.125rem 0.4rem;
-	line-height: 1.2;
+	padding: 0.25rem;
+	line-height: 1;
 	border-radius: 999px;
 	background: var(--p-orange);
 	color: #0d0d0d;

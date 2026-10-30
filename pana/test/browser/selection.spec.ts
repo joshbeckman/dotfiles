@@ -54,23 +54,26 @@ describeBrowser("corner selection", () => {
 					shifted: JSON.stringify(before) !== JSON.stringify(row.getBoundingClientRect().toJSON()),
 					focus: document.activeElement === nav ? 'nav' : 'other' };
 			`);
-			const badge = await evaluatePage<{ padding: number[]; heights: number[]; centers: number[] }>(`
+			const badge = await evaluatePage<{ padding: number[]; heights: number[]; widths: number[]; centers: number[] }>(`
 				const badge = document.getElementById('nav-inbox-count');
 				const original = badge.textContent;
 				const css = getComputedStyle(badge);
 				const padding = [css.paddingTop, css.paddingRight, css.paddingBottom, css.paddingLeft].map(parseFloat);
-				const heights = [], centers = [];
+				const heights = [], widths = [], centers = [];
 				for (const count of ['1', '12', '1234']) {
 					badge.textContent = count;
 					const b = badge.getBoundingClientRect(), n = badge.parentElement.getBoundingClientRect();
 					heights.push(b.height);
+					widths.push(b.width);
 					centers.push(Math.abs(b.y + b.height / 2 - n.y - n.height / 2));
 				}
 				badge.textContent = original;
-				return { padding, heights, centers };
+				return { padding, heights, widths, centers };
 			`);
-			expect(badge.padding, name).toEqual([2, 6.4, 2, 6.4]);
-			expect(Math.min(...badge.heights), name).toBeGreaterThan(17);
+			expect(badge.padding, name).toEqual([4, 4, 4, 4]);
+			expect(Math.min(...badge.heights), name).toBeGreaterThan(19);
+			expect(Math.abs(badge.widths[0]! - badge.heights[0]!), name).toBeLessThan(1);
+			expect(badge.widths[2]!, name).toBeGreaterThan(badge.widths[1]!);
 			expect(Math.max(...badge.heights) - Math.min(...badge.heights), name).toBeLessThan(1);
 			expect(Math.max(...badge.centers), name).toBeLessThan(1);
 			expect(result.pageWidth, name).toBeLessThanOrEqual(result.width);
