@@ -18,7 +18,7 @@
 	--c-text-alt: #5c5c5c;
 	--c-link: var(--p-blue);
 	--c-border: #cfcfcf;
-	--c-selected: #e8edfb;
+	--c-selected: #f4f6fc;
 	--c-on-accent: var(--p-white);
 
 	--s1: 0.25rem;
@@ -44,7 +44,7 @@
 		--c-text-alt: #a3a3a3;
 		--c-link: #7fa4ff;
 		--c-border: #3a3a3a;
-		--c-selected: #14244d;
+		--c-selected: #111722;
 		--c-on-accent: #ffffff;
 	}
 }
