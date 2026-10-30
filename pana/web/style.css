@@ -1369,6 +1369,20 @@ kbd {
 	.view-header .header-actions {
 		flex-basis: 100%;
 	}
+	/* Keep Inbox compose in thumb reach, clear of the home indicator and last row. */
+	#view-inbox .header-actions {
+		position: fixed;
+		right: calc(var(--s4) + env(safe-area-inset-right, 0px));
+		bottom: calc(var(--s4) + env(safe-area-inset-bottom, 0px));
+		z-index: 4;
+	}
+	#view-inbox [data-testid="inbox-new"] {
+		min-width: 3rem;
+		min-height: 3rem;
+	}
+	#view-inbox {
+		padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+	}
 	main,
 	#status {
 		padding-left: var(--s3);
