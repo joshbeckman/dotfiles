@@ -1216,6 +1216,10 @@ button.quiet:hover,
 	padding: var(--s2) 0;
 	caret-color: var(--c-text);
 }
+/* drawSelection hides the native caret; its drawn cursor needs a theme color too. */
+.memory-editor .cm-cursor {
+	border-left-color: var(--c-text);
+}
 .memory-editor .cm-line {
 	padding: 0 var(--s3);
 }
@@ -1419,6 +1423,13 @@ kbd {
 	.memory-editor {
 		height: 55vh;
 		height: 55dvh;
+	}
+	.memory-editor .cm-scroller {
+		/* iOS zooms/pans focused editable content below 16px, clipping the gutter. */
+		font-size: 1rem;
+	}
+	.memory-editor .cm-cursor {
+		border-left-width: 2px;
 	}
 }
 
