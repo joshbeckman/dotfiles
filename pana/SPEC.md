@@ -182,6 +182,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **STA-05** `session resume` on a stopped session sets `idle` and delivers queued mail in order.
 - [x] **STA-06** `session search --state S` returns only sessions in state S. The PWA sessions list offers all six states and an All states option, preserves descending ULID order when browsing, and combines the state filter with transcript search and pagination.
 - [x] **STA-07** Archived sessions are read-only. Messages to them return 409.
+- [x] **STA-08** Transient model errors and authentication errors share sixteen attempts total per generation or compaction request, with exponential backoff starting at 2 seconds and capped at 60 seconds. Attempt counts and backoff survive daemon restart; stopping cancels a pending retry. Exhaustion posts one failure notice without an outer session restart loop. Billing/quota errors and unrelated permission/malformed-request errors do not gain retries.
 
 ### Delivery
 
