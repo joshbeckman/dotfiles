@@ -26,7 +26,7 @@ describeBrowser("inbox compose", () => {
 		for (const viewport of ["", "390x844x3,mobile,touch"]) {
 			await emulateViewport(viewport, "light");
 			for (const archived of [false, true]) {
-				const result = await evaluatePage<{ same: boolean; fits: boolean; compose: boolean; archived: boolean }>(`
+				const result = await evaluatePage<{ same: boolean; fits: boolean; compose: boolean; archived: boolean; thumbReach: boolean }>(`
 					location.hash = '#/inbox';
 					await until(() => !document.querySelector('#view-inbox').hidden);
 					const toggle = document.querySelector('#inbox-archived');
@@ -36,13 +36,22 @@ describeBrowser("inbox compose", () => {
 					const same = button.className === other.className && button.href === other.href && button.textContent === other.textContent;
 					const rect = button.getBoundingClientRect();
 					const fits = rect.width > 0 && rect.x >= 0 && rect.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth;
+					let thumbReach = true;
+					if (innerWidth <= 640) {
+						thumbReach = rect.width >= 48 && rect.height >= 48 && innerHeight - rect.bottom >= 16 && innerHeight - rect.bottom < 64 && innerWidth - rect.right < 64;
+						scrollTo(0, document.body.scrollHeight);
+						await new Promise(resolve => requestAnimationFrame(resolve));
+						const scrolled = button.getBoundingClientRect();
+						const lastRow = document.querySelector('#inbox-list .item:last-child');
+						thumbReach &&= Math.abs(scrolled.bottom - rect.bottom) < 1 && (!lastRow || lastRow.getBoundingClientRect().bottom <= scrolled.top);
+					}
 					button.focus();
 					const focused = document.activeElement === button;
 					button.click();
 					await until(() => !document.querySelector('#view-compose').hidden);
-					return { same, fits, compose: focused && location.hash === '#/compose' && !!document.querySelector('#compose-body'), archived: toggle.checked };
+					return { same, fits, compose: focused && location.hash === '#/compose' && !!document.querySelector('#compose-body') && !button.getClientRects().length, archived: toggle.checked, thumbReach };
 				`);
-				expect(result).toEqual({ same: true, fits: true, compose: true, archived });
+				expect(result).toEqual({ same: true, fits: true, compose: true, archived, thumbReach: true });
 			}
 		}
 		for (const thread of await t.runtime.db.all<{ id: string }>("SELECT id FROM threads")) {
