@@ -517,7 +517,8 @@ button.quiet:hover,
 .list > .hint {
 	padding: var(--s3) 0;
 }
-.list > .more {
+.list > .more,
+#thread-messages > .more {
 	align-self: center;
 	margin: var(--s3) 0;
 }

@@ -82,3 +82,16 @@ The Inbox navigation uses an orange dot for any unread activity, hidden at zero.
 Its tooltip and accessible image label retain the total unread delivery count
 (including messages beyond the first inbox page). Numeric counts on inbox rows
 are unchanged. This keeps navigation width independent of the count.
+
+### Large thread history
+
+Opening a thread renders the newest 30 messages, or a 30-message window around a
+linked message. Earlier/later controls reveal history in 30-message chunks without
+changing message order, the reply head, or scroll position when prepending history.
+Keyboard focus stays on the history control (or newly loaded content at the end).
+The API still returns the full thread: this bounds initial Markdown/image/diagram
+work, not transfer size or server query cost. Run the large-thread regression with:
+
+```sh
+npm run test:web -- test/browser/thread-window.spec.ts
+```

@@ -1140,8 +1140,15 @@ function parkConfirm() {
 	state.confirm = null;
 }
 
+// Invalidate in-flight rendering on navigation or a newer refresh of the same thread.
+let threadRenderVersion = 0;
+const THREAD_PAGE_SIZE = 30;
+
 async function openThread(id, focusMessage) {
+	const version = ++threadRenderVersion;
+	const current = () => version === threadRenderVersion && state.section === "threads";
 	const body = await api("GET", `/threads/${id}`);
+	if (!current()) return;
 	const thread = body.thread;
 	const messages = body.messages ?? [];
 	state.thread = thread;
@@ -1187,9 +1194,67 @@ async function openThread(id, focusMessage) {
 	archiveButton.dataset.testid = body.archived ? "thread-unarchive" : "thread-archive";
 	const container = $("thread-messages");
 	container.replaceChildren();
-	for (const message of messages) {
-		container.append(await messageElement(message, { focus: message.id === focusMessage }));
+	// Parse and hydrate only one page, not years of history before the first paint. Keep the
+	// full response for draft.after and stale-reply handling; the wire/API contract is unchanged.
+	const linkedIndex = focusMessage ? messages.findIndex((message) => message.id === focusMessage) : -1;
+	let start = linkedIndex < 0 ? Math.max(0, messages.length - THREAD_PAGE_SIZE) : Math.max(0, linkedIndex - Math.floor(THREAD_PAGE_SIZE / 2));
+	let end = Math.min(messages.length, start + THREAD_PAGE_SIZE);
+	start = Math.max(0, end - THREAD_PAGE_SIZE);
+	async function renderRange(from, to) {
+		const fragment = document.createDocumentFragment();
+		for (const message of messages.slice(from, to)) {
+			const article = await messageElement(message, { focus: message.id === focusMessage });
+			if (!current()) return null;
+			fragment.append(article);
+		}
+		return fragment;
 	}
+	function historyButtons() {
+		container.querySelectorAll(":scope > [data-history]").forEach((button) => button.remove());
+		for (const direction of ["earlier", "later"]) {
+			const remaining = direction === "earlier" ? start : messages.length - end;
+			if (!remaining) continue;
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "more";
+			button.dataset.history = direction;
+			button.dataset.testid = `thread-${direction}`;
+			button.textContent = `Load ${Math.min(THREAD_PAGE_SIZE, remaining)} ${direction} messages (${remaining} remaining)`;
+			button.addEventListener("click", async () => {
+				const retainFocus = document.activeElement === button;
+				// Serialize history loads so repeated clicks cannot duplicate a range.
+				container.querySelectorAll(":scope > [data-history]").forEach((node) => { node.disabled = true; });
+				try {
+					const from = direction === "earlier" ? Math.max(0, start - THREAD_PAGE_SIZE) : end;
+					const to = direction === "earlier" ? start : Math.min(messages.length, end + THREAD_PAGE_SIZE);
+					const fragment = await renderRange(from, to);
+					if (!current() || !fragment) return;
+					const firstNew = fragment.firstElementChild;
+					const anchor = container.querySelector(".message");
+					const top = anchor?.getBoundingClientRect().top;
+					if (direction === "earlier") {
+						container.insertBefore(fragment, anchor);
+						start = from;
+					} else {
+						container.append(fragment);
+						end = to;
+					}
+					historyButtons();
+					if (retainFocus) (container.querySelector(`[data-history="${direction}"]`) ?? firstNew)?.focus({ preventScroll: true });
+					// Preserve the reader's position when older content is inserted above them.
+					if (direction === "earlier" && anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - top);
+				} catch (error) {
+					if (current()) { historyButtons(); fail(error); }
+				}
+			});
+			if (direction === "earlier") container.prepend(button);
+			else container.append(button);
+		}
+	}
+	const initial = await renderRange(start, end);
+	if (!current() || !initial) return;
+	container.append(initial);
+	historyButtons();
 	if (messages.length === 0) empty(container, "No messages yet.");
 
 	document.querySelector("#thread .back")?.setAttribute("href", state.lastList);
@@ -2682,6 +2747,7 @@ function onKeydown(event) {
 // ---- Router ---------------------------------------------------------------------------------
 
 function showSection(section) {
+	threadRenderVersion++;
 	state.section = section;
 	// Compose has no nav item of its own: it is the Threads page's New button.
 	const navSection = section === "compose" ? "threads" : section;
