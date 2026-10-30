@@ -591,8 +591,8 @@ function empty(container, text) {
 	container.append(p);
 }
 
-function badge(text) {
-	return span(text, `badge ${text}`);
+function badge(text, kind = "") {
+	return span(text, `badge ${text} ${kind}`.trim());
 }
 
 function unreadBadge(count) {
@@ -650,7 +650,7 @@ function applyStateEvent(event) {
 	// The open session's header follows too, so a finished run does not still read "running".
 	if (state.session?.id === sessionId && next) {
 		state.session.state = next;
-		$("session-meta").querySelector(".badge")?.replaceWith(badge(next));
+		$("session-meta").querySelector(".badge")?.replaceWith(badge(next, "state-badge"));
 	}
 	for (const threadId of Array.isArray(event.threadIds) ? event.threadIds.map(String) : []) {
 		const map = workingMap(threadId);
@@ -1295,7 +1295,7 @@ async function loadSessionList(query = "", cursor, filter = $("sessions-state").
 		const swatch = span("", "person");
 		swatch.dataset.color = participantColor({ url: session.url ?? "", kind: "session" });
 		swatch.append(refLink(session.url ?? session.id, "session", session.id, session.url));
-		title.append(badge(session.state ?? "unknown"), swatch);
+		title.append(badge(session.state ?? "unknown", "state-badge"), swatch);
 		const aside = document.createElement("div");
 		aside.className = "item-aside";
 		aside.append(timeEl(session.updatedAt));
@@ -1325,7 +1325,7 @@ async function openSession(id) {
 	// MOB-03: the short label, as everywhere else; the full ID is in the pana:// URL just below.
 	title.replaceChildren(copyLink(state.session.url ?? `pana://${state.domain}/sessions/${state.session.id}`, "session", refLabel(state.session.url ?? "") || state.session.id));
 	const meta = $("session-meta");
-	meta.replaceChildren(badge(state.session.state ?? "unknown"));
+	meta.replaceChildren(badge(state.session.state ?? "unknown", "state-badge"));
 	const details = document.createElement("span");
 	for (const part of [
 		state.session.model,

@@ -31,6 +31,7 @@
 	--font-sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
 	--font-condensed: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
 	--font-mono: "Berkeley Mono", "IBM Plex Mono", ui-monospace, monospace;
+	--font-signal: "Departure Mono", var(--font-mono);
 	--control-h: 2.25rem;
 }
 @media (prefers-color-scheme: dark) {
@@ -617,6 +618,13 @@ button.quiet:hover,
 	color: var(--c-text-alt);
 	text-transform: uppercase;
 	letter-spacing: 0.03em;
+}
+/* Keep pixel lettering inside bounded signals, not adjacent unread counts or metadata. */
+.state-badge {
+	font-family: var(--font-signal);
+	font-size: 0.6875rem;
+	font-synthesis: none;
+	letter-spacing: normal;
 }
 .badge.running,
 .badge.waiting {
@@ -1236,6 +1244,11 @@ button.quiet:hover,
 	font-size: 0.8rem;
 }
 kbd {
+	font-family: var(--font-signal);
+	font-size: 0.6875rem;
+	font-weight: 400;
+	font-synthesis: none;
+	letter-spacing: normal;
 	display: inline-block;
 	min-width: 1.4rem;
 	padding: 0 0.3rem;
@@ -1244,7 +1257,6 @@ kbd {
 	border-radius: var(--radius);
 	background: var(--c-bg-alt);
 	color: var(--c-text);
-	font-size: 0.8rem;
 	text-align: center;
 }
 
