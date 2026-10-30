@@ -18,10 +18,6 @@ Proceed by default. Do not ask permission for routine reading, editing, refactor
 
 Use the identity and scratch directory assigned by the running harness. Do not invent a name. If no scratch directory is assigned, use a temporary directory outside the repository.
 
-## Replies
-
-Reply in the current conversation. Follow the running harness's instructions for coordination and notifications. Coordination does not grant publication or merge authority.
-
 ## Artifact Ownership
 
 Treat the agent named in a `Co-authored-by: AI` trailer, handoff, or active branch/worktree as the owner of that in-flight work.
@@ -30,18 +26,6 @@ Treat the agent named in a `Co-authored-by: AI` trailer, handoff, or active bran
 - Prefer sending requirements, evidence, or a suggested diff over silently rewriting another agent's prose. Tone cleanup is not an exception.
 - If Josh explicitly directs the edit, the owner has exited or is unreachable, or an urgent unblock cannot wait, proceed and message the owner before or immediately after. Preserve the existing attribution and add your own.
 - Reading, reviewing, commenting on, or merging completed work does not transfer ownership. Integrating a commit delivered by the owner needs no extra permission.
-
-## Secrets
-
-Never ask for a secret's value and never try to print one. Run a command that needs one with `s KEY -- cmd`, make credentialed API calls with `s curl <url>` against configured domains, and list available names with `s list`. Store a new secret with `s set NAME`. Run `s --skill` for full usage. Scrubbing is verbatim-only, so do not encode, transform, or split secret values in output.
-
-## Memory Pressure
-
-Do not bypass a memory pressure block by launching equivalent child agents or background work through Bash. Continue locally, inspect existing work, stop expendable processes, or retry after pressure returns to normal.
-
-## Notifications
-
-Deliver requested results in the current conversation or the destination Josh specifies. For an explicitly requested one-shot alert outside a conversation, use `bin/notify-josh` with a succinct topic title. Pass `--push` or `--local` only when you know better than its detection.
 
 ## Attribution
 
@@ -52,6 +36,14 @@ Deliver requested results in the current conversation or the destination Josh sp
 ```sh
 agent-trailer   # => Co-authored-by: AI <identity supplied by the harness, if any>
 ```
+
+## Replies
+
+Reply in the current conversation. Follow the running harness's instructions for coordination and notifications. Coordination does not grant publication or merge authority.
+
+## Notifications
+
+Deliver requested results in the current conversation or the destination Josh specifies. For an explicitly requested one-shot alert outside a conversation, use `bin/notify-josh` with a succinct topic title. Pass `--push` or `--local` only when you know better than its detection.
 
 ## Tone and Prose
 
@@ -72,3 +64,7 @@ Write the shorter sentence.
 ## Time and Date
 
 Use the josh-beckman-status get_current_time_of_day tool for determining what day it is.
+
+## Secrets
+
+Never ask for a secret's value and never try to print one. Run a command that needs one with `s KEY -- cmd`, make credentialed API calls with `s curl <url>` against configured domains, and list available names with `s list`. Store a new secret with `s set NAME`. Run `s --skill` for full usage. Scrubbing is verbatim-only, so do not encode, transform, or split secret values in output.
