@@ -96,6 +96,18 @@ describe("withAuthRetries", () => {
 		expect(await wrapped.completeSimple(model, context)).toBe(message);
 	});
 
+	it.each([
+		"401 quota exhausted", "401 quota_exceeded", "401 insufficient balance",
+		"AuthenticationError: insufficient_credits", "401 balance depleted", "401 credits_exhausted",
+	])("does not introduce retries for account-limit wording: %s", async (text) => {
+		const message = failure(text);
+		expect(isRetryableAssistantError(message)).toBe(false);
+		const { wrapped } = fixture(message);
+		const result = await wrapped.completeSimple(model, context);
+		expect(result).toBe(message);
+		expect(isRetryableAssistantError(result)).toBe(false);
+	});
+
 	it("leaves unrelated terminal errors untouched and forwards request options", async () => {
 		const { wrapped, source, message, stream } = fixture(failure("invalid request"));
 		const terminal: AssistantMessageEvent = { type: "error", reason: "error", error: message };

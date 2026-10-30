@@ -94,7 +94,7 @@ describe("STA-08 bounded durable model retries", () => {
 		expect(t!.model.calls()).toBe(16); // No outer session retry loop.
 	});
 
-	it.each(["403 Forbidden", "400 malformed request", "401 billing quota exceeded"])("does not retry %s", async (failure) => {
+	it.each(["403 Forbidden", "400 malformed request", "401 billing quota exceeded", "401 quota exhausted", "401 quota_exceeded", "401 insufficient balance"])("does not retry %s", async (failure) => {
 		const { session } = await start([{ fail: failure }, { text: "must not run" }]);
 		await settled(session.id, "failed");
 		expect(t!.model.calls()).toBe(1);

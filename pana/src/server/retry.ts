@@ -5,6 +5,8 @@ import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 const RETRY_HINT = "(please retry your request)";
 const AUTH_ERROR = /(?<![a-z0-9])401(?![a-z0-9])|\bAuthenticationError\b|\bunauthorized\b|\binvalid[ _-]+api[ _-]+key\b|\bapi[ _-]+key[ _-]+(?:is[ _-]+)?invalid\b|\bexpired[ _-]+(?:access[ _-]+|auth[ _-]+)?token\b|\b(?:access[ _-]+|auth[ _-]+)?token[ _-]+(?:has[ _-]+|is[ _-]+)?expired\b/i;
 const FORBIDDEN = /(?<![a-z0-9])403(?![a-z0-9])/i;
+// Additional deterministic account-limit wording not recognized by pi-ai 1.4.0.
+const ACCOUNT_LIMIT = /\b(?:quota[ _-]+(?:exceeded|exhausted)|(?:insufficient|exhausted)[ _-]+(?:balance|credits?)|(?:balance|credits?)[ _-]+(?:exhausted|depleted))\b/i;
 
 /**
  * Let pi-durable own the retry budget, durable backoff and progress reporting, including for
@@ -18,7 +20,7 @@ export function withAuthRetries(models: Models): Models {
 		const cached = messages.get(message);
 		if (cached) return cached;
 		const text = message.errorMessage;
-		if (message.stopReason !== "error" || !text || !AUTH_ERROR.test(text) || FORBIDDEN.test(text) || text.includes(RETRY_HINT)) {
+		if (message.stopReason !== "error" || !text || !AUTH_ERROR.test(text) || FORBIDDEN.test(text) || ACCOUNT_LIMIT.test(text) || text.includes(RETRY_HINT)) {
 			return message;
 		}
 		const candidate = { ...message, errorMessage: `${text} ${RETRY_HINT}` };
