@@ -64,3 +64,16 @@ code, images, and table overflow. Run its desktop/390px light/dark browser regre
 npm run test:web -- test/browser/prose.spec.ts
 PANA_PROSE_SHOTS=docs npm run test:web -- test/browser/prose.spec.ts
 ```
+
+### Selection indicators
+
+Active navigation, j/k-selected rows and messages, and the command palette's active
+result share inset corner brackets and a tinted background. Navigation uses orange
+corners; content uses the theme's link color. These overlays do not affect layout
+or intercept clicks. Native keyboard-focus indicators remain separate. The brand
+and navigation links are vertically centered; on phones, navigation keeps its own
+horizontally scrolling row. Exercise desktop/phone light/dark regressions with:
+
+```sh
+npm run test:web -- test/browser/selection.spec.ts
+```

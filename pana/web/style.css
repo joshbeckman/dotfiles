@@ -110,6 +110,8 @@ h2 {
 	display: flex;
 	align-items: center;
 	gap: var(--s2);
+	min-height: var(--control-h);
+	line-height: 1;
 }
 .topbar h1::after {
 	display: none;
@@ -169,13 +171,19 @@ pre {
 }
 #nav {
 	display: flex;
-	gap: var(--s4);
+	gap: var(--s1);
+	align-items: center;
 	flex: 1;
 	min-width: 0;
 	overflow-x: auto;
 	scrollbar-width: none;
 }
 #nav a {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--control-h);
+	line-height: 1;
 	flex: none;
 	color: var(--c-text);
 	text-decoration: none;
@@ -183,11 +191,11 @@ pre {
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	font-size: 0.9rem;
-	padding: var(--s1) 0;
-	border-bottom: 2px solid transparent;
+	padding: var(--s1) var(--s2);
 }
 #nav a[aria-current="page"] {
-	border-bottom-color: var(--p-orange);
+	--selection-color: var(--p-orange);
+	background: var(--c-selected);
 }
 /* REF-06: the inbox unread count in the navigation. */
 #nav-inbox-count {
@@ -589,13 +597,34 @@ button.quiet:hover,
 	border-left-color: var(--c-link);
 	background: var(--c-bg-alt);
 }
-/* UX-08: the row or message j and k selected. */
-.item.selected {
+/* One selection language for sections, j/k targets, and command-palette results.
+   The overlay is inset, never changes layout, and cannot intercept row actions. */
+#nav a[aria-current="page"],
+.item.selected,
+.message.selected,
+.palette .item.focus {
+	position: relative;
 	background: var(--c-selected);
-	box-shadow: inset 0 0 0 1px var(--c-link);
 }
-.message.selected {
-	box-shadow: 0 0 0 1px var(--c-link);
+#nav a[aria-current="page"]::after,
+.item.selected::after,
+.message.selected::after,
+.palette .item.focus::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	--corner: linear-gradient(var(--selection-color, var(--c-link)), var(--selection-color, var(--c-link)));
+	background:
+		var(--corner) top left / 8px 1px,
+		var(--corner) top left / 1px 8px,
+		var(--corner) top right / 8px 1px,
+		var(--corner) top right / 1px 8px,
+		var(--corner) bottom left / 8px 1px,
+		var(--corner) bottom left / 1px 8px,
+		var(--corner) bottom right / 8px 1px,
+		var(--corner) bottom right / 1px 8px;
+	background-repeat: no-repeat;
 }
 .unread-count {
 	display: inline-block;
@@ -1306,11 +1335,6 @@ kbd {
 .palette .item .meta {
 	font-family: var(--font-mono);
 }
-/* The row the palette's input is on: a brighter selection than j and k draw elsewhere. */
-.palette .item.focus {
-	background: var(--c-selected);
-	box-shadow: inset 0 0 0 1px var(--c-link);
-}
 .palette-key {
 	font-size: 0.78rem;
 	letter-spacing: 0.02em;
@@ -1335,7 +1359,7 @@ kbd {
 	#nav {
 		order: 3;
 		flex-basis: 100%;
-		gap: var(--s3);
+		gap: var(--s1);
 	}
 	#nav a {
 		font-size: 0.85rem;
