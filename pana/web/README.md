@@ -27,6 +27,14 @@ Memory files have canonical `pana://<domain>/memory/files/<path>` URLs, with eac
 
 The Memory section is one view at a time (MEM-11): `#/memory` lists files and the log, `#/memory/files/<path>` is a rendered file with a Source toggle, `#/memory/commits/<hash>` is `git show`, and `#/memory/edit/<path>` (or `#/memory/new`) is the full-view editor.
 
+On phones, editor text is 1rem (16px at the default root size) to avoid iOS focus zoom and horizontal panning, including in Home Screen web apps. CodeMirror draws its own caret, so `.cm-cursor` follows the theme's text color and is 2px wide on phones; `caret-color` alone does not style it. Selection rendering and desktop text sizing are unchanged. See CodeMirror's [styling guide](https://codemirror.net/examples/styling/) and [`drawSelection` reference](https://codemirror.net/docs/ref/#view.drawSelection). The desktop/phone light/dark regression, including live theme changes, runs with:
+
+```sh
+npm run test:web -- test/browser/memory-editor.spec.ts
+```
+
+Chrome emulation checks computed font size, cursor contrast/color, and overflow, but does not prove iOS keyboard behavior. For an iOS release check, tap and type with the software keyboard in both Safari and an installed Home Screen app: the page should stay at 1× scale, keep the gutter visible, and keep the caret visible at the end of a long file.
+
 ## Authorize a window
 
 `panad` prints `panad: open http://127.0.0.1:<port>/#<web-token>`. The token lives in the fragment, which browsers never send to the server. The app stores it and clears the hash. Keep the launch URL private: anyone who has it can act as the user. A window with no usable token, or one that gets a 403, shows **Authorize this app** and accepts the launch URL or the token once.
