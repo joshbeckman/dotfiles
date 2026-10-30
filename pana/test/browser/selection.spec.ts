@@ -5,6 +5,19 @@ import { loopbackOrigin } from "../../src/web/static.ts";
 import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, resizePage, screenshot } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
 
+// Selection fill should be quiet; corner brackets carry the strong selected-state signal.
+function contrast(a: string, b: string): number {
+	const luminance = (color: string) => {
+		const channels = color.match(/\d+/g)!.slice(0, 3).map(Number).map(value => {
+			const channel = value / 255;
+			return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+		});
+		return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722;
+	};
+	const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
+	return (values[0]! + 0.05) / (values[1]! + 0.05);
+}
+
 const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
 let seeded: Seeded | undefined;
 let page: number | undefined;
@@ -33,6 +46,7 @@ describeBrowser("corner selection", () => {
 			const result = await evaluatePage<{
 				pageWidth: number; width: number; centers: number[]; navCenter: number;
 				border: string; corners: boolean; pointer: string; shifted: boolean; focus: string;
+				fill: string; background: string; foreground: string;
 			}>(`
 				location.hash = '#/inbox';
 				await until(() => document.querySelector('#inbox-list .item'));
@@ -48,6 +62,7 @@ describeBrowser("corner selection", () => {
 				nav.focus();
 				return { pageWidth: document.documentElement.scrollWidth, width: innerWidth,
 					centers: [center(document.querySelector('.topbar h1')), center(document.querySelector('.brand-mark'))],
+					fill: getComputedStyle(selected).backgroundColor, background: getComputedStyle(document.body).backgroundColor, foreground: getComputedStyle(selected).color,
 					navCenter: center(nav), border: getComputedStyle(nav).borderBottomWidth,
 					corners: corners(nav) && corners(selected) && links.filter(e => getComputedStyle(e, '::after').content !== 'none').length === 1,
 					pointer: getComputedStyle(selected, '::after').pointerEvents,
@@ -69,6 +84,9 @@ describeBrowser("corner selection", () => {
 			expect(badge.title).toBe(badge.label);
 			expect(badge.role).toBe("img");
 			expect(badge.color).toBe("rgb(255, 121, 0)");
+			expect(contrast(result.fill, result.background), name).toBeGreaterThan(1.03);
+			expect(contrast(result.fill, result.background), name).toBeLessThan(1.12);
+			expect(contrast(result.foreground, result.fill), name).toBeGreaterThan(7);
 			expect(result.pageWidth, name).toBeLessThanOrEqual(result.width);
 			expect(result.border).toBe("0px");
 			expect(result.corners).toBe(true);
