@@ -1,3 +1,5 @@
+import type { ServerResponse } from "node:http";
+import { subscribeEvents } from "../src/web/events.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	applyInitialSubject,
@@ -84,6 +86,40 @@ async function currentSubject(panad: TestPanad, threadId: string): Promise<strin
 }
 
 describe("SUB subjects", () => {
+	it("SUB-02/SUB-04 publish committed subject changes for background jobs and regeneration, but not failures", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
+			{ text: "Background subject" }, { text: "Regenerated subject" }, { fail: "provider error" },
+		] });
+		const seeded = await seed(t, "Initial subject");
+		const frames: Array<{ kind: string; threadId?: string; subject?: string }> = [];
+		const committed: Array<Promise<string | null | undefined>> = [];
+		const stop = subscribeEvents(t.runtime, {
+			write(chunk: string) {
+				const line = chunk.split("\n").find((line) => line.startsWith("data:"));
+				if (line) {
+					const event = JSON.parse(line.slice(5));
+					if (event.kind === "thread.subject") {
+						frames.push(event);
+						committed.push(currentSubject(t!, seeded.threadId));
+					}
+				}
+				return true;
+			},
+			on() { return this; },
+		} as unknown as ServerResponse);
+		try {
+			scheduleSubject(t.runtime, seeded.threadId);
+			await awaitSubjectJobs(t.runtime);
+			await t.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+			const failed = await t.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+			expect(failed.status).not.toBe(200);
+			expect(frames).toEqual([
+				expect.objectContaining({ kind: "thread.subject", threadId: seeded.threadId, subject: "Background subject" }),
+				expect.objectContaining({ kind: "thread.subject", threadId: seeded.threadId, subject: "Regenerated subject" }),
+			]);
+			expect(await Promise.all(committed)).toEqual(["Background subject", "Regenerated subject"]);
+		} finally { stop(); }
+	});
 	it("SUB-01 a new thread's subject is the first line of its first message, trimmed to 80 characters", async () => {
 		t = await startTestPanad();
 		const panad = t;

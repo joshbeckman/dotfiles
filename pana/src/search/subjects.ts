@@ -7,6 +7,7 @@
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Runtime } from "../server/runtime.ts";
+import { publish } from "../web/events.ts";
 
 export const SUBJECT_MAX_LENGTH = 80;
 // Bound regeneration cost while retaining the conversation's most recent direction.
@@ -148,6 +149,7 @@ export async function regenerateSubject(runtime: Runtime, threadId: string): Pro
 	const recorded = await runtime.db.write((tx) =>
 		recordSubject(tx, { threadId, subject, source: "model", id: runtime.newId(), now: runtime.clock.now() }),
 	);
+	await publish(runtime, { kind: "thread.subject", threadId, subject: recorded });
 	return { subject: recorded, previous: thread.subject };
 }
 
@@ -173,9 +175,10 @@ function jobsFor(runtime: Runtime): Set<Promise<void>> {
 
 async function runSubjectJob(runtime: Runtime, threadId: string): Promise<void> {
 	const subject = await askSubjectModel(runtime, await firstMessageBody(runtime, threadId));
-	await runtime.db.write((tx) =>
+	const recorded = await runtime.db.write((tx) =>
 		recordSubject(tx, { threadId, subject, source: "model", id: runtime.newId(), now: runtime.clock.now() }),
 	);
+	await publish(runtime, { kind: "thread.subject", threadId, subject: recorded });
 }
 
 /** Read current, unredacted message bodies in one snapshot. Keep recent context on long threads. */

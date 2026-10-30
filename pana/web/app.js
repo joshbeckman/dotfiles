@@ -295,7 +295,25 @@ function learnDomain(value) {
 	}
 }
 
+// Patch labels only: reopening a thread would disturb reply drafts, focus, and scroll.
+function applyThreadSubject(threadId, subject) {
+	if (state.thread?.id === threadId) {
+		state.thread.subject = subject;
+		$("thread-subject").textContent = subject;
+	}
+	for (const row of document.querySelectorAll("[data-thread]")) {
+		if (row.dataset.thread === threadId) {
+			const label = row.querySelector(".thread-subject-label");
+			if (label) label.textContent = subject;
+		}
+	}
+}
+
 function handleEvent(event) {
+	if (event.kind === "thread.subject" && typeof event.threadId === "string" && typeof event.subject === "string") {
+		applyThreadSubject(event.threadId, event.subject);
+		return;
+	}
 	if (event.kind === "hello") {
 		if (typeof event.domain === "string") state.domain = event.domain;
 		state.domainResolved?.();
@@ -883,7 +901,7 @@ function inboxItem(row, showArchived) {
 		? rowAction("inbox-unarchive", "Unarchive", () => void archiveThread(row.threadId, false))
 		: rowAction("inbox-archive", "Archive", () => void archiveThread(row.threadId, true));
 	const node = item(
-		row.subject,
+		span(row.subject, "thread-subject-label"),
 		[people, row.unreadCount > 0 ? unreadBadge(row.unreadCount) : undefined],
 		() => {
 			location.hash = `#/threads/${row.threadId}`;
@@ -955,9 +973,7 @@ async function regenerateThreadSubject() {
 	button.textContent = "Regenerating…";
 	try {
 		const body = await api("POST", `/threads/${thread.id}/subject`, { regenerate: true });
-		// The heading is the only place the page names the thread, so a stale one would be a lie.
-		thread.subject = body.subject;
-		$("thread-subject").textContent = body.subject ?? "(no subject)";
+		applyThreadSubject(thread.id, body.subject ?? "(no subject)");
 		status("Subject regenerated.");
 	} catch (error) {
 		// The route names the cause. The usual one is a config.json with no subjectModel, which is
@@ -1034,7 +1050,7 @@ async function searchThreads(event, cursor) {
 		aside.className = "item-aside";
 		aside.append(timeEl(thread.at));
 		const row = item(
-			thread.subject,
+			span(thread.subject, "thread-subject-label"),
 			[thread.snippet],
 			() => {
 				location.hash = `#/threads/${thread.id}`;
