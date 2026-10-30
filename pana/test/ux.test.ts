@@ -386,7 +386,7 @@ describe("UX-16 the thread header regenerates a subject", () => {
 		expect(app).toContain('$("thread-subject-regenerate").addEventListener("click"');
 		// It asks the SUB-04 route for a regeneration and swaps in the subject it answers with.
 		expect(app).toContain('api("POST", `/threads/${thread.id}/subject`, { regenerate: true })');
-		expect(app).toContain('$("thread-subject").textContent = body.subject');
+		expect(app).toContain('applyThreadSubject(thread.id, body.subject ?? "(no subject)")');
 		// With no subjectModel there is nothing to regenerate with, so the button says what to set.
 		expect(app).toContain('error?.body?.error?.code === "no_subject_model"');
 		expect(app).toContain("Set subjectModel in config.json to regenerate a subject.");
