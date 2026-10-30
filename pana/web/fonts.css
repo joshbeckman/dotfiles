@@ -60,3 +60,13 @@
   font-display: swap;
   src: url("/fonts/plex-mono-700.woff2") format("woff2");
 }
+
+/* Departure Mono by Helena Zhang (https://departuremono.com/), unmodified.
+   SIL OFL 1.1; see fonts/DepartureMono-LICENSE.txt. Signal accents only. */
+@font-face {
+  font-family: "Departure Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/departure-mono-regular.woff2") format("woff2");
+}

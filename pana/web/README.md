@@ -44,6 +44,14 @@ The browser suite starts a real test `panad` with the scripted faux model, seeds
 
 Memory saves send the editor's read commit as `baseCommit` (`null` for a new file). The server fast-forwards clean writer worktrees before applying edits and rejects dirty/unpublished local work instead of overwriting or publishing it. A 409 `stale_file` leaves editor text intact: copy the edits, reload the current file, then reapply them. Existing unpublished commits from older failed saves still need explicit worktree conflict resolution; retries never discard them or add more commits.
 
+### Signal typography
+
+Departure Mono is self-hosted under SIL OFL 1.1 (see `fonts/DepartureMono-LICENSE.txt`).
+Only session state badges and shortcut keycaps use it, at 0.6875rem (11px at the default
+root size), regular weight. Unread counts, generic badges (edited/file status), navigation,
+timestamps, prose, and source keep their existing Plex/Berkeley font roles. Avoid extending
+Departure into tightly adjacent metadata: the mixed lettering is visually tiring.
+
 ### Message typography
 
 Thread messages and rendered transcript text opt into `.prose`; the app's headings,
