@@ -7,7 +7,8 @@ Type=simple
 # the provider credentials with `s`, because a user unit has neither.
 ExecStart=%h/dotfiles/bin/panad-service
 # Same rule as the Mac's launchd job: restart after a crash or a failed start,
-# but stay down after a clean SIGTERM stop.
+# but stay down after a clean SIGTERM stop. A daemon that stops serving without a
+# SIGTERM exits 1 (SRV-04), so it counts as a failure and comes back.
 Restart=on-failure
 RestartSec=10
 

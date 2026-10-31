@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
 import type { Handlers } from "../src/api/types.ts";
 import { statePaths } from "../src/config/index.ts";
+import { exitCodeWithoutStop } from "../src/server/index.ts";
 import {
 	createScriptedModel,
 	FAUX_MODEL,
@@ -171,6 +172,15 @@ describe("panad", () => {
 		const after = await t.client.get("/inbox");
 		expect(after.status).toBe(200);
 		expect(logLines(t.dir)).toHaveLength(6);
+	});
+
+	it("SRV-04 a daemon that stops without a stop request reports failure", () => {
+		// The service managers restart on failure only: `Restart=on-failure` here, launchd's
+		// `SuccessfulExit=false` on macOS. A clean code is what a stop request produces, so any
+		// other clean code has to become a failure or the restart never happens.
+		expect(exitCodeWithoutStop(false, 0)).toBe(1);
+		expect(exitCodeWithoutStop(true, 0)).toBe(0);
+		expect(exitCodeWithoutStop(false, 2)).toBe(2);
 	});
 
 	it("SRV-02 on SIGTERM panad stops accepting requests, closes the Harness, and exits 0", async () => {

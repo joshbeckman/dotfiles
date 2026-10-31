@@ -38,8 +38,9 @@
 	<key>RunAtLoad</key>
 	<true/>
 	<!-- Restart after a crash or a failed start, but stay down after a clean
-	     SIGTERM exit so a deliberate stop is not undone. ThrottleInterval keeps a
-	     startup failure from becoming a restart loop. -->
+	     SIGTERM exit so a deliberate stop is not undone. A daemon that stops serving
+	     without a SIGTERM exits 1 (SRV-04), so it counts as a failure and comes back.
+	     ThrottleInterval keeps a startup failure from becoming a restart loop. -->
 	<key>KeepAlive</key>
 	<dict>
 		<key>SuccessfulExit</key>

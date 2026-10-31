@@ -1,6 +1,7 @@
 // panad: open the state directory, the shared database, and the Harness, then serve the API
 // on the Unix socket and on loopback TCP. WP1 owns the request log (SRV-01), graceful shutdown
-// on SIGTERM (SRV-02), and resuming work a previous process left behind (SRV-03).
+// on SIGTERM (SRV-02), resuming work a previous process left behind (SRV-03), and reporting a
+// daemon that stopped without being asked to (SRV-04).
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
@@ -264,6 +265,17 @@ function closeServer(server: Server): Promise<void> {
 	});
 }
 
+/**
+ * SRV-04: a stop request is the only clean exit. If the event loop ends without one, the daemon
+ * stopped serving while nobody asked it to, and a service manager that restarts on failure is
+ * the only thing that brings it back: `Restart=on-failure` and launchd's `SuccessfulExit=false`
+ * both key on a non-zero code. One panad on this machine left exactly that way, exit 0 with no
+ * message and no stop in the journal, and stayed down until someone noticed.
+ */
+export function exitCodeWithoutStop(stopping: boolean, code: number): number {
+	return code === 0 && !stopping ? 1 : code;
+}
+
 /** `panad` entry point. Returns the exit code. `options` lets a test fixture swap in a faux model. */
 export async function main(_argv: string[], options: StartOptions = {}): Promise<number> {
 	let panad: Panad;
@@ -299,6 +311,15 @@ export async function main(_argv: string[], options: StartOptions = {}): Promise
 	}
 	return new Promise((resolve) => {
 		let stopping = false;
+		// SRV-04: node ends the process on its own when the last handle closes, without settling
+		// this promise and without a word. Report that as failure so the service restarts the
+		// daemon instead of leaving pana down, and say so rather than dying silently.
+		process.once("exit", (code) => {
+			const reported = exitCodeWithoutStop(stopping, code);
+			if (reported === code) return;
+			console.error(`panad: exited ${code} without a stop request; reporting ${reported} so the service restarts`);
+			process.exitCode = reported;
+		});
 		const stop = () => {
 			// A second signal means the operator is done waiting: leave now, without a clean close.
 			if (stopping) process.exit(1);
