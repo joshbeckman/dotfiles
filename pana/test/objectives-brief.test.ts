@@ -154,6 +154,31 @@ it("OBJ-32 a draft's brief renders without members, and names what is missing ra
 	expect(text).toContain("No metrics declared.");
 	expect(text).toContain("Nothing: no escalation is open.");
 	expect(text).toContain("Money today: $0.00 (no limit)");
+	expect(text).toContain("No deadline: this objective has no `dueAt`.");
+});
+
+it("OBJ-32 the brief renders each targeted metric's pace against the deadline", async () => {
+	await start();
+	const objective = await draft(t!, "Lose 5 kg by June", { dueAt: new Date(t!.clock.now() + 30 * 86_400_000).toISOString() });
+	const now = t!.clock.now();
+	await t!.runtime.db.write(async (tx) => {
+		await tx.run("INSERT INTO objective_metrics (objective_id, name, unit, direction, target, created_at) VALUES (?, 'weight', 'kg', 'down', 80, ?)", objective.id, now - 10 * 86_400_000);
+		for (const [daysAgo, value] of [[10, 86], [5, 85], [0, 84.5]] as const) {
+			await tx.run(
+				"INSERT INTO metric_readings (id, objective_id, name, at, value, source) VALUES (?, ?, 'weight', ?, ?, 'lead')",
+				t!.runtime.newId(),
+				objective.id,
+				now - daysAgo * 86_400_000,
+				value,
+			);
+		}
+	});
+	const text = await brief(objective.id);
+	expect(text).toContain("## Pace");
+	// `pace.ts`' line: what it needs a day against what it has moved.
+	expect(text).toMatch(/- weight \(kg\): needs [\d.-]+ kg\/day, has moved [\d.-]+ kg\/day/);
+	// The deadline is 30 days out and the pace is short, so the brief names it.
+	expect(text).toMatch(/weight \(kg\): needs .* (— behind)?/);
 });
 
 // --- OBJ-37 --------------------------------------------------------------------

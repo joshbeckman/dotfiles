@@ -20,6 +20,7 @@ import type { Runtime } from "../server/runtime.ts";
 import { heldDeliveries } from "./hold.ts";
 import { objectiveConditions, type ObjectiveConditions } from "./limits.ts";
 import { listMetrics, type MetricView } from "./metrics.ts";
+import { behindPaces, metricPaces, paceLine } from "./pace.ts";
 import { CHARTER_SECTIONS, type CharterSection, type ObjectiveMemberRow, type ObjectiveRow } from "./schema.ts";
 import { objectiveMembers, objectiveState, objectiveUrl, sessionUrl } from "./state.ts";
 import { charterSections, type CharterRevisionRow } from "./charter.ts";
@@ -169,6 +170,9 @@ export async function leadBriefing(runtime: Runtime, row: ObjectiveRow, options:
 	const sections = await charterSections(db, row.id);
 	const conditions = await conditionsOf(db, runtime, row, members);
 	const metrics = await metricsOf(runtime, row);
+	// OBJ-08: pace against `dueAt` is `pace.ts`' arithmetic, computed once for the notice and here.
+	const paces = await metricPaces(db, row, runtime.clock.now());
+	const behind = new Set(behindPaces(paces).map((pace) => pace.name));
 	const wakes = await pendingWakes(db, members);
 	const escalations = (await openEscalations(db, runtime, row.id)).map((open) => escalationView(runtime, open));
 	const reports = await lastReports(db, row.id);
@@ -258,6 +262,11 @@ export async function leadBriefing(runtime: Runtime, row: ObjectiveRow, options:
 		const at = metric.atTarget === null ? "" : metric.atTarget ? "; at target" : "; short of target";
 		lines.push(`- ${metric.name} (${metric.direction} is progress, ${metric.aggregation}${metric.window === null ? "" : ` over ${metric.window}`}): ${current}; ${target}${at}`);
 	}
+
+	lines.push("", "## Pace", "");
+	if (row.due_at === null) lines.push("No deadline: this objective has no `dueAt`.");
+	else if (paces.length === 0) lines.push("No targeted metric has a pace yet (no deadline-relative reading).");
+	for (const pace of paces) lines.push(`- ${paceLine(pace)}${behind.has(pace.name) ? " — behind" : ""}`);
 
 	lines.push("", "## Pending wakes", "");
 	if (wakes.length === 0) lines.push("None.");
