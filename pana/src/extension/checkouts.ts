@@ -163,3 +163,111 @@ export function primaryCheckoutRefusal(path: string, root: string): string {
 		"so its tests, builds, and git commands behave as they would here."
 	);
 }
+
+/**
+ * GUARD-06: the cheap admission check a `bash` call gets before it runs. The mount namespace
+ * (GUARD-02) costs ~2 ms per protected checkout per call, which is a tax on every call that
+ * cannot touch one; this check costs a handful of string operations, and it catches what
+ * actually happened: a command that changes into the checkout and runs something there.
+ *
+ * What it refuses:
+ * - `cd` or `pushd` into a checkout: a shell inside one can write anything.
+ * - `git -C <checkout>` / `--git-dir <checkout>` unless the git subcommand only reads.
+ * - a shell redirect into a checkout.
+ * - a mutating command (`rm`, `mv`, `sed -i`, …) whose arguments name a checkout path.
+ *
+ * Reads that name their file stay allowed: `grep -n foo ~/dotfiles/pana/src/x.ts`.
+ */
+export function checkoutCommandRefusal(
+	command: string,
+	options: { cwd: string; home: string; checkouts: readonly string[] },
+): string | undefined {
+	if (options.checkouts.length === 0) return undefined;
+	const checkouts = options.checkouts;
+	const inside = (token: string): string | undefined => {
+		const path = tokenTarget(token, options.cwd, options.home);
+		if (path === undefined) return undefined;
+		return checkouts.find((root) => under(root, path));
+	};
+
+	for (const match of command.matchAll(ENTER)) {
+		const root = inside(match[1]!);
+		if (root !== undefined) return refusedEntry(root);
+	}
+
+	for (const match of command.matchAll(GIT_DIR)) {
+		const token = match[1] ?? match[2] ?? "";
+		const root = inside(token);
+		if (root === undefined) continue;
+		const rest = command.slice((match.index ?? 0) + match[0].length).trim().split(/\s+/);
+		const subcommand = rest[0]?.replace(/^["']|["']$/g, "") ?? "";
+		if (!READ_ONLY_GIT.has(subcommand)) return refusedEntry(root);
+	}
+
+	for (const match of command.matchAll(REDIRECT)) {
+		const root = inside(match[1]!);
+		if (root !== undefined) return refusedEntry(root);
+	}
+
+	for (const match of command.matchAll(MUTATOR)) {
+		for (const token of (match[1] ?? "").split(/\s+/)) {
+			const root = inside(token);
+			if (root !== undefined) return refusedEntry(root);
+		}
+	}
+	return undefined;
+}
+
+/** `cd` into a checkout, or `pushd`: the whole shell is then inside it. */
+const ENTER = /(?:^|[\s;&|(`])(?:cd|pushd)\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
+/** `git -C PATH` and `git --git-dir PATH|--git-dir=PATH`. */
+const GIT_DIR = /(?:^|[\s;&|(`])-C\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)|--git-dir[=\s]("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
+/** A shell redirect's target: `> path`, `>> path`. */
+const REDIRECT = /(?:^|[^0-9<>])>>?\s*("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
+/** A command that writes its arguments, with everything up to the next separator as its words. */
+const MUTATOR =
+	/(?:^|[\s;&|(`])(?:rm|mv|cp|ln|touch|mkdir|rmdir|tee|truncate|chmod|chown|dd|install|rsync|sed|perl|patch)\s+([^;&|`]*)/g;
+/** Git subcommands that only read; `git -C <checkout> log` is how a session inspects the user's work. */
+const READ_ONLY_GIT = new Set([
+	"status",
+	"log",
+	"diff",
+	"show",
+	"blame",
+	"grep",
+	"rev-parse",
+	"rev-list",
+	"describe",
+	"ls-files",
+	"ls-tree",
+	"cat-file",
+	"remote",
+	"branch",
+	"tag",
+	"worktree",
+	"config",
+	"check-ignore",
+	"for-each-ref",
+	"shortlog",
+]);
+
+/** A shell word resolved to an absolute path, or undefined for a flag, a variable, or a non-path. */
+function tokenTarget(token: string, cwd: string, home: string): string | undefined {
+	let text = token.replace(/^["']|["']$/g, "").replace(/[),]+$/, "");
+	if (text === "" || text.startsWith("-")) return undefined;
+	// The session's HOME, not panad's: `~` in a session's shell is where its bash says it is.
+	text = text.replace(/^\$\{?HOME\}?/, home).replace(/^~(?=\/|$)/, home);
+	// A word still carrying a variable is not a path this check can resolve; `cd "$X"` is caught
+	// by the mount (GUARD-02) rather than guessed at here.
+	if (text.includes("$")) return undefined;
+	return realPath(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) ? text : resolve(cwd, text));
+}
+
+function refusedEntry(root: string): string {
+	return (
+		`pana refused this command: it enters ${root}, the user's primary checkout of a git repository, ` +
+		`not a worktree. Work in a worktree instead: run \`pana worktree add ${root}\`, then \`cd\` to the path ` +
+		"it prints and run the command there. Reading the checkout is still allowed by naming the file, as in " +
+		`\`grep -n something ${root}/README.md\`.`
+	);
+}

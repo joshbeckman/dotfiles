@@ -28,11 +28,20 @@ export interface HttpConfig {
 	port: number;
 }
 
+/** How hard a session is kept out of the user's primary checkouts (GUARD-01, GUARD-06). */
+export type CheckoutGuard = "guard" | "sandbox" | "off";
+
+export const CHECKOUT_GUARDS: readonly CheckoutGuard[] = ["guard", "sandbox", "off"];
+
 export interface ToolsConfig {
 	/** The time limit of a `bash` call that names none of its own (ISO-05). */
 	bashTimeoutSec: number;
-	/** Keep the user's primary checkouts read-only for a session (GUARD-01); true unless turned off. */
-	protectCheckouts: boolean;
+	/**
+	 * `guard` refuses a write in a checkout and a command that enters one, for no measurable cost;
+	 * `sandbox` adds the per-call mount namespace that makes it impossible (~2 ms per checkout);
+	 * `off` disables both.
+	 */
+	protectCheckouts: CheckoutGuard;
 }
 
 export interface ScratchConfig {
@@ -75,7 +84,7 @@ export const DEFAULTS = {
 	budget: { sessionUsd: 100, domainDailyUsd: 500 },
 	files: { maxBytes: 26214400 },
 	http: { port: 8766 },
-	tools: { bashTimeoutSec: 600, protectCheckouts: true },
+	tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 	scratch: { ttlDays: 8 },
 	objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 } as const;
@@ -150,8 +159,7 @@ export function loadConfig(dir = stateDir()): Config {
 		},
 		tools: {
 			bashTimeoutSec: positive(tools.bashTimeoutSec, "tools.bashTimeoutSec") ?? DEFAULTS.tools.bashTimeoutSec,
-			protectCheckouts:
-				typeof tools.protectCheckouts === "boolean" ? tools.protectCheckouts : DEFAULTS.tools.protectCheckouts,
+			protectCheckouts: checkoutGuard(tools.protectCheckouts) ?? DEFAULTS.tools.protectCheckouts,
 		},
 		scratch: {
 			ttlDays: positive(scratch.ttlDays, "scratch.ttlDays", "days") ?? DEFAULTS.scratch.ttlDays,
@@ -167,6 +175,15 @@ export function loadConfig(dir = stateDir()): Config {
 				positive(objectives.wakeMinMinutes, "objectives.wakeMinMinutes", "minutes") ?? DEFAULTS.objectives.wakeMinMinutes,
 		},
 	};
+}
+
+/** `tools.protectCheckouts`: a mode name, or a boolean where `true` means the default mode. */
+function checkoutGuard(value: unknown): CheckoutGuard | undefined {
+	if (value === undefined) return undefined;
+	if (value === true) return "guard";
+	if (value === false) return "off";
+	if (typeof value === "string" && (CHECKOUT_GUARDS as readonly string[]).includes(value)) return value as CheckoutGuard;
+	throw new ConfigError(`tools.protectCheckouts must be one of ${CHECKOUT_GUARDS.join(", ")}`, 2);
 }
 
 /** A positive number, or undefined when absent. A zero limit would kill every call or every scratch. */

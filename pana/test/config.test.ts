@@ -89,7 +89,7 @@ describe("config and state", () => {
 			budget: { sessionUsd: 100, domainDailyUsd: 500 },
 			files: { maxBytes: 26214400 },
 			http: { port: 8766 },
-			tools: { bashTimeoutSec: 600, protectCheckouts: true },
+			tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 			scratch: { ttlDays: 8 },
 			objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 		});

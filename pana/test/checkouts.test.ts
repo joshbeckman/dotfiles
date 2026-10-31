@@ -10,7 +10,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PanaExecutionEnv } from "../src/extension/env.ts";
-import { blockedCheckout, primaryCheckoutOf, primaryCheckouts, realPath, resetCheckoutScan } from "../src/extension/checkouts.ts";
+import {
+	blockedCheckout,
+	checkoutCommandRefusal,
+	primaryCheckoutOf,
+	primaryCheckouts,
+	realPath,
+	resetCheckoutScan,
+} from "../src/extension/checkouts.ts";
 import { addWorktree } from "../src/worktrees/index.ts";
 import type { Runtime } from "../src/server/runtime.ts";
 import type { RequestContext } from "../src/api/types.ts";
@@ -52,7 +59,7 @@ function setup() {
 	return { home, repo, scratch, git };
 }
 
-function env(options: { home: string; cwd: string; roots?: string[]; protect?: boolean }): PanaExecutionEnv {
+function env(options: { home: string; cwd: string; roots?: string[]; protect?: "guard" | "sandbox" | "off" }): PanaExecutionEnv {
 	return new PanaExecutionEnv({
 		cwd: options.cwd,
 		home: options.home,
@@ -102,32 +109,87 @@ describe("GUARD-01 the file tools refuse the user's checkout", () => {
 		expect((await e.writeFile(join(other, "refused.txt"), "no", ctx)).ok).toBe(false);
 	});
 
-	it("tools.protectCheckouts: false turns the refusal off", async () => {
+	it("tools.protectCheckouts: off turns the refusal off", async () => {
 		const t = setup();
-		const e = env({ home: t.home, cwd: t.scratch, protect: false });
+		const e = env({ home: t.home, cwd: t.scratch, protect: "off" });
 		expect((await e.writeFile(join(t.repo, "off.txt"), "yes", ctx)).ok).toBe(true);
 	});
 });
 
-describe("GUARD-02 bash cannot write to the checkout", () => {
-	it.skipIf(!canNamespace())("a redirect into the primary checkout fails, a worktree write succeeds", async () => {
+describe("GUARD-02 sandbox mode cannot write to the checkout", () => {
+	it.skipIf(!canNamespace())("a write the admission check cannot see still fails, and a worktree write succeeds", async () => {
 		const t = setup();
 		const wt = join(t.scratch, "worktree");
 		t.git(t.repo, ["worktree", "add", "-q", "-b", "pana/bash", wt, "HEAD"]);
-		const e = env({ home: t.home, cwd: t.scratch });
-		const run = (command: string[]) => e.exec(command, undefined, ctx);
+		const e = env({ home: t.home, cwd: t.scratch, protect: "sandbox" });
+		// `$TARGET` is unreadable to the string check, so only the read-only mount can refuse it.
+		const script = ["sh", "-c", `printf nope > "$TARGET"`];
 
-		const refused = await run(["sh", "-c", `printf nope > ${t.repo}/from-bash.txt`]);
+		const refused = await e.exec(script, { env: { TARGET: join(t.repo, "from-bash.txt") } }, ctx);
 		expect(refused.ok).toBe(true);
 		if (!refused.ok) throw new Error(refused.error.message);
 		expect(refused.value.exitCode).not.toBe(0);
 		expect(existsSync(join(t.repo, "from-bash.txt"))).toBe(false);
 
-		const allowed = await run(["sh", "-c", `printf yes > ${wt}/from-bash.txt`]);
+		const allowed = await e.exec(script, { env: { TARGET: join(wt, "from-bash.txt") } }, ctx);
 		expect(allowed.ok).toBe(true);
 		if (!allowed.ok) throw new Error(allowed.error.message);
 		expect(allowed.value.exitCode).toBe(0);
 		expect(existsSync(join(wt, "from-bash.txt"))).toBe(true);
+	});
+});
+
+describe("GUARD-06 the admission check costs no process", () => {
+	it("refuses a command that enters the checkout, and allows one that names a file", async () => {
+		const t = setup();
+		const e = env({ home: t.home, cwd: t.scratch });
+		writeFileSync(join(t.repo, "readable.txt"), "hello\n");
+
+		const entered = await e.exec("cd ~/pana && npm run test:web", undefined, ctx);
+		expect(entered.ok).toBe(false);
+		if (entered.ok) throw new Error("expected a refusal");
+		expect(entered.error.message).toContain(t.repo);
+		expect(entered.error.message).toContain("pana worktree add");
+
+		// Reading stays allowed, and so does a read-only git command.
+		const read = await e.exec(`grep -n hello ${join(t.home, "pana", "readable.txt")}`, undefined, ctx);
+		expect(read.ok).toBe(true);
+		if (!read.ok) throw new Error(read.error.message);
+		expect(read.value.exitCode).toBe(0);
+		const git = await e.exec(["git", "-C", t.repo, "log", "--oneline"], undefined, ctx);
+		expect(git.ok).toBe(true);
+	});
+
+	it("answers a command in microseconds, so guard mode costs nothing per call", async () => {
+		const t = setup();
+		const e = env({ home: t.home, cwd: t.scratch });
+		// Warm the scan, then time the pure-string check on a typical command.
+		primaryCheckouts({ roots: [t.home] });
+		const checkouts = [realPath(t.repo)];
+		const started = performance.now();
+		const rounds = 1000;
+		for (let i = 0; i < rounds; i++) {
+			expect(
+				checkoutCommandRefusal("npm test && git status --porcelain | head -3", { cwd: t.scratch, home: t.home, checkouts }),
+			).toBeUndefined();
+		}
+		const perCall = (performance.now() - started) / rounds;
+		expect(perCall).toBeLessThan(1);
+	});
+
+	it("refuses the ways into a checkout: pushd, git -C with a write, a redirect, a mutator", () => {
+		const t = setup();
+		const checkouts = [realPath(t.repo)];
+		const refusal = (command: string) => checkoutCommandRefusal(command, { cwd: t.scratch, home: t.home, checkouts });
+		expect(refusal("pushd ~/pana")).toBeDefined();
+		expect(refusal(`git -C ${t.repo} commit -am wip`)).toBeDefined();
+		expect(refusal(`git --git-dir=${join(t.repo, ".git")} commit -m wip`)).toBeDefined();
+		expect(refusal(`printf x > ${join(t.repo, "a.txt")}`)).toBeDefined();
+		expect(refusal(`sed -i s/a/b/ ${join(t.repo, "tracked.txt")}`)).toBeDefined();
+		expect(refusal(`rm -rf ${join(t.repo, "pana")}`)).toBeDefined();
+		expect(refusal(`git -C ${t.repo} status --porcelain`)).toBeUndefined();
+		expect(refusal(`cat ${join(t.repo, "tracked.txt")}`)).toBeUndefined();
+		expect(refusal("npm test")).toBeUndefined();
 	});
 });
 

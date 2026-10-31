@@ -5,8 +5,8 @@
 // `exec` to drop that inheritance, so the child sees exactly the variables built here.
 
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { err, FileError } from "@earendil-works/pi-durable/env";
-import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result, ExecutionError } from "@earendil-works/pi-durable/env";
+import { err, ExecutionError, FileError } from "@earendil-works/pi-durable/env";
+import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
 import { homedir, userInfo } from "node:os";
 import { existsSync } from "node:fs";
@@ -16,7 +16,15 @@ import { memoryFor } from "../memory/handlers.ts";
 import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { browserScope } from "./browser.ts";
-import { blockedCheckout, primaryCheckoutRefusal, primaryCheckouts, realPath, under } from "./checkouts.ts";
+import type { CheckoutGuard } from "../config/index.ts";
+import {
+	blockedCheckout,
+	checkoutCommandRefusal,
+	primaryCheckoutRefusal,
+	primaryCheckouts,
+	realPath,
+	under,
+} from "./checkouts.ts";
 
 /** The only variables a pana session's commands see. Git config is left to the repository. */
 export const PANA_ENV_NAMES = [
@@ -44,8 +52,8 @@ export interface PanaEnvOptions {
 	scratchDir?: string;
 	/** Overrides `HOME`, for a host whose session home differs from panad's. Default: panad's `HOME`. */
 	home?: string;
-	/** GUARD-01: keep the user's primary checkouts read-only. `tools.protectCheckouts`, true by default. */
-	protectCheckouts?: boolean;
+	/** GUARD-01/06: how hard to keep a session out of the user's checkouts. `tools.protectCheckouts`. */
+	protectCheckouts?: CheckoutGuard;
 	/** Where to scan for primary checkouts (GUARD-04). HOME by default; a test names its own root. */
 	checkoutRoots?: readonly string[];
 }
@@ -127,7 +135,9 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 	readonly panaEnv: Record<string, string>;
 	/** The session's own cwd: writes under it are the session's business, even in a checkout (GUARD-05). */
 	readonly sessionCwd: string;
-	readonly protectCheckouts: boolean;
+	/** The session's HOME, which is what `~` means in its commands. */
+	readonly home: string;
+	readonly protectCheckouts: CheckoutGuard;
 	/** GUARD-04: the roots the read-only scan covers. */
 	readonly checkoutRoots: readonly string[];
 	/** undefined until the first wrapped command says whether this machine can make a namespace. */
@@ -137,13 +147,14 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 		super({ cwd: options.cwd });
 		this.panaEnv = panaShellEnv(options);
 		this.sessionCwd = realPath(options.cwd);
-		this.protectCheckouts = options.protectCheckouts ?? true;
+		this.home = options.home ?? homedir();
+		this.protectCheckouts = options.protectCheckouts ?? "guard";
 		this.checkoutRoots = options.checkoutRoots ?? [homedir()];
 	}
 
 	/** GUARD-01: the refusal for a write to `path`, or undefined when the write may proceed. */
 	private refusal(path: string): string | undefined {
-		if (!this.protectCheckouts) return undefined;
+		if (this.protectCheckouts === "off") return undefined;
 		const root = blockedCheckout(path, this.sessionCwd);
 		return root === undefined ? undefined : primaryCheckoutRefusal(path, root);
 	}
@@ -196,9 +207,15 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 		return super.createDir(path, options, context);
 	}
 
-	/** GUARD-02: the checkouts to bind read-only, which is every one the session may not write (GUARD-05). */
+	/** The user's checkouts this session may not write, a scan that is cached for ten minutes (GUARD-04). */
+	private checkouts(): string[] {
+		if (this.protectCheckouts === "off") return [];
+		return primaryCheckouts({ roots: this.checkoutRoots }).filter((root) => !under(root, this.sessionCwd));
+	}
+
+	/** GUARD-02: the checkouts to bind read-only, which is every one the session may not write. */
 	private mounts(): string[] {
-		if (!this.protectCheckouts || this.namespace === false) return [];
+		if (this.protectCheckouts !== "sandbox" || this.namespace === false) return [];
 		return primaryCheckouts({ roots: this.checkoutRoots }).filter((root) => !under(root, this.sessionCwd));
 	}
 
@@ -212,6 +229,16 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 			inheritEnv: false,
 			env: { ...this.panaEnv, ...options?.env },
 		};
+		// GUARD-06: the admission check every call gets, which costs string work rather than a
+		// process. `sandbox` adds GUARD-02's mounts on top, for what the check cannot see.
+		if (this.protectCheckouts !== "off") {
+			const refusal = checkoutCommandRefusal(typeof command === "string" ? command : command.join(" "), {
+				cwd: this.cwd,
+				home: this.home,
+				checkouts: this.checkouts(),
+			});
+			if (refusal !== undefined) return err(new ExecutionError("unknown", refusal));
+		}
 		const mounts = this.mounts();
 		if (mounts.length === 0) return super.exec(command, execOptions, context);
 		const result = await super.exec(namespaced(mounts, command), execOptions, context);
