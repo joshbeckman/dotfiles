@@ -213,18 +213,18 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["objective", "metric", "add"],
 		usage: "pana objective metric add OBJECTIVE --name NAME --unit UNIT --direction up|down",
-		altUsage: ["pana objective metric add OBJECTIVE --name NAME --unit UNIT --direction up|down --target N --check COMMAND"],
+		altUsage: ["pana objective metric add OBJECTIVE --name NAME --unit UNIT --direction up|down --target N --check COMMAND --check-every DURATION"],
 		summary: "Declare a metric, with an optional target and check",
 		flags: [
 			string("name", "--name NAME", "The metric's slug: [a-z0-9-], 1 to 40", { required: true }),
 			string("unit", "--unit UNIT", "The unit every value is rendered with", { required: true }),
 			string("direction", "--direction up|down", "Which way is progress", { required: true }),
-			string("target", "--target N", "The value that finishes the metric"),
+			string("target", "--target N", "The value that finishes the metric; omitted, it is infinite"),
 			string("aggregation", "--aggregation raw|mean", "Latest reading, or a trailing mean"),
 			string("window", "--window WINDOW", "The trailing window for a mean, such as 7d"),
 			string("check", "--check COMMAND", "Read the value from the world instead of trusting the lead"),
 			string("check-cwd", "--check-cwd DIR", "Absolute directory the check runs in"),
-			string("check-every", "--check-every DURATION", "Run the check every this long"),
+			string("check-every", "--check-every DURATION", "Run the check every this long, such as 1d"),
 			string("check-cron", "--check-cron CRON", "Run the check on a cron schedule"),
 		],
 		positionals: [{ name: "OBJECTIVE", param: "id", required: true }],
@@ -260,7 +260,7 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		flags: [
 			string("name", "--name NAME", "The metric's name", { required: true }),
 			string("value", "--value V", "The reading; must be numeric", { required: true }),
-			string("source", "--source S", "Where the value came from"),
+			string("source", "--source S", "Where the value came from: lead, user, or check"),
 		],
 		positionals: [{ name: "OBJECTIVE", param: "id", required: true }],
 		request: (params) => ({
@@ -281,7 +281,8 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		request: (params) => ({
 			method: "POST",
 			path: `/objectives/${objectiveSegment(text(params, "id"))}/metrics/${encodeURIComponent(text(params, "name") ?? "")}`,
-			body: compact({ target: numberParam(params, "target") }),
+			// Omitted, --target removes the target and the metric is infinite again (OBJ-29).
+			body: { target: numberParam(params, "target") ?? null },
 		}),
 	},
 	{

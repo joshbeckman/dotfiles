@@ -11,6 +11,7 @@ import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
 import { launchObjective } from "./launch.ts";
+import { addMetric, appendReading, listMetrics, setMetric } from "./metrics.ts";
 import { phaseFilter } from "./schema.ts";
 import { objectiveId } from "./state.ts";
 import { createObjective } from "./store.ts";
@@ -88,5 +89,27 @@ export const handlers: Handlers = {
 	"objectives.archive": async (ctx): Promise<HandlerResult> => ({
 		status: 200,
 		body: { objective: await archiveObjective(ctx.runtime, ctx.caller, ctx.params.id) },
+	}),
+
+	// OBJ-25..OBJ-29: metrics. The `GET` answers every metric's readings in time order, its target,
+	// and its current value; the writes answer with the one metric they touched.
+	"objectives.metrics.list": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await listMetrics(ctx.runtime, ctx.params.id),
+	}),
+
+	"objectives.metrics.add": async (ctx): Promise<HandlerResult> => ({
+		status: 201,
+		body: { metric: await addMetric(ctx.runtime, ctx.caller, ctx.params.id, ctx.body) },
+	}),
+
+	"objectives.metrics.set": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: { metric: await setMetric(ctx.runtime, ctx.caller, ctx.params.id, ctx.params.name ?? "", ctx.body) },
+	}),
+
+	"objectives.metrics.readings": async (ctx): Promise<HandlerResult> => ({
+		status: 201,
+		body: { metric: await appendReading(ctx.runtime, ctx.caller, ctx.params.id, ctx.params.name ?? "", ctx.body) },
 	}),
 };

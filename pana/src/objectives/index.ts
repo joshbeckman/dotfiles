@@ -7,14 +7,17 @@
 // - `store.ts` — create (OBJ-01, OBJ-04).
 // - `launch.ts` — launch in one transaction (OBJ-05).
 // - `gates.ts` — stop, resume, done, archive (OBJ-07).
+// - `metrics.ts` — declared metrics, append-only readings, and the derived baseline and current
+//   value (OBJ-25, OBJ-27..OBJ-29).
+// - `metric-checks.ts` — the metric check loop on `runtime.clock` with no session (OBJ-26).
 // - `view.ts` — the read shape (extend `showObjective` for a new field on `GET /objectives/:id`).
 // - `brief.ts` — the lead's briefing seam (OBJ-32), a stub until the briefing package lands.
 // - `handlers.ts` — HTTP, one line per route.
 // - `cli.ts` — the `pana objective` command table.
 //
-// Later packages add `hold.ts`, `metrics.ts`, `brief.ts` (replacing the stub), `escalation.ts`, and
-// `reports.ts` beside these, their routes to `src/api/routes.ts`, one handler line each to
-// `handlers.ts`, and their commands to `cli.ts`.
+// Later packages add `hold.ts`, `brief.ts` (replacing the stub), `escalation.ts`, and `reports.ts`
+// beside these, their routes to `src/api/routes.ts`, one handler line each to `handlers.ts`, and
+// their commands to `cli.ts`.
 
 export {
 	CHARTER_SECTIONS,
@@ -54,6 +57,40 @@ export { createObjective, type CreateObjectiveInput, type CreatedObjective } fro
 export { leadBriefing, type BriefingOptions } from "./brief.ts";
 export { launchObjective } from "./launch.ts";
 export { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
+export {
+	METRIC_AGGREGATIONS,
+	METRIC_DIRECTIONS,
+	METRIC_NAME,
+	READING_SOURCES,
+	addMetric,
+	aggregate,
+	appendReading,
+	formatValue,
+	listMetrics,
+	metricRow,
+	metricRows,
+	metricView,
+	setMetric,
+	type MetricAggregation,
+	type MetricCheckView,
+	type MetricCurrentView,
+	type MetricDirection,
+	type MetricReadingRow,
+	type MetricReadingView,
+	type MetricRow,
+	type MetricView,
+	type MetricsView,
+	type ReadingSource,
+} from "./metrics.ts";
+export {
+	dueMetricChecks,
+	evaluated,
+	nextCheckTime,
+	nextMetricCheckAt,
+	startMetricChecks,
+	type DueMetricCheck,
+	type MetricChecks,
+} from "./metric-checks.ts";
 export {
 	listObjectives,
 	objectiveView,
