@@ -13,6 +13,7 @@ import { ApiError } from "../api/errors.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { CLOSED_PHASES, type ObjectiveDisplayState, type ObjectiveEventKind, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow } from "./schema.ts";
+import { objectivePaused } from "./limits.ts";
 
 /** An objective ID from a bare ULID or a `pana://<domain>/objectives/<id>` URL. */
 export function objectiveId(value: string | null | undefined, domain: string): string {
@@ -67,13 +68,16 @@ export async function objectiveMembers(db: SqliteExecutor, objectiveId: string):
  * `running` when any member session is `running` or `waiting`; else `idle` when an active wake
  * targets a member (or the lead is under a hold, which persists as one, OBJ-18) or a metric check
  * is due in the future (OBJ-26, read ahead so a measured objective is not called stranded between
- * checks); else `stranded`. A phase other than `active` has no display state: the phase is what a
- * reader shows.
+ * checks); else `stranded`. A paused objective (OBJ-20..22) is `idle`: its limits hold it, so it
+ * is not stranded. A phase other than `active` has no display state: the phase is what a reader
+ * shows.
  */
 export async function objectiveState(db: SqliteExecutor, runtime: Runtime, row: ObjectiveRow): Promise<ObjectiveDisplayState | null> {
 	if (row.phase !== "active") return null;
 	const members = await objectiveMembers(db, row.id);
 	if (members.some((member) => member.state === "running" || member.state === "waiting")) return "running";
+	// OBJ-20..OBJ-22: a budget condition is not a stranded objective.
+	if ((await objectivePaused(db, runtime, row)) !== null) return "idle";
 	if (members.some((member) => member.hold_until !== null && member.hold_until > runtime.clock.now())) return "idle";
 	if (await hasPendingWake(db, members.map((member) => member.id))) return "idle";
 	if (await hasFutureCheck(db, row.id, runtime.clock.now())) return "idle";

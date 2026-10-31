@@ -33,6 +33,12 @@ export interface SessionView {
 	cwd: string | null;
 	conversationId: number | null;
 	costUsd: number;
+	/** OBJ-15: the objective this session acts for, inherited at create; null outside one. */
+	objectiveId: string | null;
+	/** OBJ-14: who stopped this session, so a briefing can list a member the user stopped. */
+	stoppedBy: "user" | "objective" | null;
+	/** OBJ-18: when the lead's hold lifts, or null. */
+	holdUntil: number | null;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -62,6 +68,9 @@ export function sessionView(runtime: Runtime, row: SessionRow, waiting: Set<numb
 		cwd: row.cwd,
 		conversationId: row.conversation_id,
 		costUsd: row.cost_usd,
+		objectiveId: row.objective_id ?? null,
+		stoppedBy: row.stopped_by ?? null,
+		holdUntil: row.hold_until ?? null,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};

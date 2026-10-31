@@ -73,18 +73,9 @@ export async function stopObjective(runtime: Runtime, caller: Caller, value: str
 	await setPhase(runtime, row, "stopped", "stopped", caller, { members: members.map((member) => member.id), wakes });
 
 	for (const member of members) {
-		// The runtime's stop aborts the run and queues nothing; an archived member is already inert.
-		await sessionRuntime(runtime).stop(member.id);
-	}
-	if (members.length > 0) {
-		await runtime.db.write((tx) =>
-			tx.run(
-				`UPDATE sessions SET stopped_by = 'objective', updated_at = ?
-				  WHERE objective_id = ? AND state = 'stopped' AND (stopped_by IS NULL OR stopped_by = 'objective')`,
-				runtime.clock.now(),
-				id,
-			),
-		);
+		// The runtime's stop aborts the run and queues nothing; the objective records why (OBJ-14),
+		// so a member the user stopped keeps `user` and stays inert.
+		await sessionRuntime(runtime).stop(member.id, "objective");
 	}
 	for (const wake of wakes) await deleteSchedule(runtime, wake);
 	return showObjective(runtime, id);
