@@ -15,6 +15,7 @@ import { appendAttachmentMarkdown } from "../threads/files.ts";
 import { CommandUsageError, parseArgv, resolveFlags, resolvePositionals, type Flags } from "./args.ts";
 
 export { CommandUsageError, UsageError } from "./args.ts";
+import { OBJECTIVE_COMMANDS } from "../objectives/cli.ts";
 import { readBody, readStdinSync, uploadAttachments, type ApiCall, type FileAttachment } from "./body.ts";
 import { renderText } from "./output.ts";
 
@@ -526,6 +527,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		positionals: [],
 		request: (params) => ({ method: "POST", path: "/scratch/prune", body: { dryRun: params.dryRun === true } }),
 	},
+	// WP18: `src/objectives/cli.ts` holds the `pana objective` table, so a WP18 package adds its
+	// commands there and not here.
+	...OBJECTIVE_COMMANDS,
 	{
 		path: ["schedule", "session", "create"],
 		usage: 'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',

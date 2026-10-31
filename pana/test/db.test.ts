@@ -27,6 +27,16 @@ const PANA_TABLES = [
 	"push_subscriptions",
 	"subjects",
 	"thread_archives",
+	// WP18: objectives (migration 12).
+	"objectives",
+	"objective_charter_revisions",
+	"objective_metrics",
+	"metric_readings",
+	"objective_reports",
+	"objective_files",
+	"objective_events",
+	"objective_escalations",
+	"objective_costs",
 ];
 
 const opened: TestPanad[] = [];

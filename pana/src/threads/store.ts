@@ -478,45 +478,59 @@ function wakeable(state: string | null): boolean {
 // --- Threads -------------------------------------------------------------------
 
 export async function createThread(runtime: Runtime, caller: Caller, input: CreateThreadInput): Promise<ThreadResult> {
+	const recipients: string[] = [];
+	const result = await runtime.db.atomically((tx) => createThreadIn(tx, runtime, caller, input, recipients));
+	announce(runtime, "delivery", result, recipients);
+	// SUB-02: the model job runs in the background, after the create transaction commits.
+	scheduleSubject(runtime, result.thread.id);
+	return result;
+}
+
+/**
+ * `createThread` inside a transaction the caller already opened, for a create that must commit
+ * with other work: launch creates an objective's thread, its lead, and the objective's phase in one
+ * transaction (OBJ-05). The caller announces and schedules the subject after its own commit, since
+ * both are work that must not run inside the write.
+ */
+export async function createThreadIn(
+	tx: SqliteExecutor,
+	runtime: Runtime,
+	caller: Caller,
+	input: CreateThreadInput,
+	recipients: string[] = [],
+): Promise<ThreadResult> {
 	const body = messageBody(input.body);
 	const addresses = addressList(input.to, "recipients");
 	const now = runtime.clock.now();
 	const explicitSubject = typeof input.subject === "string" && input.subject.trim().length > 0;
 
-	const recipients: string[] = [];
-	const result = await runtime.db.atomically(async (tx) => {
-		const sender = await ensureCaller(tx, runtime, now, caller);
-		const members = new Map<string, ParticipantRecord>([[sender.id, sender]]);
-		for (const raw of addresses) {
-			const resolved = await participantFor(tx, runtime, now, raw);
-			members.set(resolved.id, resolved);
-		}
+	const sender = await ensureCaller(tx, runtime, now, caller);
+	const members = new Map<string, ParticipantRecord>([[sender.id, sender]]);
+	for (const raw of addresses) {
+		const resolved = await participantFor(tx, runtime, now, raw);
+		members.set(resolved.id, resolved);
+	}
 
-		const threadId = runtime.newId();
-		await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, NULL, ?, ?)", threadId, sender.id, now);
-		for (const member of members.values()) {
-			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
-		}
+	const threadId = runtime.newId();
+	await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, NULL, ?, ?)", threadId, sender.id, now);
+	for (const member of members.values()) {
+		await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
+	}
 
-		const message = await appendMessage(tx, runtime, {
-			messageId: runtime.newId(),
-			threadId,
-			sender,
-			body,
-			now,
-			recipients,
-		});
-		if (explicitSubject) {
-			await recordSubject(tx, { threadId, subject: input.subject as string, source: "manual", id: runtime.newId(), now });
-		} else {
-			await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
-		}
-		return { thread: await threadView(tx, runtime, threadId), message };
+	const message = await appendMessage(tx, runtime, {
+		messageId: runtime.newId(),
+		threadId,
+		sender,
+		body,
+		now,
+		recipients,
 	});
-	announce(runtime, "delivery", result, recipients);
-	// SUB-02: the model job runs in the background, after the create transaction commits.
-	scheduleSubject(runtime, result.thread.id);
-	return result;
+	if (explicitSubject) {
+		await recordSubject(tx, { threadId, subject: input.subject as string, source: "manual", id: runtime.newId(), now });
+	} else {
+		await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
+	}
+	return { thread: await threadView(tx, runtime, threadId), message };
 }
 
 /**

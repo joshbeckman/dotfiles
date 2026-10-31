@@ -99,7 +99,7 @@ export function ulid(): string {
 
 // --- References and URLs -------------------------------------------------------
 
-export type RefKind = "domain" | "user" | "session" | "thread" | "message" | "file" | "schedule" | "memory";
+export type RefKind = "domain" | "user" | "session" | "thread" | "message" | "file" | "schedule" | "memory" | "objective";
 
 export interface Ref {
 	kind: RefKind;
@@ -142,6 +142,8 @@ export function formatUrl(ref: Ref, domain: string): string {
 			return `${base}/files/${ref.id}/${encodeURIComponent(ref.name)}`;
 		case "schedule":
 			return `${base}/schedules/${ref.id}`;
+		case "objective":
+			return `${base}/objectives/${ref.id}`;
 		case "memory":
 			return `${base}/memory/files/${memorySegments(ref.id).map(encodeMemorySegment).join("/")}`;
 	}
@@ -230,6 +232,9 @@ function parseUrl(url: string, domain?: string): Ref {
 		case "schedules":
 			if (!first) break;
 			return { kind: "schedule", id: first };
+		case "objectives":
+			if (!first) break;
+			return { kind: "objective", id: first };
 	}
 	throw new RefError("invalid_ref", `unrecognized pana:// path: ${parsed.pathname}`);
 }

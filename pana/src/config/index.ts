@@ -40,6 +40,19 @@ export interface ScratchConfig {
 	maxTotalMB?: number;
 }
 
+/**
+ * Objective defaults (OBJ-16, OBJ-24, OBJ-18). An objective row overrides any of them per
+ * objective; these are what a new objective starts with.
+ */
+export interface ObjectivesConfig {
+	/** OBJ-16: the most member creates one lead run may attempt before the excess is refused. */
+	maxMembersPerRun: number;
+	/** OBJ-24: the messages an objective's sessions may send the user per local day. */
+	maxDailyUserMessages: number;
+	/** OBJ-18: the quiet interval between a lead's runs before a held delivery starts one. */
+	wakeMinMinutes: number;
+}
+
 export interface Config {
 	domain: string;
 	user: string;
@@ -52,6 +65,7 @@ export interface Config {
 	http: HttpConfig;
 	tools: ToolsConfig;
 	scratch: ScratchConfig;
+	objectives: ObjectivesConfig;
 }
 
 export const DEFAULTS = {
@@ -61,6 +75,7 @@ export const DEFAULTS = {
 	http: { port: 8766 },
 	tools: { bashTimeoutSec: 600 },
 	scratch: { ttlDays: 8 },
+	objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 } as const;
 
 /** The state directory, from `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
@@ -110,6 +125,7 @@ export function loadConfig(dir = stateDir()): Config {
 	const http = (obj.http ?? {}) as Record<string, unknown>;
 	const tools = (obj.tools ?? {}) as Record<string, unknown>;
 	const scratch = (obj.scratch ?? {}) as Record<string, unknown>;
+	const objectives = (obj.objectives ?? {}) as Record<string, unknown>;
 	const maxTotalMB = positive(scratch.maxTotalMB, "scratch.maxTotalMB", "megabytes");
 
 	return {
@@ -136,6 +152,15 @@ export function loadConfig(dir = stateDir()): Config {
 		scratch: {
 			ttlDays: positive(scratch.ttlDays, "scratch.ttlDays", "days") ?? DEFAULTS.scratch.ttlDays,
 			...(maxTotalMB === undefined ? {} : { maxTotalMB }),
+		},
+		objectives: {
+			maxMembersPerRun:
+				positive(objectives.maxMembersPerRun, "objectives.maxMembersPerRun", "members") ?? DEFAULTS.objectives.maxMembersPerRun,
+			maxDailyUserMessages:
+				positive(objectives.maxDailyUserMessages, "objectives.maxDailyUserMessages", "messages") ??
+				DEFAULTS.objectives.maxDailyUserMessages,
+			wakeMinMinutes:
+				positive(objectives.wakeMinMinutes, "objectives.wakeMinMinutes", "minutes") ?? DEFAULTS.objectives.wakeMinMinutes,
 		},
 	};
 }

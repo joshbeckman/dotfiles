@@ -2,6 +2,7 @@
 
 import type { Handlers } from "../api/types.ts";
 import { handlers as memory } from "../memory/handlers.ts";
+import { handlers as objectives } from "../objectives/handlers.ts";
 import { handlers as push } from "../push/handlers.ts";
 import { handlers as scratch } from "../scratch/handlers.ts";
 import { handlers as schedules } from "../schedules/handlers.ts";
@@ -15,6 +16,7 @@ export const defaultHandlers: Handlers = {
 	...sessions,
 	...memory,
 	...schedules,
+	...objectives,
 	...scratch,
 	...search,
 	...push,
