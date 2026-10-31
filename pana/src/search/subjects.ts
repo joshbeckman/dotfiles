@@ -10,6 +10,11 @@ import type { Runtime } from "../server/runtime.ts";
 import { publish } from "../web/events.ts";
 
 export const SUBJECT_MAX_LENGTH = 80;
+// The model's output budget, in the unit the model counts. Tokens are not characters: English
+// runs about four characters per token and denser scripts one or two, so half the character
+// limit is roughly this title in English and still enough for a shorter line in a denser script.
+// reply that ignores the 80-character instruction from rambling; `shorten` still owns the cut.
+export const SUBJECT_MAX_TOKENS = Math.ceil(SUBJECT_MAX_LENGTH / 2);
 // Bound regeneration cost while retaining the conversation's most recent direction.
 const SUBJECT_CONTEXT_MESSAGES = 100;
 const SUBJECT_CONTEXT_CHARS = 32_000;
@@ -17,7 +22,7 @@ const SUBJECT_MESSAGE_CHARS = 4_000;
 
 export const SUBJECT_SYSTEM_PROMPT = [
 	"You name message threads.",
-	"Reply with one plain-text line of at most 80 characters.",
+	`Reply with one plain-text line of at most ${SUBJECT_MAX_LENGTH} characters.`,
 	"No label, no quotes, no trailing punctuation.",
 	"Name the substantive topic of the supplied conversation, not its greeting.",
 	"When the topic evolves, reflect its current focus.",
@@ -244,6 +249,9 @@ export async function askSubjectModel(runtime: Runtime, body: string, systemProm
 	const response = await runtime.models.completeSimple(model, {
 		systemPrompt,
 		messages: [{ role: "user", content: body, timestamp: runtime.clock.now() }],
+	}, {
+		// SUB-04: spend about what an 80-character subject is worth, not the model's default.
+		maxTokens: SUBJECT_MAX_TOKENS,
 	});
 	if (response.stopReason === "error" || response.stopReason === "aborted") {
 		throw new SubjectError("model_failed", response.errorMessage ?? `subject model stopped: ${response.stopReason}`);
@@ -257,8 +265,20 @@ export async function askSubjectModel(runtime: Runtime, body: string, systemProm
 	return subject;
 }
 
-/** Collapse to one line and cut to 80 characters. Code points, so a cut never splits an emoji. */
+/**
+ * Collapse to one line and cut to 80 characters, at a word boundary when one is near enough to
+ * keep. Code points, so a cut never splits an emoji; an unspaced script has no boundary and
+ * hard-cuts, as does a long token that would cost most of the line.
+ */
 export function shorten(text: string): string {
 	const collapsed = text.replace(/\s+/g, " ").trim();
-	return Array.from(collapsed).slice(0, SUBJECT_MAX_LENGTH).join("").trim();
+	const characters = Array.from(collapsed);
+	if (characters.length <= SUBJECT_MAX_LENGTH) return collapsed;
+	const cut = characters.slice(0, SUBJECT_MAX_LENGTH);
+	const next = characters[SUBJECT_MAX_LENGTH] ?? "";
+	if (!/\s/.test(next)) {
+		const space = cut.lastIndexOf(" ");
+		if (space >= SUBJECT_MAX_LENGTH * 0.6) return cut.slice(0, space).join("").trim();
+	}
+	return cut.join("").trim();
 }

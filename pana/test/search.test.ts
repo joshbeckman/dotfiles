@@ -12,6 +12,7 @@ import {
 	reindexRevision,
 	removeRedacted,
 	scheduleSubject,
+	SUBJECT_MAX_TOKENS,
 	searchSessions,
 	searchThreads,
 	subjectHistory,
@@ -91,6 +92,7 @@ describe("SUB subjects", () => {
 			{ text: "Background subject" }, { text: "Regenerated subject" }, { fail: "provider error" },
 		] });
 		const seeded = await seed(t, "Initial subject");
+		const ask = vi.spyOn(t.runtime.models, "completeSimple");
 		const frames: Array<{ kind: string; threadId?: string; subject?: string }> = [];
 		const committed: Array<Promise<string | null | undefined>> = [];
 		const stop = subscribeEvents(t.runtime, {
@@ -118,6 +120,8 @@ describe("SUB subjects", () => {
 				expect.objectContaining({ kind: "thread.subject", threadId: seeded.threadId, subject: "Regenerated subject" }),
 			]);
 			expect(await Promise.all(committed)).toEqual(["Background subject", "Regenerated subject"]);
+			// SUB-04: the reply is budgeted near the character length, not the model's default.
+			for (const call of ask.mock.calls) expect(call[2]).toEqual(expect.objectContaining({ maxTokens: SUBJECT_MAX_TOKENS }));
 		} finally { stop(); }
 	});
 	it("SUB-01 a new thread's subject is the first line of its first message, trimmed to 80 characters", async () => {
@@ -136,6 +140,12 @@ describe("SUB subjects", () => {
 		]);
 
 		expect(firstLineSubject("one line\nrest of the body")).toBe("one line");
+
+		// SUB-01: a cut that lands inside a word gives the word back while the line keeps most of
+		// its budget; an unbroken 120-character token has no boundary and hard-cuts at 80.
+		const words = Array.from({ length: 30 }, () => "word").join(" ");
+		expect(firstLineSubject(words)).toBe(words.split(" ").slice(0, 16).join(" "));
+		expect(firstLineSubject(words).length).toBeLessThan(80);
 	});
 
 	it("SUB-02 with subjectModel set a background job replaces the subject, and create does not wait for it", async () => {
