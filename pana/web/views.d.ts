@@ -50,6 +50,17 @@ export interface WorkingSessionRef {
 export function isWorking(state: string): boolean;
 export function workingOf(value: any): WorkingSessionRef[];
 export function workingParticipants(thread: any): WorkingSessionRef[];
+/** UX-09: a session participant with a wake pending, for the thread footer's scheduled chip. */
+export interface ScheduledSessionRef {
+	sessionId: string;
+	url: string;
+	at: number;
+	scheduleUrl: string;
+	subject: string;
+	cron: string | null;
+}
+export function scheduledOf(thread: any): ScheduledSessionRef[];
+export function untilLabel(at: number, now?: number): string;
 export function inboxThreadRow(thread: any): {
 	threadId: string;
 	threadUrl?: string;

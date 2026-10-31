@@ -21,6 +21,7 @@ import type { PersonView } from "../threads/store.ts";
 import { addressList, messageBody } from "../threads/store.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { fallbackDescription, fallbackScheduleSubject, parseScheduleSubject, queueScheduleSubject } from "./subjects.ts";
+import { announceWakes, wakeSessionOf } from "./live.ts";
 import { notifySchedulesChanged } from "./registry.ts";
 
 export type ScheduleKind = "session" | "thread" | "wake";
@@ -431,6 +432,7 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 		return scheduleView(saved, runtime);
 	});
 	notifySchedulesChanged(runtime);
+	if (kind === "wake") await announceWakes(runtime, [String(payload.session)]);
 	if (subject === null) queueScheduleSubject(runtime, saved);
 	return view;
 }
@@ -449,6 +451,9 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 	const now = runtime.clock.now();
 	const retime = hasValue(typeof input.cron === "string" ? input.cron.trim() : input.cron) || hasValue(input.at);
 	const timing = retime ? scheduleTiming(input, runtime.config.timezone, now) : undefined;
+	// UX-09: an edit can retarget a wake, so both the old and the new session get the news.
+	const before = await runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
+	if (!before || before.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
 	const view = await runtime.db.write(async (tx) => {
 		const existing = await scheduleRow(tx, id);
 		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
@@ -485,6 +490,9 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 		return scheduleView(saved, runtime);
 	});
 	notifySchedulesChanged(runtime);
+	if (before.kind === "wake" || view.kind === "wake") {
+		await announceWakes(runtime, [wakeSessionOf(before.payload) ?? "", wakeSessionOf(view.payload) ?? ""]);
+	}
 	if (regenerate || saved.subject === null) queueScheduleSubject(runtime, saved);
 	return view;
 }
@@ -493,13 +501,14 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 export async function deleteSchedule(runtime: Runtime, id: string): Promise<void> {
 	const now = runtime.clock.now();
 	const deleted = await runtime.db.write(async (tx) => {
-		const row = await tx.get<{ state: ScheduleState }>("SELECT state FROM schedules WHERE id = ?", id);
-		if (!row || row.state === "deleted") return false;
+		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
+		if (!row || row.state === "deleted") return undefined;
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
-		return true;
+		return row;
 	});
 	if (!deleted) throw ApiError.notFound(`schedule ${id}`);
 	notifySchedulesChanged(runtime);
+	if (deleted.kind === "wake") await announceWakes(runtime, [wakeSessionOf(deleted.payload) ?? ""]);
 }
 
 // --- Scheduler-facing reads and writes ------------------------------------------

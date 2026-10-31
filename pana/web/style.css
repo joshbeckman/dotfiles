@@ -828,12 +828,18 @@ button.quiet:hover,
    so the state reads without a label; reduced motion keeps the color and drops the animation. */
 .working {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: var(--s1) var(--s3);
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--s1);
 	margin: var(--s3) 0 var(--s2);
 	font-size: 0.8rem;
 	color: var(--c-text-alt);
+}
+.working-group {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--s1) var(--s3);
 }
 .working-label {
 	font-family: var(--font-condensed);
@@ -848,6 +854,17 @@ button.quiet:hover,
 }
 .working-chip a {
 	color: var(--who, var(--c-text));
+}
+/* UX-09: a session with a wake pending is work to come, not work now: a hollow mark and a
+   quieter time, so the footer never reads as two things happening at once. */
+.working-dot.scheduled-mark {
+	background: none;
+	border: 1px solid var(--who, var(--c-link));
+	animation: none;
+}
+.working-chip a.scheduled-when {
+	font-variant-numeric: tabular-nums;
+	color: var(--c-text-alt);
 }
 .working-dot,
 .working-mark {

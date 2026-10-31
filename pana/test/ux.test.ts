@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPanaCli } from "../src/cli/commands.ts";
+import { type SessionWakeEvent } from "../src/schedules/live.ts";
 import { sessionRuntime, setSessionState, type SessionStateEvent } from "../src/sessions/index.ts";
 import { snippetOf } from "../src/threads/index.ts";
 import { subscribeEvents } from "../src/web/events.ts";
@@ -13,7 +14,7 @@ import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection, sequenceLabel } from "../web/keys.js";
 import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits, rankBy } from "../web/palette.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
-import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, SESSION_COLORS, threadRow, workingOf } from "../web/views.js";
+import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, scheduledOf, SESSION_COLORS, threadRow, untilLabel, workingOf } from "../web/views.js";
 
 it("enables inherited font disambiguation throughout the UI", () => {
 	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
@@ -646,7 +647,13 @@ interface InboxThreadRow {
 interface ThreadReadBody {
 	thread: {
 		id: string;
-		participants: Array<{ id: string; kind: string; url: string; state?: string }>;
+		participants: Array<{
+			id: string;
+			kind: string;
+			url: string;
+			state?: string;
+			wake?: { at: number; url: string; subject: string; cron: string | null };
+		}>;
 	};
 	messages: unknown[];
 	archived: boolean;
@@ -655,16 +662,16 @@ interface ThreadReadBody {
 /** A session needs a model; the scripted faux provider is the only one a test registers. */
 const MODEL = { defaultModel: "faux/faux-1", timezone: "UTC" };
 
-/** An in-process `/events` subscriber: every frame the hub writes, parsed. */
-function stateEvents(t: TestPanad): SessionStateEvent[] {
-	const seen: SessionStateEvent[] = [];
+/** An in-process `/events` subscriber: every frame the hub writes, parsed, of one kind. */
+function eventsOfKind<T>(t: TestPanad, kind: string): T[] {
+	const seen: T[] = [];
 	const res = {
 		write(chunk: string) {
 			for (const frame of chunk.split("\n\n")) {
 				const line = frame.split("\n").find((row) => row.startsWith("data:"));
 				if (!line) continue;
-				const event = JSON.parse(line.slice(5).trim()) as SessionStateEvent;
-				if (event.kind === "session.state") seen.push(event);
+				const event = JSON.parse(line.slice(5).trim()) as { kind?: string };
+				if (event.kind === kind) seen.push(event as T);
 			}
 			return true;
 		},
@@ -674,6 +681,10 @@ function stateEvents(t: TestPanad): SessionStateEvent[] {
 	} as unknown as ServerResponse;
 	subscribeEvents(t.runtime, res);
 	return seen;
+}
+
+function stateEvents(t: TestPanad): SessionStateEvent[] {
+	return eventsOfKind<SessionStateEvent>(t, "session.state");
 }
 
 async function shownState(id: string): Promise<string> {
@@ -811,6 +822,85 @@ describe("UX-09 working indicators", () => {
 		});
 		expect(row.working).toEqual([{ sessionId: "S1", url: "pana://a.example/sessions/S1", state: "running" }]);
 		expect(workingOf({})).toEqual([]);
+	});
+
+	it("UX-09 a thread names the wake each scheduled session is waiting for", async () => {
+		t = await startTestPanad({ script: [{ text: "later then" }], config: MODEL });
+		const wakes = eventsOfKind<SessionWakeEvent>(t, "session.wake");
+		const created = await post<{ session: { id: string; url: string }; thread: { id: string } }>("/sessions", { prompt: "go" });
+		const sessionId = created.session.id;
+		await settled(sessionId);
+		// A session with nothing scheduled says nothing about waking.
+		const quiet = await readThread(created.thread.id);
+		expect(quiet.thread.participants.find((participant) => participant.id === sessionId)!.wake).toBeUndefined();
+
+		const made = await post<{ schedule: { id: string; url: string; nextAt: number } }>("/schedules", {
+			kind: "wake",
+			session: sessionId,
+			in: "2h",
+			note: "Check the release.",
+			subject: "Check release",
+		});
+		const wake = { at: made.schedule.nextAt, url: made.schedule.url, subject: "Check release", cron: null };
+
+		// The scheduled chip is work to come, apart from the working set, soonest first.
+		const read = await readThread(created.thread.id);
+		expect(read.thread.participants.find((participant) => participant.id === sessionId)!.wake).toEqual(wake);
+		expect(scheduledOf(read.thread)).toEqual([
+			{ sessionId, url: created.session.url, at: wake.at, scheduleUrl: wake.url, subject: wake.subject, cron: wake.cron },
+		]);
+		expect(scheduledOf(quiet.thread)).toEqual([]);
+
+		// A window hears the new time without a reload, and hears it clear: an edit moves the chip.
+		expect(wakes.map((event) => ({ sessionId: event.sessionId, wake: event.wake }))).toEqual([{ sessionId, wake }]);
+		const edited = await post<{ schedule: { nextAt: number } }>(`/schedules/${made.schedule.id}`, { in: "3h" });
+		const moved = { ...wake, at: edited.schedule.nextAt };
+		await until(async () => (await readThread(created.thread.id)).thread.participants.find((each) => each.id === sessionId)!.wake?.at === moved.at, "the edited wake");
+		expect(wakes.map((event) => event.wake?.at)).toEqual([wake.at, moved.at]);
+		await t.client.delete(`/schedules/${made.schedule.id}`);
+		await until(async () => (await readThread(created.thread.id)).thread.participants.find((each) => each.id === sessionId)!.wake === undefined, "the wake to clear");
+		expect(wakes.at(-1)).toMatchObject({ kind: "session.wake", sessionId, wake: null });
+		expect(scheduledOf((await readThread(created.thread.id)).thread)).toEqual([]);
+	});
+
+	it("UX-09 a recurring wake's chip moves to the next occurrence when it fires", async () => {
+		t = await startTestPanad({ script: [{ text: "woken" }], config: MODEL });
+		const wakes = eventsOfKind<SessionWakeEvent>(t, "session.wake");
+		const created = await post<{ session: { id: string }; thread: { id: string } }>("/sessions", { prompt: "go" });
+		const sessionId = created.session.id;
+		await settled(sessionId);
+		const made = await post<{ schedule: { nextAt: number } }>("/schedules", {
+			kind: "wake",
+			session: sessionId,
+			cron: "0 * * * *",
+			note: "Hourly check.",
+			subject: "Hourly",
+		});
+		const first = (await readThread(created.thread.id)).thread.participants.find((each) => each.id === sessionId)!.wake!;
+		expect(first.at).toBe(made.schedule.nextAt);
+		expect(first.cron).toBe("0 * * * *");
+
+		await t.clock.advance(first.at - t.clock.now());
+		await until(async () => {
+			const wake = (await readThread(created.thread.id)).thread.participants.find((each) => each.id === sessionId)!.wake;
+			return (wake?.at ?? 0) > first.at;
+		}, "the chip to move to the next hour");
+		// The claim published the same next time the thread now reads, before the session reported.
+		const next = (await readThread(created.thread.id)).thread.participants.find((each) => each.id === sessionId)!.wake!;
+		expect(wakes.map((event) => event.wake?.at)).toEqual([first.at, next.at]);
+	});
+
+	it("UX-09 the scheduled chip says how long, in the footer's few words", () => {
+		const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+		expect(untilLabel(now + 30_000, now)).toBe("in 30s");
+		expect(untilLabel(now + 5 * 60_000, now)).toBe("in 5m");
+		expect(untilLabel(now + 2 * 3_600_000, now)).toBe("in 2h");
+		expect(untilLabel(now + 3 * 86_400_000, now)).toBe("in 3d");
+		expect(untilLabel(now, now)).toBe("now");
+		expect(untilLabel(now - 1, now)).toBe("now");
+		expect(untilLabel(Number.NaN, now)).toBe("");
+		// A scheduled chip only takes sessions that carry a numeric wake.
+		expect(scheduledOf({ participants: [{ kind: "session", id: "S", wake: { at: "later" } }, { kind: "user", id: "U" }] })).toEqual([]);
 	});
 
 	it("UX-09 the stylesheet animates the working dot and honors reduced motion", () => {
