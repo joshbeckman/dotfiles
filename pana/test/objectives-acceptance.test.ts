@@ -447,4 +447,23 @@ it("OBJ-35 a regenerated lead takes the retired lead's place in every thread and
 	// The user's own stop stays inert to the objective even for a lead that can now control members.
 	expect((await t.client.post(`/sessions/${member}/stop`)).status).toBe(200);
 	expect((await t.client.post(`/sessions/${member}/resume`, {}, { caller: replacement })).status).toBe(403);
+
+	// A user's message that lands while a regenerate is in flight is accepted either way. Writes are
+	// serialized behind the swap (`PanaDatabase.atomically`'s queue), so no message can see the
+	// objective with the successor as its lead and the member's thread not yet handed over.
+	expect((await t.client.post(`/sessions/${member}/resume`)).status).toBe(200);
+	t.model.append([{ text: "Noted." }, { text: "Noted." }]);
+	const [racingMail, racingSwap] = await Promise.all([
+		reply(t, memberThread, "One more count, please."),
+		t.client.post(`/objectives/${objective.id}/regenerate-lead`, { reason: "One more handover." }),
+	]);
+	expect(racingMail.status, JSON.stringify(racingMail.body)).toBe(200);
+	expect(racingSwap.status, JSON.stringify(racingSwap.body)).toBe(200);
+	await settle(t);
+	const latest = (await view(t, objective.id)).lead!.id;
+	expect(latest).not.toBe(replacement);
+	expect(await t!.runtime.db.get("SELECT 1 AS one FROM thread_participants WHERE participant_id = ?", replacement)).toBeUndefined();
+	// The member's thread holds the member, the newest lead, and the user whose mail joined it.
+	expect(await participants()).toEqual([member, latest, t!.runtime.config.user].sort());
+	expect(await sessionFacts(member)).toMatchObject({ state: "idle" });
 });
