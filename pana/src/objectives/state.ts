@@ -45,6 +45,16 @@ export function sessionUrl(runtime: Runtime, id: string): string {
 	return runtime.url({ kind: "session", id });
 }
 
+/** A person a view names: a session ULID becomes a session URL, anything else the user. */
+export interface ObjectivePersonView {
+	id: string;
+	url: string;
+}
+
+export function personView(runtime: Runtime, id: string): ObjectivePersonView {
+	return { id, url: isUlid(id) ? sessionUrl(runtime, id) : runtime.url({ kind: "user", id }) };
+}
+
 export function objectiveUrl(runtime: Runtime, id: string): string {
 	return runtime.url({ kind: "objective", id });
 }
@@ -53,7 +63,7 @@ export function objectiveUrl(runtime: Runtime, id: string): string {
 export async function objectiveMembers(db: SqliteExecutor, objectiveId: string): Promise<ObjectiveMemberRow[]> {
 	return db.all<ObjectiveMemberRow>(
 		`SELECT s.id AS id, p.url AS url, s.state AS state, s.parent AS parent, s.objective_id AS objective_id,
-		        s.stopped_by AS stopped_by, s.hold_until AS hold_until
+		        s.stopped_by AS stopped_by, s.hold_until AS hold_until, s.profile AS profile, s.created_at AS created_at
 		   FROM sessions s
 		   JOIN participants p ON p.id = s.id
 		  WHERE s.objective_id = ?

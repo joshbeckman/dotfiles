@@ -18,6 +18,7 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { addressList, createThread, messageBody, type ThreadResult } from "../threads/store.ts";
+import { memberBriefing } from "../objectives/brief.ts";
 import { memberCreateGate } from "../objectives/hold.ts";
 import { assertObjectiveOpen, objectiveUrl, recordObjectiveEvent } from "../objectives/state.ts";
 import { overDomainBudget } from "./budget.ts";
@@ -241,6 +242,13 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	}
 	if (await overDomainBudget(runtime.db, runtime)) {
 		throw ApiError.overBudget(`the domain is over its daily budget of $${runtime.config.budget.domainDailyUsd}`, { reason: "domain_budget" });
+	}
+
+	// OBJ-11: a member created for an objective carries the charter's scope and guidance after the
+	// prompt the lead wrote, so the task reads first and the standing instructions follow. It is
+	// text, not a permission: OBJ-12.
+	if (parent?.objective_id !== null && parent?.objective_id !== undefined) {
+		prompt = `${prompt}\n\n---\n\n${await memberBriefing(runtime, parent.objective_id)}`;
 	}
 
 	const id = runtime.newId();

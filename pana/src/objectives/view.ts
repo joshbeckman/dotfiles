@@ -6,19 +6,19 @@
 // there is one place for those additions.
 
 import { decodeCursor, pageOf, type Page } from "../api/pagination.ts";
-import { isUlid } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { sessionStates } from "../sessions/state.ts";
 import { objectiveArtifacts, type ObjectiveArtifactView } from "./artifacts.ts";
+import { escalationView, openEscalations, type EscalationView } from "./escalation.ts";
 import { newestReport, type ObjectiveReportView } from "./reports.ts";
-import { limitsOf, type ObjectiveLimits, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow, type ObjectiveAutonomy, type ObjectiveDisplayState } from "./schema.ts";
 import { leadRunsToday, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, type ObjectivePaused } from "./limits.ts";
-import { loadObjective, objectiveMembers, objectiveState, objectiveUrl, sessionUrl } from "./state.ts";
+import { limitsOf, type ObjectiveLimits, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow, type ObjectiveAutonomy, type ObjectiveDisplayState } from "./schema.ts";
+import { loadObjective, objectiveMembers, objectiveState, objectiveUrl, personView, type ObjectivePersonView } from "./state.ts";
 
-export interface ObjectivePersonView {
-	id: string;
-	url: string;
-}
+export type { ObjectivePersonView } from "./state.ts";
+
+/** OBJ-33/34: an escalation as a view shows it. */
+export type ObjectiveEscalationView = EscalationView;
 
 export interface ObjectiveMemberView {
 	id: string;
@@ -28,6 +28,8 @@ export interface ObjectiveMemberView {
 	lead: boolean;
 	/** OBJ-14: `user` or `objective` when this member was stopped, else null. */
 	stoppedBy: "user" | "objective" | null;
+	/** OBJ-12: what this member may touch in the world is its profile, cwd, and bash credentials. */
+	profile: string | null;
 }
 
 export interface ObjectiveView {
@@ -64,14 +66,17 @@ export interface ObjectiveView {
 	report?: ObjectiveReportView | null;
 	/** OBJ-31: the linked files, on `GET /objectives/:id` and `pana objective show` only. */
 	artifacts?: ObjectiveArtifactView[];
+	/** OBJ-33: an open escalation is waiting for the user. */
+	awaitingUser: boolean;
+	/** OBJ-34: each held scope, with the thread it waits on. */
+	escalations: ObjectiveEscalationView[];
 	createdAt: number;
 	updatedAt: number;
 }
 
 /** An ID as a person's URL: a ULID is a session, anything else the user. */
 function person(runtime: Runtime, id: string | null): ObjectivePersonView | null {
-	if (id === null) return null;
-	return { id, url: isUlid(id) ? sessionUrl(runtime, id) : runtime.url({ kind: "user", id }) };
+	return id === null ? null : personView(runtime, id);
 }
 
 /** The stored view, from rows already in hand. */
@@ -81,9 +86,11 @@ export interface ObjectiveReadings {
 	spendTotalUsd: number;
 	leadRunsToday: number;
 	userMessagesToday: number;
+	/** OBJ-33/34: every escalation waiting for the user, with the thread it waits on. */
+	escalations: ObjectiveEscalationView[];
 }
 
-const EMPTY_READINGS: ObjectiveReadings = { paused: null, spendTodayUsd: 0, spendTotalUsd: 0, leadRunsToday: 0, userMessagesToday: 0 };
+const EMPTY_READINGS: ObjectiveReadings = { paused: null, spendTodayUsd: 0, spendTotalUsd: 0, leadRunsToday: 0, userMessagesToday: 0, escalations: [] };
 
 export function objectiveView(
 	runtime: Runtime,
@@ -118,7 +125,10 @@ export function objectiveView(
 			state: states?.get(member.id) ?? member.state,
 			lead: member.id === row.lead_id,
 			stoppedBy: member.stopped_by,
+			profile: member.profile,
 		})),
+		awaitingUser: readings.escalations.length > 0,
+		escalations: [...readings.escalations],
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -140,14 +150,16 @@ export async function showObjective(runtime: Runtime, id: string): Promise<Objec
 	};
 }
 
-/** OBJ-20..OBJ-24: the limits a read shows, from the same reads the admission gate uses. */
+/** OBJ-20..OBJ-24, OBJ-33/34: the limits, spend, and escalation a read shows, from the reads the admission gate uses. */
 export async function objectiveReadings(runtime: Runtime, row: ObjectiveRow): Promise<ObjectiveReadings> {
+	const escalations = (await openEscalations(runtime.db, runtime, row.id)).map((open) => escalationView(runtime, open));
 	return {
 		paused: await objectivePaused(runtime.db, runtime, row),
 		spendTodayUsd: await objectiveCostToday(runtime.db, runtime, row.id),
 		spendTotalUsd: await objectiveCostTotal(runtime.db, row.id),
 		leadRunsToday: await leadRunsToday(runtime.db, runtime, row),
 		userMessagesToday: await objectiveUserMessagesToday(runtime.db, runtime, row),
+		escalations,
 	};
 }
 

@@ -15,6 +15,7 @@ import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
+import { startEscalationTimeouts } from "../objectives/escalation.ts";
 import { startMetricChecks } from "../objectives/index.ts";
 import { startObjectiveSweeper } from "../objectives/sweep.ts";
 import { initPush } from "../push/index.ts";
@@ -171,6 +172,9 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		// costs nothing and needs no agent awake. They add no schedule kind.
 		const checks = startMetricChecks(runtime, (error, what) => report(error, what));
 		cleanup.unshift(() => checks.close());
+		// OBJ-33: a charter `Escalation` timeout clears the hold, then delivers what it held.
+		const escalations = startEscalationTimeouts(runtime, report, () => sessions.deliverHeld());
+		cleanup.unshift(() => escalations.close());
 		// SCR-05: sweep scratch now, then daily.
 		const sweeper = startScratchSweeper(runtime, report);
 		cleanup.unshift(() => sweeper.close());

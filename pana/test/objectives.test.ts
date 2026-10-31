@@ -638,21 +638,23 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		expect(names, name).toContain(name);
 	}
 
-	// Every route a later package owns answers 501 `not_implemented` until it lands.
-	const objective = await draft("Not built yet");
+	// Every route the package registers has a handler by now: none answers 501 `not_implemented`.
+	// A refusal here (a draft has no thread, an artifact names no file) is a real answer, not a hole.
+	const objective = await draft("All routes wired");
 	for (const [method, path] of [
 		["GET", `/objectives/${objective.id}/brief`],
 		["GET", `/objectives/${objective.id}/charter`],
+		["GET", `/objectives/${objective.id}/metrics`],
+		["POST", `/objectives/${objective.id}/report`],
 		["POST", `/objectives/${objective.id}/escalate`],
 		["POST", `/objectives/${objective.id}/regenerate-lead`],
+		["POST", `/objectives/${objective.id}/artifacts`],
+		["DELETE", `/objectives/${objective.id}/artifacts/anything`],
 	] as const) {
-		const res = await t!.client.request(method, path, method === "GET" ? {} : { body: {} });
-		expect(res.status, `${method} ${path}`).toBe(501);
-		expect((res.body as { error: { code: string } }).error.code).toBe("not_implemented");
+		const res = await t!.client.request(method, path, { body: {} });
+		expect(res.status, `${method} ${path}`).not.toBe(501);
+		expect((res.body as { error?: { code: string } }).error?.code, `${method} ${path}`).not.toBe("not_implemented");
 	}
-	// The CLI reports the same: a command whose route is unbuilt exits 1 (API-02).
-	const brief = await command("objective brief", { id: objective.id });
-	expect(brief.exitCode).toBe(1);
 });
 
 // --- OBJ-13..OBJ-24: membership, lineage, run admission, and limits ------------

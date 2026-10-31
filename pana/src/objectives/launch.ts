@@ -22,7 +22,7 @@ import { loadObjective, objectiveId, recordObjectiveEvent } from "./state.ts";
 import { showObjective, type ObjectiveView } from "./view.ts";
 
 /** The lead's profile and model. The default profile, unless a later package adds a per-objective one. */
-function leadAgent(runtime: Runtime, objective: ObjectiveRow) {
+export function leadAgent(runtime: Runtime, objective: ObjectiveRow) {
 	const profileName = DEFAULT_PROFILE;
 	const profile = loadProfile(runtime, profileName);
 	const modelName = runtime.config.defaultModel ?? profile.model;
