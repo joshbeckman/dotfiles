@@ -310,6 +310,12 @@ main {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
+/* MOB-05: on a wide screen a session's facts read as one sentence. Each fact is its own node so
+   the phone rules below can stack them. */
+.session-facts .fact + .fact::before {
+	content: " · ";
+	color: var(--c-text-alt);
+}
 .panel {
 	border: 1px solid var(--c-border);
 	border-radius: var(--radius);
@@ -1366,6 +1372,84 @@ kbd {
 	}
 	#nav a {
 		font-size: 0.85rem;
+	}
+	/* MOB-04: five items at 0.85rem overflowed a 390 px phone by 28 px, clipping SCHEDULES. A
+	   tighter item fits the row; a narrower phone scrolls the nav rather than cutting a section
+	   off, which MOB-01 allows for a block that holds its own overflow. */
+	#nav {
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	#nav::-webkit-scrollbar {
+		display: none;
+	}
+	#nav a {
+		padding-inline: 0.3rem;
+	}
+	/* Thumbs: a session's controls take the full 44 px target instead of 36 px. */
+	.view-header .header-actions button,
+	.view-header .header-actions .button {
+		min-height: 2.75rem;
+	}
+	/* MOB-05: the session's details stack instead of running on. The state and the short facts
+	   share a row, the working directory and then the pana:// URL take their own, so a phone reads
+	   four tidy lines where it read six ragged ones and the URL stops looking like the heading. */
+	#session-meta {
+		align-items: center;
+		gap: var(--s1) var(--s3);
+	}
+	.session-facts {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0 var(--s3);
+		flex: 1 1 auto;
+		min-width: 0;
+		font-size: 0.85rem;
+	}
+	.session-facts .fact {
+		white-space: nowrap;
+	}
+	/* A provider's model ID is a long word: wrap it here rather than run off the screen. */
+	.session-facts .fact-model {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	.session-facts .fact + .fact::before {
+		content: none;
+	}
+	.session-facts .fact-cwd {
+		order: 1;
+		flex-basis: 100%;
+		white-space: normal;
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+	}
+	#session-meta .session-url {
+		flex-basis: 100%;
+		font-size: 0.75rem;
+	}
+	/* The canonical URL stays readable but stops competing with the session's name: the title
+	   above already copies it. */
+	#session-meta .session-url a {
+		color: var(--c-text-alt);
+		text-decoration-color: var(--c-border);
+	}
+	/* An empty list of wakes is two lines of nothing above the transcript, and its absence must
+	   not leave the header's rule and the transcript's rule 16 px apart. */
+	#session-wakes[data-empty="true"] {
+		display: none;
+	}
+	#session-wakes[data-empty="true"] + .transcript {
+		border-top: 0;
+		padding-top: 0;
+	}
+	/* MOB-06: the transcript's own indent costs a phone 16 px of every code line. */
+	#transcript .entry {
+		padding-inline: var(--s2);
+	}
+	#transcript .entry pre {
+		padding-inline: var(--s2);
 	}
 	/* MOB-03: the title and Back share the first row; the controls take their own row below. */
 	.view-header {

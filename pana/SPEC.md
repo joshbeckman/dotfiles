@@ -393,6 +393,9 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **MOB-01** At a 390 px phone viewport, no view scrolls sideways or clips text: inbox, thread, threads, compose, sessions, session, memory, and schedules. Wide content scrolls only inside its own block, such as a code block. `test/browser/mobile.spec.ts` emulates the phone and measures every element.
 - [x] **MOB-02** Long unbroken text (a pasted URL, a model ID, a path, a `pana://` URL, a message ID) wraps inside its row instead of widening the page.
 - [x] **MOB-03** On a phone, a view header puts Back and the title on one row and the controls on their own row below. The session title is the session's short label, as everywhere else, and the full ID stays in its `pana://` URL.
+- [x] **MOB-04** On a phone the nav fits the width: five items at 0.85rem overflowed a 390 px phone by 28 px, cutting Schedules off mid-word. A narrower phone scrolls the nav rather than clipping a section.
+- [x] **MOB-05** On a phone a session's details stack instead of running on: the state and the short facts share a row, the working directory and the `pana://` URL take their own, and an empty list of scheduled wakes is hidden rather than spending two lines above the transcript.
+- [x] **MOB-06** On a phone a transcript entry spends its width on text: the entry and the code blocks inside it take 8 px of side padding on each side.
 - [x] **ISO-05** A `bash` tool call without a timeout gets a default one (`tools.bashTimeoutSec` in config.json, default 600). A call that hits it is killed with its whole process group, and the model gets an error result that says it timed out.
 
 ## WP16: Scratch
