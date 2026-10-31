@@ -25,7 +25,9 @@ function singleString(value: unknown): string | undefined {
 	const entries = Object.entries(value);
 	if (entries.length !== 1) return undefined;
 	const [key, field] = entries[0]!;
-	return typeof field === "string" && (key === "path" || key === "url" || key === "body") ? field : undefined;
+	// A single text field renders as just its text, so `pana memory` and `pana objective brief`
+	// print their document and nothing else.
+	return typeof field === "string" && (key === "path" || key === "url" || key === "body" || key === "brief") ? field : undefined;
 }
 
 function renderRecord(value: unknown, indent = ""): string {

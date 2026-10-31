@@ -75,6 +75,9 @@ export interface ObjectiveMemberRow {
 	objective_id: string | null;
 	stopped_by: "user" | "objective" | null;
 	hold_until: number | null;
+	/** OBJ-12: what a member may touch in the world is its profile, cwd, and bash credentials. */
+	profile: string | null;
+	created_at: number;
 }
 
 /** The event kinds the package records on `objective_events` (OBJ-23). Later packages add theirs. */

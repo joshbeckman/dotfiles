@@ -291,7 +291,9 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		summary: "Print the lead's briefing",
 		flags: [],
 		positionals: [{ name: "OBJECTIVE", param: "id" }],
-		request: (params) => ({ method: "GET", path: `/objectives/${objectiveSegment(text(params, "id"))}/brief` }),
+		// OBJ-32: with no objective named, a lead asks for its own. `self` is how the caller's
+		// objective is named on a route whose id is otherwise an objective.
+		request: (params) => ({ method: "GET", path: `/objectives/${objectiveSegment(text(params, "id")) || "self"}/brief` }),
 	},
 	{
 		path: ["objective", "report"],

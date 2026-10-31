@@ -20,14 +20,16 @@ import { notifySchedulesChanged } from "../schedules/registry.ts";
 import { nextDayStart, overDomainBudget } from "../sessions/budget.ts";
 import { setSessionState } from "../sessions/state.ts";
 import { MESSAGE_ENTRY_KIND, renderMessage, sessionConversation, submitScheduledWake, WAKE_ENTRY_KIND, type ScheduledWake } from "../sessions/wake.ts";
+import { leadRunInput } from "./brief.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { postNotice } from "../threads/store.ts";
+import { objectiveRunHold } from "./admission.ts";
 import { CLOSED_PHASES, type ObjectiveRow } from "./schema.ts";
 import { objectiveDay, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, lastLeadRunEnd, leadRunsToday, type ObjectivePaused } from "./limits.ts";
 import { objectiveRow, objectiveUrl, recordObjectiveEvent } from "./state.ts";
 
 /** Why a run is waiting, as the event and the hold record it (OBJ-23). */
-export type HoldCondition = "lead_quiet" | "lead_turns_day" | "messages_day" | ObjectivePaused;
+export type HoldCondition = "lead_quiet" | "lead_turns_day" | "messages_day" | "awaiting_user" | ObjectivePaused;
 
 /** What `admitRun` decided. `admit: false` means no run starts and the delivery stays queued. */
 export interface RunAdmission {
@@ -93,6 +95,19 @@ export async function admitRun(tx: SqliteExecutor, runtime: Runtime, sessionId: 
 				details: { objective: row.id, phase: row.phase, session: sessionId },
 			},
 		};
+	}
+
+	// OBJ-33/34: an escalation the user owes an answer on outranks every other condition — a budget
+	// pause or a turn cap would otherwise start a run the escalation covers. The hold is one
+	// condition among the rest, in `admitRun`'s own shape, not a second gate over the same decision.
+	const escalation = await objectiveRunHold(tx, runtime, sessionId, intent);
+	if (escalation !== undefined) {
+		// OBJ-18/33: a timed escalation persists as the lead's ordinary hold, so a wake that fires
+		// while the user decides rides along to the release instead of spending its note.
+		if (escalation.until !== undefined && escalation.lead === true) {
+			await holdLead(tx, runtime, row, sessionId, { condition: "awaiting_user", until: escalation.until, intent });
+		}
+		return escalation;
 	}
 
 	// At launch the lead's first run starts before the phase and `lead_id` move in the same
@@ -521,7 +536,8 @@ export async function releaseLeadHold(runtime: Runtime, input: { sessionId: stri
 			const submission = await conversation.submit(
 				{
 					type: "input",
-					content,
+					// OBJ-32: the lead's briefing starts every run it has, a hold release included.
+					content: await leadRunInput(runtime, input.sessionId, content),
 					whenBusy: "steer",
 					entry: { kind: MESSAGE_ENTRY_KIND, data: { ...firstData, held: held.length } },
 					requestId: `pana.hold:${input.scheduleId}:${now}`,
@@ -541,7 +557,7 @@ export async function releaseLeadHold(runtime: Runtime, input: { sessionId: stri
 			await conversation.submit(
 				{
 					type: "input",
-					content: ["Objective hold released.", ...(input.note === undefined ? [] : ["", input.note]), "", "Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know."].join("\n"),
+					content: await leadRunInput(runtime, input.sessionId, ["Objective hold released.", ...(input.note === undefined ? [] : ["", input.note]), "", "Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know."].join("\n")),
 					whenBusy: "followUp",
 					entry: { kind: WAKE_ENTRY_KIND, data: { scheduleId: input.scheduleId } },
 					requestId: `pana.hold:${input.scheduleId}:${now}`,

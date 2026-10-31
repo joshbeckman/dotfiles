@@ -10,12 +10,16 @@ import { parseLimit } from "../api/pagination.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { addArtifact, removeArtifact } from "./artifacts.ts";
+import { leadBriefing } from "./brief.ts";
+import { charterLog, optionalCharterSection, setCharter } from "./charter.ts";
+import { escalateObjective } from "./escalation.ts";
 import { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
 import { launchObjective } from "./launch.ts";
+import { regenerateLead } from "./lead.ts";
 import { addMetric, appendReading, listMetrics, setMetric } from "./metrics.ts";
 import { reportObjective } from "./reports.ts";
 import { objectBody, phaseFilter } from "./schema.ts";
-import { objectiveId } from "./state.ts";
+import { loadObjective, objectiveId } from "./state.ts";
 import { createObjective } from "./store.ts";
 import { listObjectives, showObjective } from "./view.ts";
 
@@ -133,4 +137,47 @@ export const handlers: Handlers = {
 		const removed = await removeArtifact(ctx.runtime, ctx.params.id, ctx.params.fileId);
 		return { status: 200, body: { ...removed, objective: await showObjective(ctx.runtime, objectiveId(ctx.params.id, ctx.runtime.config.domain)) } };
 	},
+
+	// OBJ-09/OBJ-10: the charter is append-only revisions; a session writes only Notes.
+	"objectives.charter.log": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await charterLog(ctx.runtime, ctx.params.id, optionalCharterSection(query(ctx, "section"))),
+	}),
+
+	"objectives.charter.set": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await setCharter(ctx.runtime, ctx.caller, ctx.params.id, ctx.body),
+	}),
+
+	// OBJ-32: the lead's briefing, for its own ID or (with none) the caller's objective.
+	"objectives.brief": async (ctx): Promise<HandlerResult> => {
+		const id = await briefObjective(ctx);
+		return { status: 200, body: { brief: await leadBriefing(ctx.runtime, await loadObjective(ctx.runtime.db, id)) } };
+	},
+
+	// OBJ-33/OBJ-34: ask the user to decide, and hold the runs the decision covers.
+	"objectives.escalate": async (ctx): Promise<HandlerResult> => {
+		const escalated = await escalateObjective(ctx.runtime, ctx.caller, ctx.params.id, ctx.body);
+		return { status: 201, body: { escalation: escalated.escalation, thread: escalated.thread } };
+	},
+
+	// OBJ-35: replace a failed lead in one transaction; the user only.
+	"objectives.regenerateLead": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: { objective: await regenerateLead(ctx.runtime, ctx.caller, ctx.params.id, ctx.body) },
+	}),
 };
+
+/**
+ * OBJ-32: the named objective, or `self` for the one the calling session acts for, which is how
+ * `pana objective brief` with no ID reaches a lead's own briefing.
+ */
+async function briefObjective(ctx: RequestContext): Promise<string> {
+	const named = ctx.params.id;
+	if (named !== undefined && named !== "" && named !== "self" && named !== "me") return objectiveId(named, ctx.runtime.config.domain);
+	const row = await ctx.runtime.db.get<{ objective_id: string | null }>("SELECT objective_id FROM sessions WHERE id = ?", ctx.caller.id);
+	if (row?.objective_id === null || row?.objective_id === undefined) {
+		throw ApiError.badRequest("missing_objective", "pass an objective, or call as a session that acts for one");
+	}
+	return row.objective_id;
+}

@@ -25,9 +25,11 @@ import {
 	type UsageState,
 } from "@earendil-works/pi-durable";
 import { ApiError } from "../api/errors.ts";
+import { clearForUserMessage } from "../objectives/escalation.ts";
 import { admitRun, recordBudgetHold, recordRunEnded } from "../objectives/hold.ts";
 import { objectivePaused } from "../objectives/limits.ts";
 import { assertObjectiveOpen, objectiveRow } from "../objectives/state.ts";
+import { assertNotSupersededLead, recordLeadFailure, regenerateOffer } from "../objectives/stranded.ts";
 import { wakeRequestId, type PendingWake } from "../db/outbox.ts";
 import { indexSessionRun, type TranscriptEntry } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
@@ -62,6 +64,7 @@ export interface SessionRow {
 	created_at: number;
 	updated_at: number;
 	cost_usd: number;
+	/** OBJ-15: the objective this session acts for, inherited at create. */
 	objective_id: string | null;
 	stopped_by: "user" | "objective" | null;
 	hold_until: number | null;
@@ -162,10 +165,24 @@ export class SessionRuntime {
 				// OBJ-07: a closed objective refuses deliveries to its members, so it cannot spend
 				// by accident. The throw rolls back the append with it.
 				await assertObjectiveOpen(tx, event.recipientId);
+				// OBJ-33: a user's message in the objective's thread answers the escalation. Clearing
+				// before admission means the message that clears it is also the run that carries it.
+				if (event.senderKind === "user") {
+					const cleared = await clearForUserMessage(tx, this.runtime, event.threadId, event.messageId);
+					// After the message commits, hand whatever the escalation held to `deliverHeld`.
+					if (cleared > 0) {
+						this.runtime.db.afterCommit(() =>
+							this.enqueue(async () => {
+								await this.deliverHeld();
+							}, "held deliveries"),
+						);
+					}
+				}
 				if (event.requestId === null) return;
-				// OBJ-18..OBJ-24: one admission choke point decides whether the run may start. A held
-				// or refused delivery stays unread with no wake, so `deliverHeld` finds it when the
-				// hold lifts or the next local day turns; the gate records why on `objective_events`.
+				// OBJ-18..OBJ-24, OBJ-33/34: one admission choke point decides whether the run may
+				// start, and escalation is one of its conditions (`hold.ts` asks
+				// `objectiveRunHold` first). A held or refused delivery stays unread with no wake,
+				// so `deliverHeld` finds it when the hold lifts or the next local day turns.
 				const admission = await admitRun(tx, runtime, event.recipientId, {
 					kind: "delivery",
 					deliveryId: event.deliveryId,
@@ -212,7 +229,8 @@ export class SessionRuntime {
 			const done = await db.atomically(async (tx) => {
 				const current = await tx.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", row.recipient_id);
 				if (current?.state === "stopped" || current?.state === "archived") return true;
-				// OBJ-23: the same gate that holds a fresh delivery also holds mail retried here.
+				// OBJ-23, OBJ-33/34: the same gate that holds a fresh delivery also holds mail
+				// retried here, so a cleared escalation's mail is carried from this one path.
 				const admission = await admitRun(tx, this.runtime, row.recipient_id, { kind: "delivery", deliveryId: row.id, messageId: row.message_id });
 				if (!admission.admit) return admission.condition === "domain_budget" || admission.condition === "budget_day" ? false : "skipped";
 				// A fresh request ID: the delivery's first one may already name a settled submission.
@@ -305,6 +323,8 @@ export class SessionRuntime {
 		const { db } = this.runtime;
 		const session = await db.get<SessionRow>("SELECT * FROM sessions WHERE id = ?", sessionId);
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
+		// OBJ-35: a lead the user replaced cannot resume itself into the objective.
+		await assertNotSupersededLead(db, sessionId);
 		if (session.state === "archived") throw ApiError.stale(`session ${sessionId} is archived`, { session: sessionId });
 		if (session.state === "stopped") {
 			await db.write(async (tx) => {
@@ -321,11 +341,11 @@ export class SessionRuntime {
 	}
 
 	/** STA-07: stop the session for good. Its threads become read-only. */
-	async archive(sessionId: string): Promise<void> {
+	async archive(sessionId: string, stoppedBy: "user" | "objective" | null = null): Promise<void> {
 		const session = await this.runtime.db.get<SessionRow>("SELECT state FROM sessions WHERE id = ?", sessionId);
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") return;
-		await this.stop(sessionId);
+		await this.stop(sessionId, stoppedBy);
 		await this.runtime.db.write((tx) =>
 			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
 		);
@@ -420,12 +440,26 @@ export class SessionRuntime {
 		});
 
 		if (failure && changed) {
-			const thread = await triggeringThread(db, session.id, starter.id);
+			const trigger = await triggeringDelivery(db, session.id, starter.id);
 			const detail = failure.status === "unanswered" && failure.detail !== undefined ? `: ${String(failure.detail)}` : "";
 			const reason = failure.status === "unanswered" ? failure.reason : "failed";
+			// OBJ-36: a lead's failed run leaves the objective stranded, and its thread and message
+			// are recorded so the user can read what happened before deciding to replace it.
+			const lead = session.objective_id === null ? undefined : await leadObjective(db, session.objective_id, session.id);
+			if (lead !== undefined) {
+				await recordLeadFailure(this.runtime, {
+					objectiveId: lead,
+					sessionId: session.id,
+					reason,
+					...(trigger === undefined ? {} : { threadId: trigger.thread_id, messageId: trigger.message_id }),
+				});
+			}
 			await postNotice(this.runtime, {
-				body: `Session ${this.runtime.url({ kind: "session", id: session.id })} failed (${reason}${detail}). Send it a message to try again.`,
-				...(thread ? { thread } : {}),
+				body: [
+					`Session ${this.runtime.url({ kind: "session", id: session.id })} failed (${reason}${detail}). Send it a message to try again.`,
+					...(lead === undefined ? [] : [regenerateOffer(this.runtime, lead)]),
+				].join("\n"),
+				...(trigger ? { thread: trigger.thread_id } : {}),
 			});
 		}
 	}
@@ -551,12 +585,26 @@ export async function wakeDelivery(tx: SqliteExecutor, runtime: Runtime, wake: P
 
 /** The thread of the delivery a submission carried, if it was a pana message. */
 export async function triggeringThread(db: SqliteExecutor, sessionId: string, submissionId: SubmissionId | number): Promise<string | undefined> {
-	const row = await db.get<{ thread_id: string }>(
-		"SELECT thread_id FROM deliveries WHERE recipient_id = ? AND wake_submission_id = ?",
+	return (await triggeringDelivery(db, sessionId, submissionId))?.thread_id;
+}
+
+/** The delivery a submission carried: the run's trigger, for a failure a reader can open (OBJ-36). */
+export async function triggeringDelivery(
+	db: SqliteExecutor,
+	sessionId: string,
+	submissionId: SubmissionId | number,
+): Promise<{ thread_id: string; message_id: string } | undefined> {
+	return db.get<{ thread_id: string; message_id: string }>(
+		"SELECT thread_id, message_id FROM deliveries WHERE recipient_id = ? AND wake_submission_id = ?",
 		sessionId,
 		submissionId,
 	);
-	return row?.thread_id;
+}
+
+/** The objective this session leads, or undefined when it is not that objective's lead. */
+async function leadObjective(db: SqliteExecutor, objectiveId: string, sessionId: string): Promise<string | undefined> {
+	const row = await db.get<{ id: string }>("SELECT id FROM objectives WHERE id = ? AND lead_id = ?", objectiveId, sessionId);
+	return row?.id;
 }
 
 /** Who hears about a session: its parent session, or the user who made a top-level one. */

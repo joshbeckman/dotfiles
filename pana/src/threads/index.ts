@@ -39,6 +39,7 @@ export {
 	type ThreadResult,
 	type ThreadView,
 } from "./store.ts";
+export { announce } from "./announce.ts";
 export {
 	configureDelivery,
 	defaultDeliveryHooks,

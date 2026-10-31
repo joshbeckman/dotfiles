@@ -11,19 +11,20 @@
 //   value (OBJ-25, OBJ-27..OBJ-29).
 // - `metric-checks.ts` — the metric check loop on `runtime.clock` with no session (OBJ-26).
 // - `view.ts` — the read shape (extend `showObjective` for a new field on `GET /objectives/:id`).
-// - `brief.ts` — the lead's briefing seam (OBJ-32), a stub until the briefing package lands.
+// - `charter.ts` — the six sections and their append-only revisions (OBJ-09, OBJ-10).
+// - `brief.ts` — the lead's briefing and the one charter renderer (OBJ-11, OBJ-12, OBJ-32, OBJ-37).
+// - `escalation.ts` — asking the user to decide, and the scope of that hold (OBJ-33, OBJ-34).
+// - `admission.ts` — the escalation half of `hold.ts`' `admitRun`, in its own shape (OBJ-33/34).
+// - `lead.ts` — regenerating a failed lead (OBJ-35).
+// - `stranded.ts` — what a failed lead leaves behind (OBJ-36).
 // - `handlers.ts` — HTTP, one line per route.
 // - `cli.ts` — the `pana objective` command table.
 //
-// This package's reports, artifacts, and notices:
+// This package's reports, artifacts, pace, and notices:
 // - `reports.ts` — a report is a message in the objective's thread plus its mark (OBJ-30).
 // - `artifacts.ts` — an artifact is an uploaded file plus a link (OBJ-31).
-// - `pace.ts` — the pace needed against the pace achieved for a `dueAt` (OBJ-08); the briefing
-//   calls it rather than growing a second copy.
+// - `pace.ts` — the pace needed against the pace achieved for a `dueAt` (OBJ-08).
 // - `sweep.ts` — the stranded notice (OBJ-06) and the behind notice (OBJ-08) on `runtime.clock`.
-//
-// Later packages add `hold.ts`, `brief.ts` (replacing the stub), and `escalation.ts` beside these,
-// one handler line each to `handlers.ts`, and their commands to `cli.ts`.
 
 export {
 	CHARTER_SECTIONS,
@@ -55,12 +56,58 @@ export {
 	objectiveRow,
 	objectiveState,
 	objectiveUrl,
+	personView,
 	recordObjectiveEvent,
 	sessionUrl,
 	type ObjectiveEventInput,
+	type ObjectivePersonView,
 } from "./state.ts";
 export { createObjective, type CreateObjectiveInput, type CreatedObjective } from "./store.ts";
-export { leadBriefing, type BriefingOptions } from "./brief.ts";
+export {
+	BRIEF_TITLE,
+	MEMBER_SECTIONS,
+	leadBriefing,
+	leadRunInput,
+	memberBriefing,
+	renderCharter,
+	type BriefingOptions,
+	type CharterRenderOptions,
+} from "./brief.ts";
+export {
+	charterLog,
+	charterRevisions,
+	charterSection,
+	charterSections,
+	charterText,
+	optionalCharterSection,
+	setCharter,
+	type CharterRevisionRow,
+	type CharterRevisionView,
+	type CharterSectionView,
+	type CharterView,
+	type SetCharterInput,
+} from "./charter.ts";
+export {
+	charterEscalationTimeout,
+	clearDueEscalations,
+	clearEscalations,
+	clearForUserMessage,
+	escalateObjective,
+	escalationHold,
+	escalationView,
+	objectiveOfThread,
+	openEscalations,
+	startEscalationTimeouts,
+	TIMEOUT_TICK_MS,
+	type ClearEscalationsOptions,
+	type EscalationRow,
+	type EscalationView,
+	type EscalateInput,
+	type EscalationTimeouts,
+} from "./escalation.ts";
+export { objectiveRunHold } from "./admission.ts";
+export { regenerateLead, type RegenerateInput } from "./lead.ts";
+export { assertNotSupersededLead, recordLeadFailure, regenerateOffer, type LeadFailure } from "./stranded.ts";
 export {
 	admitRun,
 	admitScheduledWake,
@@ -156,10 +203,10 @@ export {
 	objectiveReadings,
 	objectiveView,
 	showObjective,
-	type ObjectiveReadings,
+	type ObjectiveEscalationView,
 	type ObjectiveListFilters,
 	type ObjectiveListOptions,
 	type ObjectiveMemberView,
-	type ObjectivePersonView,
+	type ObjectiveReadings,
 	type ObjectiveView,
 } from "./view.ts";

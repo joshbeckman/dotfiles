@@ -10,6 +10,7 @@ import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { isAbsolute, join } from "node:path";
 import type { PendingWake, WakeSubmitter } from "../db/outbox.ts";
+import { leadRunInput } from "../objectives/brief.ts";
 import { firstLineSubject } from "../search/subjects.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { setSessionState } from "./state.ts";
@@ -131,10 +132,13 @@ export function defaultWakeSubmitter(getRuntime: () => Runtime): WakeSubmitter {
 		const runtime = getRuntime();
 		const conversation = await sessionConversation(runtime, wake.recipientId);
 		const rendered = await renderMessage(runtime.db, runtime, wake);
+		// OBJ-32: a lead's run starts with the briefing, then the message that woke it — except when
+		// the message is itself a briefing (launch's first input, a regenerate's handoff).
+		const content = await leadRunInput(runtime, wake.recipientId, rendered.content, wake.messageId);
 		const submission = await conversation.submit(
 			{
 				type: "input",
-				content: rendered.content,
+				content,
 				whenBusy: rendered.senderKind === "user" ? "steer" : "followUp",
 				entry: { kind: MESSAGE_ENTRY_KIND, data: rendered.data },
 				requestId: wake.requestId,
@@ -176,16 +180,22 @@ export async function wakeScheduled(runtime: Runtime, wake: ScheduledWake): Prom
 export async function submitScheduledWake(tx: SqliteExecutor, runtime: Runtime, wake: ScheduledWake): Promise<boolean> {
 	const conversation = await sessionConversation(runtime, wake.sessionId);
 	const scheduleUrl = runtime.url({ kind: "schedule", id: wake.scheduleId });
+	// OBJ-32: a lead's every run starts with the briefing, a scheduled wake included.
+	const content = await leadRunInput(
+		runtime,
+		wake.sessionId,
+		[
+			"Scheduled wakeup.",
+			`Schedule: ${scheduleUrl}`,
+			"Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know.",
+			"",
+			wake.note,
+		].join("\n"),
+	);
 	await conversation.submit(
 		{
 			type: "input",
-			content: [
-				"Scheduled wakeup.",
-				`Schedule: ${scheduleUrl}`,
-				"Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know.",
-				"",
-				wake.note,
-			].join("\n"),
+			content,
 			whenBusy: "followUp",
 			entry: { kind: WAKE_ENTRY_KIND, data: { scheduleId: wake.scheduleId } },
 			requestId: `pana.wake:${wake.scheduleId}${wake.occurrence === undefined ? "" : `:${wake.occurrence}`}`,
