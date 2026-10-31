@@ -243,6 +243,8 @@ main {
 #sessions-browse,
 #thread,
 #session,
+#objective,
+#objectives-browse,
 .memory-detail {
 	display: flex;
 	flex-direction: column;
@@ -1441,11 +1443,14 @@ kbd {
 		gap: var(--s1);
 	}
 	#nav a {
-		font-size: 0.85rem;
+		font-size: 0.75rem;
+		letter-spacing: 0.01em;
 	}
-	/* MOB-04: five items at 0.85rem overflowed a 390 px phone by 28 px, clipping SCHEDULES. A
-	   tighter item fits the row; a narrower phone scrolls the nav rather than cutting a section
-	   off, which MOB-01 allows for a block that holds its own overflow. */
+	/* MOB-04: five items at 0.85rem overflowed a 390 px phone by 28 px, clipping SCHEDULES; the
+	   sixth (OBJ-39's Objectives) put six at that size 75 px past the edge. A tighter item — 0.75rem
+	   and a hair of tracking — fits all six in a 390 px row; a narrower phone scrolls the nav
+	   rather than cutting a section off, which MOB-01 allows for a block that holds its own
+	   overflow. */
 	#nav {
 		overflow-x: auto;
 		scrollbar-width: none;
@@ -1454,7 +1459,7 @@ kbd {
 		display: none;
 	}
 	#nav a {
-		padding-inline: 0.3rem;
+		padding-inline: 0.2rem;
 	}
 	/* Thumbs: a session's controls take the full 44 px target instead of 36 px. */
 	.view-header .header-actions button,
@@ -1627,4 +1632,194 @@ kbd {
 }
 #session-wakes li + li {
 	margin-top: var(--s1);
+}
+
+/* ---- Objectives (OBJ-39) ------------------------------------------------------------------ */
+/* An objective's goal is a sentence, not an ID: it reads across the row, and its own URL sits
+   below the rest of the metadata like a thread's. */
+#objectives-browse > .hint {
+	max-width: 60ch;
+}
+#objective .objective-url {
+	flex-basis: 100%;
+}
+#objective > section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+}
+#objective > section > h3 {
+	font-size: 1rem;
+}
+.badge.holding-badge {
+	border-color: var(--p-orange);
+	color: var(--p-orange);
+}
+
+/* OBJ-20..OBJ-24: money and runs against their limits. A meter without a known limit draws no
+   bar rather than a bar against a number this app would be making up. */
+.meters {
+	display: grid;
+	gap: var(--s3) var(--s4);
+}
+@media (min-width: 48rem) {
+	.meters {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+.meter {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s1);
+	min-width: 0;
+}
+.meter-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--s1) var(--s3);
+	min-width: 0;
+}
+.meter-label {
+	font-family: var(--font-condensed);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-size: 0.8rem;
+	color: var(--c-text-alt);
+}
+.meter-value {
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	overflow-wrap: anywhere;
+}
+.meter-value[data-over="true"] {
+	color: var(--p-red);
+}
+.meter-bar {
+	height: 0.35rem;
+	border: 1px solid var(--c-border);
+	border-radius: 999px;
+	overflow: hidden;
+}
+.meter-fill {
+	height: 100%;
+	background: var(--c-text);
+}
+.meter-fill[data-over="true"] {
+	background: var(--p-red);
+}
+
+/* OBJ-28: one chart per metric, because one axis across mixed units would be the averaged number
+   the metric rule forbids. The line and its target are drawn in one preserveAspectRatio-none box,
+   so the SVG stretches to the column and a phone never scrolls to see the end of it. */
+.metrics {
+	display: grid;
+	gap: var(--s3);
+}
+@media (min-width: 48rem) {
+	.metrics {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+.metric {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s1);
+	min-width: 0;
+	margin: 0;
+	padding: var(--s2) var(--s3);
+	border: 1px solid var(--c-border);
+	border-radius: var(--radius);
+}
+.metric figcaption {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--s1) var(--s2);
+	min-width: 0;
+}
+.metric-name {
+	font-family: var(--font-condensed);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-size: 0.8rem;
+}
+.metric-current {
+	font-family: var(--font-mono);
+	font-size: 0.9rem;
+	overflow-wrap: anywhere;
+}
+.metric-chart {
+	display: block;
+	width: 100%;
+	height: 4rem;
+}
+.metric-line {
+	fill: none;
+	stroke: var(--c-link);
+	stroke-width: 2;
+	/* The box is stretched, so the stroke must not stretch with it. */
+	vector-effect: non-scaling-stroke;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+.metric-target {
+	stroke: var(--p-orange);
+	stroke-width: 1.5;
+	stroke-dasharray: 4 3;
+	vector-effect: non-scaling-stroke;
+}
+
+/* OBJ-09: the charter, one block per section, each with its own revision and editor. */
+.charter {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s3);
+}
+.charter-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+	padding-top: var(--s3);
+	border-top: 1px solid var(--c-border);
+	min-width: 0;
+}
+.charter-section-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--s1) var(--s3);
+}
+.charter-section-head h4 {
+	margin: 0;
+	font-family: var(--font-condensed);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-size: 0.9rem;
+}
+.charter-section-head .link-button {
+	margin-left: auto;
+}
+.charter-editor textarea {
+	width: 100%;
+	font-family: var(--font-mono);
+	font-size: 0.9rem;
+}
+.charter-conflict {
+	border-color: var(--p-red);
+	padding: var(--s2) var(--s3);
+}
+
+#objective-escalation ul,
+#objective-wakes ul {
+	margin: 0;
+	padding-left: var(--s4);
+}
+#objective-escalation li + li,
+#objective-wakes li + li {
+	margin-top: var(--s1);
+}
+#objective-wakes li {
+	overflow-wrap: anywhere;
 }

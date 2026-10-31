@@ -20,6 +20,8 @@ export const KEYMAP = [
 	{ action: "help", sequences: [["?"]], description: "Show or hide this help" },
 	// UX-15: the palette opens from anywhere, including a text box, so it has its own chord.
 	{ action: "palette", sequences: [["Mod+k"]], description: "Open the command palette" },
+	// OBJ-39: the objectives section, appended so no existing binding moves.
+	{ action: "go:objectives", sequences: [["g", "o"]], description: "Go to Objectives" },
 ];
 
 /** Bindings that work inside text inputs. `Mod` is Cmd on macOS and Ctrl elsewhere. */

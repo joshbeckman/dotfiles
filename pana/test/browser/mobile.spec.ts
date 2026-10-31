@@ -145,7 +145,8 @@ describeBrowser("MOB the PWA at phone width", () => {
 				overflow: nav.scrollWidth - nav.clientWidth,
 			};
 		`);
-		expect(nav.items).toBe(5);
+		// OBJ-39 added Objectives; six sections still fit a 390 px phone without scrolling.
+		expect(nav.items).toBe(6);
 		expect(nav.fits).toBe(true);
 		expect(nav.overflow).toBe(0);
 	});

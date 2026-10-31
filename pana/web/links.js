@@ -1,7 +1,7 @@
 // Pure helpers shared by the PWA, its service worker, and tests. No DOM and no globals are
 // touched at module load, so Node can import this file directly (WEB-02, WEB-05, WEB-07).
 
-/** The six app sections (WEB-03), in navigation order. */
+/** The app sections (WEB-03), in navigation order. */
 export const SECTIONS = [
 	{ id: "inbox", title: "Inbox", route: "#/inbox" },
 	{ id: "compose", title: "Compose", route: "#/compose" },
@@ -9,6 +9,8 @@ export const SECTIONS = [
 	{ id: "sessions", title: "Sessions", route: "#/sessions" },
 	{ id: "memory", title: "Memory", route: "#/memory" },
 	{ id: "schedules", title: "Schedules", route: "#/schedules" },
+	// OBJ-39: an objective's list and view.
+	{ id: "objectives", title: "Objectives", route: "#/objectives" },
 ];
 
 export const TOKEN_KEY = "pana-token";
@@ -79,6 +81,9 @@ export function appHref(href, domain) {
 			return "#/inbox";
 		case "schedules":
 			return id ? `#/schedules?focus=${encodeURIComponent(id)}` : "#/schedules";
+		// OBJ-39: an objective URL opens its view, like every other ID (REF-08).
+		case "objectives":
+			return id ? `#/objectives/${encodeURIComponent(id)}` : "#/objectives";
 		default:
 			return undefined;
 	}
@@ -100,6 +105,8 @@ export function idHref(id, kind) {
 			return "#/inbox";
 		case "schedule":
 			return `#/schedules?focus=${encodeURIComponent(value)}`;
+		case "objective":
+			return `#/objectives/${encodeURIComponent(value)}`;
 		default:
 			return undefined;
 	}

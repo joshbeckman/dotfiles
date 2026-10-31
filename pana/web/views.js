@@ -465,3 +465,380 @@ export function transcriptPage(body) {
 		previous: typeof body?.previous === "number" ? body.previous : undefined,
 	};
 }
+
+// ---- Objectives (OBJ-39) ----------------------------------------------------------------------
+// An objective is a goal, a charter, one lead, its members, and accounting (WP18). The list and the
+// view read `GET /objectives` and `GET /objectives/:id`; the charter, the metrics, and each
+// member's own session detail are their own reads, mapped here too.
+
+/** OBJ-09: the six charter sections, in the order the charter renders them. */
+export const CHARTER_SECTIONS = ["Scope", "Cancel", "Done", "Guidance", "Escalation", "Notes"];
+
+/** OBJ-20..OBJ-22: a budget condition holding the objective, in the few words a badge has room for. */
+export function holdingLabel(paused) {
+	switch (paused) {
+		case "budget_total":
+			return "over its total budget";
+		case "budget_day":
+			return "over today's budget";
+		case "domain_budget":
+			return "domain budget spent";
+		default:
+			return "";
+	}
+}
+
+/**
+ * OBJ-03/OBJ-33: what is holding the objective. The derived state says whether anything is moving;
+ * this says why it is not, which is the question a person looking at a quiet objective asks.
+ */
+export function holdingOf(objective) {
+	if (typeof objective?.paused === "string" && objective.paused) return holdingLabel(objective.paused);
+	if (objective?.awaitingUser) return "waiting for you";
+	return "";
+}
+
+function amount(value) {
+	const number = Number(value);
+	return Number.isFinite(number) ? number : 0;
+}
+
+function optionalAmount(value) {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function urlOf(person) {
+	return String(person?.url ?? "");
+}
+
+/** One row of `GET /objectives` (OBJ-39): phase, derived state, holding condition, goal, lead, spend, runs. */
+export function objectiveRow(objective) {
+	const row = {
+		id: String(objective?.id ?? ""),
+		url: String(objective?.url ?? ""),
+		goal: String(objective?.goal ?? "(no goal)"),
+		phase: String(objective?.phase ?? "drafting"),
+		/** OBJ-03: derived on read, null for a phase that is not `active`. */
+		state: objective?.state === null || objective?.state === undefined ? null : String(objective.state),
+		paused: typeof objective?.paused === "string" ? objective.paused : null,
+		awaitingUser: Boolean(objective?.awaitingUser),
+		holding: "",
+		lead: urlOf(objective?.lead),
+		spendTodayUsd: amount(objective?.spendTodayUsd),
+		leadRunsToday: amount(objective?.leadRunsToday),
+		dueAt: optionalAmount(objective?.dueAt),
+		at: amount(objective?.updatedAt ?? objective?.createdAt),
+	};
+	row.holding = holdingOf(row);
+	return row;
+}
+
+/**
+ * OBJ-16..OBJ-24: the meters for money and runs. A null limit means the objective falls back to
+ * the domain's configured default, which this app cannot read, so the meter says that instead of
+ * drawing a bar against a limit it would have to invent.
+ */
+export function objectiveMeters(objective) {
+	const limits = objective?.limits ?? {};
+	const members = Array.isArray(objective?.members) ? objective.members : [];
+	const active = members.filter((member) => isActiveMember(member?.state)).length;
+	const meter = (id, label, value, limit, unit) => {
+		const bounded = optionalAmount(limit);
+		return {
+			id,
+			label,
+			value: amount(value),
+			limit: bounded,
+			unit,
+			share: bounded !== null && bounded > 0 ? Math.min(1, amount(value) / bounded) : null,
+			// OBJ-20/OBJ-21: at or over the limit is what stops the objective, not only past it.
+			over: bounded !== null && amount(value) >= bounded,
+		};
+	};
+	return [
+		meter("spend-today", "Spend today", objective?.spendTodayUsd, limits.maxDailyUsd, "usd"),
+		meter("spend-total", "Spend in total", objective?.spendTotalUsd, limits.maxTotalUsd, "usd"),
+		meter("runs-today", "Lead runs today", objective?.leadRunsToday, limits.maxDailyLeadTurns, "count"),
+		meter("messages-today", "Messages to you today", objective?.userMessagesToday, limits.maxDailyUserMessages, "count"),
+		meter("members", "Active members", active, limits.maxActiveMembers, "count"),
+	];
+}
+
+/** OBJ-16: a member counts against the roster unless it is stopped or archived. */
+export function isActiveMember(state) {
+	return state !== "stopped" && state !== "archived";
+}
+
+/** One member of the roster: its session URL and its live state (UX-09). */
+export function objectiveMember(member) {
+	return {
+		id: String(member?.id ?? ""),
+		url: String(member?.url ?? ""),
+		state: String(member?.state ?? "unknown"),
+		lead: Boolean(member?.lead),
+		stoppedBy: member?.stoppedBy === "user" || member?.stoppedBy === "objective" ? member.stoppedBy : null,
+		profile: member?.profile === null || member?.profile === undefined ? null : String(member.profile),
+	};
+}
+
+/** The message a `pana://` message URL names: the id rides in its query (REF-08). */
+function messageIdOf(url) {
+	const match = /[?&]message=([^&#]+)/.exec(String(url ?? ""));
+	if (!match) return "";
+	try {
+		return decodeURIComponent(match[1]);
+	} catch {
+		return "";
+	}
+}
+
+/** OBJ-33/OBJ-34: an open escalation, the message it asks in, and the thread whose answer clears it. */
+export function objectiveEscalation(escalation) {
+	return {
+		id: String(escalation?.id ?? ""),
+		scope: escalation?.scope === "member" ? "member" : "objective",
+		member: urlOf(escalation?.member),
+		url: String(escalation?.url ?? ""),
+		messageId: messageIdOf(escalation?.url),
+		threadUrl: String(escalation?.thread?.url ?? ""),
+		threadId: String(escalation?.thread?.id ?? ""),
+		timeoutAt: optionalAmount(escalation?.timeoutAt),
+	};
+}
+
+/** OBJ-30: the newest report, which is a message in the objective's thread. */
+export function objectiveReport(report) {
+	if (!report || typeof report !== "object") return null;
+	return {
+		messageId: String(report.messageId ?? ""),
+		url: String(report.url ?? ""),
+		threadUrl: String(report.threadUrl ?? ""),
+		sender: urlOf(report.sender),
+		at: amount(report.createdAt),
+		body: String(report.body ?? report.display ?? ""),
+		revised: Boolean(report.revised),
+		redacted: Boolean(report.redacted),
+	};
+}
+
+/** OBJ-31: a linked file, with the name, size, and URL the view lists. */
+export function objectiveArtifact(artifact) {
+	return {
+		id: String(artifact?.id ?? ""),
+		name: String(artifact?.name ?? "file"),
+		size: amount(artifact?.size),
+		mediaType: artifact?.mediaType === null || artifact?.mediaType === undefined ? null : String(artifact.mediaType),
+		url: String(artifact?.url ?? ""),
+		addedAt: amount(artifact?.addedAt),
+	};
+}
+
+/**
+ * `GET /objectives/:id` (OBJ-39): everything the view shows about the objective itself. The charter,
+ * the metrics, and each member's session are their own reads, mapped below.
+ */
+export function objectiveView(objective) {
+	const view = {
+		id: String(objective?.id ?? ""),
+		url: String(objective?.url ?? ""),
+		goal: String(objective?.goal ?? "(no goal)"),
+		phase: String(objective?.phase ?? "drafting"),
+		state: objective?.state === null || objective?.state === undefined ? null : String(objective.state),
+		paused: typeof objective?.paused === "string" ? objective.paused : null,
+		awaitingUser: Boolean(objective?.awaitingUser),
+		holding: "",
+		creator: urlOf(objective?.creator),
+		proposedBy: urlOf(objective?.proposedBy) || null,
+		lead: urlOf(objective?.lead) || null,
+		thread: objective?.thread?.id ? { id: String(objective.thread.id), url: String(objective.thread.url ?? "") } : null,
+		dueAt: optionalAmount(objective?.dueAt),
+		autonomy: objective?.autonomy === "auto" ? "auto" : "manual",
+		charterRev: amount(objective?.charterRev),
+		limits: {
+			maxDailyUsd: optionalAmount(objective?.limits?.maxDailyUsd),
+			maxTotalUsd: optionalAmount(objective?.limits?.maxTotalUsd),
+			wakeMinMinutes: optionalAmount(objective?.limits?.wakeMinMinutes),
+			maxDailyLeadTurns: optionalAmount(objective?.limits?.maxDailyLeadTurns),
+			maxDailyUserMessages: optionalAmount(objective?.limits?.maxDailyUserMessages),
+			maxActiveMembers: optionalAmount(objective?.limits?.maxActiveMembers),
+		},
+		spendTodayUsd: amount(objective?.spendTodayUsd),
+		spendTotalUsd: amount(objective?.spendTotalUsd),
+		leadRunsToday: amount(objective?.leadRunsToday),
+		userMessagesToday: amount(objective?.userMessagesToday),
+		members: (Array.isArray(objective?.members) ? objective.members : []).map(objectiveMember),
+		escalations: (Array.isArray(objective?.escalations) ? objective.escalations : []).map(objectiveEscalation),
+		report: objectiveReport(objective?.report),
+		artifacts: (Array.isArray(objective?.artifacts) ? objective.artifacts : []).map(objectiveArtifact),
+		at: amount(objective?.updatedAt ?? objective?.createdAt),
+	};
+	view.meters = objectiveMeters(view);
+	view.holding = holdingOf(view);
+	return view;
+}
+
+/**
+ * OBJ-28/OBJ-39: one metric's own line, its target, and its current value. There is no total across
+ * metrics and no percent-to-target figure anywhere in this file, because a single averaged number
+ * across mixed units becomes the only number the objective has.
+ */
+export function metricSeries(metric) {
+	const readings = Array.isArray(metric?.readings) ? metric.readings : [];
+	const points = readings
+		.filter((reading) => Number.isFinite(Number(reading?.value)) && Number.isFinite(Number(reading?.at)))
+		.map((reading) => ({ at: Number(reading.at), value: Number(reading.value), source: String(reading.source ?? "") }))
+		// The route answers oldest first; sorting by time alone keeps that order for readings the
+		// clock placed in the same millisecond, which a fast metric check can do.
+		.sort((a, b) => a.at - b.at);
+	const current = metric?.current ?? {};
+	const check = metric?.check;
+	return {
+		name: String(metric?.name ?? ""),
+		unit: String(metric?.unit ?? ""),
+		direction: metric?.direction === "down" ? "down" : "up",
+		target: optionalAmount(metric?.target),
+		targetDisplay: metric?.targetDisplay === null || metric?.targetDisplay === undefined ? null : String(metric.targetDisplay),
+		aggregation: metric?.aggregation === "mean" ? "mean" : "raw",
+		window: metric?.window === null || metric?.window === undefined ? null : String(metric.window),
+		baseline: optionalAmount(metric?.baseline),
+		current: {
+			value: optionalAmount(current.value),
+			at: optionalAmount(current.at),
+			// OBJ-27: a window with no readings is stale, never zero.
+			stale: Boolean(current.stale),
+			display: current.display === null || current.display === undefined ? null : String(current.display),
+		},
+		/** OBJ-27: at its target, false before the first reading, null with no target at all. */
+		atTarget: metric?.atTarget === true ? true : metric?.atTarget === false ? false : null,
+		frozen: Boolean(metric?.frozen),
+		check: check
+			? {
+					command: String(check.command ?? ""),
+					nextCheckAt: optionalAmount(check.nextCheckAt),
+					lastCheck: check.lastCheck?.status === undefined ? null : String(check.lastCheck.status),
+				}
+			: null,
+		points,
+	};
+}
+
+/** `GET /objectives/:id/metrics` (OBJ-28): one series per metric and the count at target. */
+export function metricsView(body) {
+	const metrics = (Array.isArray(body?.metrics) ? body.metrics : []).map(metricSeries);
+	return {
+		objectiveId: String(body?.objective?.id ?? ""),
+		url: String(body?.objective?.url ?? ""),
+		phase: String(body?.objective?.phase ?? ""),
+		// OBJ-28's "3 of 5 at target": a count of metrics, never a percentage.
+		atTarget: { count: amount(body?.atTarget?.count), of: amount(body?.atTarget?.of) },
+		metrics,
+	};
+}
+
+function round(value) {
+	return Math.round(value * 10) / 10;
+}
+
+/**
+ * OBJ-28/OBJ-39: the drawing of one metric — a line through its readings and its target line —
+ * in a box of the given size, with one value axis on which both are true. One chart per metric,
+ * because an axis shared across mixed units would put a weight and a kilowatt-hour on one scale.
+ */
+export function metricChart(series, { width = 320, height = 64, pad = 6 } = {}) {
+	const points = series?.points ?? [];
+	const target = optionalAmount(series?.target);
+	const values = points.map((point) => point.value);
+	if (target !== null) values.push(target);
+	if (values.length === 0) return { empty: true, line: "", target: null, min: null, max: null };
+	let min = Math.min(...values);
+	let max = Math.max(...values);
+	// A flat metric, or a single reading, would divide by zero: open the axis around it.
+	if (min === max) {
+		min -= 1;
+		max += 1;
+	}
+	const span = max - min;
+	const first = points[0]?.at ?? 0;
+	const last = points[points.length - 1]?.at ?? 0;
+	const across = last - first;
+	const inner = width - 2 * pad;
+	const x = (point, index) => {
+		if (across > 0) return pad + ((point.at - first) / across) * inner;
+		if (points.length === 1) return width / 2;
+		return pad + (index / (points.length - 1)) * inner;
+	};
+	const y = (value) => height - pad - ((value - min) / span) * (height - 2 * pad);
+	const dots = points.map((point, index) => ({ x: round(x(point, index)), y: round(y(point.value)) }));
+	return {
+		empty: false,
+		line: dots.map((dot) => `${dot.x},${dot.y}`).join(" "),
+		// A single reading draws no line, so the view marks the one point it has.
+		dots,
+		target: target === null ? null : { y: round(y(target)), value: target },
+		min,
+		max,
+		first: points[0]?.at ?? null,
+		last: points[points.length - 1]?.at ?? null,
+	};
+}
+
+/** `GET /objectives/:id/charter` (OBJ-09): every section's newest revision, and the revision to write from. */
+export function charterView(body) {
+	const sections = body?.sections ?? {};
+	return {
+		rev: amount(body?.rev),
+		sections: CHARTER_SECTIONS.map((name) => {
+			const section = sections[name] ?? null;
+			return {
+				name,
+				body: section ? String(section.body ?? "") : "",
+				rev: section ? amount(section.rev) : null,
+				author: urlOf(section?.author),
+				at: section ? optionalAmount(section.at) : null,
+			};
+		}),
+		revisions: (Array.isArray(body?.revisions) ? body.revisions : []).map((revision) => ({
+			id: String(revision?.id ?? ""),
+			rev: amount(revision?.rev),
+			section: String(revision?.section ?? ""),
+			body: String(revision?.body ?? ""),
+			author: urlOf(revision?.author),
+			at: amount(revision?.at),
+		})),
+	};
+}
+
+/**
+ * OBJ-09: the body of `POST /objectives/:id/charter`. `baseRev` is the revision the editor read,
+ * so a charter that moved since then answers 409 instead of overwriting a change nobody saw.
+ */
+export function charterBody(section, body, baseRev) {
+	const out = { section: String(section ?? ""), body: String(body ?? "") };
+	if (typeof baseRev === "number" && Number.isFinite(baseRev)) out.baseRev = baseRev;
+	return out;
+}
+
+/**
+ * WAK-08 for an objective: its pending wakes, read from each member's own session detail, which is
+ * where a session's pending wakes live. Ordered by next run, soonest first, like the session view.
+ */
+export function objectiveWakes(details) {
+	const out = [];
+	for (const detail of Array.isArray(details) ? details : []) {
+		const session = detail?.session ?? {};
+		const sessionId = String(session.id ?? "");
+		for (const wake of Array.isArray(session.wakes) ? session.wakes : []) {
+			if (!Number.isFinite(Number(wake?.nextAt))) continue;
+			out.push({
+				sessionId,
+				sessionUrl: String(session.url ?? ""),
+				id: String(wake.id ?? ""),
+				url: String(wake.url ?? ""),
+				subject: String(wake.subject ?? ""),
+				at: amount(wake.nextAt),
+				cron: wake.cron === null || wake.cron === undefined ? null : String(wake.cron),
+			});
+		}
+	}
+	return out.sort((a, b) => a.at - b.at || a.url.localeCompare(b.url));
+}

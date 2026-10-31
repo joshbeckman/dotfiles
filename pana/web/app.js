@@ -25,6 +25,8 @@ import { nextCursor, pagePath, showMore } from "./pages.js";
 import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
+	charterBody,
+	charterView,
 	commitView,
 	elapsedLabel,
 	entryRaw,
@@ -36,6 +38,11 @@ import {
 	memoryFileView,
 	memoryHitView,
 	messageView,
+	metricChart,
+	metricsView,
+	objectiveRow,
+	objectiveView,
+	objectiveWakes,
 	participantColor,
 	refLabel,
 	scheduleBody,
@@ -342,6 +349,8 @@ function handleEvent(event) {
 	// UX-09: who is working changes in the open thread and in the lists, without a reload.
 	if (event.kind === "session.state" && typeof event.sessionId === "string") {
 		applyStateEvent(event);
+		// OBJ-39/UX-09: an objective's roster follows the same events, so a member's state is live.
+		applyObjectiveStateEvent(event);
 		return;
 	}
 	// UX-09: a session's next wake moved, so the open thread's scheduled chip follows without a reload.
@@ -2356,6 +2365,700 @@ async function deleteSchedule(id) {
 	}
 }
 
+// ---- Objectives (OBJ-39) ---------------------------------------------------------------------
+// A list of objectives and the one view a person uses to watch and steer one: goal, charter,
+// metrics, the newest report, artifacts, the roster, money and runs, the pending wakes, and the
+// escalation. Every action that spends money or retires a session asks first.
+
+const OBJECTIVE_PHASES = ["drafting", "active", "stopped", "done", "archived"];
+const SVG_NS = "http://www.w3.org/2000/svg";
+/** UX-09: a member's state changes arrive as `session.state`; one re-read follows a burst of them. */
+const OBJECTIVE_REFRESH_MS = 400;
+
+let objectiveListRequest = 0;
+/** The objective the view is showing: its view, metrics, charter, and each member's session detail. */
+let objectiveDetail = null;
+/** Which read the view is drawing: a slower answer from an older objective must not overwrite it. */
+let objectiveVersion = 0;
+/** The action a pending confirmation guards: `launch`, `stop`, or `regenerate`. */
+let objectivePending = null;
+let objectiveRefresh;
+
+async function loadObjectives(cursor) {
+	const request = ++objectiveListRequest;
+	const phase = $("objectives-phase").value;
+	const body = await api("GET", pagePath(phase ? `/objectives?phase=${encodeURIComponent(phase)}` : "/objectives", cursor));
+	if (request !== objectiveListRequest) return;
+	const list = $("objectives-list");
+	if (!cursor) list.replaceChildren();
+	const rows = asList(body, ["objectives"]);
+	if (rows.length === 0 && !cursor) {
+		return empty(
+			list,
+			phase
+				? `No ${phase} objectives.`
+				: "No objectives yet. An objective is stated work with a lifetime: a goal, a charter of standing instructions, one lead session that coordinates, members that do the work, and money and runs that stop it. A draft costs nothing until it is launched.",
+		);
+	}
+	for (const raw of rows) {
+		const row = objectiveRow(raw);
+		learnDomain(row.url);
+		const title = document.createDocumentFragment();
+		title.append(span(row.phase, "badge phase-badge"), " ");
+		// OBJ-03: the derived state, which is a function of other rows and never stored.
+		if (row.state) title.append(span(row.state, "badge state-badge"), " ");
+		if (row.holding) title.append(span(row.holding, "badge holding-badge"), " ");
+		title.append(linkified(row.goal));
+		const meta = [
+			row.lead ? refLink(row.lead, "session", `lead ${refLabel(row.lead)}`, row.lead) : "no lead yet",
+			`spent ${cost(row.spendTodayUsd)} today`,
+			`${row.leadRunsToday} ${row.leadRunsToday === 1 ? "run" : "runs"} today`,
+			row.dueAt ? `due ${shortTime(row.dueAt)}` : undefined,
+		];
+		const aside = document.createElement("div");
+		aside.className = "item-aside";
+		aside.append(timeEl(row.at));
+		list.append(
+			item(title, meta, () => {
+				location.hash = `#/objectives/${row.id}`;
+			}, { testid: "objective-item", id: row.id, aside }),
+		);
+	}
+	showMore(list, nextCursor(body), (next) => loadObjectives(next).catch(fail));
+}
+
+/**
+ * WAK-08: a wake belongs to a session, so each member's own session detail is where the objective's
+ * pending wakes and live states come from; the roster and the wakes then read what the session
+ * view reads, rather than a second definition of either.
+ */
+async function memberSessions(members) {
+	const details = await Promise.all(
+		members
+			.filter((member) => member.id)
+			.map((member) => api("GET", `/sessions/${encodeURIComponent(member.id)}`).catch(() => undefined)),
+	);
+	return details.filter((detail) => detail?.session);
+}
+
+async function openObjective(id) {
+	const version = ++objectiveVersion;
+	clearTimeout(objectiveRefresh);
+	const [shown, metrics, charter] = await Promise.all([
+		api("GET", `/objectives/${encodeURIComponent(id)}`),
+		api("GET", `/objectives/${encodeURIComponent(id)}/metrics`),
+		api("GET", `/objectives/${encodeURIComponent(id)}/charter`),
+	]);
+	if (version !== objectiveVersion) return;
+	const view = objectiveView(shown.objective);
+	learnDomain(view.url);
+	const members = await memberSessions(view.members);
+	if (version !== objectiveVersion) return;
+	objectiveDetail = { view, metrics: metricsView(metrics), charter: charterView(charter), members };
+	objectivePending = null;
+	$("objective-confirm").hidden = true;
+	$("objectives-browse").hidden = true;
+	$("objectives-list").hidden = true;
+	$("objective").hidden = false;
+	renderObjective();
+}
+
+/** OBJ-03: after a member's state changes, the derived state and the meters are re-read, not guessed. */
+async function refreshObjective() {
+	const current = objectiveDetail;
+	if (!current || $("objective").hidden) return;
+	const version = objectiveVersion;
+	const shown = await api("GET", `/objectives/${encodeURIComponent(current.view.id)}`);
+	if (!objectiveDetail || objectiveDetail !== current || version !== objectiveVersion) return;
+	const view = objectiveView(shown.objective);
+	const members = await memberSessions(view.members);
+	if (!objectiveDetail || objectiveDetail !== current || version !== objectiveVersion) return;
+	current.view = view;
+	current.members = members;
+	// The charter editor and the charts are left alone: neither is a function of a session's state,
+	// and redrawing them would take the cursor out of someone's writing.
+	current.view.meters = view.meters;
+	renderObjectiveHead();
+	renderObjectiveMeters();
+	renderObjectiveMembers();
+	renderObjectiveWakes();
+	renderObjectiveEscalation();
+}
+
+function scheduleObjectiveRefresh() {
+	clearTimeout(objectiveRefresh);
+	objectiveRefresh = setTimeout(() => void refreshObjective().catch(() => {}), OBJECTIVE_REFRESH_MS);
+}
+
+function renderObjective() {
+	renderObjectiveHead();
+	renderObjectiveMeters();
+	renderObjectiveMetrics();
+	renderObjectiveCharter();
+	renderObjectiveReport();
+	renderObjectiveArtifacts();
+	renderObjectiveMembers();
+	renderObjectiveWakes();
+	renderObjectiveEscalation();
+}
+
+function renderObjectiveHead() {
+	const view = objectiveDetail.view;
+	$("objective-goal").textContent = view.goal;
+	const meta = $("objective-meta");
+	meta.replaceChildren(badge(view.phase, "state-badge"));
+	if (view.state) meta.append(badge(view.state, "state-badge"));
+	if (view.holding) {
+		const holding = span(view.holding, "badge holding-badge");
+		holding.dataset.testid = "objective-holding";
+		meta.append(holding);
+	}
+	if (view.lead) meta.append(refLink(view.lead, "session", `lead ${refLabel(view.lead)}`, view.lead));
+	// OBJ-05: an active objective always has its own thread, and that is where its mail is.
+	if (view.thread) meta.append(refLink(view.thread.url, "thread", "thread", view.thread.url));
+	if (view.proposedBy) meta.append(span(`proposed by ${refLabel(view.proposedBy)}`, "hint"));
+	meta.append(span(view.autonomy === "auto" ? "autonomy: auto" : "autonomy: manual", "hint"));
+	if (view.dueAt) meta.append(span(`due ${when(view.dueAt)}`, "hint"));
+	const url = document.createElement("span");
+	url.className = "hint objective-url";
+	url.dataset.testid = "objective-url";
+	url.append(copyLink(view.url || `pana://${state.domain}/objectives/${view.id}`, "objective"));
+	meta.append(url);
+	// OBJ-07/OBJ-35: the actions each phase offers. Launch is the user's alone, and a draft is the
+	// only phase that launches; regenerate replaces a lead, so it needs an active objective.
+	$("objective-launch").hidden = view.phase !== "drafting";
+	$("objective-stop").hidden = view.phase !== "active";
+	$("objective-regenerate").hidden = view.phase !== "active" || !view.lead;
+	$("objective-charter-rev").textContent = `revision ${view.charterRev}`;
+}
+
+/** OBJ-20..OBJ-24: money and runs against the limits that stop the objective. */
+function renderObjectiveMeters() {
+	const container = $("objective-meters");
+	container.replaceChildren();
+	for (const meter of objectiveDetail.view.meters) {
+		const row = document.createElement("div");
+		row.className = "meter";
+		row.dataset.testid = "objective-meter";
+		row.dataset.meter = meter.id;
+		const head = document.createElement("div");
+		head.className = "meter-head";
+		head.append(span(meter.label, "meter-label"));
+		const value = document.createElement("span");
+		value.className = "meter-value";
+		value.dataset.testid = "objective-meter-value";
+		value.textContent = meterText(meter);
+		if (meter.over) value.dataset.over = "true";
+		head.append(value);
+		row.append(head);
+		if (meter.share !== null) {
+			const bar = document.createElement("div");
+			bar.className = "meter-bar";
+			bar.setAttribute("role", "img");
+			bar.setAttribute("aria-label", `${meter.label}: ${value.textContent}`);
+			const fill = document.createElement("div");
+			fill.className = "meter-fill";
+			fill.style.width = `${Math.round(meter.share * 100)}%`;
+			if (meter.over) fill.dataset.over = "true";
+			bar.append(fill);
+			row.append(bar);
+		}
+		container.append(row);
+	}
+}
+
+/** A meter's reading. A null limit follows the domain's configuration, which this app cannot read. */
+function meterText(meter) {
+	const shown = meter.unit === "usd" ? (value) => cost(value) : (value) => String(value);
+	if (meter.limit === null) return `${shown(meter.value)} · the domain's default limit`;
+	return `${shown(meter.value)} of ${shown(meter.limit)}`;
+}
+
+/**
+ * OBJ-28: one chart per metric, each with its own line and its target line. The count under the
+ * heading is a count of metrics at their own targets, never a percent-to-target total.
+ */
+function renderObjectiveMetrics() {
+	const container = $("objective-metrics");
+	container.replaceChildren();
+	const view = objectiveDetail.metrics;
+	$("objective-at-target").textContent = view.atTarget.of === 0 ? "no metric has a target" : `${view.atTarget.count} of ${view.atTarget.of} at target`;
+	if (view.metrics.length === 0) {
+		return empty(container, "No metrics. A metric is a name, a unit, and a direction; its first reading sets its baseline, and a target makes the objective finite.");
+	}
+	for (const series of view.metrics) {
+		const figure = document.createElement("figure");
+		figure.className = "metric";
+		figure.dataset.testid = "objective-metric";
+		figure.dataset.metric = series.name;
+		const caption = document.createElement("figcaption");
+		caption.append(span(series.name, "metric-name"));
+		const current = span(
+			series.current.stale ? "no reading in its window" : series.current.display ?? "no readings yet",
+			"metric-current",
+		);
+		current.dataset.testid = "metric-current";
+		caption.append(current);
+		caption.append(
+			span(series.targetDisplay === null ? "no target" : `target ${series.targetDisplay}`, "hint metric-target-label"),
+		);
+		if (series.atTarget === true) caption.append(span("at target", "badge"));
+		caption.title = [
+			series.baseline === null ? "no baseline yet" : `baseline ${series.baselineDisplay ?? series.baseline}`,
+			series.aggregation === "mean" && series.window ? `mean over ${series.window}` : "latest reading",
+			series.check ? `checked from the world${series.check.lastCheck ? ` (last check ${series.check.lastCheck})` : ""}` : undefined,
+		]
+			.filter(Boolean)
+			.join(" · ");
+		figure.append(caption, metricChartElement(series));
+		container.append(figure);
+	}
+}
+
+/** One metric's drawing: its line through its readings, and its target line across the box. */
+function metricChartElement(series) {
+	const box = { width: 320, height: 64, pad: 6 };
+	const chart = metricChart(series, box);
+	const svg = document.createElementNS(SVG_NS, "svg");
+	svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
+	svg.setAttribute("preserveAspectRatio", "none");
+	svg.setAttribute("role", "img");
+	svg.setAttribute("aria-label", `${series.name}: ${series.current.display ?? "no readings"}${series.targetDisplay === null ? "" : `, target ${series.targetDisplay}`}`);
+	svg.classList.add("metric-chart");
+	svg.dataset.testid = "metric-chart";
+	if (!chart.empty && chart.target !== null) {
+		const target = document.createElementNS(SVG_NS, "line");
+		target.setAttribute("x1", "0");
+		target.setAttribute("x2", String(box.width));
+		target.setAttribute("y1", String(chart.target.y));
+		target.setAttribute("y2", String(chart.target.y));
+		target.setAttribute("class", "metric-target");
+		svg.append(target);
+	}
+	if (!chart.empty) {
+		const line = document.createElementNS(SVG_NS, "polyline");
+		line.setAttribute("points", chart.line);
+		line.setAttribute("class", "metric-line");
+		line.dataset.testid = "metric-line";
+		svg.append(line);
+		// A metric read once has one point and no line: mark it, so it is not an empty chart.
+		for (const dot of chart.dots ?? []) {
+			if ((chart.dots ?? []).length > 1) break;
+			const mark = document.createElementNS(SVG_NS, "circle");
+			mark.setAttribute("cx", String(dot.x));
+			mark.setAttribute("cy", String(dot.y));
+			mark.setAttribute("r", "3");
+			mark.setAttribute("class", "metric-dot");
+			svg.append(mark);
+		}
+	}
+	return svg;
+}
+
+/**
+ * OBJ-09/OBJ-10: the charter, one block per section with its newest revision. The user edits any
+ * section; `Notes` is also where the lead keeps its own writing.
+ */
+function renderObjectiveCharter() {
+	const container = $("objective-charter");
+	container.replaceChildren();
+	for (const section of objectiveDetail.charter.sections) {
+		const block = document.createElement("section");
+		block.className = "charter-section";
+		block.dataset.testid = "charter-section";
+		block.dataset.section = section.name;
+		const head = document.createElement("header");
+		head.className = "charter-section-head";
+		const title = document.createElement("h4");
+		title.textContent = section.name;
+		head.append(title);
+		head.append(
+			span(
+				section.rev === null ? "never written" : `revision ${section.rev} · ${refLabel(section.author)} · ${shortTime(section.at)}`,
+				"hint",
+			),
+		);
+		const edit = document.createElement("button");
+		edit.type = "button";
+		edit.className = "link-button";
+		edit.dataset.testid = "charter-edit";
+		edit.dataset.section = section.name;
+		edit.textContent = "Edit";
+		head.append(edit);
+		block.append(head);
+		if (section.body.trim().length > 0) block.append(markdownElement(section.body, "charter-body"));
+		else {
+			block.append(
+				span(
+					section.name === "Notes"
+						? "Empty. The lead keeps its own durable notes here."
+						: "Empty. An empty section grants nothing, so the lead escalates instead of guessing.",
+					"hint charter-empty",
+				),
+			);
+		}
+		container.append(block);
+	}
+}
+
+function charterBlock(section) {
+	return [...document.querySelectorAll("#objective-charter [data-section]")].find((block) => block.dataset.section === section);
+}
+
+/**
+ * OBJ-09: writing a section sends the revision this editor read as `baseRev`, so a charter that
+ * moved underneath it answers 409 instead of overwriting a change nobody saw.
+ */
+function startCharterEdit(section) {
+	const block = charterBlock(section);
+	if (!block || block.querySelector("[data-testid=charter-editor]")) return;
+	const current = objectiveDetail.charter.sections.find((entry) => entry.name === section);
+	const form = document.createElement("form");
+	form.className = "charter-editor";
+	form.dataset.testid = "charter-editor";
+	form.dataset.section = section;
+	form.dataset.baseRev = String(objectiveDetail.charter.rev);
+	const field = document.createElement("div");
+	field.className = "field";
+	const label = document.createElement("label");
+	label.textContent = `${section} (Markdown)`;
+	const textarea = document.createElement("textarea");
+	textarea.rows = 6;
+	textarea.value = current?.body ?? "";
+	textarea.dataset.testid = "charter-text";
+	field.append(label, textarea);
+	const actions = document.createElement("div");
+	actions.className = "form-actions";
+	const cancel = document.createElement("button");
+	cancel.type = "button";
+	cancel.dataset.testid = "charter-cancel";
+	cancel.textContent = "Cancel";
+	cancel.addEventListener("click", () => {
+		form.remove();
+		block.querySelector("[data-testid=charter-edit]")?.focus();
+	});
+	const save = document.createElement("button");
+	save.type = "submit";
+	save.className = "primary";
+	save.dataset.testid = "charter-save";
+	save.textContent = "Save";
+	actions.append(cancel, save);
+	form.append(field, actions);
+	form.addEventListener("submit", (event) => void saveCharterSection(event, section));
+	block.append(form);
+	textarea.focus();
+}
+
+async function saveCharterSection(event, section) {
+	event.preventDefault();
+	const form = event.currentTarget;
+	const textarea = form.querySelector("[data-testid=charter-text]");
+	const save = form.querySelector("[data-testid=charter-save]");
+	save.disabled = true;
+	try {
+		const body = await api(
+			"POST",
+			`/objectives/${encodeURIComponent(objectiveDetail.view.id)}/charter`,
+			charterBody(section, textarea.value, Number(form.dataset.baseRev)),
+		);
+		objectiveDetail.charter = charterView(body);
+		status(`${section} saved at revision ${objectiveDetail.charter.rev}.`);
+		$("objective-charter-rev").textContent = `revision ${objectiveDetail.charter.rev}`;
+		renderObjectiveCharter();
+	} catch (error) {
+		if (error?.status === 409 && error?.body?.error?.code === "stale_charter") {
+			await showCharterConflict(form, section, error);
+			return;
+		}
+		fail(error);
+	} finally {
+		save.disabled = false;
+	}
+}
+
+/**
+ * OBJ-09/MEM-09: the charter moved while this editor was open. The written text stays in the
+ * editor, the newer revision is shown beside it, and saving again sends the revision just read —
+ * a conflict costs one read rather than the writing.
+ */
+async function showCharterConflict(form, section, error) {
+	const fresh = charterView(await api("GET", `/objectives/${encodeURIComponent(objectiveDetail.view.id)}/charter`));
+	objectiveDetail.charter = fresh;
+	form.dataset.baseRev = String(fresh.rev);
+	const newest = fresh.sections.find((entry) => entry.name === section);
+	const notice = document.createElement("div");
+	notice.className = "notice charter-conflict";
+	notice.dataset.testid = "charter-conflict";
+	const message = document.createElement("p");
+	message.textContent = `The charter moved to revision ${fresh.rev}; you read ${error?.body?.error?.baseRev ?? "an older revision"}. Your text is still here. Saving again writes over the newest revision.`;
+	notice.append(message);
+	if (newest && newest.body.trim().length > 0) {
+		const label = document.createElement("p");
+		label.className = "hint";
+		label.textContent = `${section} at revision ${fresh.rev}:`;
+		notice.append(label, markdownElement(newest.body, "charter-conflict-body"));
+	}
+	const save = document.createElement("button");
+	save.type = "button";
+	save.dataset.testid = "charter-save-over";
+	save.className = "danger";
+	save.textContent = "Save mine over it";
+	save.addEventListener("click", () => form.requestSubmit());
+	notice.append(save);
+	form.querySelector("[data-testid=charter-conflict]")?.remove();
+	form.insertBefore(notice, form.querySelector(".field"));
+}
+
+/** OBJ-30: the newest report is a message in the objective's thread, rendered as mail is. */
+function renderObjectiveReport() {
+	const container = $("objective-report");
+	container.replaceChildren();
+	const report = objectiveDetail.view.report;
+	if (!report) return empty(container, "No report yet. A report is a message in the objective's thread, so it keeps its edits, its redaction, and its deliveries.");
+	const head = document.createElement("p");
+	head.className = "meta-line";
+	head.dataset.testid = "objective-report-head";
+	head.append(refLink(report.sender, "user", refLabel(report.sender), report.sender));
+	head.append(" ");
+	head.append(timeEl(report.at));
+	head.append(" ");
+	head.append(refLink(report.url, "thread", `#${report.messageId.slice(-6)}`, report.url));
+	if (report.revised) head.append(span("edited", "badge"));
+	if (report.redacted) head.append(span("redacted", "badge"));
+	container.append(head, markdownElement(report.body, "objective-report-body"));
+}
+
+/** OBJ-31: name, size, and a link that fetches the bytes, because a file needs the token. */
+function renderObjectiveArtifacts() {
+	const list = $("objective-artifacts");
+	list.replaceChildren();
+	const artifacts = objectiveDetail.view.artifacts;
+	if (artifacts.length === 0) return empty(list, "No artifacts. An artifact is a file linked to the objective, uploaded through the same store a message's attachment uses.");
+	for (const artifact of artifacts) {
+		const title = document.createDocumentFragment();
+		title.append(fileLink(artifact.url, artifact.name));
+		const meta = [fileSize(artifact.size), artifact.mediaType ?? undefined].filter(Boolean);
+		list.append(item(title, meta, () => undefined, { testid: "objective-artifact", id: artifact.id }));
+	}
+}
+
+/** FIL-06: a file's bytes arrive with the bearer token, which an anchor cannot send. */
+function fileLink(url, label) {
+	const href = appHref(url, state.domain);
+	const anchor = document.createElement("a");
+	anchor.href = href ?? "#";
+	anchor.textContent = label;
+	anchor.dataset.testid = "objective-artifact-link";
+	anchor.addEventListener("click", (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		if (!href) return;
+		fetchFile(href)
+			.then((blob) => {
+				const download = document.createElement("a");
+				download.href = URL.createObjectURL(blob);
+				download.download = label;
+				download.click();
+				setTimeout(() => URL.revokeObjectURL(download.href), 10_000);
+			})
+			.catch(() => status(`Could not open ${label}.`, true));
+	});
+	return anchor;
+}
+
+/** UX-09: the roster, each member's live state beside a link to its session. */
+function renderObjectiveMembers() {
+	const list = $("objective-members");
+	list.replaceChildren();
+	const view = objectiveDetail.view;
+	const sessions = new Map(objectiveDetail.members.map((detail) => [String(detail?.session?.id ?? ""), detail.session]));
+	if (view.members.length === 0) {
+		return empty(list, "No members. A lead alone may measure, report, and finish an objective; it creates members for the work that produces something.");
+	}
+	for (const member of view.members) {
+		const detail = sessions.get(member.id);
+		const state = String(detail?.state ?? member.state);
+		const title = document.createDocumentFragment();
+		title.append(span(state, "badge state-badge"));
+		const person = span("", "person");
+		person.dataset.color = participantColor({ url: member.url, kind: "session" });
+		person.append(refLink(member.url || member.id, "session", member.id, member.url));
+		title.append(" ", person);
+		if (member.lead) title.append(" ", span("lead", "badge"));
+		const meta = [
+			member.profile ? `profile ${member.profile}` : undefined,
+			member.stoppedBy ? `stopped by ${member.stoppedBy}` : undefined,
+			detail?.live?.activity ? liveActivityLabel(detail.live, serverNow()) : undefined,
+			detail?.costUsd === undefined ? undefined : cost(detail.costUsd),
+		];
+		list.append(
+			item(title, meta, () => {
+				location.hash = `#/sessions/${member.id}`;
+			}, { testid: "objective-member", id: member.id, sessionId: member.id }),
+		);
+	}
+}
+
+/** WAK-08: the objective's pending wakes, with linked labels, next-run times, and recurrence. */
+function renderObjectiveWakes() {
+	const container = $("objective-wakes");
+	container.replaceChildren();
+	const wakes = objectiveWakes(objectiveDetail.members);
+	const heading = document.createElement("p");
+	heading.className = "hint";
+	heading.dataset.testid = "objective-wake-count";
+	heading.textContent = wakes.length === 0 ? "No pending wakes." : `${wakes.length} pending wake${wakes.length === 1 ? "" : "s"}.`;
+	container.append(heading);
+	if (wakes.length === 0) return;
+	const list = document.createElement("ul");
+	for (const wake of wakes) {
+		const row = document.createElement("li");
+		row.dataset.testid = "objective-wake";
+		row.append(refLink(wake.url, "schedule", wake.subject || "Untitled wake"), " · ");
+		row.append(refLink(wake.sessionUrl, "session", `wakes ${wake.sessionId.slice(-6)}`), " · ");
+		const time = document.createElement("time");
+		time.dateTime = new Date(wake.at).toISOString();
+		time.textContent = when(wake.at);
+		time.title = untilLabel(wake.at, serverNow());
+		row.append(time);
+		if (wake.cron) row.append(span(` · recurring (${wake.cron})`, "hint"));
+		list.append(row);
+	}
+	container.append(list);
+}
+
+/** The question an escalation asks, read once per message: `GET /messages/:id` is the message. */
+const escalationQuestions = new Map();
+
+function escalationQuestion(id) {
+	if (!id) return Promise.resolve(undefined);
+	if (!escalationQuestions.has(id)) {
+		escalationQuestions.set(
+			id,
+			api("GET", `/messages/${encodeURIComponent(id)}`)
+				.then((body) => messageView(body.message))
+				.catch(() => undefined),
+		);
+	}
+	return escalationQuestions.get(id);
+}
+
+/** OBJ-33/OBJ-34: the escalation, at the scope it holds, the question, and the thread an answer comes from. */
+function renderObjectiveEscalation() {
+	const node = $("objective-escalation");
+	node.replaceChildren();
+	const view = objectiveDetail.view;
+	node.hidden = !view.awaitingUser;
+	if (!view.awaitingUser) return;
+	const title = document.createElement("p");
+	title.append(span("Waiting for you. ", ""));
+	title.append("Nothing this covers starts until you answer in its thread.");
+	node.append(title);
+	const list = document.createElement("ul");
+	for (const escalation of view.escalations) {
+		const row = document.createElement("li");
+		row.dataset.testid = "objective-escalation-row";
+		row.dataset.scope = escalation.scope;
+		row.append(
+			span(
+				escalation.scope === "member" ? `member ${refLabel(escalation.member)}` : "the whole objective",
+				"hint",
+			),
+			" · ",
+		);
+		row.append(refLink(escalation.threadUrl, "thread", "answer in the thread", escalation.threadUrl));
+		if (escalation.timeoutAt) row.append(span(` · until ${when(escalation.timeoutAt)}`, "hint"));
+		const question = document.createElement("div");
+		question.className = "escalation-question";
+		question.dataset.testid = "objective-escalation-question";
+		row.append(question);
+		void escalationQuestion(escalation.messageId).then((message) => {
+			// The view may have moved on while the message was in flight.
+			if (!question.isConnected || !message) return;
+			question.append(markdownElement(message.body, "objective-escalation-body"));
+		});
+		list.append(row);
+	}
+	node.append(list);
+}
+
+/** Every action that spends money or retires a session asks first (OBJ-04, OBJ-07, OBJ-35). */
+const OBJECTIVE_ACTIONS = {
+	launch: {
+		question:
+			"Launch this objective? It creates the lead session and starts its first run, which begins spending money against the objective's limits.",
+		label: "Yes, launch",
+		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/launch`, {}),
+	},
+	stop: {
+		question:
+			"Stop this objective? Its running members stop, their wakes are cancelled, and it starts nothing until you resume it.",
+		label: "Yes, stop",
+		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/stop`, {}),
+	},
+	regenerate: {
+		question:
+			"Replace the lead? Its session is stopped and archived, and a new lead starts with the briefing. The old lead's transcript stays readable.",
+		label: "Yes, replace the lead",
+		reason: true,
+		run: (id, reason) => api("POST", `/objectives/${encodeURIComponent(id)}/regenerate-lead`, { reason }),
+	},
+};
+
+function askObjectiveAction(action) {
+	const spec = OBJECTIVE_ACTIONS[action];
+	if (!spec || !objectiveDetail) return;
+	objectivePending = action;
+	$("objective-confirm-text").textContent = spec.question;
+	$("objective-reason-field").hidden = !spec.reason;
+	$("objective-reason").value = "";
+	$("objective-confirm-yes").textContent = spec.label;
+	$("objective-confirm").hidden = false;
+	(spec.reason ? $("objective-reason") : $("objective-confirm-yes")).focus();
+}
+
+function cancelObjectiveAction() {
+	objectivePending = null;
+	$("objective-confirm").hidden = true;
+	$("objective-reason-field").hidden = true;
+}
+
+async function confirmObjectiveAction() {
+	const action = objectivePending;
+	if (!action || !objectiveDetail) return;
+	const spec = OBJECTIVE_ACTIONS[action];
+	const id = objectiveDetail.view.id;
+	const reason = spec.reason ? $("objective-reason").value.trim() : undefined;
+	if (spec.reason && reason.length === 0) {
+		status("Say why the lead is being replaced: the new lead reads it.", true);
+		$("objective-reason").focus();
+		return;
+	}
+	cancelObjectiveAction();
+	try {
+		await spec.run(id, reason);
+		status(action === "launch" ? "Objective launched." : action === "stop" ? "Objective stopped." : "The lead is replaced.");
+		await openObjective(id);
+	} catch (error) {
+		fail(error);
+	}
+}
+
+/** UX-09: a member's state event patches its badge now and re-reads the derived state after the burst. */
+function applyObjectiveStateEvent(event) {
+	if (!objectiveDetail || $("objective").hidden) return;
+	const member = objectiveDetail.view.members.find((entry) => entry.id === event.sessionId);
+	if (!member) return;
+	member.state = String(event.state ?? member.state);
+	const row = document.querySelector(`#objective-members [data-session="${event.sessionId}"]`);
+	const stateBadge = row?.querySelector(".state-badge");
+	if (stateBadge) {
+		stateBadge.textContent = member.state;
+		stateBadge.className = `badge ${member.state} state-badge`;
+	}
+	scheduleObjectiveRefresh();
+}
+
 // ---- Renderer bundles -----------------------------------------------------------------------
 
 let vendorLoading;
@@ -3041,6 +3744,15 @@ async function route() {
 				$("schedules-kind").value = ["session", "thread", "wake"].includes(query.get("kind")) ? query.get("kind") : "";
 				await loadSchedules(query.get("focus") ?? undefined);
 				break;
+			case "objectives":
+				$("objectives-browse").hidden = false;
+				$("objectives-list").hidden = false;
+				$("objective").hidden = true;
+				// An unknown phase resets the filter rather than answering an empty list.
+				$("objectives-phase").value = OBJECTIVE_PHASES.includes(query.get("phase")) ? query.get("phase") : "";
+				if (id) await openObjective(id);
+				else await loadObjectives();
+				break;
 		}
 	} catch (error) {
 		fail(error);
@@ -3148,6 +3860,25 @@ $("schedules-kind").addEventListener("change", () => {
 	location.hash = kind ? `#/schedules?kind=${kind}` : "#/schedules";
 });
 $("schedule-form").addEventListener("submit", (event) => void createSchedule(event));
+$("objectives-phase").addEventListener("change", () => {
+	const phase = $("objectives-phase").value;
+	location.hash = phase ? `#/objectives?phase=${encodeURIComponent(phase)}` : "#/objectives";
+});
+$("objective-launch").addEventListener("click", () => askObjectiveAction("launch"));
+$("objective-stop").addEventListener("click", () => askObjectiveAction("stop"));
+$("objective-regenerate").addEventListener("click", () => askObjectiveAction("regenerate"));
+$("objective-reload").addEventListener("click", () => {
+	if (objectiveDetail) void openObjective(objectiveDetail.view.id).catch(fail);
+});
+$("objective-confirm-yes").addEventListener("click", () => void confirmObjectiveAction());
+$("objective-confirm-no").addEventListener("click", cancelObjectiveAction);
+// OBJ-09: each charter section's Edit opens its editor in place, and a save sends the revision read.
+$("objective-charter").addEventListener("click", (event) => {
+	const button = event.target?.closest?.("[data-testid=charter-edit]");
+	if (!button) return;
+	event.preventDefault();
+	startCharterEdit(button.dataset.section);
+});
 $("schedule-cancel").addEventListener("click", () => {
 	resetScheduleForm();
 	status("");
@@ -3196,6 +3927,7 @@ window.__pana = {
 			section: state.section,
 			threadId: state.thread?.id,
 			sessionId: state.session?.id,
+			objectiveId: objectiveDetail?.view.id,
 			draft: state.draft ? { threadId: state.draft.threadId, after: state.draft.after } : undefined,
 			confirm: state.confirm?.action,
 			selected: current ? { testid: current.dataset.testid, id: current.dataset.id, thread: current.dataset.thread } : undefined,

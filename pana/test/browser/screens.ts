@@ -40,6 +40,8 @@ try {
 		await shot(`inbox${suffix}`, "#/inbox", `document.querySelectorAll("#inbox-list .item").length >= 3`);
 		await shot(`thread${suffix}`, `#/threads/${seeded.group.threadId}`, `document.querySelectorAll("#thread-messages [data-testid=message]").length >= 4`);
 		await shot(`session${suffix}`, `#/sessions/${seeded.capital.sessionId}`, `document.querySelectorAll("#transcript [data-testid=entry]").length >= 2`);
+		// OBJ-39: this domain seeds no objectives, so the section shows its empty state.
+		await shot(`objectives${suffix}`, "#/objectives", `!document.getElementById("view-objectives").hidden && document.getElementById("objectives-list").textContent.length > 0`);
 		if (suffix) continue;
 		await shot("compose", "#/compose", `!document.getElementById("view-compose").hidden`);
 		await shot("threads", "#/threads", `!document.getElementById("threads-list").hidden && document.querySelectorAll("#threads-list .item").length >= 3`);

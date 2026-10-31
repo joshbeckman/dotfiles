@@ -42,6 +42,8 @@ export const COMMANDS = [
 	{ id: "push", label: "Enable notifications", keywords: "push subscribe alerts", when: (context) => !context.push?.subscribed },
 	{ id: "back", label: "Go back", hint: "u", keywords: "return up" },
 	{ id: "help", label: "Show keyboard shortcuts", hint: "?", keywords: "keys help" },
+	// OBJ-39: the objectives list, appended so no existing command moves.
+	{ id: "go:objectives", label: "Go to Objectives", hint: "g o", keywords: "goals charter lead spend budget members" },
 ];
 
 /**

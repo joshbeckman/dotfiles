@@ -22,6 +22,7 @@
 				<a data-section="sessions" href="#/sessions">Sessions</a>
 				<a data-section="memory" href="#/memory">Memory</a>
 				<a data-section="schedules" href="#/schedules">Schedules</a>
+				<a data-section="objectives" href="#/objectives">Objectives</a>
 			</nav>
 			<div class="topbar-tools">
 				<button id="enable-push" data-testid="enable-push" class="quiet" type="button">Notifications</button>
@@ -295,6 +296,90 @@
 					<p id="memory-commit-meta" data-testid="memory-commit-meta" class="meta-line"></p>
 					<pre id="memory-commit-message" data-testid="memory-commit-message" class="commit-message" hidden></pre>
 					<div id="memory-commit-files" data-testid="memory-commit-files" class="commit-files"></div>
+				</article>
+			</section>
+
+			<section class="view" id="view-objectives" data-testid="objectives" hidden>
+				<div id="objectives-browse">
+					<header class="view-header"><h2>Objectives</h2></header>
+					<p class="hint">Every objective, newest first. A draft costs nothing until it is launched.</p>
+					<div class="field">
+						<label for="objectives-phase">Show objectives</label>
+						<select id="objectives-phase" data-testid="objectives-phase">
+							<option value="">All phases</option>
+							<option value="drafting">Drafting</option>
+							<option value="active">Active</option>
+							<option value="stopped">Stopped</option>
+							<option value="done">Done</option>
+							<option value="archived">Archived</option>
+						</select>
+					</div>
+					<div id="objectives-list" data-testid="objectives-list" class="list" role="list"></div>
+				</div>
+
+				<article id="objective" data-testid="objective" hidden>
+					<header class="view-header thread-header">
+						<a href="#/objectives" class="back" data-testid="objective-back">Objectives</a>
+						<h2 id="objective-goal" data-testid="objective-goal" tabindex="-1"></h2>
+						<div class="header-actions">
+							<button type="button" class="quiet" id="objective-launch" data-testid="objective-launch" hidden>Launch</button>
+							<button type="button" class="quiet" id="objective-stop" data-testid="objective-stop" hidden>Stop</button>
+							<button type="button" class="quiet" id="objective-regenerate" data-testid="objective-regenerate" hidden>Regenerate lead</button>
+							<button type="button" class="quiet" data-testid="objective-reload" id="objective-reload">Reload</button>
+						</div>
+					</header>
+					<p id="objective-meta" data-testid="objective-meta" class="meta-line"></p>
+
+					<div id="objective-escalation" data-testid="objective-escalation" class="notice" hidden></div>
+
+					<div id="objective-confirm" data-testid="objective-confirm" class="confirm" hidden>
+						<p id="objective-confirm-text"></p>
+						<div class="field" id="objective-reason-field" hidden>
+							<label for="objective-reason">Why the lead is being replaced</label>
+							<textarea id="objective-reason" data-testid="objective-reason" rows="3"></textarea>
+							<p class="hint">The new lead reads this, and the old lead's transcript stays readable.</p>
+						</div>
+						<div class="form-actions">
+							<button type="button" id="objective-confirm-no" data-testid="objective-confirm-no">Cancel</button>
+							<button type="button" id="objective-confirm-yes" class="danger" data-testid="objective-confirm-yes">Yes, continue</button>
+						</div>
+					</div>
+
+					<section id="objective-meters-section" aria-labelledby="objective-meters-title">
+						<h3 id="objective-meters-title">Limits</h3>
+						<p class="hint" id="objective-meters-hint">Money and runs against the limits that stop this objective. A limit the objective does not set follows the domain's configuration.</p>
+						<div id="objective-meters" data-testid="objective-meters" class="meters"></div>
+					</section>
+
+					<section id="objective-metrics-section" aria-labelledby="objective-metrics-title">
+						<h3 id="objective-metrics-title">Metrics <span id="objective-at-target" data-testid="objective-at-target" class="hint"></span></h3>
+						<div id="objective-metrics" data-testid="objective-metrics" class="metrics"></div>
+					</section>
+
+					<section id="objective-charter-section" aria-labelledby="objective-charter-title">
+						<h3 id="objective-charter-title">Charter <span id="objective-charter-rev" data-testid="objective-charter-rev" class="hint"></span></h3>
+						<div id="objective-charter" data-testid="objective-charter" class="charter"></div>
+					</section>
+
+					<section id="objective-report-section" aria-labelledby="objective-report-title">
+						<h3 id="objective-report-title">Latest report</h3>
+						<div id="objective-report" data-testid="objective-report"></div>
+					</section>
+
+					<section id="objective-artifacts-section" aria-labelledby="objective-artifacts-title">
+						<h3 id="objective-artifacts-title">Artifacts</h3>
+						<div id="objective-artifacts" data-testid="objective-artifacts" class="list" role="list"></div>
+					</section>
+
+					<section id="objective-members-section" aria-labelledby="objective-members-title">
+						<h3 id="objective-members-title">Members</h3>
+						<div id="objective-members" data-testid="objective-members" class="list" role="list"></div>
+					</section>
+
+					<section id="objective-wakes-section" aria-labelledby="objective-wakes-title">
+						<h3 id="objective-wakes-title">Pending wakes</h3>
+						<div id="objective-wakes" data-testid="objective-wakes"></div>
+					</section>
 				</article>
 			</section>
 

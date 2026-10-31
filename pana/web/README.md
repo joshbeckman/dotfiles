@@ -4,7 +4,7 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 
 | File | What |
 |---|---|
-| `index.html` | the shell and the six sections |
+| `index.html` | the shell and its sections |
 | `app.js` | hash router, API calls, and per-section rendering |
 | `links.js` | pure helpers: `pana://` links, routes, drafts, notification targets, and an uploaded file's Markdown reference (FIL-02, FIL-06) |
 | `views.js` | the only reader of handler response fields, the schedule form's request body, and participant colors (UX-06) |
@@ -86,6 +86,32 @@ too. The action still opens the confirmation form inside that message (WEB-08).
 
 `node test/browser/message-menu-shots.ts DIR` saves the closed and open menu, desktop and
 phone, light and dark to `DIR/message-menu-*.png`, for reviewing this layout.
+
+### Objectives
+
+An objective is a goal, a charter, one lead session, its members, and the money and runs that stop
+it. `#/objectives` lists them — phase, derived state, holding condition, goal, lead, spend today,
+runs today — and `#/objectives/<id>` is the screen a person watches and steers one from: the goal,
+the charter (one block per section, each edited with the revision it was read at, so a charter that
+moved answers 409 and keeps the text), one chart per metric with its own target line and a
+"3 of 5 at target" count, the newest report, the artifacts, the roster with each member's live
+state, money and run meters, the pending wakes, and the escalation. Launch, stop, regenerate the
+lead (with a reason), and charter edit are actions there; each that spends money or retires a
+session asks first.
+
+There is no percent-to-target figure anywhere in this section (OBJ-28): metrics have different
+units, and one averaged number across them would become the only number the objective has. A meter
+whose limit the objective does not set says the domain's default governs, because the PWA cannot
+read panad's config.
+
+A member's `session.state` event patches its badge in place and re-reads the objective's derived
+state once the burst settles (UX-09), so the roster is live without redrawing the charter editor or
+the charts. Run the regression with:
+
+```sh
+npm run test:web -- test/browser/objectives.spec.ts
+node test/browser/objective-shots.ts DIR LABEL   # list and view, desktop and phone, light and dark
+```
 
 ### Selection indicators
 
