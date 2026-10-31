@@ -376,7 +376,7 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **UX-01** Clicking Notifications and choosing Allow in the browser prompt subscribes to Web Push, in Chrome on `http://127.0.0.1` and on the Tailscale HTTPS URL. When the browser does block notifications, the app names the real cause and how to fix it, instead of a generic "permission denied".
 - [x] **UX-02** Cmd+Enter (Ctrl+Enter off macOS) submits the form that has focus, in every form: reply, compose, edit, memory, schedules.
 - [x] **UX-03** The inbox lists threads, not messages. It shows one row per thread the user participates in and has not archived, ordered by latest activity. Each row shows the subject, the participants, a snippet of the latest message, its time, and a clear unread mark with the count.
-- [x] **UX-04** Edit and Redact are small secondary controls on each message, not full-size buttons.
+- [x] **UX-04** Edit and Redact are small secondary controls on each message, not full-size buttons. They sit folded into one quiet menu at the right of the message header, unfolded inside the message card, so a thread of messages reads as prose rather than a column of repeated links.
 - [x] **UX-05** Opening a thread scrolls to its latest message. A link to a specific message scrolls to that message.
 - [x] **UX-06** In a thread, each participant's messages have a left border in that participant's own color. A participant keeps the same color in every thread, and the user always has the same color. Colors come from the style guide palette.
 - [x] **UX-07** The PWA's layout is consistent. Labels and controls align vertically, spacing has one rhythm, and every control sits visibly inside the form or section it acts on.

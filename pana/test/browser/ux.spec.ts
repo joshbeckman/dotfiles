@@ -207,6 +207,8 @@ describeBrowser("pana usability in a browser", () => {
 			${KEYS}
 			location.hash = "#/threads/${seeded!.capital.threadId}";
 			await until(() => document.getElementById("thread-subject").textContent.includes("capital") && document.querySelectorAll("#thread-messages [data-testid=message]").length === 2);
+			document.querySelector("#thread-messages [data-testid=message-menu] > summary").click();
+			await until(() => document.querySelector("#thread-messages [data-testid=message-menu]").open);
 			document.querySelector("#thread-messages [data-testid=message-edit]").click();
 			await until(() => !document.getElementById("confirm").hidden);
 			const box = document.getElementById("edit-body");
@@ -331,26 +333,80 @@ describeBrowser("pana usability in a browser", () => {
 		expect(parseInt(paged.badge)).toBe(unreadTotal);
 	});
 
-	it("UX-04 Edit and Redact are small secondary controls on each message", async () => {
+	it("UX-04 Edit and Redact are small secondary controls, folded into one menu per message", async () => {
 		await start();
-		const sizes = await evaluatePage<{ count: number; messages: number; edit: { h: number; font: number; border: string; inHeader: boolean }; reply: { h: number; font: number } }>(`
+		const sizes = await evaluatePage<{
+			messages: number;
+			menus: number;
+			open: number;
+			count: number;
+			edit: { h: number; font: number; border: string; inHeader: boolean; inCard: boolean };
+			reply: { h: number; font: number };
+		}>(`
 			location.hash = "#/threads/${seeded!.group.threadId}";
 			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length >= 6);
+			const menus = [...document.querySelectorAll("#thread-messages [data-testid=message-menu]")];
+			const openBefore = menus.filter((menu) => menu.open).length;
+			const menu = menus[0];
+			menu.querySelector("summary").click();
 			const edit = document.querySelector("#thread-messages [data-testid=message-edit]");
 			const reply = document.querySelector("[data-testid=reply-send]");
 			const style = getComputedStyle(edit);
+			const box = edit.getBoundingClientRect();
+			const card = menu.closest("[data-testid=message]").getBoundingClientRect();
 			return {
-				count: document.querySelectorAll("#thread-messages [data-testid=message-edit], #thread-messages [data-testid=message-redact]").length,
 				messages: document.querySelectorAll("#thread-messages [data-testid=message]").length,
-				edit: { h: edit.getBoundingClientRect().height, font: parseFloat(style.fontSize), border: style.borderTopStyle, inHeader: Boolean(edit.closest(".message > header")) },
+				menus: menus.length,
+				open: menus.filter((menu) => menu.open).length - openBefore,
+				count: document.querySelectorAll("#thread-messages [data-testid=message-edit], #thread-messages [data-testid=message-redact]").length,
+				edit: {
+					h: box.height,
+					font: parseFloat(style.fontSize),
+					border: style.borderTopStyle,
+					inHeader: Boolean(edit.closest(".message > header")),
+					inCard: box.left >= card.left && box.right <= card.right && box.top >= card.top && box.bottom <= card.bottom,
+				},
 				reply: { h: reply.getBoundingClientRect().height, font: parseFloat(getComputedStyle(reply).fontSize) },
 			};
 		`);
+		// Every message carries one closed menu holding both controls; opening one reveals only its own.
+		expect(sizes.menus).toBe(sizes.messages);
+		expect(sizes.open).toBe(1);
 		expect(sizes.count).toBe(sizes.messages * 2);
 		expect(sizes.edit.inHeader).toBe(true);
+		expect(sizes.edit.inCard).toBe(true);
 		expect(sizes.edit.border).toBe("none");
 		expect(sizes.edit.h).toBeLessThan(sizes.reply.h / 1.5);
 		expect(sizes.edit.font).toBeLessThan(sizes.reply.font);
+
+		// One opens at a time, Escape closes it instead of leaving the thread, and choosing an
+		// action closes it and opens that message's confirmation.
+		const behaviour = await evaluatePage<{ others: number; afterEscape: number; left: boolean; afterEdit: number; confirming: boolean }>(`
+			const menus = [...document.querySelectorAll("#thread-messages [data-testid=message-menu]")];
+			menus[0].open = true;
+			menus[1].querySelector("summary").click();
+			const others = menus.filter((menu) => menu.open).length;
+			menus[1].querySelector("summary").focus();
+			menus[1].querySelector("summary").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+			await sleep(50);
+			const afterEscape = menus.filter((menu) => menu.open).length;
+			menus[1].querySelector("summary").click();
+			menus[1].querySelector("[data-testid=message-edit]").click();
+			await until(() => !document.getElementById("confirm").hidden);
+			return {
+				others,
+				afterEscape,
+				left: !location.hash.includes("#/threads/${seeded!.group.threadId}"),
+				afterEdit: menus.filter((menu) => menu.open).length,
+				confirming: document.getElementById("confirm").closest("[data-testid=message]") === menus[1].closest("[data-testid=message]"),
+			};
+		`);
+		expect(behaviour.others).toBe(1);
+		expect(behaviour.afterEscape).toBe(0);
+		expect(behaviour.left).toBe(false);
+		expect(behaviour.afterEdit).toBe(0);
+		expect(behaviour.confirming).toBe(true);
+		await evaluatePage(`document.getElementById("confirm-no").click(); return true;`);
 	});
 
 	it("UX-05 opening a thread shows its latest message, and a message link shows that message", async () => {
@@ -468,7 +524,15 @@ describeBrowser("pana usability in a browser", () => {
 			await fields("#/threads/${seeded!.group.threadId}", () => document.querySelectorAll("#thread-messages [data-testid=message]").length >= 6);
 			check("thread archive", document.getElementById("thread-archive"), document.querySelector("#thread .thread-header"));
 			check("reply send", document.querySelector("[data-testid=reply-send]"), document.getElementById("reply-form"));
-			for (const message of document.querySelectorAll("#thread-messages [data-testid=message]")) for (const button of message.querySelectorAll("button")) check("message " + button.textContent, button, message);
+			// The message's actions hide behind its menu, so open each one before measuring it.
+			for (const message of document.querySelectorAll("#thread-messages [data-testid=message]")) {
+				const menu = message.querySelector("[data-testid=message-menu]");
+				menu.querySelector("summary").click();
+				check("message actions", menu.querySelector("summary"), message);
+				for (const button of menu.querySelectorAll("button")) check("message " + button.textContent, button, message);
+				menu.querySelector("summary").click();
+			}
+			document.querySelector("#thread-messages [data-testid=message-menu] > summary").click();
 			document.querySelector("#thread-messages [data-testid=message-edit]").click();
 			await until(() => !document.getElementById("confirm").hidden);
 			check("confirm in its message", document.getElementById("confirm"), document.getElementById("confirm").closest("[data-testid=message]") ?? document.body.appendChild(document.createElement("i")));

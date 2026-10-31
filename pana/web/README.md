@@ -73,6 +73,20 @@ npm run test:web -- test/browser/prose.spec.ts
 PANA_PROSE_SHOTS=docs npm run test:web -- test/browser/prose.spec.ts
 ```
 
+### Message actions
+
+A thread repeats one header per message, so Edit and Redact are not two links repeated down
+the page: each message carries one quiet `⋯` (`details.message-menu`) at the right of its
+header, and its actions unfold inside the card, right-aligned under the summary. Because the
+menu is a `details`, a click, Enter, or Space opens it, and the actions never float free of the
+message they act on (UX-07); because it unfolds in place rather than as an overlay, a short
+message's controls cannot spill over the next one. Opening one menu closes any other, Escape
+closes it instead of leaving the thread, and a click elsewhere or choosing an action closes it
+too. The action still opens the confirmation form inside that message (WEB-08).
+
+`node test/browser/message-menu-shots.ts DIR` saves the closed and open menu, desktop and
+phone, light and dark to `DIR/message-menu-*.png`, for reviewing this layout.
+
 ### Selection indicators
 
 Active navigation, j/k-selected rows and messages, and the command palette's active
