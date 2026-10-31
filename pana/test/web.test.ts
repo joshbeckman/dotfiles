@@ -164,6 +164,20 @@ describe("PWA shell and static assets", () => {
 		}
 	});
 
+	it("a request target that is not a URL is refused and leaves panad serving", async () => {
+		// A browser's speculative probe asks for `//`, which `new URL` rejects. That throw once
+		// escaped the handler and took the daemon down for every transport, so a page load in
+		// Chrome killed panad.
+		t = await startTestPanad();
+		const port = t.panad.tcpPort!;
+		const bad = await request({ host: "127.0.0.1", port, token: t.panad.webToken }, "GET", "//");
+		expect(bad.status).toBe(400);
+		expect(bad.body).toMatchObject({ error: { code: "invalid_path" } });
+		// Still alive, on both transports.
+		expect((await request({ host: "127.0.0.1", port }, "GET", "/")).status).toBe(200);
+		expect((await t.client.get("/inbox")).status).toBe(200);
+	});
+
 	it("WEB-02 the token round-trips from a launch URL and the shell carries an authorize panel", async () => {
 		const token = "abcdefghijklmnopqrstuvwxyz012345";
 		expect(tokenFromInput(`http://127.0.0.1:8766/#${token}`)).toBe(token);

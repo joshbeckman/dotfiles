@@ -44,11 +44,15 @@ export function createApp(options: AppOptions, transport: Transport): RequestLis
 async function handle(options: AppOptions, transport: Transport, req: IncomingMessage, res: ServerResponse): Promise<void> {
 	const started = performance.now();
 	const method = req.method ?? "GET";
-	const url = new URL(req.url ?? "/", "http://panad");
+	const target = req.url ?? "/";
+	let url: URL | undefined;
 	let status = 500;
 	let routeName: string | undefined;
 	let caller: Caller | undefined;
 	try {
+		// A request target that is not a URL, such as `//` from a browser's speculative probe, must
+		// not take the daemon down: every other request on both transports would die with it.
+		url = parseTarget(target);
 		const rawBody = await readBody(req);
 		// The app shell loads in a browser, which cannot attach the bearer token to a page load,
 		// so the shell assets are the one public part of the TCP surface. Everything else,
@@ -95,12 +99,21 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 		options.onRequest?.({
 			transport,
 			method,
-			path: url.pathname,
+			path: url?.pathname ?? target,
 			route: routeName,
 			caller: caller?.url,
 			status,
 			durationMs: performance.now() - started,
 		});
+	}
+}
+
+/** The request target as a URL: an origin-form path against a fixed base. */
+function parseTarget(target: string): URL {
+	try {
+		return new URL(target, "http://panad");
+	} catch {
+		throw ApiError.badRequest("invalid_path", `the request target is not a URL: ${JSON.stringify(target)}`);
 	}
 }
 
