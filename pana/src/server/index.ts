@@ -15,6 +15,7 @@ import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
+import { startMetricChecks } from "../objectives/index.ts";
 import { initPush } from "../push/index.ts";
 import { startScheduler } from "../schedules/index.ts";
 import { startSessions } from "../sessions/runtime.ts";
@@ -165,6 +166,10 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			onReport: (error, what) => report(error, what),
 		});
 		cleanup.unshift(() => scheduler.close());
+		// WP18/OBJ-26: metric checks run on the same clock with no session, so a daily measurement
+		// costs nothing and needs no agent awake. They add no schedule kind.
+		const checks = startMetricChecks(runtime, (error, what) => report(error, what));
+		cleanup.unshift(() => checks.close());
 		// SCR-05: sweep scratch now, then daily.
 		const sweeper = startScratchSweeper(runtime, report);
 		cleanup.unshift(() => sweeper.close());

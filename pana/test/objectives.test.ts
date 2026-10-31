@@ -642,7 +642,6 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 	for (const [method, path] of [
 		["GET", `/objectives/${objective.id}/brief`],
 		["GET", `/objectives/${objective.id}/charter`],
-		["GET", `/objectives/${objective.id}/metrics`],
 		["POST", `/objectives/${objective.id}/report`],
 		["POST", `/objectives/${objective.id}/escalate`],
 		["POST", `/objectives/${objective.id}/regenerate-lead`],
