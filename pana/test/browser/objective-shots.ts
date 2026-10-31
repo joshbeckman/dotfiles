@@ -6,7 +6,7 @@
 import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { loopbackOrigin } from "../../src/web/static.ts";
-import { closePage, emulateColorScheme, emulateViewport, evaluatePage, newPage, resizePage, screenshot } from "./cli.ts";
+import { closePage, emulateViewport, evaluatePage, newPage, resizePage, screenshot } from "./cli.ts";
 import { seedObjectives } from "./objective-seed.ts";
 
 const dir = process.argv[2] ?? "";
@@ -36,20 +36,20 @@ const VIEW = `!document.getElementById("objective").hidden && document.querySele
 
 try {
 	for (const [dark, suffix] of [[false, ""], [true, "-dark"]] as const) {
-		await emulateColorScheme(dark ? "dark" : "light");
-		await emulateViewport("");
+		// The scheme rides with the viewport call: `emulate --viewport` resets the emulated media,
+		// so setting the scheme first and clearing the viewport after it shoots a light page under
+		// a `-dark` name, which is what this script did before PR 149.
+		await emulateViewport("", dark ? "dark" : "light");
 		await resizePage(1280, 900);
 		await shot(`list${suffix}`, "#/objectives", LIST);
 		await shot(`view${suffix}`, `#/objectives/${active.id}`, VIEW);
 	}
-	await emulateColorScheme("light");
-	await emulateViewport("390x844x1,mobile,touch");
+	await emulateViewport("390x844x1,mobile,touch", "light");
 	await resizePage(390, 844);
 	await shot("list-phone", "#/objectives", LIST);
 	await shot("view-phone", `#/objectives/${active.id}`, VIEW);
 } finally {
-	await emulateColorScheme("auto");
-	await emulateViewport("");
+	await emulateViewport("", "auto");
 	await resizePage(1280, 900);
 	await closePage(page);
 	await t.close();
