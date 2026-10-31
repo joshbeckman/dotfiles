@@ -16,11 +16,11 @@
 // again.
 //
 // OBJ-22's rule — a condition that is not the objective's fault is not reported as stranded, and
-// resolving it is the user's or the clock's business — applies to every standing condition: an
-// objective paused by a budget (OBJ-20..22) is held, not stranded, and `objectiveState` already
-// says so (it asks `limits.ts`'s `objectivePaused` and derives `idle`), so the notice inherits
-// that without a second check. An objective waiting on the user (OBJ-33) is the one hold the
-// derived state does not carry, so the awaiting-user read below is the sweep's own.
+// resolving it is the user's or the clock's business — applies to every standing condition, and
+// none of them needs a hook here. A budget pause (OBJ-20..22) is already `idle` in
+// `objectiveState` (it asks `limits.ts`'s `objectivePaused`), so the notice inherits it. An
+// objective waiting on the user (OBJ-33) is the one hold the derived state does not carry, so the
+// awaiting-user read below is the sweep's own.
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { Runtime } from "../server/runtime.ts";
@@ -31,19 +31,6 @@ import { objectiveState, objectiveUrl, recordObjectiveEvent } from "./state.ts";
 
 /** OBJ-06: at least every five minutes, the ISO-07 interval. */
 export const OBJECTIVE_SWEEP_MS = 5 * 60 * 1000;
-
-/** A standing condition that holds the objective: the condition's name, or undefined when none. */
-export type BudgetCondition = (runtime: Runtime, row: ObjectiveRow) => Promise<string | undefined>;
-
-export interface ObjectiveSweepOptions {
-	/**
-	 * An extra standing condition to hold the notice, returning its name while it holds. `undefined`
-	 * today: OBJ-20..22's budget pause is already `idle` in `objectiveState`, so this hook is only
-	 * for a condition that must hold the notice while the derived state still says `stranded`.
-	 * Kept as a seam for the integration pass; drop it if nothing needs it.
-	 */
-	budget?: BudgetCondition;
-}
 
 export interface ObjectiveNotice {
 	objective: string;
@@ -63,11 +50,11 @@ export interface ObjectiveSweepResult {
  * One pass of both notices. Split from the timer so a test can drive it directly and so panad's
  * startup sweep runs it once before the first interval.
  */
-export async function sweepObjectives(runtime: Runtime, options: ObjectiveSweepOptions = {}): Promise<ObjectiveSweepResult> {
+export async function sweepObjectives(runtime: Runtime): Promise<ObjectiveSweepResult> {
 	const rows = await runtime.db.all<ObjectiveRow>("SELECT * FROM objectives WHERE phase = 'active' ORDER BY id");
 	const result: ObjectiveSweepResult = { stranded: [], behind: [] };
 	for (const row of rows) {
-		const stranded = await strandIfStranded(runtime, row, options);
+		const stranded = await strandIfStranded(runtime, row);
 		if (stranded) result.stranded.push(stranded);
 		const behind = await noticeIfBehind(runtime, row);
 		if (behind) result.behind.push(behind);
@@ -80,9 +67,9 @@ export async function sweepObjectives(runtime: Runtime, options: ObjectiveSweepO
  * condition holds it. The state is read again here rather than trusted from a list, so a wake that
  * arrived mid-sweep is seen.
  */
-async function strandIfStranded(runtime: Runtime, row: ObjectiveRow, options: ObjectiveSweepOptions): Promise<ObjectiveNotice | undefined> {
+async function strandIfStranded(runtime: Runtime, row: ObjectiveRow): Promise<ObjectiveNotice | undefined> {
 	const now = runtime.clock.now();
-	const stranded = await isStranded(runtime, row, options);
+	const stranded = await isStranded(runtime, row);
 	if (!stranded) {
 		if (row.stranded_noticed_at !== null) await clearStamp(runtime, row.id, "stranded_noticed_at");
 		return undefined;
@@ -97,11 +84,10 @@ async function strandIfStranded(runtime: Runtime, row: ObjectiveRow, options: Ob
 	return { objective: row.id, message: notice.message.id, messageUrl: notice.message.url, body };
 }
 
-/** OBJ-06 and OBJ-22: stranded means the derived state says so and nothing holds it. */
-async function isStranded(runtime: Runtime, row: ObjectiveRow, options: ObjectiveSweepOptions): Promise<boolean> {
+/** OBJ-06 and OBJ-22: stranded means the derived state says so and no hold of its own applies. */
+async function isStranded(runtime: Runtime, row: ObjectiveRow): Promise<boolean> {
 	if ((await objectiveState(runtime.db, runtime, row)) !== "stranded") return false;
 	if (await awaitingUser(runtime.db, row.id)) return false;
-	if (options.budget && (await options.budget(runtime, row)) !== undefined) return false;
 	return true;
 }
 
@@ -190,11 +176,7 @@ export interface ObjectiveSweeper {
 }
 
 /** Sweep now, then every five minutes on `runtime.clock`, the way the browser and scratch sweeps do. */
-export function startObjectiveSweeper(
-	runtime: Runtime,
-	report: (error: unknown, what: string) => void,
-	options: ObjectiveSweepOptions = {},
-): ObjectiveSweeper {
+export function startObjectiveSweeper(runtime: Runtime, report: (error: unknown, what: string) => void): ObjectiveSweeper {
 	let closed = false;
 	let cancel: (() => void) | undefined;
 	let inFlight: Promise<ObjectiveSweepResult> | undefined;
@@ -206,7 +188,7 @@ export function startObjectiveSweeper(
 		// background timers, and close() cancels this one so it cannot hold panad open.
 		cancel = runtime.clock.setTimer(kick, OBJECTIVE_SWEEP_MS, { background: false });
 		if (inFlight) return;
-		const sweep = sweepObjectives(runtime, options);
+		const sweep = sweepObjectives(runtime);
 		inFlight = sweep;
 		sweep
 			.catch((error) => report(error, "objective sweep"))

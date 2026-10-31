@@ -157,9 +157,7 @@ export {
 	OBJECTIVE_SWEEP_MS,
 	startObjectiveSweeper,
 	sweepObjectives,
-	type BudgetCondition,
 	type ObjectiveNotice,
-	type ObjectiveSweepOptions,
 	type ObjectiveSweepResult,
 	type ObjectiveSweeper,
 } from "./sweep.ts";
