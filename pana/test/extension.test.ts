@@ -16,6 +16,7 @@ import { PANA_BIN, PANA_ENV_NAMES, panaShellEnv } from "../src/extension/env.ts"
 import { BROWSER_IDLE_MS, browserScope, SCOPE_PATTERN, scopeSession, sweepBrowsers } from "../src/extension/browser.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAUX_MODEL, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
+import { testGit } from "./harness/git.ts";
 import { seedThread, type Fixture } from "./harness/wake-fixture.ts";
 import { captureExtension, contextOf, conversationOf, fakeApi, promptSections, promptText, runTool } from "./fixtures/extension.ts";
 
@@ -47,7 +48,7 @@ function tempDir(prefix = "pana-ext-"): string {
 }
 
 function git(cwd: string, args: string[]): string {
-	return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString();
+	return testGit(cwd, args);
 }
 
 function makeRepo(): string {
@@ -55,6 +56,7 @@ function makeRepo(): string {
 	git(repo, ["init", "-q"]);
 	git(repo, ["config", "user.name", "tester"]);
 	git(repo, ["config", "user.email", `tester@${TEST_DOMAIN}`]);
+	git(repo, ["config", "commit.gpgsign", "false"]);
 	return repo;
 }
 

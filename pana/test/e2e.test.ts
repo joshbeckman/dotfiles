@@ -2,13 +2,14 @@
 // scripted faux model, and the test drives it only through the `pana` binary, as a person or an
 // agent would. The session's model calls `bash`, which runs the same `pana` binary.
 
-import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import type { Script } from "./harness/index.ts";
+import { testGit } from "./harness/git.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const panaBin = join(root, "bin", "pana");
@@ -87,7 +88,7 @@ it("INT-04 a session created from the CLI uses bash, pana memory, and git, then 
 		join(state, "config.json"),
 		JSON.stringify({ domain: DOMAIN, user: "tester", defaultModel: "faux/faux-1", timezone: "UTC", http: { port: 0 } }),
 	);
-	const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { env: { ...env }, encoding: "utf8" });
+	const git = (...args: string[]) => testGit(repo, args, { home, env: { LANG: "C.UTF-8" } });
 	git("init", "-q");
 	git("config", "user.name", "tester");
 	git("config", "user.email", `tester@${DOMAIN}`);
