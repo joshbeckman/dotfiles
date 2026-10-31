@@ -63,6 +63,40 @@ export function workingParticipants(thread) {
 		.map((participant) => ({ sessionId: String(participant.id ?? ""), url: String(participant.url ?? ""), state: String(participant.state) }));
 }
 
+/**
+ * UX-09: a thread's session participants with a wake pending, for the footer's scheduled chips.
+ * A wake is a promise of later work, not work now, so these stay apart from the working set: the
+ * soonest first, because that is the one the thread will get its next message from.
+ */
+export function scheduledOf(thread) {
+	const participants = Array.isArray(thread?.participants) ? thread.participants : [];
+	return participants
+		.filter((participant) => participant?.kind === "session" && Number.isFinite(Number(participant.wake?.at)))
+		.map((participant) => ({
+			sessionId: String(participant.id ?? ""),
+			url: String(participant.url ?? ""),
+			at: Number(participant.wake.at),
+			scheduleUrl: String(participant.wake.url ?? ""),
+			subject: String(participant.wake.subject ?? ""),
+			cron: participant.wake.cron === null || participant.wake.cron === undefined ? null : String(participant.wake.cron),
+		}))
+		.sort((a, b) => a.at - b.at || a.sessionId.localeCompare(b.sessionId));
+}
+
+/** How long until a pending wake, in the few words the scheduled chip has room for. */
+export function untilLabel(at, now = Date.now()) {
+	const ms = Number(at) - Number(now);
+	if (!Number.isFinite(ms)) return "";
+	if (ms <= 0) return "now";
+	const seconds = Math.round(ms / 1000);
+	if (seconds < 60) return `in ${seconds}s`;
+	const minutes = Math.round(seconds / 60);
+	if (minutes < 60) return `in ${minutes}m`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 24) return `in ${hours}h`;
+	return `in ${Math.round(hours / 24)}d`;
+}
+
 function person(value) {
 	return { url: String(value?.url ?? ""), kind: String(value?.kind ?? "") };
 }

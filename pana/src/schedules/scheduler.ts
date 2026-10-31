@@ -13,6 +13,7 @@ import type { Runtime } from "../server/runtime.ts";
 import { wakeScheduled } from "../sessions/wake.ts";
 import { createThread, postNotice } from "../threads/index.ts";
 import { runCheck } from "./check.ts";
+import { announceWakes, wakeSessionOf } from "./live.ts";
 import { registerScheduler, unregisterScheduler } from "./registry.ts";
 import {
 	activeSchedules,
@@ -152,6 +153,9 @@ class ScheduleLoop implements Scheduler {
 		const keepsRunning = row.cron !== null && nextAt !== null;
 		const claimed = await claimSchedule(this.#runtime, row.id, keepsRunning ? "active" : "done", nextAt, row);
 		if (!claimed || this.#closed) return;
+		// UX-09: the claim moved a recurring wake to its next time, or spent a one-off, so the
+		// thread footer's scheduled chip changes now rather than when the session next reports.
+		if (row.kind === "wake") await announceWakes(this.#runtime, [wakeSessionOf(row.payload) ?? ""]);
 		let delivered = false;
 		try {
 			if (row.check_command !== null) {

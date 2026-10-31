@@ -823,4 +823,61 @@ describeBrowser("pana usability in a browser", () => {
 			await evaluatePage<boolean>(`return document.querySelector('[data-thread="${threadId}"] [data-testid=working-mark]')?.hidden ?? true;`),
 		).toBe(true);
 	});
+
+	it("UX-09 a thread of an idle session says when it is scheduled to wake", async () => {
+		const { t } = await start();
+		const threadId = seeded!.capital.threadId;
+		const sessionId = seeded!.capital.sessionId;
+		const sessionUrl = seeded!.capital.sessionUrl;
+		const color = participantColor({ url: sessionUrl, kind: "session" });
+
+		// The session is idle and has nothing scheduled, so nothing sits above the reply box.
+		await evaluatePage(`
+			location.hash = "#/threads/${threadId}";
+			await until(() => window.__pana.state.threadId === "${threadId}" && !document.getElementById("thread").hidden);
+			return true;
+		`);
+		expect(await evaluatePage<boolean>(`return document.getElementById("thread-working").hidden;`)).toBe(true);
+
+		// A pending wake is work to come, so the idle thread names it live, without a reload.
+		const made = await t.client.post<{ schedule: { id: string } }>("/schedules", {
+			kind: "wake",
+			session: sessionId,
+			in: "2h",
+			note: "Check the release.",
+			subject: "Check release",
+		});
+		expect(made.status, JSON.stringify(made.body)).toBe(201);
+		await settle(
+			t,
+			() => evaluatePage<boolean>(`return Boolean(document.querySelector("#thread-working [data-testid=scheduled-session]"));`),
+			"the scheduled chip",
+		);
+		const chip = await evaluatePage<{ labels: string[]; text: string; color: string; animated: string; href: string; title: string }>(`
+			const node = document.getElementById("thread-working");
+			const chip = node.querySelector("[data-testid=scheduled-session]");
+			const dot = chip.querySelector(".working-dot");
+			return {
+				labels: [...node.querySelectorAll(".working-label")].map((el) => el.textContent),
+				text: chip.textContent,
+				color: chip.dataset.color,
+				animated: getComputedStyle(dot).animationName,
+				href: chip.querySelector(".scheduled-when").getAttribute("href"),
+				title: chip.title,
+			};
+		`);
+		expect(chip.labels).toEqual(["Scheduled"]);
+		expect(chip.color).toBe(color);
+		expect(chip.text).toContain(refLabel(sessionUrl));
+		expect(chip.text).toContain("in 2h");
+		// Work to come does not pulse, and the time opens the schedule that will do it.
+		expect(chip.animated).toBe("none");
+		expect(chip.href).toBe(`#/schedules?focus=${made.body.schedule.id}`);
+		expect(chip.title).toContain("Check release");
+		expect(await evaluatePage<boolean>(`return document.querySelectorAll("#thread-working [data-testid=working-session]").length === 0;`)).toBe(true);
+
+		// Deleting the wake clears the footer again, live.
+		await t.client.delete(`/schedules/${made.body.schedule.id}`);
+		await settle(t, () => evaluatePage<boolean>(`return document.getElementById("thread-working").hidden;`), "the chip to clear");
+	});
 });

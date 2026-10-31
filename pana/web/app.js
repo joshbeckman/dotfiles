@@ -41,9 +41,11 @@ import {
 	scheduleBody,
 	scheduleCheckView,
 	scheduleWhen,
+	scheduledOf,
 	shortTime,
 	threadRow,
 	transcriptPage,
+	untilLabel,
 	workingParticipants,
 } from "./views.js";
 import { renderMessage } from "./render.js";
@@ -82,9 +84,16 @@ const state = {
 	 * and how far this clock runs ahead of panad's, so elapsed times are panad's.
 	 */
 	live: new Map(),
+	/** How far this clock runs ahead of panad's, from the last event's `at`, so scheduled times agree. */
+	clockSkew: 0,
 	push: undefined,
 	workerError: "",
 };
+
+/** panad's idea of now, falling back to this clock before any event has said. */
+function serverNow() {
+	return Date.now() - state.clockSkew;
+}
 
 let statusTimer;
 function status(text, error = false, link = undefined) {
@@ -318,6 +327,9 @@ function applyThreadSubject(threadId, subject) {
 }
 
 function handleEvent(event) {
+	// Every event carries panad's `at`; keeping the difference means a scheduled time counts down
+	// against panad's clock even when the two machines disagree, as a test's fake clock does.
+	if (Number.isFinite(Number(event.at))) state.clockSkew = Date.now() - Number(event.at);
 	if (event.kind === "thread.subject" && typeof event.threadId === "string" && typeof event.subject === "string") {
 		applyThreadSubject(event.threadId, event.subject);
 		return;
@@ -330,6 +342,11 @@ function handleEvent(event) {
 	// UX-09: who is working changes in the open thread and in the lists, without a reload.
 	if (event.kind === "session.state" && typeof event.sessionId === "string") {
 		applyStateEvent(event);
+		return;
+	}
+	// UX-09: a session's next wake moved, so the open thread's scheduled chip follows without a reload.
+	if (event.kind === "session.wake" && typeof event.sessionId === "string") {
+		applyWakeEvent(event);
 		return;
 	}
 	// UX-12: work in progress. It carries no entry, so it must not fall through to a reload.
@@ -686,24 +703,77 @@ function applyStateEvent(event) {
 	}
 }
 
+/** A window heard a session's next wake change: patch the open thread's participant and redraw. */
+function applyWakeEvent(event) {
+	const participant = state.thread?.participants?.find((each) => each?.kind === "session" && each.id === event.sessionId);
+	if (!participant) return;
+	if (event.wake && Number.isFinite(Number(event.wake.at))) participant.wake = event.wake;
+	else delete participant.wake;
+	renderThreadWorking();
+}
+
 function workingChanged(threadId) {
 	for (const row of document.querySelectorAll(`[data-thread="${CSS.escape(threadId)}"]`)) syncWorkingMark(row, threadId);
 	if (state.thread?.id === threadId) renderThreadWorking();
 }
 
-/** The bottom of a thread, just above the reply box: the sessions working now, in their colors. */
+/**
+ * The bottom of a thread, just above the reply box: the sessions working now, in their colors,
+ * and the ones with a wake pending — work to come, at a time the chip names (UX-09).
+ */
 function renderThreadWorking() {
 	const node = $("thread-working");
 	const threadId = state.thread?.id;
 	const working = threadId ? [...workingMap(threadId).values()] : [];
+	const scheduled = state.thread ? scheduledOf(state.thread) : [];
 	node.replaceChildren();
-	if (working.length === 0) {
+	if (working.length === 0 && scheduled.length === 0) {
 		node.hidden = true;
 		return;
 	}
-	node.append(span("Working", "working-label"));
-	for (const session of working) node.append(workingChip(session));
+	// One line each: working and scheduled are different claims, and flat would read as one list.
+	if (working.length > 0) {
+		const line = span("", "working-group");
+		line.append(span("Working", "working-label"));
+		for (const session of working) line.append(workingChip(session));
+		node.append(line);
+	}
+	if (scheduled.length > 0) {
+		const line = span("", "working-group");
+		line.append(span("Scheduled", "working-label scheduled-label"));
+		for (const wake of scheduled) line.append(scheduledChip(wake));
+		node.append(line);
+	}
 	node.hidden = false;
+}
+
+/** A session with a wake pending: who, and how long until it wakes. The time links to the schedule. */
+function scheduledChip(wake) {
+	const chip = span("", "working-chip scheduled-chip");
+	chip.dataset.testid = "scheduled-session";
+	chip.dataset.session = wake.sessionId;
+	chip.dataset.color = participantColor({ url: wake.url, kind: "session" });
+	const repeating = wake.cron ? ` (${wake.cron})` : "";
+	const subject = wake.subject ? `: ${wake.subject}` : "";
+	chip.append(span("", "working-dot scheduled-mark"));
+	chip.append(refLink(wake.url, "session", refLabel(wake.url)));
+	const at = refLink(wake.scheduleUrl, "schedule", untilLabel(wake.at));
+	if (at instanceof HTMLAnchorElement) at.className = "scheduled-when";
+	else at.textContent = untilLabel(wake.at);
+	// The countdown keeps ticking while the page is open, like the working chip's elapsed time.
+	tickUntil(at, wake.at);
+	chip.append(at);
+	chip.title = `${refLabel(wake.url)} wakes ${when(wake.at)}${repeating}${subject}`;
+	return chip;
+}
+
+/** A label that recomputes from panad's clock each second while it is on the page. */
+function tickUntil(node, at) {
+	node.dataset.ticking = "true";
+	node.__render = () => {
+		node.textContent = untilLabel(at, serverNow());
+	};
+	node.__render();
 }
 
 function workingChip(session) {
