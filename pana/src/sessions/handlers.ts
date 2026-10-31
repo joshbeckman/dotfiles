@@ -87,6 +87,8 @@ export const handlers: Handlers = {
 		status: 200,
 		body: await transcript(ctx.runtime, sessionId(ctx, ctx.params.id), {
 			after: integer(query(ctx, "after"), "after"),
+			before: integer(query(ctx, "before"), "before"),
+			latest: query(ctx, "latest") === "1" || query(ctx, "latest") === "true",
 			limit: integer(query(ctx, "limit"), "limit"),
 		}),
 	}),

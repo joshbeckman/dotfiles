@@ -136,3 +136,25 @@ npm run test:web -- test/browser/thread-images.spec.ts
 Inline copies are only as small as the host's resizer makes them: with no `sips`,
 `magick`, or `convert` installed, `?w=1024` serves the original bytes (FIL-07), so a
 five-megabyte phone photo is still five megabytes. Install one to shrink them.
+
+### Large session transcripts
+
+Opening a session renders its newest 30 transcript entries, not its whole history. **Load older
+entries** fetches the 30 entries immediately before the oldest loaded one and keeps the entry the
+reader is looking at in place; once one older page is loaded, **Load all older entries** fetches
+the rest in 500-entry pages. Both disappear when nothing older is left. A late response from a
+session the reader already left is dropped, like a thread's.
+
+The route pages in both directions: `after` walks forward from a known entry and answers `next`;
+`latest` or `before` walks backward from the newest entry and answers `previous`, so the window's
+first paint needs one request. Entries are oldest first in the body either way, and the CLI/API
+shape of a forward page is unchanged. Run the regression with:
+
+```sh
+npm run test:web -- test/browser/session-transcript-window.spec.ts
+```
+
+To retake the PR's screenshots, `node test/browser/session-window-shots.ts DIR` writes
+`session-window-after-opened.png` and `session-window-after-loaded.png`; run it against the old
+`web/app.js` with `PANA_SESSION_WINDOW_LABEL=before` for the comparison.
+

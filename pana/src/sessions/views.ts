@@ -179,18 +179,42 @@ async function searchPage(
 export interface TranscriptView {
 	session: string;
 	entries: Array<{ id: number; kind: string; data?: unknown; model?: unknown }>;
+	/** Forward paging: the newest entry in this page when entries follow it (`after` pages). */
 	next?: number;
+	/** Backward paging: the oldest entry in this page when entries precede it (`latest`/`before` pages). */
+	previous?: number;
 }
 
-/** The session's transcript, oldest first, `limit` entries after entry `after`. */
-export async function transcript(runtime: Runtime, id: string, options: { after?: number; limit?: number } = {}): Promise<TranscriptView> {
+export interface TranscriptOptions {
+	/** Entries after this entry ID, oldest first: forward paging from a known entry. */
+	after?: number;
+	/** Entries before this entry ID, the newest ones first read backward: backward paging. */
+	before?: number;
+	/** The newest entries, with no `before` boundary: what a window shows when it opens. */
+	latest?: boolean;
+	limit?: number;
+}
+
+/**
+ * The session's transcript, oldest first, one page of `limit` entries. `after` pages forward from a
+ * known entry and answers `next`; `latest` or `before` pages backward from the newest entry and
+ * answers `previous`, so a window can open at the end of a long transcript without walking every
+ * earlier page first (UX-18). Entries are oldest first in the body either way.
+ */
+export async function transcript(runtime: Runtime, id: string, options: TranscriptOptions = {}): Promise<TranscriptView> {
 	const row = await sessionRow(runtime, id);
 	if (row.conversation_id === null) return { session: id, entries: [] };
 	const conversation = await runtime.harness.conversation(row.conversation_id as ConversationId, ctx);
 	if (!conversation) return { session: id, entries: [] };
 	const limit = Math.max(1, Math.min(options.limit ?? 500, 1000));
+	const backward = options.before !== undefined || options.latest === true;
+	if (backward && options.after !== undefined) {
+		throw ApiError.badRequest("invalid_page", "after cannot be combined with before or latest");
+	}
 	const page = await conversation.entries(
-		{ order: "ascending", ...(options.after === undefined ? {} : { minEntryId: (options.after + 1) as never }) },
+		backward
+			? { order: "descending", ...(options.before === undefined ? {} : { maxEntryId: (options.before - 1) as never }) }
+			: { order: "ascending", ...(options.after === undefined ? {} : { minEntryId: (options.after + 1) as never }) },
 		limit + 1,
 		undefined,
 		ctx,
@@ -202,7 +226,11 @@ export async function transcript(runtime: Runtime, id: string, options: { after?
 		...(entry.data === undefined ? {} : { data: entry.data }),
 		...(entry.model === undefined ? {} : { model: entry.model }),
 	}));
+	if (backward) entries.reverse();
 	const view: TranscriptView = { session: id, entries };
-	if (page.items.length > limit) view.next = entries[entries.length - 1]!.id;
+	if (page.items.length <= limit || entries.length === 0) return view;
+	// The extra entry proves another page exists on the side this page came from.
+	if (backward) view.previous = entries[0]!.id;
+	else view.next = entries[entries.length - 1]!.id;
 	return view;
 }
