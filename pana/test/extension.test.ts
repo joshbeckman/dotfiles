@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPanaRegistry, runPanaCli } from "../src/extension/index.ts";
 import { PANA_BIN, PANA_ENV_NAMES, panaShellEnv } from "../src/extension/env.ts";
-import { BROWSER_IDLE_MS, browserScope, sweepBrowsers } from "../src/extension/browser.ts";
+import { BROWSER_IDLE_MS, browserScope, SCOPE_PATTERN, scopeSession, sweepBrowsers } from "../src/extension/browser.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAUX_MODEL, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { seedThread, type Fixture } from "./harness/wake-fixture.ts";
@@ -224,7 +224,7 @@ describe("browser isolation", () => {
 		const env = panaShellEnv({ cwd: tmpdir(), sessionId: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
 		expect(env.PATH?.split(":")[0]).toBe(PANA_BIN);
 		expect(existsSync(join(PANA_BIN, "chrome-devtools"))).toBe(true);
-		expect(env.PANA_BROWSER_SESSION).toBe("pana-01HZZZZZZZZZZZZZZZZZZZZZZZ");
+		expect(env.PANA_BROWSER_SESSION).toBe(browserScope("01HZZZZZZZZZZZZZZZZZZZZZZZ"));
 
 		const stub = stubCli(tempDir("pana-cli-"));
 		const xdg = tempDir("pana-xdg-");
@@ -267,6 +267,49 @@ describe("browser isolation", () => {
 
 		// No CLI on PATH is an error, not a loop.
 		expect(() => runShim(["list_pages"], "/usr/bin:/bin", xdg, { PANA_BROWSER_SESSION: scope })).toThrow();
+	});
+
+	it("ISO-06 the scope is hex, so the CLI's sessionId rule accepts it, and it names the session back", () => {
+		const id = "01HZZZZZZZZZZZZZZZZZZZZZZZ";
+		const scope = browserScope(id);
+		// The CLI's rule (`assertValidSessionId`): a ULID has letters past `f`, and so does a `pana-`
+		// prefix, so a scope that spells the session id is rejected by every command with
+		// `Error: Invalid sessionId: …`. Only hex and dashes may appear.
+		expect(scope).toMatch(SCOPE_PATTERN);
+		expect(scope).toMatch(/^[0-9a-f]+$/);
+		expect(scope).not.toBe(browserScope("01HZZZZZZZZZZZZZZZZZZZZZZY"));
+		// Stable per session, so a daemon is found again by every later call (ISO-07).
+		expect(browserScope(id)).toBe(scope);
+		expect(scopeSession(scope)).toBe(id);
+		// A scope this module did not make names nobody, and is not stopped as an orphan.
+		expect(scopeSession(`pana-${id}`)).toBeUndefined();
+		expect(scopeSession("")).toBeUndefined();
+		expect(scopeSession("3031")).toBeUndefined();
+	});
+
+	it("ISO-06 the installed CLI accepts the scope as --sessionId", () => {
+		// The stub above never validates the id, so this runs the real one: `status` answers without
+		// starting a daemon, and an id outside its rule fails the call.
+		let available = true;
+		try {
+			execFileSync("chrome-devtools", ["--version"], { stdio: "ignore" });
+		} catch {
+			available = false;
+		}
+		if (!available) {
+			console.warn("ISO-06: no chrome-devtools on PATH; the scope was not checked against the CLI");
+			return;
+		}
+		const scope = browserScope("01HZZZZZZZZZZZZZZZZZZZZZZZ");
+		const status = execFileSync("chrome-devtools", ["--sessionId", scope, "status"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		expect(status).not.toContain("Invalid sessionId");
+		// The control: the scope this replaced, which named the session in plain text, is rejected.
+		expect(() =>
+			execFileSync("chrome-devtools", ["--sessionId", "pana-01HZZZZZZZZZZZZZZZZZZZZZZZ", "status"], { stdio: ["ignore", "pipe", "pipe"] }),
+		).toThrow();
 	});
 
 	/** A session row, last changed `idleMs` ago. Not wakeable: the sweeper only reads state. */

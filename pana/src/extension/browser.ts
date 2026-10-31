@@ -21,8 +21,6 @@ import type { SessionState } from "../sessions/runtime.ts";
 
 const run = promisify(execFile);
 
-export const BROWSER_SCOPE_PREFIX = "pana-";
-
 /** A daemon's app name prefix, as `getSocketPath` in chrome-devtools-mcp builds it. */
 const DAEMON_PREFIX = "chrome-devtools-mcp";
 
@@ -36,15 +34,30 @@ const SWEEP_EVERY_MS = BROWSER_IDLE_MS / 2;
 /** A session in these states may be browsing right now; its daemon stays. */
 const WORKING: readonly SessionState[] = ["running", "waiting"];
 
-/** The `--sessionId` a session's calls carry: `pana-<ulid>`, exported as PANA_BROWSER_SESSION. */
+/**
+ * The `--sessionId` a session's calls carry, exported as PANA_BROWSER_SESSION.
+ *
+ * It has to be hex. `assertValidSessionId` in chrome-devtools-mcp's `daemon/utils.js` rejects any
+ * other id — `^[a-fA-F0-9-]+$` — on every command, before a daemon is even looked for, with
+ * `Error: Invalid sessionId: …`. A ULID has letters past `f`, and so does a `pana-` prefix, so a
+ * scope that spells the session id can never work. This is the session ULID's bytes in hex, so
+ * `01HZZ…` becomes `3031485a5a…`: stable per session, valid, and reversible, because a sweep has
+ * only a socket name to find the session that owns a daemon (ISO-07).
+ */
 export function browserScope(sessionId: string): string {
-	return `${BROWSER_SCOPE_PREFIX}${sessionId}`;
+	return Buffer.from(sessionId, "utf8").toString("hex");
 }
 
-/** The session a scope belongs to, or undefined for a scope this module did not make. */
+/** The shape chrome-devtools-mcp accepts for `--sessionId` (`assertValidSessionId`). */
+export const SCOPE_PATTERN = /^[a-fA-F0-9-]+$/;
+
+/**
+ * The session a scope belongs to, or undefined for a scope this module did not make. The socket is
+ * all a sweep has to go on, so the scope has to carry the session back to its row.
+ */
 export function scopeSession(scope: string): string | undefined {
-	if (!scope.startsWith(BROWSER_SCOPE_PREFIX)) return undefined;
-	const session = scope.slice(BROWSER_SCOPE_PREFIX.length);
+	if (!/^(?:[0-9a-f]{2})+$/.test(scope)) return undefined;
+	const session = Buffer.from(scope, "hex").toString("utf8");
 	return isUlid(session) ? session : undefined;
 }
 

@@ -8,9 +8,11 @@ const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
 let t: TestPanad | undefined;
 let page: number | undefined;
 afterEach(async () => {
-	await emulateViewport("");
-	await resizePage(1280, 900);
-	if (page !== undefined) await closePage(page);
+	if (page !== undefined) {
+		await emulateViewport("");
+		await resizePage(1280, 900);
+		await closePage(page);
+	}
 	page = undefined;
 	await t?.close();
 	t = undefined;

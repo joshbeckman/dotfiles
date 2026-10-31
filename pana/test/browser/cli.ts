@@ -1,11 +1,21 @@
 // Drive the installed Chrome through the chrome-devtools CLI (see
 // `.agents/skills/browser-testing/SKILL.md`). No browser download: the CLI uses the Chrome on
 // this machine, and the daemon persists between commands.
+//
+// chrome-devtools-mcp 1.10 takes the page a command acts on as a positional argument, and stops
+// with "Not enough non-option arguments: got 0, need at least 1" without it (1.6 only had a
+// `selectPage` that a later commit removed). So every command here names its page. Each suite
+// drives one page at a time, the one `newPage` opened, and these helpers remember it as `current`
+// rather than threading it through every call site. `evaluate_script`'s page is optional, so it
+// gets `--pageId` when there is one.
 
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+
+/** The page the commands here act on: the one `newPage` opened and `closePage` has not closed. */
+let current: number | undefined;
 
 export function chromeDevtoolsAvailable(): boolean {
 	try {
@@ -14,6 +24,12 @@ export function chromeDevtoolsAvailable(): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/** The page a command must name. A suite that has opened none has nothing to act on. */
+function pageId(): number {
+	if (current === undefined) throw new Error("no page: open one with newPage() first");
+	return current;
 }
 
 function parseOutput(stdout: string): unknown {
@@ -54,20 +70,22 @@ export async function newPage(url: string): Promise<number> {
 	const pages = result?.pages ?? [];
 	const selected = pages.find((page) => page.selected) ?? pages[pages.length - 1];
 	if (!selected) throw new Error(`could not open ${url}`);
+	current = selected.id;
 	return selected.id;
 }
 
 export async function closePage(id: number): Promise<void> {
+	if (current === id) current = undefined;
 	await command(["close_page", String(id)]).catch(() => undefined);
 }
 
 /**
- * Save a screenshot of the selected page and return the file it landed in. The installed CLI
- * refuses `--filePath` outside its workspace roots, so it always writes under the OS temp
- * directory; callers copy the file where they want it.
+ * Save a screenshot of `page` and return the file it landed in. The installed CLI refuses
+ * `--filePath` outside its workspace roots, so it always writes under the OS temp directory;
+ * callers copy the file where they want it.
  */
 export async function screenshot(fullPage = false): Promise<string> {
-	const result = (await command(["take_screenshot", ...(fullPage ? ["--fullPage", "true"] : [])])) as
+	const result = (await command(["take_screenshot", String(pageId()), ...(fullPage ? ["--fullPage"] : [])])) as
 		| { images?: Array<{ filePath?: string }> }
 		| Array<{ images?: Array<{ filePath?: string }> }>
 		| undefined;
@@ -79,20 +97,21 @@ export async function screenshot(fullPage = false): Promise<string> {
 
 /** Emulate a phone: `viewport` is `WIDTHxHEIGHTxDPR[,mobile][,touch]`, or "" to clear. */
 export async function emulateViewport(viewport: string, colorScheme?: "dark" | "light" | "auto"): Promise<void> {
-	await command(["emulate", "--viewport", viewport, ...(colorScheme ? ["--colorScheme", colorScheme] : [])]);
+	await command(["emulate", String(pageId()), "--viewport", viewport, ...(colorScheme ? ["--colorScheme", colorScheme] : [])]);
 }
 
 export async function emulateColorScheme(scheme: "dark" | "light" | "auto"): Promise<void> {
-	await command(["emulate", "--colorScheme", scheme]);
+	await command(["emulate", String(pageId()), "--colorScheme", scheme]);
 }
 
 export async function resizePage(width: number, height: number): Promise<void> {
-	await command(["resize_page", String(width), String(height)]);
+	await command(["resize_page", String(pageId()), String(width), String(height)]);
 }
 
 /** Evaluate an async function source in the page and return its JSON value. */
 export async function evaluate<T>(source: string): Promise<T> {
-	const result = (await command(["evaluate_script", source])) as
+	const page = current === undefined ? [] : ["--pageId", String(current)];
+	const result = (await command(["evaluate_script", ...page, source])) as
 		| { message?: string }
 		| Array<{ type?: string; text?: string }>
 		| undefined;
