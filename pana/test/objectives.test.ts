@@ -643,10 +643,8 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 	for (const [method, path] of [
 		["GET", `/objectives/${objective.id}/brief`],
 		["GET", `/objectives/${objective.id}/charter`],
-		["POST", `/objectives/${objective.id}/report`],
 		["POST", `/objectives/${objective.id}/escalate`],
 		["POST", `/objectives/${objective.id}/regenerate-lead`],
-		["DELETE", `/objectives/${objective.id}/artifacts/anything`],
 	] as const) {
 		const res = await t!.client.request(method, path, method === "GET" ? {} : { body: {} });
 		expect(res.status, `${method} ${path}`).toBe(501);

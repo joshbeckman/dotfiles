@@ -9,6 +9,8 @@ import { decodeCursor, pageOf, type Page } from "../api/pagination.ts";
 import { isUlid } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { sessionStates } from "../sessions/state.ts";
+import { objectiveArtifacts, type ObjectiveArtifactView } from "./artifacts.ts";
+import { newestReport, type ObjectiveReportView } from "./reports.ts";
 import { limitsOf, type ObjectiveLimits, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow, type ObjectiveAutonomy, type ObjectiveDisplayState } from "./schema.ts";
 import { leadRunsToday, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, type ObjectivePaused } from "./limits.ts";
 import { loadObjective, objectiveMembers, objectiveState, objectiveUrl, sessionUrl } from "./state.ts";
@@ -54,6 +56,14 @@ export interface ObjectiveView {
 	limits: ObjectiveLimits;
 	charterRev: number;
 	members: ObjectiveMemberView[];
+	/**
+	 * OBJ-30: the newest report, which the PWA shows as the objective's latest report. On
+	 * `GET /objectives/:id` and `pana objective show`; the list leaves it out, because a page of
+	 * objectives does not read every report body.
+	 */
+	report?: ObjectiveReportView | null;
+	/** OBJ-31: the linked files, on `GET /objectives/:id` and `pana objective show` only. */
+	artifacts?: ObjectiveArtifactView[];
 	createdAt: number;
 	updatedAt: number;
 }
@@ -114,13 +124,20 @@ export function objectiveView(
 	};
 }
 
-/** `GET /objectives/:id`: the view with each member's current state, `waiting` included (STA-03). */
+/**
+ * `GET /objectives/:id`: the view with each member's current state, `waiting` included (STA-03),
+ * the newest report (OBJ-30), and the linked artifacts (OBJ-31).
+ */
 export async function showObjective(runtime: Runtime, id: string): Promise<ObjectiveView> {
 	const row = await loadObjective(runtime.db, id);
 	const members = await objectiveMembers(runtime.db, row.id);
 	const states = await sessionStates(runtime.db, runtime, members.map((member) => member.id));
 	const state = await objectiveState(runtime.db, runtime, row);
-	return objectiveView(runtime, row, members, state, states, await objectiveReadings(runtime, row));
+	return {
+		...objectiveView(runtime, row, members, state, states, await objectiveReadings(runtime, row)),
+		report: await newestReport(runtime.db, runtime, row.id),
+		artifacts: await objectiveArtifacts(runtime.db, runtime, row.id),
+	};
 }
 
 /** OBJ-20..OBJ-24: the limits a read shows, from the same reads the admission gate uses. */

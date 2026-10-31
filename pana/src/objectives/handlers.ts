@@ -9,10 +9,12 @@ import { ApiError } from "../api/errors.ts";
 import { parseLimit } from "../api/pagination.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
+import { addArtifact, removeArtifact } from "./artifacts.ts";
 import { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
 import { launchObjective } from "./launch.ts";
 import { addMetric, appendReading, listMetrics, setMetric } from "./metrics.ts";
-import { phaseFilter } from "./schema.ts";
+import { reportObjective } from "./reports.ts";
+import { objectBody, phaseFilter } from "./schema.ts";
 import { objectiveId } from "./state.ts";
 import { createObjective } from "./store.ts";
 import { listObjectives, showObjective } from "./view.ts";
@@ -112,4 +114,23 @@ export const handlers: Handlers = {
 		status: 201,
 		body: { metric: await appendReading(ctx.runtime, ctx.caller, ctx.params.id, ctx.params.name ?? "", ctx.body) },
 	}),
+
+	// OBJ-30: a report is mail in the objective's thread plus its mark, so the reply is the message
+	// and the thread as `POST /threads/:id/messages` returns them, with the marked report beside it.
+	"objectives.report": async (ctx): Promise<HandlerResult> => {
+		const posted = await reportObjective(ctx.runtime, ctx.caller, ctx.params.id, { body: objectBody(ctx.body).body });
+		return { status: 201, body: posted };
+	},
+
+	// OBJ-31: the CLI uploads through `POST /files` and links the id; the refreshed view comes back
+	// so a PWA action can render the artifact list without a second read.
+	"objectives.artifacts.add": async (ctx): Promise<HandlerResult> => {
+		const added = await addArtifact(ctx.runtime, ctx.params.id, { file: objectBody(ctx.body).file });
+		return { status: 201, body: { ...added, objective: await showObjective(ctx.runtime, objectiveId(ctx.params.id, ctx.runtime.config.domain)) } };
+	},
+
+	"objectives.artifacts.remove": async (ctx): Promise<HandlerResult> => {
+		const removed = await removeArtifact(ctx.runtime, ctx.params.id, ctx.params.fileId);
+		return { status: 200, body: { ...removed, objective: await showObjective(ctx.runtime, objectiveId(ctx.params.id, ctx.runtime.config.domain)) } };
+	},
 };
