@@ -846,7 +846,7 @@ async function launchAndSettle(objective: ObjectiveView): Promise<string> {
 	return lead;
 }
 
-it("OBJ-13 a member is the lead's child with a thread between them, the lead controls only what it created, and only the user archives", async () => {
+it("OBJ-13 a member is the lead's child with a thread between them, the lead controls its objective's members and no other session, and only the user archives", async () => {
 	await start({
 		script: [
 			{ toolCalls: [{ name: "pana_session_create", args: { prompt: "member one" } }] },
@@ -882,11 +882,16 @@ it("OBJ-13 a member is the lead's child with a thread between them, the lead con
 	expect((await t!.client.post(`/sessions/${member.id}/resume`, {}, { caller: lead })).status, "the objective's stop is resumable").toBe(200);
 	expect((await t!.client.post(`/sessions/${member.id}/compact`, {}, { caller: lead })).status).not.toBe(403);
 
-	// It may not touch a member it did not create.
-	const outsider = await seedMember(objective.id, { parent: member.id });
-	expect((await t!.client.post(`/sessions/${outsider}/stop`, {}, { caller: lead })).status).toBe(403);
-	expect((await t!.client.post(`/sessions/${outsider}/resume`, {}, { caller: lead })).status).toBe(403);
-	expect((await t!.client.post(`/sessions/${outsider}/compact`, {}, { caller: lead })).status).toBe(403);
+	// Control follows the objective's lead role, not the creating parent: a member of the objective
+	// the lead did not create is the lead's to retire, and a session outside it never is.
+	const sibling = await seedMember(objective.id, { parent: member.id });
+	expect((await t!.client.post(`/sessions/${sibling}/stop`, {}, { caller: lead })).status).toBe(200);
+	expect((await t!.client.post(`/sessions/${sibling}/resume`, {}, { caller: lead })).status).toBe(200);
+	expect((await t!.client.post(`/sessions/${sibling}/compact`, {}, { caller: lead })).status).not.toBe(403);
+	const outsider = await seedMember(null, { parent: member.id });
+	for (const action of ["stop", "resume", "compact"]) {
+		expect((await t!.client.post(`/sessions/${outsider}/${action}`, {}, { caller: lead })).status, action).toBe(403);
+	}
 
 	// REF-02 stands: only the user archives.
 	expect((await t!.client.post(`/sessions/${member.id}/archive`, {}, { caller: lead })).status).toBe(403);

@@ -40,11 +40,20 @@ function integer(value: string | undefined, name: string): number | undefined {
 	return n;
 }
 
-/** The user controls every session; a session controls itself and the sessions it created. */
+/**
+ * Who may stop, resume, or compact a session. The user controls every session; a session controls
+ * itself, the sessions it created, and — OBJ-13 — any member of the objective it leads. The last
+ * one is the objective's role and not the creating parent: a lead that regenerated into an
+ * objective did not create its predecessor's members, and it must still be able to retire them.
+ */
 async function authorizeControl(ctx: RequestContext, id: string): Promise<void> {
 	const row = await sessionRow(ctx.runtime, id);
 	if (ctx.caller.kind === "user") return;
 	if (ctx.caller.id === id || row.parent === ctx.caller.id) return;
+	if (row.objective_id !== null) {
+		const objective = await ctx.runtime.db.get<{ lead_id: string | null }>("SELECT lead_id FROM objectives WHERE id = ?", row.objective_id);
+		if (objective?.lead_id === ctx.caller.id) return;
+	}
 	throw ApiError.forbidden(`session ${ctx.caller.id} may not control session ${id}`);
 }
 

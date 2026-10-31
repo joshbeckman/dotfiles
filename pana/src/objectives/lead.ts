@@ -3,8 +3,9 @@
 // A lead that fails leaves the objective stranded. Nothing regenerates on its own — a failed lead
 // never spends on its replacement — so this is the user's act. The swap is one transaction: the
 // old lead is stopped and marked `stopped_by: objective`, the new lead is created as a child of the
-// user at depth 0, `objectives.lead_id` moves, and the new lead's handoff (the briefing) is posted
-// into the objective's thread. Two regenerates that read the same lead produce one lead and one
+// user at depth 0, `objectives.lead_id` moves, the successor takes the retired lead's place in every
+// thread the retired lead was in, and the new lead's handoff (the briefing) is posted into the
+// objective's thread. Two regenerates that read the same lead produce one lead and one
 // 409 `lead_changed`; a launch racing an active objective is already 409 `wrong_phase`.
 //
 // The old lead's conversation is aborted and its scratch swept after the commit, through the same
@@ -96,11 +97,6 @@ export async function regenerateLead(runtime: Runtime, caller: Caller, value: st
 			now,
 			previousLead,
 		);
-		// STA-07 makes a thread holding an archived session read-only, and the objective's thread
-		// must outlive its lead: the retired lead leaves it. Its transcript keeps every message it
-		// received, and the thread's record stays for the user and the successor.
-		await tx.run("DELETE FROM thread_participants WHERE thread_id = ? AND participant_id = ?", objective.thread_id, previousLead);
-
 		// The successor is the user's child at depth 0, exactly as launch's lead is (OBJ-05).
 		const conversation = await runtime.harness.createConversation(
 			{
@@ -115,6 +111,30 @@ export async function regenerateLead(runtime: Runtime, caller: Caller, value: st
 			ctx,
 		);
 		await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", leadId, runtime.url({ kind: "session", id: leadId }), now);
+		// STA-07 makes a thread holding an archived session read-only, and every thread the objective
+		// runs on must outlive its lead. So the successor takes the retired lead's place in every
+		// thread the retired lead was in: the objective's own thread, and each member's thread too.
+		//
+		// Leaving the retired lead in a member's thread would freeze that member for good. Its thread
+		// would refuse every delivery (STA-07), so a member the objective still needs could never run
+		// again, and the successor that must control it (OBJ-13) could not even post there. The
+		// retired lead's messages keep `sender_id`, so attribution and history are untouched, and the
+		// swap is one transaction: no reader ever sees the thread without a lead in it.
+		const leadThreads = await tx.all<{ thread_id: string }>(
+			"SELECT DISTINCT thread_id FROM thread_participants WHERE participant_id = ?",
+			previousLead,
+		);
+		for (const held of leadThreads) {
+			await tx.run("DELETE FROM thread_participants WHERE thread_id = ? AND participant_id = ?", held.thread_id, previousLead);
+			// `joined_message_id` null: a participant from here on, delivered only what comes next.
+			await tx.run(
+				"INSERT OR IGNORE INTO thread_participants (thread_id, participant_id, joined_at, joined_message_id) VALUES (?, ?, ?, NULL)",
+				held.thread_id,
+				leadId,
+				now,
+			);
+		}
+
 		await tx.run(
 			`INSERT INTO sessions (id, conversation_id, state, parent, depth, model, thinking, profile, cwd, objective_id, created_at, updated_at)
 			 VALUES (?, ?, 'idle', NULL, 0, ?, ?, ?, ?, ?, ?, ?)`,
