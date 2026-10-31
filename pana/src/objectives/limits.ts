@@ -11,7 +11,7 @@
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { localDay, localDayRange, overDomainBudget } from "../sessions/budget.ts";
 import type { Runtime } from "../server/runtime.ts";
-import type { ObjectiveRow } from "./schema.ts";
+import type { EffectiveLimit, ObjectiveEffectiveLimits, ObjectiveRow } from "./schema.ts";
 
 /**
  * The condition that stops an objective's runs (OBJ-20, OBJ-21, OBJ-22). `budget_total` outranks
@@ -155,5 +155,31 @@ export async function objectiveConditions(db: SqliteExecutor, runtime: Runtime, 
 		spendTotalUsd: await objectiveCostTotal(db, row.id),
 		maxTotalUsd: row.max_total_usd,
 		holdUntil: hold?.hold_until ?? null,
+	};
+}
+
+/**
+ * OBJ-39: every limit as a meter must draw it — the value that applies, and where it came from.
+ *
+ * A limit an objective sets is the objective's (`objective`); one it leaves null falls back to the
+ * domain's `config.objectives` where a default exists, which today is `wakeMinMinutes` (OBJ-18) and
+ * `maxDailyUserMessages` (OBJ-24), and those gates resolve the fallback exactly as this does. The
+ * rest have no default, so `none` means nothing bounds them. `budget.domainDailyUsd` is LIM-03's
+ * backstop over every objective, not one objective's limit, so it is not here.
+ */
+export function effectiveLimits(runtime: Runtime, row: ObjectiveRow): ObjectiveEffectiveLimits {
+	const one = (own: number | null, fallback: number | undefined): EffectiveLimit => {
+		if (own !== null) return { value: own, source: "objective" };
+		if (fallback !== undefined) return { value: fallback, source: "config" };
+		return { value: null, source: "none" };
+	};
+	const config = runtime.config.objectives;
+	return {
+		maxDailyUsd: one(row.max_daily_usd, undefined),
+		maxTotalUsd: one(row.max_total_usd, undefined),
+		wakeMinMinutes: one(row.wake_min_minutes, config.wakeMinMinutes),
+		maxDailyLeadTurns: one(row.max_daily_lead_turns, undefined),
+		maxDailyUserMessages: one(row.max_daily_user_messages, config.maxDailyUserMessages),
+		maxActiveMembers: one(row.max_active_members, undefined),
 	};
 }

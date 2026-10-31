@@ -148,9 +148,11 @@ it("OBJ-39 the list and the view read real objective responses", async () => {
 	expect(view.artifacts).toEqual([expect.objectContaining({ name: "plan.md", size: 7 })]);
 	// OBJ-33: the escalation names its scope and the thread whose answer clears it.
 	expect(view.escalations).toEqual([expect.objectContaining({ scope: "objective", threadUrl: expect.stringContaining("/threads/") })]);
-	// OBJ-20..OBJ-24: money and runs, with the limits this objective does not set left to the domain.
+	// OBJ-20..OBJ-24, OBJ-39: money and runs, with the limits this objective does not set resolved
+	// from the domain, and each meter saying where its number came from.
 	const meters = Object.fromEntries(view.meters.map((meter) => [meter.id, meter]));
-	expect(meters["spend-today"]).toMatchObject({ label: "Spend today", unit: "usd", value: 0.42, limit: null, share: null, over: false });
+	expect(meters["spend-today"]).toMatchObject({ label: "Spend today", unit: "usd", value: 0.42, limit: null, share: null, over: false, source: "none" });
+	expect(meters["messages-today"]).toMatchObject({ limit: 10, source: "config" });
 	expect(meters["spend-total"]!.value).toBeCloseTo(0.42, 6);
 	expect(meters["runs-today"]!.value).toBeGreaterThanOrEqual(1);
 	expect(meters.members).toMatchObject({ label: "Active members", value: 2 });
@@ -186,6 +188,42 @@ it("OBJ-39 the list and the view read real objective responses", async () => {
 	expect(appHref(view.url, TEST_DOMAIN)).toBe(`#/objectives/${id}`);
 	expect(idHref(id, "objective")).toBe(`#/objectives/${id}`);
 	expect(SECTIONS.map((section) => section.id)).toContain("objectives");
+});
+
+it("OBJ-39 a meter draws the limit that applies and names where it came from", async () => {
+	await start();
+	const made = await t!.client.post<{ objective: { id: string } }>("/objectives", { goal: "Meters", maxDailyUsd: 5, maxDailyLeadTurns: 12 });
+	expect(made.status, JSON.stringify(made.body)).toBe(201);
+	const id = made.body.objective.id;
+	expect((await t!.client.post(`/objectives/${id}/launch`, {})).status).toBe(200);
+
+	// The route carries both: what the objective set, and the limit that actually applies.
+	const shown = await t!.client.get<Shown>(`/objectives/${id}`);
+	const objective = shown.body.objective as unknown as { limits: Record<string, unknown>; effectiveLimits: Record<string, unknown> };
+	expect(objective.limits).toMatchObject({ maxDailyUsd: 5, maxDailyLeadTurns: 12, maxDailyUserMessages: null, maxTotalUsd: null });
+	expect(objective.effectiveLimits).toEqual({
+		maxDailyUsd: { value: 5, source: "objective" },
+		maxTotalUsd: { value: null, source: "none" },
+		// The two limits with a configured default (OBJ-18, OBJ-24) resolve through it.
+		wakeMinMinutes: { value: 5, source: "config" },
+		maxDailyLeadTurns: { value: 12, source: "objective" },
+		maxDailyUserMessages: { value: 10, source: "config" },
+		maxActiveMembers: { value: null, source: "none" },
+	});
+
+	// The meters draw from it, so an unset limit is a bar and not a sentence.
+	const meters = Object.fromEntries(objectiveView(shown.body.objective).meters.map((meter) => [meter.id, meter]));
+	expect(meters["spend-today"]).toMatchObject({ value: 0, limit: 5, source: "objective", share: 0, over: false });
+	expect(meters["runs-today"]).toMatchObject({ limit: 12, source: "objective" });
+	expect(meters["messages-today"]).toMatchObject({ limit: 10, source: "config" });
+	expect(meters["messages-today"]!.share, "a configured limit is a bar, not prose").not.toBeNull();
+	expect(meters["messages-today"]!.share).toBeCloseTo(meters["messages-today"]!.value / 10, 6);
+	// Nothing bounds a lifetime budget here, so there is nothing to be a share of.
+	expect(meters["spend-total"]).toMatchObject({ limit: null, share: null, source: "none" });
+
+	// A view built before the field exists still renders: the meters fall back to no limit at all.
+	const legacy = objectiveView({ ...shown.body.objective, effectiveLimits: undefined });
+	expect(legacy.meters.every((meter) => meter.limit === null && meter.source === "none")).toBe(true);
 });
 
 it("OBJ-39 charts one line per metric against its target, and never a percent-to-target total", () => {

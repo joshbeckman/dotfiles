@@ -42,6 +42,22 @@ export interface ObjectiveLimits {
 	maxActiveMembers: number | null;
 }
 
+/** Where an effective limit comes from (OBJ-39: a meter names its limit's source). */
+export type ObjectiveLimitSource = "objective" | "config" | "none";
+
+/**
+ * One limit as a gate applies it: the value that actually bites, and where it came from. A limit an
+ * objective does not set falls back to `config.objectives` where a default exists (OBJ-18, OBJ-24),
+ * and `none` means nothing bounds it at all. `value` is null exactly when `source` is `none`.
+ */
+export interface EffectiveLimit {
+	value: number | null;
+	source: ObjectiveLimitSource;
+}
+
+/** Every limit, each with the value that applies to this objective and where it came from. */
+export type ObjectiveEffectiveLimits = Record<keyof ObjectiveLimits, EffectiveLimit>;
+
 /** The `objectives` row. */
 export interface ObjectiveRow {
 	id: string;

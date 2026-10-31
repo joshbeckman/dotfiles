@@ -67,7 +67,8 @@ export async function seedObjectives(): Promise<SeededObjectives> {
 		maxDailyUsd: 5,
 		maxTotalUsd: 20,
 		maxDailyLeadTurns: 12,
-		maxDailyUserMessages: 6,
+		// `maxDailyUserMessages` is left unset on purpose: the messages meter then draws the domain's
+		// configured default and names it, which is the OBJ-39 field this seed exists to show.
 		maxActiveMembers: 4,
 	});
 	if (made.status !== 201) throw new Error(`create objective: ${JSON.stringify(made.body)}`);

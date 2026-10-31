@@ -173,6 +173,8 @@ export interface ObjectiveMeterView {
 	value: number;
 	limit: number | null;
 	unit: "usd" | "count";
+	/** OBJ-39: where the limit came from, so a reader can see a bar that is not the objective's own. */
+	source: "objective" | "config" | "none";
 	share: number | null;
 	over: boolean;
 }
@@ -242,6 +244,8 @@ export interface ObjectiveDetailView {
 		maxDailyUserMessages: number | null;
 		maxActiveMembers: number | null;
 	};
+	/** OBJ-39: each limit as a meter draws it — the value that applies, and where it came from. */
+	effectiveLimits: Record<string, { value: number | null; source: "objective" | "config" | "none" }>;
 	spendTodayUsd: number;
 	spendTotalUsd: number;
 	leadRunsToday: number;

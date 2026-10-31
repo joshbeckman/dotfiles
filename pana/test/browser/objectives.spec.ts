@@ -108,7 +108,7 @@ describeBrowser("objectives", () => {
 			report: string;
 			artifacts: Array<{ title: string; meta: string; href: string | null }>;
 			members: Array<{ state: string; text: string; session: string | null; lead: boolean }>;
-			meters: Array<{ id: string; label: string; value: string; bar: number }>;
+			meters: Array<{ id: string; label: string; value: string; bar: number; source: string; sourceLabel: string }>;
 			wakes: string[];
 			wakeCount: string;
 			escalation: string;
@@ -157,6 +157,8 @@ describeBrowser("objectives", () => {
 					label: row.querySelector(".meter-label").textContent,
 					value: row.querySelector("[data-testid=objective-meter-value]").textContent,
 					bar: row.querySelectorAll(".meter-bar").length,
+					source: row.dataset.source,
+					sourceLabel: row.querySelector(".meter-source")?.textContent ?? "",
 				})),
 				wakes: [...document.querySelectorAll("#objective-wakes [data-testid=objective-wake]")].map((row) => row.textContent),
 				wakeCount: document.querySelector("[data-testid=objective-wake-count]").textContent,
@@ -202,6 +204,11 @@ describeBrowser("objectives", () => {
 		expect(meters["spend-total"]).toMatchObject({ value: "$1.7500 of $20.0000" });
 		expect(meters["runs-today"]!.value).toMatch(/^\d+ of 12$/);
 		expect(meters.members).toMatchObject({ label: "Active members", value: "3 of 4" });
+		// OBJ-39: a meter draws the limit that applies. The objective's own limits are unlabelled;
+		// the one it does not set is drawn from the domain's config and says where it came from.
+		expect(meters["spend-today"]).toMatchObject({ source: "objective", sourceLabel: "" });
+		expect(meters.members).toMatchObject({ source: "objective", sourceLabel: "" });
+		expect(meters["messages-today"]).toMatchObject({ value: expect.stringMatching(/^\d+ of 10$/), bar: 1, source: "config", sourceLabel: "from the domain's config" });
 		// WAK-08: the pending wakes, with next-run times, recurrence, and the session each wakes.
 		expect(view.wakes).toHaveLength(2);
 		expect(view.wakeCount).toBe("2 pending wakes.");
