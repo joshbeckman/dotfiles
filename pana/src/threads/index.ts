@@ -56,6 +56,7 @@ export {
 	type LoadedFile,
 	type UploadInput,
 } from "./files.ts";
+export { FILES_CACHE_CONTROL } from "./handlers.ts";
 export {
 	findBackend,
 	imageSize,

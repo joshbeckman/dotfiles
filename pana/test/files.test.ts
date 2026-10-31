@@ -7,6 +7,7 @@ import { statusToExitCode } from "../src/api/errors.ts";
 import {
 	appendAttachmentMarkdown,
 	attachmentMarkdown,
+	FILES_CACHE_CONTROL,
 	findBackend,
 	imageSize,
 	loadFile,
@@ -209,6 +210,9 @@ describe("files", () => {
 			const res = await t.client.get(`/files/${small.id}/small.png${query}`);
 			expect(res.status, query).toBe(200);
 			expect(res.raw, query).toEqual(png(20, 10));
+			// FIL-07: a file's bytes never change, so a browser may keep them and a reopened
+			// thread costs no transfer.
+			expect(String(res.headers["cache-control"]), query).toBe(FILES_CACHE_CONTROL);
 		}
 		const text = await t.client.get(`/files/${doc.id}/notes.txt?w=64`);
 		expect(text.raw).toEqual(Buffer.from("hello"));

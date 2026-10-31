@@ -7,6 +7,9 @@ import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
 import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
+/** FIL-07: a file's bytes never change for one id and width, so a browser may keep them. */
+export const FILES_CACHE_CONTROL = "private, max-age=604800";
+
 function bodyObject(ctx: RequestContext): Record<string, unknown> {
 	const body = ctx.body;
 	if (body === undefined || body === null) return {};
@@ -145,6 +148,10 @@ export const handlers: Handlers = {
 			headers: {
 				"content-type": image.mediaType,
 				"content-disposition": inlineDisposition(loaded.row.name),
+				// FIL-07: a file's bytes never change, so a reopened thread and a second message
+				// showing the same picture read the copy the browser already has instead of
+				// megabytes of photo again. Private keeps a shared cache out of a token's window.
+				"cache-control": FILES_CACHE_CONTROL,
 			},
 		};
 	},
