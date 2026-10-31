@@ -2883,9 +2883,20 @@ function showSection(section) {
 	}
 }
 
+/**
+ * UX-19: a page you navigate to starts at its top, wherever the page you left was scrolled. The
+ * pages that have a place of their own scroll themselves once they render — a thread's latest or
+ * linked message (UX-05), a session's newest entries (UX-10) — which is after this has run.
+ */
+function resetScroll() {
+	const root = document.scrollingElement ?? document.documentElement;
+	if (root.scrollTop !== 0) root.scrollTop = 0;
+}
+
 async function route() {
 	const { section, id, rest, query } = routeFromHash(location.hash);
 	showSection(section);
+	resetScroll();
 	select(null);
 	if (!id && section !== "compose") state.lastList = location.hash || "#/inbox";
 	if (!token) {
