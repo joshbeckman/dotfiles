@@ -1,8 +1,9 @@
-// MOB-01..03 in a real browser at phone width: no view scrolls sideways, long unbroken text wraps,
-// and the session header keeps its ID readable. Set PANA_MOBILE_SHOTS=DIR to save a screenshot of
-// each view for review.
+// MOB-01..06 in a real browser at phone width: no view scrolls sideways, long unbroken text wraps,
+// the session header keeps its ID readable and stacks its details, the nav fits, and the transcript
+// keeps its width for text. Set PANA_MOBILE_SHOTS=DIR to save a screenshot of each view for review.
 
-import { copyFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loopbackOrigin } from "../../src/web/static.ts";
@@ -127,5 +128,79 @@ describeBrowser("MOB the PWA at phone width", () => {
 		`);
 		expect(layout.titleLines).toBeLessThanOrEqual(1);
 		expect(layout.actionsBelow).toBe(true);
+	});
+
+	it("MOB-04 the nav fits a phone's width instead of clipping its last section", async () => {
+		seeded = await seedDomain();
+		page = await newPage(`${loopbackOrigin(seeded.t.panad.tcpPort!)}/#${seeded.t.panad.webToken}`);
+		await emulateViewport(PHONE);
+		const nav = await evaluatePage<{ items: number; fits: boolean; overflow: number }>(`
+			await until(() => document.querySelectorAll("#nav a").length >= 5);
+			const nav = document.getElementById("nav");
+			const last = nav.querySelector("a:last-of-type");
+			return {
+				items: nav.querySelectorAll("a").length,
+				// SCHEDULES was 28 px past the edge, so the last item was cut off mid-word.
+				fits: last.getBoundingClientRect().right <= nav.getBoundingClientRect().right + 1,
+				overflow: nav.scrollWidth - nav.clientWidth,
+			};
+		`);
+		expect(nav.items).toBe(5);
+		expect(nav.fits).toBe(true);
+		expect(nav.overflow).toBe(0);
+	});
+
+	it("MOB-05 the session header stacks its details on a phone instead of running them together", async () => {
+		seeded = await seedDomain();
+		const { t } = seeded;
+		// A session with a working directory, so the row the phone dedicates to it has something in it.
+		const cwd = mkdtempSync(join(tmpdir(), "pana-mob-session-"));
+		const created = await t.client.post<{ session: { id: string } }>("/sessions", { prompt: "Compose one", cwd });
+		expect(created.status, JSON.stringify(created.body)).toBe(201);
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await emulateViewport(PHONE);
+		const layout = await evaluatePage<{ facts: number; urlOwnRow: boolean; cwdOwnRow: boolean; wakesHidden: boolean }>(`
+			location.hash = "#/sessions/${created.body.session.id}";
+			await until(() => !document.getElementById("session").hidden && document.querySelector("[data-testid=session-facts] .fact-cwd"));
+			await sleep(200);
+			const meta = document.getElementById("session-meta");
+			const facts = meta.querySelector("[data-testid=session-facts]");
+			const url = meta.querySelector("[data-testid=session-url]");
+			const cwd = meta.querySelector(".fact-cwd");
+			const wakes = document.getElementById("session-wakes");
+			const box = (el) => el.getBoundingClientRect();
+			return {
+				facts: facts.querySelectorAll(".fact").length,
+				// The URL and the working directory each own a row: neither shares a line with a fact.
+				urlOwnRow: Math.abs(box(url).left - box(meta).left) < 2 && box(url).top >= box(facts).bottom - 1,
+				cwdOwnRow: box(cwd).width >= box(meta).width - 2 && box(cwd).left <= box(meta).left + 2,
+				wakesHidden: box(wakes).height === 0,
+			};
+		`);
+		expect(layout.facts).toBeGreaterThanOrEqual(2);
+		expect(layout.urlOwnRow).toBe(true);
+		expect(layout.cwdOwnRow).toBe(true);
+		expect(layout.wakesHidden).toBe(true);
+		rmSync(cwd, { recursive: true, force: true });
+	});
+
+	it("MOB-06 a phone's transcript keeps its width for text", async () => {
+		seeded = await seedDomain();
+		page = await newPage(`${loopbackOrigin(seeded.t.panad.tcpPort!)}/#${seeded.t.panad.webToken}`);
+		await emulateViewport(PHONE);
+		const widths = await evaluatePage<{ entryPad: number; prePad: number }>(`
+			location.hash = "#/sessions/${seeded.capital.sessionId}";
+			await until(() => document.querySelector('#transcript [data-testid=entry] pre'));
+			const entry = document.querySelector("#transcript [data-testid=entry] pre").closest("[data-testid=entry]");
+			const pre = entry.querySelector("pre");
+			return {
+				entryPad: parseFloat(getComputedStyle(entry).paddingLeft) + parseFloat(getComputedStyle(entry).paddingRight),
+				prePad: parseFloat(getComputedStyle(pre).paddingLeft) + parseFloat(getComputedStyle(pre).paddingRight),
+			};
+		`);
+		// 8 px a side (--s2) is the intended value, not a ceiling: a wider indent is a design
+		// decision, so this fails rather than drifting 2 px at a time.
+		expect(widths.entryPad).toBe(16);
+		expect(widths.prePad).toBe(16);
 	});
 });

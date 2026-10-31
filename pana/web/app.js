@@ -1418,28 +1418,36 @@ async function openSession(id) {
 	title.replaceChildren(copyLink(state.session.url ?? `pana://${state.domain}/sessions/${state.session.id}`, "session", refLabel(state.session.url ?? "") || state.session.id));
 	const meta = $("session-meta");
 	meta.replaceChildren(badge(state.session.state ?? "unknown", "state-badge"));
-	const details = document.createElement("span");
-	for (const part of [
-		state.session.model,
-		state.session.cwd,
-		state.session.parent ? refLink(state.session.parentUrl ?? state.session.parent, "session", `parent ${state.session.parent}`) : undefined,
-		cost(state.session.costUsd),
-		scratchSize(state.session.scratch),
-		`scheduled wakes: ${state.session.wakes?.length ?? 0}`,
+	// MOB-05: each fact is its own node, so a phone can put the working directory on its own row
+	// instead of letting one long sentence break inside a model ID or a path.
+	const facts = document.createElement("span");
+	facts.className = "session-facts";
+	facts.dataset.testid = "session-facts";
+	for (const [name, part] of [
+		["model", state.session.model],
+		["cwd", state.session.cwd],
+		["parent", state.session.parent ? refLink(state.session.parentUrl ?? state.session.parent, "session", `parent ${state.session.parent}`) : undefined],
+		["cost", cost(state.session.costUsd)],
+		["scratch", scratchSize(state.session.scratch)],
+		["wakes", `scheduled wakes: ${state.session.wakes?.length ?? 0}`],
 	]) {
 		if (part === undefined || part === null || part === "") continue;
-		if (details.childNodes.length > 0) details.append(" · ");
-		if (part instanceof Node) details.append(part);
-		else details.append(document.createTextNode(String(part)));
+		const fact = document.createElement("span");
+		fact.className = `fact fact-${name}`;
+		// The row can ellipsize a path or a model on a narrow screen; the title keeps it whole.
+		if (typeof part === "string") fact.title = part;
+		if (part instanceof Node) fact.append(part);
+		else fact.textContent = String(part);
+		facts.append(fact);
 	}
-	meta.append(" ", details);
+	meta.append(facts);
 	// Like a thread's header, the session's header shows its canonical pana:// URL.
 	if (state.session.url) {
 		const url = document.createElement("span");
-		url.className = "hint";
+		url.className = "hint session-url";
 		url.dataset.testid = "session-url";
 		url.append(copyLink(state.session.url, "session"));
-		meta.append(" ", url);
+		meta.append(url);
 	}
 	renderSessionWakes();
 	const archive = $("session-archive");
@@ -1462,6 +1470,8 @@ function renderSessionWakes() {
 	const section = $("session-wakes");
 	section.replaceChildren();
 	const wakes = state.session?.wakes ?? [];
+	// MOB-05: a phone hides an empty list rather than spending two lines above the transcript.
+	section.dataset.empty = String(wakes.length === 0);
 	if (wakes.length === 0) {
 		section.append(span("No scheduled wakes.", "hint"));
 		return;
