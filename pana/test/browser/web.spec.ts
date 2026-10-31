@@ -628,6 +628,8 @@ describeBrowser("pana in a browser", () => {
 		`);
 
 		const confirmEdit = await evaluatePage<string>(`
+			document.querySelector("#thread-messages [data-testid=message-menu] > summary").click();
+			await until(() => document.querySelector("#thread-messages [data-testid=message-menu]").open);
 			document.querySelector("[data-testid=message-edit]").click();
 			await until(() => !document.getElementById("confirm").hidden);
 			return document.getElementById("confirm-text").textContent;
@@ -644,6 +646,9 @@ describeBrowser("pana in a browser", () => {
 		expect((await messages(seeded.thread.id))[0]).toMatchObject({ body: "edited body", revised: true });
 
 		const confirmRedact = await evaluatePage<string>(`
+			const menus = document.querySelectorAll("#thread-messages [data-testid=message-menu]");
+			menus[1].querySelector("summary").click();
+			await until(() => menus[1].open);
 			document.querySelectorAll("[data-testid=message-redact]")[1].click();
 			await until(() => !document.getElementById("confirm").hidden);
 			return document.getElementById("confirm-text").textContent;

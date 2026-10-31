@@ -742,7 +742,48 @@ button.quiet:hover,
 .message-actions {
 	display: inline-flex;
 	gap: var(--s3);
+}
+/* UX-04: edit and redact are rare, so one quiet control at the right of the header holds them.
+   The menu unfolds inside the message, so the actions stay with the message they act on (UX-07). */
+.message-menu {
 	margin-left: auto;
+	align-self: center;
+	margin-block: -0.4rem;
+}
+.message-menu > summary {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-inline-start: auto;
+	width: 1.6rem;
+	height: 1.6rem;
+	border-radius: var(--radius);
+	list-style: none;
+	font-size: 1rem;
+	line-height: 1;
+	color: var(--c-text-alt);
+	cursor: pointer;
+}
+.message-menu > summary::-webkit-details-marker {
+	display: none;
+}
+.message-menu > summary:hover,
+.message-menu[open] > summary {
+	color: var(--c-link);
+	background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.message-menu > summary:focus-visible {
+	outline: 2px solid var(--c-link);
+	outline-offset: -2px;
+}
+.message-menu .message-actions {
+	justify-content: flex-end;
+	padding-top: var(--s1);
+}
+/* A closed menu is only its summary: a hidden details still lays its content out, and a phone
+   would measure that as an overflow. */
+.message-menu:not([open]) .message-actions {
+	display: none;
 }
 /* Rendered content is prose, not the compact uppercase UI heading system. Shared by
    thread messages and model text in the transcript; controls and memory stay unchanged. */
@@ -1419,6 +1460,15 @@ kbd {
 	.view-header .header-actions button,
 	.view-header .header-actions .button {
 		min-height: 2.75rem;
+	}
+	/* The message menu keeps its size on screen but takes a thumb's 44 px target around itself. */
+	.message-menu > summary {
+		position: relative;
+	}
+	.message-menu > summary::after {
+		content: "";
+		position: absolute;
+		inset: -0.6rem;
 	}
 	/* MOB-05: the session's details stack instead of running on. The state and the short facts
 	   share a row, the working directory and then the pana:// URL take their own, so a phone reads

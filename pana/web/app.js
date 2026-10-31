@@ -1167,7 +1167,17 @@ async function messageElement(message, { focus }) {
 	header.append(sender, timeEl(view.at), messageLink);
 	if (view.revised) header.append(span("edited", "badge"));
 
-	// UX-04: edit and redact are small secondary controls in the header, not full buttons.
+	// UX-04: edit and redact are small secondary controls, folded into one quiet menu per message
+	// so a thread of messages reads as prose rather than a column of repeated links.
+	const menu = document.createElement("details");
+	menu.className = "message-menu";
+	menu.dataset.testid = "message-menu";
+	const summary = document.createElement("summary");
+	summary.className = "message-menu-summary";
+	summary.textContent = "⋯";
+	summary.title = "Actions for this message";
+	summary.ariaLabel = "Actions for this message";
+	menu.append(summary);
 	const actions = document.createElement("span");
 	actions.className = "message-actions";
 	for (const [action, label] of [
@@ -1181,10 +1191,24 @@ async function messageElement(message, { focus }) {
 		button.dataset.id = view.id ?? "";
 		button.dataset.testid = `message-${action}`;
 		button.textContent = label;
-		button.addEventListener("click", () => startConfirm(action, view, article));
+		button.addEventListener("click", () => {
+			menu.open = false;
+			startConfirm(action, view, article);
+		});
 		actions.append(button);
 	}
-	header.append(actions);
+	menu.append(actions);
+	// One menu at a time, and Escape closes it instead of leaving the thread. Closing the others
+	// on the click keeps a single menu open even though the summary's own toggle lands later.
+	summary.addEventListener("click", () => closeMessageMenus(menu));
+	menu.addEventListener("keydown", (event) => {
+		if (event.key !== "Escape" || !menu.open) return;
+		event.preventDefault();
+		event.stopPropagation();
+		menu.open = false;
+		summary.focus();
+	});
+	header.append(menu);
 	article.append(header);
 
 	const body = document.createElement("div");
@@ -1209,6 +1233,11 @@ async function messageElement(message, { focus }) {
 
 	if (focus) article.classList.add("focus");
 	return article;
+}
+
+/** Close any message's action menu except the one named; a click elsewhere or Escape does this. */
+function closeMessageMenus(except) {
+	for (const menu of document.querySelectorAll(".message-menu[open]")) if (menu !== except) menu.open = false;
 }
 
 /** Put the edit and redact form back in its hidden home before the messages are replaced. */
@@ -3135,6 +3164,8 @@ document.addEventListener("focusin", (event) => {
 	if (row) select(row, { scroll: false });
 });
 document.addEventListener("click", (event) => {
+	// A click that is not on a message's actions closes whichever one is open.
+	if (!event.target?.closest?.(".message-menu")) closeMessageMenus();
 	const action = event.target?.closest?.("[data-action]")?.dataset.action;
 	if (action === "stop" || action === "compact") void sessionAction(action);
 	if (action === "archive-session") askArchiveSession();

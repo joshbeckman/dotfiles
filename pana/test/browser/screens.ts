@@ -47,7 +47,7 @@ try {
 			"thread-capital",
 			`#/threads/${seeded.capital.threadId}`,
 			`document.getElementById("thread-subject").textContent.includes("capital") && document.querySelectorAll("#thread-messages [data-testid=message]").length === 2`,
-			`document.querySelector("#thread-messages [data-testid=message-edit]")?.click(); await sleep(100);`,
+			`document.querySelector("#thread-messages [data-testid=message-menu] > summary")?.click(); await sleep(100); document.querySelector("#thread-messages [data-testid=message-edit]")?.click(); await sleep(100);`,
 		);
 		await shot("sessions", "#/sessions", `document.querySelectorAll("#sessions-list .item").length >= 3`);
 		await shot("memory", "#/memory", `document.querySelectorAll("#memory-files .item").length >= 1 && document.querySelectorAll("#memory-log .item").length >= 2`);
