@@ -128,3 +128,9 @@ export function scheduleCheckView(
 	schedule: Partial<Pick<ScheduleView, "check" | "checkCwd" | "stopAfterSuccess" | "lastCheck">>,
 	formatTime?: (time: number) => string,
 ): { status: string; text: string } | null;
+
+export interface TranscriptPageView {
+	entries: any[];
+	previous?: number;
+}
+export function transcriptPage(body: any): TranscriptPageView;

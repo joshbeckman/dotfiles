@@ -419,3 +419,15 @@ export function scheduleCheckView(schedule, formatTime = (time) => new Date(time
 	);
 	return { status, text: lines.join("\n") };
 }
+
+/**
+ * One page of `GET /sessions/:id/transcript`: the entries oldest first, and the ID just before the
+ * oldest one when older entries remain (UX-18). The route pages forward with `next` and backward
+ * with `previous`; a window reads backward, from the newest entry.
+ */
+export function transcriptPage(body) {
+	return {
+		entries: Array.isArray(body?.entries) ? body.entries : [],
+		previous: typeof body?.previous === "number" ? body.previous : undefined,
+	};
+}

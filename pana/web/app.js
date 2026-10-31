@@ -43,6 +43,7 @@ import {
 	scheduleWhen,
 	shortTime,
 	threadRow,
+	transcriptPage,
 	workingParticipants,
 } from "./views.js";
 import { renderMessage } from "./render.js";
@@ -1410,7 +1411,13 @@ async function loadSessionList(query = "", cursor, filter = $("sessions-state").
 }
 
 async function openSession(id) {
-	const [body, transcript] = await Promise.all([api("GET", `/sessions/${id}`), api("GET", `/sessions/${id}/transcript`)]);
+	// UX-18: a newer open or reload makes this one's late response stale.
+	const version = ++transcriptVersion;
+	const [body, transcript] = await Promise.all([
+		api("GET", `/sessions/${id}`),
+		fetchTranscriptPage(id, { latest: "1", limit: String(TRANSCRIPT_PAGE_SIZE) }),
+	]);
+	if (version !== transcriptVersion) return;
 	state.session = body.session;
 	// UX-17: the session's own ID copies its URL; the parent remains a navigation link.
 	const title = $("session-title");
@@ -1452,7 +1459,8 @@ async function openSession(id) {
 	$("sessions-browse").hidden = true;
 	$("sessions-list").hidden = true;
 	$("session").hidden = false;
-	renderTranscript(asList(transcript, ["entries"]));
+	transcriptWindow = { previous: transcript.previous, pages: 1 };
+	renderTranscript(transcript.entries);
 	rememberLive(state.session.id, body.session.live);
 	renderLive();
 	scrollToLatest();
@@ -1502,8 +1510,104 @@ function scratchSize(scratch) {
 function renderTranscript(entries) {
 	const container = $("transcript");
 	container.replaceChildren();
+	renderHistoryControls();
 	for (const entry of entries) container.append(entryElement(entry));
 	if (entries.length === 0) empty(container, "No transcript yet.");
+}
+
+// UX-18: an open transcript shows its newest entries, then loads older ones a page at a time.
+const TRANSCRIPT_PAGE_SIZE = 30;
+/** Large enough that loading a whole transcript normally takes one request per 500 entries. */
+const TRANSCRIPT_ALL_PAGE_SIZE = 500;
+/** Bumped by every open and reload, so a late page from the previous window cannot render. */
+let transcriptVersion = 0;
+/** The open window: the oldest loaded entry ID (for `before`) and how many pages are loaded. */
+let transcriptWindow = { previous: undefined, pages: 0 };
+
+/** One transcript page from the route, oldest first, plus the cursor toward older entries. */
+async function fetchTranscriptPage(id, params) {
+	const query = new URLSearchParams(params);
+	return transcriptPage(await api("GET", `/sessions/${id}/transcript?${query}`));
+}
+
+/** UX-18: "load older" while history remains, and "load all" once a page has been loaded. */
+function renderHistoryControls() {
+	const container = $("transcript");
+	container.querySelector(":scope > [data-history]")?.remove();
+	if (transcriptWindow.previous === undefined) return;
+	const controls = document.createElement("div");
+	controls.className = "transcript-history";
+	controls.dataset.history = "";
+	controls.dataset.testid = "transcript-history";
+	const older = document.createElement("button");
+	older.type = "button";
+	older.className = "more";
+	older.dataset.testid = "transcript-earlier";
+	older.textContent = "Load older entries";
+	older.addEventListener("click", () => void loadOlderTranscript({ all: false }));
+	controls.append(older);
+	if (transcriptWindow.pages > 1) {
+		const all = document.createElement("button");
+		all.type = "button";
+		all.className = "more";
+		all.dataset.testid = "transcript-earlier-all";
+		all.textContent = "Load all older entries";
+		all.addEventListener("click", () => void loadOlderTranscript({ all: true }));
+		controls.append(all);
+	}
+	container.prepend(controls);
+}
+
+/**
+ * UX-18: fetch the page before the window's oldest entry, or every page before it, and prepend
+ * them without moving the entry the reader is looking at.
+ */
+async function loadOlderTranscript({ all = false } = {}) {
+	const id = state.session?.id;
+	if (!id || transcriptWindow.previous === undefined) return;
+	const version = transcriptVersion;
+	const container = $("transcript");
+	const anchor = container.querySelector(":scope > .entry");
+	const top = anchor?.getBoundingClientRect().top;
+	const focused = document.activeElement?.dataset?.testid;
+	const fromControls = focused === "transcript-earlier" || focused === "transcript-earlier-all";
+	for (const button of container.querySelectorAll("[data-history] button")) button.disabled = true;
+	status(all ? "Loading the whole transcript…" : "Loading older entries…");
+	let collected = [];
+	let previous = transcriptWindow.previous;
+	let pages = 0;
+	try {
+		while (previous !== undefined) {
+			const pageSize = all ? TRANSCRIPT_ALL_PAGE_SIZE : TRANSCRIPT_PAGE_SIZE;
+			const page = await fetchTranscriptPage(id, { before: String(previous), limit: String(pageSize) });
+			if (version !== transcriptVersion) return;
+			// Pages arrive newest first; the oldest page goes in front, so the window stays ascending.
+			collected = [...page.entries, ...collected];
+			previous = page.previous;
+			pages += 1;
+			if (!all) break;
+		}
+		transcriptWindow = { previous, pages: transcriptWindow.pages + pages };
+		const fragment = document.createDocumentFragment();
+		for (const entry of collected) fragment.append(entryElement(entry));
+		const first = fragment.firstElementChild;
+		container.insertBefore(fragment, anchor);
+		renderHistoryControls();
+		// A keyboard reader keeps their place: the same control, or the newly loaded entries when
+		// nothing older is left. A mouse click leaves focus where it was.
+		const again = container.querySelector(`[data-history] [data-testid="${focused === "transcript-earlier-all" ? "transcript-earlier-all" : "transcript-earlier"}"]`);
+		if (fromControls && again) again.focus({ preventScroll: true });
+		else if (fromControls && first) {
+			first.setAttribute("tabindex", "-1");
+			first.focus({ preventScroll: true });
+		}
+		if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - top);
+		status(collected.length === 0 ? "No older entries." : `Loaded ${collected.length} older ${collected.length === 1 ? "entry" : "entries"}.`);
+	} catch (error) {
+		if (version !== transcriptVersion) return;
+		renderHistoryControls();
+		fail(error);
+	}
 }
 
 /** A tool result's output is collapsed only when it is long (REF-09). */
@@ -1646,8 +1750,7 @@ function details(className, summaryText, text, { testid, open = false } = {}) {
 
 async function loadTranscript() {
 	if (!state.session) return;
-	const transcript = await api("GET", `/sessions/${state.session.id}/transcript`);
-	renderTranscript(asList(transcript, ["entries"]));
+	await openSession(state.session.id);
 }
 
 async function sessionAction(action) {

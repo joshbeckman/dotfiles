@@ -777,3 +777,75 @@ describe("session environment", () => {
 		expect(existsSync(join(PANA_BIN, "pana"))).toBe(true);
 	});
 });
+
+describe("UX-18 transcript window", () => {
+	interface Page {
+		entries: Array<{ id: number }>;
+		previous?: number;
+		next?: number;
+	}
+
+	/** One run with forty tool calls, so the transcript is a few dozen entries long. */
+	async function longTranscript(): Promise<{ id: string; ids: number[] }> {
+		const toolCalls = Array.from({ length: 40 }, () => ({ name: "bash", args: { command: "true" } }));
+		await start({ script: [{ toolCalls }, { text: "done" }] });
+		const created = await create({ prompt: "run forty commands" });
+		await settled(created.session.id);
+		const res = await t!.client.get<Page>(`/sessions/${created.session.id}/transcript`);
+		expect(res.status, JSON.stringify(res.body)).toBe(200);
+		const ids = res.body.entries.map((entry) => entry.id);
+		expect(ids.length).toBeGreaterThan(40);
+		return { id: created.session.id, ids };
+	}
+
+	it("UX-18 latest and before page backward from the newest entry and answer previous; after still pages forward", async () => {
+		const { id, ids } = await longTranscript();
+		const read = async (query: string) => {
+			const res = await t!.client.get<Page>(`/sessions/${id}/transcript?${query}`);
+			expect(res.status, JSON.stringify(res.body)).toBe(200);
+			return res.body;
+		};
+
+		// A window opens at the end of the transcript, oldest first inside its page.
+		const latest = await read("latest=1&limit=10");
+		expect(latest.entries.map((entry) => entry.id)).toEqual(ids.slice(-10));
+		// `previous` is the oldest entry in the page: `before` it means the page just older.
+		expect(latest.previous).toBe(ids[ids.length - 10]);
+		expect(latest.next).toBeUndefined();
+
+		const older = await read(`before=${latest.previous}&limit=10`);
+		expect(older.entries.map((entry) => entry.id)).toEqual(ids.slice(-20, -10));
+		expect(older.previous).toBe(ids[ids.length - 20]);
+
+		// Walking back covers the whole transcript exactly once, ending with no earlier page.
+		const pages = [older.entries.map((entry) => entry.id), latest.entries.map((entry) => entry.id)];
+		let previous = older.previous;
+		while (previous !== undefined) {
+			const page = await read(`before=${previous}&limit=10`);
+			expect(page.next).toBeUndefined();
+			pages.unshift(page.entries.map((entry) => entry.id));
+			previous = page.previous;
+		}
+		expect(pages.flat()).toEqual(ids);
+
+		// Forward paging from a known entry is unchanged.
+		const forward = await read(`after=${ids[0]}&limit=5`);
+		expect(forward.entries.map((entry) => entry.id)).toEqual(ids.slice(1, 6));
+		expect(forward.next).toBe(ids[5]);
+		expect(forward.previous).toBeUndefined();
+
+		// The two directions cannot be mixed in one request.
+		const mixed = await t!.client.get(`/sessions/${id}/transcript?after=${ids[0]}&latest=1`);
+		expect(mixed.status).toBe(400);
+	});
+
+	it("UX-18 the PWA's page mapper keeps the entries and the cursor toward older ones", async () => {
+		const { id, ids } = await longTranscript();
+		const res = await t!.client.get(`/sessions/${id}/transcript?latest=1&limit=10`);
+		const { transcriptPage } = await import("../web/views.js");
+		const page = transcriptPage(res.body);
+		expect(page.entries.map((entry: { id: number }) => entry.id)).toEqual(ids.slice(-10));
+		expect(page.previous).toBe(ids[ids.length - 10]);
+		expect(transcriptPage({})).toEqual({ entries: [], previous: undefined });
+	});
+});

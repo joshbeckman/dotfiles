@@ -522,6 +522,18 @@ button.quiet:hover,
 	align-self: center;
 	margin: var(--s3) 0;
 }
+/* UX-18: the session transcript's history controls sit above the oldest loaded entry. */
+.transcript-history {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: var(--s2) var(--s3);
+	margin-bottom: var(--s2);
+}
+.transcript-history .more {
+	margin: 0;
+}
 .item {
 	display: flex;
 	align-items: center;
