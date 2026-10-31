@@ -200,7 +200,7 @@ describe("PWA shell and static assets", () => {
 
 	it("WEB-03 the shell has every section and the app routes each one", async () => {
 		const ids = SECTIONS.map((section) => section.id);
-		expect(ids).toEqual(["inbox", "compose", "threads", "sessions", "memory", "schedules"]);
+		expect(ids).toEqual(["inbox", "compose", "threads", "sessions", "memory", "schedules", "objectives"]);
 
 		t = await startTestPanad();
 		const html = String((await t.tcp.get("/")).raw);

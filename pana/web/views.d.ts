@@ -145,3 +145,171 @@ export interface TranscriptPageView {
 	previous?: number;
 }
 export function transcriptPage(body: any): TranscriptPageView;
+
+// ---- Objectives (OBJ-39) ----------------------------------------------------------------------
+
+export const CHARTER_SECTIONS: string[];
+export function holdingLabel(paused: string | null | undefined): string;
+export function holdingOf(objective: any): string;
+export interface ObjectiveRowView {
+	id: string;
+	url: string;
+	goal: string;
+	phase: string;
+	state: string | null;
+	paused: string | null;
+	awaitingUser: boolean;
+	holding: string;
+	lead: string;
+	spendTodayUsd: number;
+	leadRunsToday: number;
+	dueAt: number | null;
+	at: number;
+}
+export function objectiveRow(objective: any): ObjectiveRowView;
+export interface ObjectiveMeterView {
+	id: string;
+	label: string;
+	value: number;
+	limit: number | null;
+	unit: "usd" | "count";
+	share: number | null;
+	over: boolean;
+}
+export function objectiveMeters(objective: any): ObjectiveMeterView[];
+export function isActiveMember(state: string | null | undefined): boolean;
+export interface ObjectiveMemberView {
+	id: string;
+	url: string;
+	state: string;
+	lead: boolean;
+	stoppedBy: "user" | "objective" | null;
+	profile: string | null;
+}
+export function objectiveMember(member: any): ObjectiveMemberView;
+export interface ObjectiveEscalationView {
+	id: string;
+	scope: "objective" | "member";
+	member: string;
+	url: string;
+	messageId: string;
+	threadUrl: string;
+	threadId: string;
+	timeoutAt: number | null;
+}
+export function objectiveEscalation(escalation: any): ObjectiveEscalationView;
+export interface ObjectiveReportView {
+	messageId: string;
+	url: string;
+	threadUrl: string;
+	sender: string;
+	at: number;
+	body: string;
+	revised: boolean;
+	redacted: boolean;
+}
+export function objectiveReport(report: any): ObjectiveReportView | null;
+export interface ObjectiveArtifactView {
+	id: string;
+	name: string;
+	size: number;
+	mediaType: string | null;
+	url: string;
+	addedAt: number;
+}
+export function objectiveArtifact(artifact: any): ObjectiveArtifactView;
+export interface ObjectiveDetailView {
+	id: string;
+	url: string;
+	goal: string;
+	phase: string;
+	state: string | null;
+	paused: string | null;
+	awaitingUser: boolean;
+	holding: string;
+	creator: string;
+	proposedBy: string | null;
+	lead: string | null;
+	thread: { id: string; url: string } | null;
+	dueAt: number | null;
+	autonomy: "manual" | "auto";
+	charterRev: number;
+	limits: {
+		maxDailyUsd: number | null;
+		maxTotalUsd: number | null;
+		wakeMinMinutes: number | null;
+		maxDailyLeadTurns: number | null;
+		maxDailyUserMessages: number | null;
+		maxActiveMembers: number | null;
+	};
+	spendTodayUsd: number;
+	spendTotalUsd: number;
+	leadRunsToday: number;
+	userMessagesToday: number;
+	members: ObjectiveMemberView[];
+	escalations: ObjectiveEscalationView[];
+	report: ObjectiveReportView | null;
+	artifacts: ObjectiveArtifactView[];
+	meters: ObjectiveMeterView[];
+	at: number;
+}
+export function objectiveView(objective: any): ObjectiveDetailView;
+export interface MetricSeriesView {
+	name: string;
+	unit: string;
+	direction: "up" | "down";
+	target: number | null;
+	targetDisplay: string | null;
+	aggregation: "raw" | "mean";
+	window: string | null;
+	baseline: number | null;
+	current: { value: number | null; at: number | null; stale: boolean; display: string | null };
+	atTarget: boolean | null;
+	frozen: boolean;
+	check: { command: string; nextCheckAt: number | null; lastCheck: string | null } | null;
+	points: Array<{ at: number; value: number; source: string }>;
+}
+export function metricSeries(metric: any): MetricSeriesView;
+export interface MetricsView {
+	objectiveId: string;
+	url: string;
+	phase: string;
+	atTarget: { count: number; of: number };
+	metrics: MetricSeriesView[];
+}
+export function metricsView(body: any): MetricsView;
+export interface MetricChartView {
+	empty: boolean;
+	line: string;
+	dots?: Array<{ x: number; y: number }>;
+	target: { y: number; value: number } | null;
+	min: number | null;
+	max: number | null;
+	first?: number | null;
+	last?: number | null;
+}
+export function metricChart(series: MetricSeriesView | any, box?: { width?: number; height?: number; pad?: number }): MetricChartView;
+export interface CharterSectionView {
+	name: string;
+	body: string;
+	rev: number | null;
+	author: string;
+	at: number | null;
+}
+export interface CharterView {
+	rev: number;
+	sections: CharterSectionView[];
+	revisions: Array<{ id: string; rev: number; section: string; body: string; author: string; at: number }>;
+}
+export function charterView(body: any): CharterView;
+export function charterBody(section: string, body: string, baseRev?: number | null): { section: string; body: string; baseRev?: number };
+export interface ObjectiveWakeView {
+	sessionId: string;
+	sessionUrl: string;
+	id: string;
+	url: string;
+	subject: string;
+	at: number;
+	cron: string | null;
+}
+export function objectiveWakes(details: any[]): ObjectiveWakeView[];
