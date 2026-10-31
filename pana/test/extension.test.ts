@@ -219,6 +219,34 @@ describe("browser isolation", () => {
 		writeFileSync(join(xdg, `chrome-devtools-mcp-${scope}`, "daemon.pid"), "1");
 	}
 
+	/** The one browser candidate that is not on PATH: Google Chrome's app bundle on a Mac. */
+	const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+	const hasMacChrome = existsSync(MAC_CHROME);
+	// Two cases below are gated on what the host has, because discovery itself is: a PATH candidate
+	// outranks /Applications, and a machine that has Chrome is not a machine with "no browser
+	// anywhere". Say which half is skipped, so a green run on one host cannot read as both.
+	const macCase = process.platform === "darwin" && hasMacChrome ? "runs" : "is skipped";
+	console.warn(
+		`ISO-06: ${MAC_CHROME} is ${hasMacChrome ? "here" : "absent"}, so the Mac-Chrome case ${macCase} and the no-browser case ${hasMacChrome ? "is skipped" : "runs"}`,
+	);
+
+	/** A stand-in for an installed browser: discovery only needs an executable at that name. */
+	function stubBrowser(dir: string, name: string): string {
+		const path = join(dir, name);
+		writeFileSync(path, "#!/bin/sh\n", { mode: 0o755 });
+		return path;
+	}
+
+	/**
+	 * A PATH with the CLI stub and a browser of each name, in a directory of their own, and an
+	 * empty directory last: no system `chromium` from /usr/bin and no /bin (a symlink to it).
+	 */
+	function sandboxedPath(cli: string, ...browsers: Array<[string, string]>): string {
+		const bin = tempDir("pana-path-");
+		for (const [name, dir] of browsers) stubBrowser(dir, name);
+		return [cli, ...browsers.map(([, dir]) => dir), bin].join(":");
+	}
+
 	it("ISO-06 bin/chrome-devtools runs the CLI with this session's --sessionId", () => {
 		// ISO-03 puts pana's bin first on a session's PATH, so the shim is what `chrome-devtools` means.
 		const env = panaShellEnv({ cwd: tmpdir(), sessionId: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
@@ -228,7 +256,12 @@ describe("browser isolation", () => {
 
 		const stub = stubCli(tempDir("pana-cli-"));
 		const xdg = tempDir("pana-xdg-");
-		const path = `${stub.path}:/usr/bin:/bin`;
+		// A stub browser on PATH, so the implicit start is one fixed argv on every host: a PATH
+		// candidate outranks the Mac app bundle, and `/usr/bin:/bin` would name whatever browser
+		// the test machine happens to have.
+		const browsers = tempDir("pana-browsers-");
+		const chromium = stubBrowser(browsers, "chromium");
+		const path = sandboxedPath(stub.path, ["chromium", browsers]);
 		const scope = env.PANA_BROWSER_SESSION!;
 
 		// A shell with no session runs the CLI unchanged, with no daemon started for it.
@@ -239,7 +272,10 @@ describe("browser isolation", () => {
 		// machine-wide Chrome profile, which the next session's daemon cannot open.
 		writeFileSync(join(stub.path, "argv"), "");
 		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
-		expect(stub.calls()).toEqual([`start --sessionId ${scope} --isolated`, `--sessionId ${scope} list_pages`]);
+		expect(stub.calls()).toEqual([
+			`start --sessionId ${scope} --isolated --executablePath ${chromium}`,
+			`--sessionId ${scope} list_pages`,
+		]);
 
 		// A daemon that is already running is never started again: `start` restarts it and closes
 		// the pages under it.
@@ -265,8 +301,96 @@ describe("browser isolation", () => {
 		runShim(["list_pages"], `${other}:${path}`, xdg, { PANA_BROWSER_SESSION: scope });
 		expect(stub.calls()).toEqual([`--sessionId ${scope} list_pages`]);
 
-		// No CLI on PATH is an error, not a loop.
+		// No CLI on PATH is an error, not a loop, and no browser discovery gets in the way of it.
 		expect(() => runShim(["list_pages"], "/usr/bin:/bin", xdg, { PANA_BROWSER_SESSION: scope })).toThrow();
+		expect(() => runShim(["list_pages"], `${tempDir("pana-nobrowser-")}`, xdg, { PANA_BROWSER_SESSION: scope })).toThrow();
+	});
+
+	it("ISO-06 the implicit start passes --executablePath for the first browser it finds", () => {
+		// chrome-devtools-mcp 1.10.1 reads a browser only from `--executablePath`, or from
+		// `--channel`, whose choices are all Chrome-branded; with neither it probes
+		// /opt/google/chrome, so on a machine with a distro Chromium and no Chrome the daemon
+		// starts and every call then fails with "Could not find Google Chrome executable".
+		const stub = stubCli(tempDir("pana-cli-"));
+		const xdg = tempDir("pana-xdg-");
+		const browsers = tempDir("pana-browsers-");
+		const chromium = stubBrowser(browsers, "chromium");
+		const path = sandboxedPath(stub.path, ["chromium", browsers]);
+		const scope = browserScope("01HZZZZZZZZZZZZZZZZZZZZZZZ");
+
+		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([
+			`start --sessionId ${scope} --isolated --executablePath ${chromium}`,
+			`--sessionId ${scope} list_pages`,
+		]);
+
+		// Discovery changes only that start: a daemon already running is never started again.
+		markRunning(xdg, scope);
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`--sessionId ${scope} list_pages`]);
+
+		// `stop` starts nothing, with or without a browser to hand it.
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["stop"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`--sessionId ${scope} stop`]);
+
+		// A call that names its own `--sessionId` runs unchanged, and starts nothing.
+		writeFileSync(join(stub.path, "argv"), "");
+		runShim(["list_pages", "--sessionId", "mine"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual(["list_pages --sessionId mine"]);
+	});
+
+	// Skipped where the absolute candidate exists: that machine has a browser to find, so it has no
+	// "nowhere" to test. The Mac case below covers that half where it can actually run.
+	it.skipIf(hasMacChrome)("ISO-06 with no browser anywhere the implicit start keeps today's exact argv", () => {
+		// A machine without a browser must keep the CLI's own error, not get a new one from here, so
+		// the start is byte for byte what it was before discovery.
+		const stub = stubCli(tempDir("pana-cli-"));
+		const xdg = tempDir("pana-xdg-");
+		const path = sandboxedPath(stub.path);
+		const scope = browserScope("01HZZZZZZZZZZZZZZZZZZZZZZZ");
+
+		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([`start --sessionId ${scope} --isolated`, `--sessionId ${scope} list_pages`]);
+	});
+
+	// The only candidate that is not on PATH, gated on the platform that has it, so the branch runs
+	// where it can instead of being asserted nowhere. Elsewhere this case is skipped, not faked.
+	it.skipIf(process.platform !== "darwin" || !hasMacChrome)(
+		"ISO-06 on a Mac the implicit start names the Chrome app bundle, spaces and all",
+		() => {
+			const stub = stubCli(tempDir("pana-cli-"));
+			const xdg = tempDir("pana-xdg-");
+			const path = sandboxedPath(stub.path);
+			const scope = browserScope("01HZZZZZZZZZZZZZZZZZZZZZZZ");
+
+			runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+			expect(stub.calls()).toEqual([
+				// One argument, because the shim quotes it: `/Applications/…` has spaces.
+				`start --sessionId ${scope} --isolated --executablePath ${MAC_CHROME}`,
+				`--sessionId ${scope} list_pages`,
+			]);
+		},
+	);
+
+	it("ISO-06 google-chrome wins over chromium, which is the CLI's own order", () => {
+		// Candidate name beats PATH order: `chromium` sits in the first directory on PATH and
+		// `google-chrome` in the second, and the CLI's default is still the Chrome one.
+		const stub = stubCli(tempDir("pana-cli-"));
+		const xdg = tempDir("pana-xdg-");
+		const chromiumDir = tempDir("pana-browsers-");
+		const chromeDir = tempDir("pana-browsers-");
+		stubBrowser(chromiumDir, "chromium");
+		const chrome = stubBrowser(chromeDir, "google-chrome");
+		const path = sandboxedPath(stub.path, ["chromium", chromiumDir], ["google-chrome", chromeDir]);
+		const scope = browserScope("01HZZZZZZZZZZZZZZZZZZZZZZZ");
+
+		runShim(["list_pages"], path, xdg, { PANA_BROWSER_SESSION: scope });
+		expect(stub.calls()).toEqual([
+			`start --sessionId ${scope} --isolated --executablePath ${chrome}`,
+			`--sessionId ${scope} list_pages`,
+		]);
 	});
 
 	it("ISO-06 the scope is hex, so the CLI's sessionId rule accepts it, and it names the session back", () => {

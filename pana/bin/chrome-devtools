@@ -65,6 +65,27 @@ else
 	home=/tmp/chrome-devtools-mcp-$scope-$(id -u 2>/dev/null || echo 0)
 fi
 if [ ! -f "$home/daemon.pid" ]; then
-	"$real" start --sessionId "$scope" --isolated >/dev/null 2>&1 || true
+	# The CLI finds a browser only through `--executablePath`, or through `--channel`, whose
+	# choices (canary, dev, beta, stable) are all Chrome-branded; with neither it probes
+	# /opt/google/chrome. On a machine with a distro Chromium and no Google Chrome the daemon still
+	# starts, and then every call fails with "Could not find Google Chrome executable for channel
+	# 'stable'". So hand this start the first browser found, in the order the CLI itself would
+	# prefer. With none found the argv is exactly what it was, and the CLI reports its own error.
+	browser=
+	for name in google-chrome google-chrome-stable chromium chromium-browser; do
+		found=$(command -v "$name" 2>/dev/null) || continue
+		[ -n "$found" ] || continue
+		browser=$found
+		break
+	done
+	if [ -z "$browser" ]; then
+		mac='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+		[ -x "$mac" ] && browser=$mac
+	fi
+	if [ -n "$browser" ]; then
+		"$real" start --sessionId "$scope" --isolated --executablePath "$browser" >/dev/null 2>&1 || true
+	else
+		"$real" start --sessionId "$scope" --isolated >/dev/null 2>&1 || true
+	fi
 fi
 exec "$real" --sessionId "$scope" "$@"
