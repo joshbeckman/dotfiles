@@ -10,6 +10,7 @@
 
 import type { Caller, Handlers } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { admitScheduledWake, releaseLeadHold } from "../objectives/hold.ts";
 import { wakeScheduled } from "../sessions/wake.ts";
 import { createThread, postNotice } from "../threads/index.ts";
 import { runCheck } from "./check.ts";
@@ -200,7 +201,18 @@ class ScheduleLoop implements Scheduler {
 			return true;
 		}
 		if (row.kind === "wake") {
-			return wakeScheduled(this.#runtime, { scheduleId: row.id, occurrence: row.cron ? row.next_at! : undefined, sessionId: String(payload.session), note: String(payload.note) });
+			// OBJ-18: an objective hold persists as an ordinary wake whose note names what waited.
+			// Firing it releases the hold through the same admission gate as any other run.
+			if (payload.hold === true) {
+				return releaseLeadHold(this.#runtime, { sessionId: String(payload.session), scheduleId: row.id, note: typeof payload.note === "string" ? payload.note : undefined });
+			}
+			// OBJ-23: a wake is a run start too, so it passes the objective gates before it submits.
+			return admitScheduledWake(this.#runtime, {
+				scheduleId: row.id,
+				occurrence: row.cron ? row.next_at! : undefined,
+				sessionId: String(payload.session),
+				note: String(payload.note),
+			});
 		}
 		await createThread(this.#runtime, creator, {
 			to: payload.to,

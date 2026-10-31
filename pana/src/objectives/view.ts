@@ -10,6 +10,7 @@ import { isUlid } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { sessionStates } from "../sessions/state.ts";
 import { limitsOf, type ObjectiveLimits, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow, type ObjectiveAutonomy, type ObjectiveDisplayState } from "./schema.ts";
+import { leadRunsToday, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, type ObjectivePaused } from "./limits.ts";
 import { loadObjective, objectiveMembers, objectiveState, objectiveUrl, sessionUrl } from "./state.ts";
 
 export interface ObjectivePersonView {
@@ -34,6 +35,16 @@ export interface ObjectiveView {
 	phase: ObjectivePhase;
 	/** OBJ-03: derived on read. Null for a phase that is not `active`. */
 	state: ObjectiveDisplayState | null;
+	/**
+	 * OBJ-20..OBJ-22: the budget condition holding the objective, derived on read. `budget_total`
+	 * outranks `budget_day`; `domain_budget` is LIM-03's backstop. Null when nothing holds it.
+	 */
+	paused: ObjectivePaused | null;
+	/** OBJ-20/21, OBJ-24: today's and the lifetime spend, and today's lead runs and user messages. */
+	spendTodayUsd: number;
+	spendTotalUsd: number;
+	leadRunsToday: number;
+	userMessagesToday: number;
 	creator: ObjectivePersonView;
 	proposedBy: ObjectivePersonView | null;
 	lead: ObjectivePersonView | null;
@@ -54,12 +65,23 @@ function person(runtime: Runtime, id: string | null): ObjectivePersonView | null
 }
 
 /** The stored view, from rows already in hand. */
+export interface ObjectiveReadings {
+	paused: ObjectivePaused | null;
+	spendTodayUsd: number;
+	spendTotalUsd: number;
+	leadRunsToday: number;
+	userMessagesToday: number;
+}
+
+const EMPTY_READINGS: ObjectiveReadings = { paused: null, spendTodayUsd: 0, spendTotalUsd: 0, leadRunsToday: 0, userMessagesToday: 0 };
+
 export function objectiveView(
 	runtime: Runtime,
 	row: ObjectiveRow,
 	members: readonly ObjectiveMemberRow[],
 	state: ObjectiveDisplayState | null,
 	states?: Map<string, string>,
+	readings: ObjectiveReadings = EMPTY_READINGS,
 ): ObjectiveView {
 	return {
 		id: row.id,
@@ -67,6 +89,11 @@ export function objectiveView(
 		goal: row.goal,
 		phase: row.phase,
 		state,
+		paused: readings.paused,
+		spendTodayUsd: readings.spendTodayUsd,
+		spendTotalUsd: readings.spendTotalUsd,
+		leadRunsToday: readings.leadRunsToday,
+		userMessagesToday: readings.userMessagesToday,
 		creator: person(runtime, row.creator_id)!,
 		proposedBy: person(runtime, row.proposed_by),
 		lead: person(runtime, row.lead_id),
@@ -93,7 +120,18 @@ export async function showObjective(runtime: Runtime, id: string): Promise<Objec
 	const members = await objectiveMembers(runtime.db, row.id);
 	const states = await sessionStates(runtime.db, runtime, members.map((member) => member.id));
 	const state = await objectiveState(runtime.db, runtime, row);
-	return objectiveView(runtime, row, members, state, states);
+	return objectiveView(runtime, row, members, state, states, await objectiveReadings(runtime, row));
+}
+
+/** OBJ-20..OBJ-24: the limits a read shows, from the same reads the admission gate uses. */
+export async function objectiveReadings(runtime: Runtime, row: ObjectiveRow): Promise<ObjectiveReadings> {
+	return {
+		paused: await objectivePaused(runtime.db, runtime, row),
+		spendTodayUsd: await objectiveCostToday(runtime.db, runtime, row.id),
+		spendTotalUsd: await objectiveCostTotal(runtime.db, row.id),
+		leadRunsToday: await leadRunsToday(runtime.db, runtime, row),
+		userMessagesToday: await objectiveUserMessagesToday(runtime.db, runtime, row),
+	};
 }
 
 export interface ObjectiveListFilters {
@@ -133,7 +171,7 @@ export async function listObjectives(runtime: Runtime, options: ObjectiveListOpt
 	const views: ObjectiveView[] = [];
 	for (const row of rows) {
 		const members = await objectiveMembers(runtime.db, row.id);
-		views.push(objectiveView(runtime, row, members, await objectiveState(runtime.db, runtime, row)));
+		views.push(objectiveView(runtime, row, members, await objectiveState(runtime.db, runtime, row), undefined, await objectiveReadings(runtime, row)));
 	}
 	return pageOf(views, options.limit, (view) => [view.id]);
 }

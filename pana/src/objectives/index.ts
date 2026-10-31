@@ -52,12 +52,39 @@ export {
 } from "./state.ts";
 export { createObjective, type CreateObjectiveInput, type CreatedObjective } from "./store.ts";
 export { leadBriefing, type BriefingOptions } from "./brief.ts";
+export {
+	admitRun,
+	admitScheduledWake,
+	heldDeliveries,
+	holdLead,
+	memberCreateGate,
+	recordBudgetHold,
+	recordRunEnded,
+	releaseLeadHold,
+	type HoldCondition,
+	type RunAdmission,
+	type RunIntent,
+} from "./hold.ts";
+export {
+	lastLeadRunEnd,
+	leadRunsToday,
+	objectiveConditions,
+	objectiveCostToday,
+	objectiveCostTotal,
+	objectivePaused,
+	objectiveRunsToday,
+	objectiveUserMessagesToday,
+	type ObjectiveConditions,
+	type ObjectivePaused,
+} from "./limits.ts";
 export { launchObjective } from "./launch.ts";
 export { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
 export {
 	listObjectives,
+	objectiveReadings,
 	objectiveView,
 	showObjective,
+	type ObjectiveReadings,
 	type ObjectiveListFilters,
 	type ObjectiveListOptions,
 	type ObjectiveMemberView,

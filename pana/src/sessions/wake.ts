@@ -165,25 +165,33 @@ export async function wakeScheduled(runtime: Runtime, wake: ScheduledWake): Prom
 	return runtime.db.write(async (tx) => {
 		const row = await tx.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", wake.sessionId);
 		if (!row || row.state === "stopped" || row.state === "archived") return false;
-		const conversation = await sessionConversation(runtime, wake.sessionId);
-		const scheduleUrl = runtime.url({ kind: "schedule", id: wake.scheduleId });
-		await conversation.submit(
-			{
-				type: "input",
-				content: [
-					"Scheduled wakeup.",
-					`Schedule: ${scheduleUrl}`,
-					"Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know.",
-					"",
-					wake.note,
-				].join("\n"),
-				whenBusy: "followUp",
-				entry: { kind: WAKE_ENTRY_KIND, data: { scheduleId: wake.scheduleId } },
-				requestId: `pana.wake:${wake.scheduleId}${wake.occurrence === undefined ? "" : `:${wake.occurrence}`}`,
-			},
-			BACKGROUND_CONTEXT,
-		);
-		await setSessionState(tx, runtime, { sessionId: wake.sessionId, state: "running", from: ["idle", "failed"] });
-		return true;
+		return submitScheduledWake(tx, runtime, wake);
 	});
+}
+
+/**
+ * The submit half of a wake, for a caller that has already made its own decision in the same
+ * transaction (OBJ-18: the scheduler's admission for an objective's session).
+ */
+export async function submitScheduledWake(tx: SqliteExecutor, runtime: Runtime, wake: ScheduledWake): Promise<boolean> {
+	const conversation = await sessionConversation(runtime, wake.sessionId);
+	const scheduleUrl = runtime.url({ kind: "schedule", id: wake.scheduleId });
+	await conversation.submit(
+		{
+			type: "input",
+			content: [
+				"Scheduled wakeup.",
+				`Schedule: ${scheduleUrl}`,
+				"Nothing you write at the end of this run is posted. Reply with pana_reply where your note says, if anything changed that someone needs to know.",
+				"",
+				wake.note,
+			].join("\n"),
+			whenBusy: "followUp",
+			entry: { kind: WAKE_ENTRY_KIND, data: { scheduleId: wake.scheduleId } },
+			requestId: `pana.wake:${wake.scheduleId}${wake.occurrence === undefined ? "" : `:${wake.occurrence}`}`,
+		},
+		BACKGROUND_CONTEXT,
+	);
+	await setSessionState(tx, runtime, { sessionId: wake.sessionId, state: "running", from: ["idle", "failed"] });
+	return true;
 }

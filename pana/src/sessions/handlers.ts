@@ -96,13 +96,24 @@ export const handlers: Handlers = {
 	"sessions.stop": async (ctx): Promise<HandlerResult> => {
 		const id = sessionId(ctx, ctx.params.id);
 		await authorizeControl(ctx, id);
-		await sessionRuntime(ctx.runtime).stop(id);
+		const row = await sessionRow(ctx.runtime, id);
+		// OBJ-14: the user's own stop writes `user`; a session retiring a member writes `objective`,
+		// which the lead may later resume. A session outside an objective records neither, and a
+		// session never overwrites the user's reason on a member the user already stopped.
+		const stoppedBy = ctx.caller.kind === "user" ? "user" : row.stopped_by === "user" ? "user" : row.objective_id !== null ? "objective" : null;
+		await sessionRuntime(ctx.runtime).stop(id, stoppedBy);
 		return shown(ctx, id);
 	},
 
 	"sessions.resume": async (ctx): Promise<HandlerResult> => {
 		const id = sessionId(ctx, ctx.params.id);
 		await authorizeControl(ctx, id);
+		const row = await sessionRow(ctx.runtime, id);
+		// OBJ-14: a member the user stopped is inert to the objective: no gate, condition, schedule,
+		// or lead revives it. The user resumes it themselves.
+		if (ctx.caller.kind !== "user" && row.stopped_by === "user") {
+			throw ApiError.forbidden(`session ${id} was stopped by the user; only the user may resume it`, { session: id });
+		}
 		await sessionRuntime(ctx.runtime).resume(id);
 		return shown(ctx, id);
 	},

@@ -25,7 +25,9 @@ import {
 	type UsageState,
 } from "@earendil-works/pi-durable";
 import { ApiError } from "../api/errors.ts";
-import { assertObjectiveOpen } from "../objectives/state.ts";
+import { admitRun, recordBudgetHold, recordRunEnded } from "../objectives/hold.ts";
+import { objectivePaused } from "../objectives/limits.ts";
+import { assertObjectiveOpen, objectiveRow } from "../objectives/state.ts";
 import { wakeRequestId, type PendingWake } from "../db/outbox.ts";
 import { indexSessionRun, type TranscriptEntry } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
@@ -60,6 +62,9 @@ export interface SessionRow {
 	created_at: number;
 	updated_at: number;
 	cost_usd: number;
+	objective_id: string | null;
+	stopped_by: "user" | "objective" | null;
+	hold_until: number | null;
 	scratch_removed_at?: number | null;
 	scratch_removed_bytes?: number | null;
 }
@@ -158,11 +163,18 @@ export class SessionRuntime {
 				// by accident. The throw rolls back the append with it.
 				await assertObjectiveOpen(tx, event.recipientId);
 				if (event.requestId === null) return;
-				if (await overDomainBudget(tx, runtime)) {
-					// LIM-03: no new runs today. The delivery stays unread with no wake request, so
-					// `deliverHeld` finds it at the next local day.
+				// OBJ-18..OBJ-24: one admission choke point decides whether the run may start. A held
+				// or refused delivery stays unread with no wake, so `deliverHeld` finds it when the
+				// hold lifts or the next local day turns; the gate records why on `objective_events`.
+				const admission = await admitRun(tx, runtime, event.recipientId, {
+					kind: "delivery",
+					deliveryId: event.deliveryId,
+					messageId: event.messageId,
+				});
+				if (!admission.admit) {
 					await tx.run("UPDATE deliveries SET wake_request_id = NULL WHERE id = ?", event.deliveryId);
-					this.#armRollover();
+					// LIM-03 and OBJ-20: held mail is retried when the local day turns.
+					if (admission.condition === "domain_budget" || admission.condition === "budget_day") this.#armRollover();
 					return;
 				}
 				await wakeDelivery(tx, runtime, {
@@ -189,6 +201,8 @@ export class SessionRuntime {
 			   JOIN messages m ON m.id = d.message_id
 			  WHERE d.read_at IS NULL AND d.wake_request_id IS NULL AND d.wake_submission_id IS NULL
 			    AND s.conversation_id IS NOT NULL AND s.state NOT IN ('stopped', 'archived')
+			    -- OBJ-18: a hold wake owns its lead's release, so the budget rollover leaves it alone.
+			    AND s.hold_until IS NULL
 			    ${sessionId === undefined ? "" : "AND s.id = ?"}
 			  ORDER BY m.created_at, m.seq, d.id`,
 			...(sessionId === undefined ? [] : [sessionId]),
@@ -196,9 +210,11 @@ export class SessionRuntime {
 		let delivered = 0;
 		for (const row of rows) {
 			const done = await db.atomically(async (tx) => {
-				if (await overDomainBudget(tx, this.runtime)) return false;
 				const current = await tx.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", row.recipient_id);
 				if (current?.state === "stopped" || current?.state === "archived") return true;
+				// OBJ-23: the same gate that holds a fresh delivery also holds mail retried here.
+				const admission = await admitRun(tx, this.runtime, row.recipient_id, { kind: "delivery", deliveryId: row.id, messageId: row.message_id });
+				if (!admission.admit) return admission.condition === "domain_budget" || admission.condition === "budget_day" ? false : "skipped";
 				// A fresh request ID: the delivery's first one may already name a settled submission.
 				const requestId = `${wakeRequestId(row.id)}:${this.runtime.newId()}`;
 				await tx.run("UPDATE deliveries SET wake_request_id = ? WHERE id = ?", requestId, row.id);
@@ -212,7 +228,7 @@ export class SessionRuntime {
 				delivered++;
 				return true;
 			});
-			if (!done) {
+			if (done === false) {
 				this.#armRollover();
 				break;
 			}
@@ -243,12 +259,26 @@ export class SessionRuntime {
 
 	// --- Stop and resume (STA-04, STA-05) ----------------------------------------
 
-	async stop(sessionId: string): Promise<void> {
+	/**
+	 * STA-04, OBJ-14: stop the session and record who did it. `user` is the user's own stop; a
+	 * session stopping a member it created writes `objective`. A member the user stopped is inert
+	 * to the objective until the user resumes it.
+	 */
+	async stop(sessionId: string, stoppedBy: "user" | "objective" | null = null): Promise<void> {
 		const { db, harness } = this.runtime;
 		const session = await db.get<SessionRow>("SELECT * FROM sessions WHERE id = ?", sessionId);
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") throw ApiError.stale(`session ${sessionId} is archived`, { session: sessionId });
-		await db.write((tx) => setSessionState(tx, this.runtime, { sessionId, state: "stopped", from: UNARCHIVED_STATES }));
+		await db.write(async (tx) => {
+			await setSessionState(tx, this.runtime, { sessionId, state: "stopped", from: UNARCHIVED_STATES });
+			// OBJ-18: a stopped session is not waiting on a hold any more.
+			await tx.run(
+				"UPDATE sessions SET stopped_by = ?, hold_until = NULL, updated_at = ? WHERE id = ?",
+				stoppedBy,
+				this.runtime.clock.now(),
+				sessionId,
+			);
+		});
 		if (session.conversation_id === null) return;
 		const conversation = await harness.conversation(session.conversation_id as ConversationId, ctx);
 		if (!conversation) return;
@@ -277,7 +307,11 @@ export class SessionRuntime {
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") throw ApiError.stale(`session ${sessionId} is archived`, { session: sessionId });
 		if (session.state === "stopped") {
-			await db.write((tx) => setSessionState(tx, this.runtime, { sessionId, state: "idle", from: ["stopped"] }));
+			await db.write(async (tx) => {
+				await setSessionState(tx, this.runtime, { sessionId, state: "idle", from: ["stopped"] });
+				// OBJ-14: a resumed member is no longer recorded as stopped by anyone.
+				await tx.run("UPDATE sessions SET stopped_by = NULL, hold_until = NULL, updated_at = ? WHERE id = ?", this.runtime.clock.now(), sessionId);
+			});
 		}
 		if (await overDomainBudget(db, this.runtime)) {
 			this.#armRollover();
@@ -380,6 +414,8 @@ export class SessionRuntime {
 
 		const changed = await db.write(async (tx) => {
 			await indexSessionRun(tx, { sessionId: session.id, entries: transcriptText(entries) });
+			// OBJ-18, OBJ-19: the quiet interval and the run rollup read when a run ended.
+			await recordRunEnded(tx, this.runtime, session, next);
 			return setSessionState(tx, this.runtime, { sessionId: session.id, state: next, from: LIVE_STATES });
 		});
 
@@ -442,6 +478,35 @@ export class SessionRuntime {
 			});
 			this.#armRollover();
 		}
+		// OBJ-20, OBJ-21: the objective's own budget may have crossed, the lead included.
+		if (update.objectiveId !== null) await this.enforceObjectiveBudget(update.objectiveId);
+	}
+
+	/**
+	 * OBJ-20, OBJ-21: at or over an objective's budget no run starts, running members stop with
+	 * `stopped_by: objective`, one notice says why, and the day budget sets a wake at the next
+	 * local day. The lifetime budget sets no wake: it holds until the user acts.
+	 */
+	async enforceObjectiveBudget(objectiveId: string): Promise<void> {
+		const { db } = this.runtime;
+		const row = await objectiveRow(db, objectiveId);
+		if (!row || row.phase !== "active") return;
+		const paused = await objectivePaused(db, this.runtime, row);
+		// OBJ-22: the domain budget refuses new runs but stops nothing; LIM-03 already owns it.
+		if (paused === null || paused === "domain_budget") return;
+		const running = await db.all<{ id: string; stopped_by: "user" | "objective" | null }>(
+			"SELECT id, stopped_by FROM sessions WHERE objective_id = ? AND state IN ('running', 'waiting')",
+			objectiveId,
+		);
+		for (const member of running) {
+			if (member.stopped_by === "user") continue;
+			try {
+				await this.stop(member.id, "objective");
+			} catch (error) {
+				this.#report(error, "objective budget stop");
+			}
+		}
+		await db.write((tx) => recordBudgetHold(tx, this.runtime, row, paused));
 	}
 }
 

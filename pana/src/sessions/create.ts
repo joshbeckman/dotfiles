@@ -18,7 +18,8 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { addressList, createThread, messageBody, type ThreadResult } from "../threads/store.ts";
-import { assertObjectiveOpen } from "../objectives/state.ts";
+import { memberCreateGate } from "../objectives/hold.ts";
+import { assertObjectiveOpen, objectiveUrl, recordObjectiveEvent } from "../objectives/state.ts";
 import { overDomainBudget } from "./budget.ts";
 import type { SessionRow } from "./runtime.ts";
 import { setSessionState } from "./state.ts";
@@ -197,7 +198,7 @@ export interface CreatedSession extends ThreadResult {
 export const DEFAULT_THINKING = "medium";
 
 export async function createSession(runtime: Runtime, caller: Caller, input: CreateSessionInput): Promise<CreatedSession> {
-	const prompt = messageBody(input.prompt);
+	let prompt = messageBody(input.prompt);
 	const to = addressList(input.to, "recipients");
 	const subject = optionalString(input.subject, "subject");
 	const profileName = optionalString(input.profile, "profile") ?? DEFAULT_PROFILE;
@@ -212,14 +213,23 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	const chosen = selection(runtime, profile, profileName);
 
 	let parent: { id: string; depth: number; objective_id: string | null } | undefined;
+	// OBJ-16: the per-run member cap needs the run the create belongs to.
+	let objectiveRun: string | null = null;
 	if (caller.kind === "session") {
 		parent = await runtime.db.get<{ id: string; depth: number; objective_id: string | null }>(
 			"SELECT id, depth, objective_id FROM sessions WHERE id = ?",
 			caller.id,
 		);
 		if (!parent) throw ApiError.notFound(`session ${caller.id}`);
-		// OBJ-07: a member of a closed objective accepts no member create.
-		if (parent.objective_id !== null) await assertObjectiveOpen(runtime.db, parent.id);
+		if (parent.objective_id !== null) {
+			// OBJ-07: a member of a closed objective accepts no member create.
+			await assertObjectiveOpen(runtime.db, parent.id);
+			// OBJ-13..OBJ-16, OBJ-20, OBJ-21: only the lead creates members, within the roster and
+			// per-run caps, and never for a paused objective.
+			objectiveRun = (await memberCreateGate(runtime.db, runtime, parent.objective_id, parent.id)).run;
+			// OBJ-15: a session created for an objective carries the objective URL in its prompt.
+			prompt = `Objective: ${objectiveUrl(runtime, parent.objective_id)}\n\n${prompt}`;
+		}
 		// LIM-01: a session at the cap cannot create sessions.
 		if (parent.depth >= runtime.config.spawnDepth) {
 			throw ApiError.overBudget(`session ${caller.id} is at the spawn depth limit (${runtime.config.spawnDepth})`, {
@@ -282,6 +292,14 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 			now,
 			now,
 		);
+		if (parent?.objective_id != null) {
+			await recordObjectiveEvent(tx, runtime, {
+				objectiveId: parent.objective_id,
+				kind: "member.created",
+				actorId: caller.id,
+				detail: { session: parent.id, member: id, run: objectiveRun },
+			});
+		}
 	});
 
 	let thread: ThreadResult;
