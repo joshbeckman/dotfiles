@@ -5,7 +5,8 @@
 // `exec` to drop that inheritance, so the child sees exactly the variables built here.
 
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result, ExecutionError } from "@earendil-works/pi-durable/env";
+import { err, ExecutionError, FileError } from "@earendil-works/pi-durable/env";
+import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
 import { homedir, userInfo } from "node:os";
 import { existsSync } from "node:fs";
@@ -15,6 +16,15 @@ import { memoryFor } from "../memory/handlers.ts";
 import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { browserScope } from "./browser.ts";
+import type { CheckoutGuard } from "../config/index.ts";
+import {
+	blockedCheckout,
+	checkoutCommandRefusal,
+	primaryCheckoutRefusal,
+	primaryCheckouts,
+	realPath,
+	under,
+} from "./checkouts.ts";
 
 /** The only variables a pana session's commands see. Git config is left to the repository. */
 export const PANA_ENV_NAMES = [
@@ -42,6 +52,10 @@ export interface PanaEnvOptions {
 	scratchDir?: string;
 	/** Overrides `HOME`, for a host whose session home differs from panad's. Default: panad's `HOME`. */
 	home?: string;
+	/** GUARD-01/06: how hard to keep a session out of the user's checkouts. `tools.protectCheckouts`. */
+	protectCheckouts?: CheckoutGuard;
+	/** Where to scan for primary checkouts (GUARD-04). HOME by default; a test names its own root. */
+	checkoutRoots?: readonly string[];
 }
 
 export const PANA_BIN = fileURLToPath(new URL("../../bin", import.meta.url));
@@ -83,29 +97,159 @@ function fallbackUser(): string {
 	}
 }
 
+/** The shell `unshare` runs a wrapped command in: bash where the machine has it, as pi-durable picks. */
+const SHELL = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+
+/** Quote a path for the mount prologue. Paths come from a scan, but a `'` in one would still break it. */
+function quote(path: string): string {
+	return `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * GUARD-02: the command, run in a mount namespace of its own with every primary checkout bound
+ * read-only. A command cannot write to a read-only mount, so no pattern of `bash` defeats this.
+ *
+ * The mounts are set up inside the same shell that runs the command, before it: `unshare` needs
+ * no root (`--map-root-user` maps the caller to uid 0 inside the namespace), and the bind of a
+ * mount point onto itself followed by a read-only remount is the classic way to make an existing
+ * directory read-only without moving it.
+ */
+export function namespaced(mounts: readonly string[], command: string | readonly string[]): string[] {
+	const prologue = mounts
+		.map((path) => `mount --bind ${quote(path)} ${quote(path)} && mount -o remount,bind,ro ${quote(path)} || true`)
+		.join("; ");
+	if (typeof command === "string") return ["unshare", "--map-root-user", "--mount", SHELL, "-c", `${prologue}\n${command}`];
+	return ["unshare", "--map-root-user", "--mount", SHELL, "-c", `${prologue}\nexec "$@"`, "pana", ...command];
+}
+
+/**
+ * Whether the wrapper itself is what failed: no `unshare` (macOS), or user namespaces off.
+ * The command is then run once more unwrapped, and the interpreter is not tried again.
+ */
+function namespaceUnavailable(error: ExecutionError): boolean {
+	return error.code === "spawn_error" && /unshare/i.test(error.message);
+}
+
 /** A local environment whose commands see only `panaShellEnv`, never panad's own variables. */
 export class PanaExecutionEnv extends NodeExecutionEnv {
 	readonly panaEnv: Record<string, string>;
+	/** The session's own cwd: writes under it are the session's business, even in a checkout (GUARD-05). */
+	readonly sessionCwd: string;
+	/** The session's HOME, which is what `~` means in its commands. */
+	readonly home: string;
+	readonly protectCheckouts: CheckoutGuard;
+	/** GUARD-04: the roots the read-only scan covers. */
+	readonly checkoutRoots: readonly string[];
+	/** undefined until the first wrapped command says whether this machine can make a namespace. */
+	private namespace: boolean | undefined = undefined;
 
 	constructor(options: PanaEnvOptions) {
 		super({ cwd: options.cwd });
 		this.panaEnv = panaShellEnv(options);
+		this.sessionCwd = realPath(options.cwd);
+		this.home = options.home ?? homedir();
+		this.protectCheckouts = options.protectCheckouts ?? "guard";
+		this.checkoutRoots = options.checkoutRoots ?? [homedir()];
 	}
 
-	override exec(
+	/** GUARD-01: the refusal for a write to `path`, or undefined when the write may proceed. */
+	private refusal(path: string): string | undefined {
+		if (this.protectCheckouts === "off") return undefined;
+		const root = blockedCheckout(path, this.sessionCwd);
+		return root === undefined ? undefined : primaryCheckoutRefusal(path, root);
+	}
+
+	override async writeFile(path: string, content: string | Uint8Array, context: Context): Promise<Result<void, FileError>> {
+		const refusal = this.refusal(path);
+		if (refusal !== undefined) return err(new FileError("permission_denied", refusal, path));
+		return super.writeFile(path, content, context);
+	}
+
+	override async appendFile(path: string, content: string | Uint8Array, context: Context): Promise<Result<void, FileError>> {
+		const refusal = this.refusal(path);
+		if (refusal !== undefined) return err(new FileError("permission_denied", refusal, path));
+		return super.appendFile(path, content, context);
+	}
+
+	override async truncateFile(path: string, size: number, context: Context): Promise<Result<void, FileError>> {
+		const refusal = this.refusal(path);
+		if (refusal !== undefined) return err(new FileError("permission_denied", refusal, path));
+		return super.truncateFile(path, size, context);
+	}
+
+	override async renameFile(
+		sourcePath: string,
+		destinationPath: string,
+		context: Context,
+	): Promise<Result<void, FileError>> {
+		const refusal = this.refusal(sourcePath) ?? this.refusal(destinationPath);
+		if (refusal !== undefined) return err(new FileError("permission_denied", refusal, sourcePath));
+		return super.renameFile(sourcePath, destinationPath, context);
+	}
+
+	override async remove(
+		path: string,
+		options: { recursive?: boolean; force?: boolean } | undefined,
+		context: Context,
+	): Promise<Result<void, FileError>> {
+		const refusal = this.refusal(path);
+		if (refusal !== undefined) return err(new FileError("permission_denied", refusal, path));
+		return super.remove(path, options, context);
+	}
+
+	override async createDir(
+		path: string,
+		options: { recursive?: boolean } | undefined,
+		context: Context,
+	): Promise<Result<void, FileError>> {
+		const refusal = this.refusal(path);
+		if (refusal !== undefined) return err(new FileError("permission_denied", refusal, path));
+		return super.createDir(path, options, context);
+	}
+
+	/** The user's checkouts this session may not write, a scan that is cached for ten minutes (GUARD-04). */
+	private checkouts(): string[] {
+		if (this.protectCheckouts === "off") return [];
+		return primaryCheckouts({ roots: this.checkoutRoots }).filter((root) => !under(root, this.sessionCwd));
+	}
+
+	/** GUARD-02: the checkouts to bind read-only, which is every one the session may not write. */
+	private mounts(): string[] {
+		if (this.protectCheckouts !== "sandbox" || this.namespace === false) return [];
+		return primaryCheckouts({ roots: this.checkoutRoots }).filter((root) => !under(root, this.sessionCwd));
+	}
+
+	override async exec(
 		command: string | readonly string[],
 		options: ShellExecOptions | undefined,
 		context: Context,
 	): Promise<Result<ShellExecResult, ExecutionError>> {
-		return super.exec(
-			command,
-			{
-				...options,
-				inheritEnv: false,
-				env: { ...this.panaEnv, ...options?.env },
-			},
-			context,
-		);
+		const execOptions = {
+			...options,
+			inheritEnv: false,
+			env: { ...this.panaEnv, ...options?.env },
+		};
+		// GUARD-06: the admission check every call gets, which costs string work rather than a
+		// process. `sandbox` adds GUARD-02's mounts on top, for what the check cannot see.
+		if (this.protectCheckouts !== "off") {
+			const refusal = checkoutCommandRefusal(typeof command === "string" ? command : command.join(" "), {
+				cwd: this.cwd,
+				home: this.home,
+				checkouts: this.checkouts(),
+			});
+			if (refusal !== undefined) return err(new ExecutionError("unknown", refusal));
+		}
+		const mounts = this.mounts();
+		if (mounts.length === 0) return super.exec(command, execOptions, context);
+		const result = await super.exec(namespaced(mounts, command), execOptions, context);
+		if (result.ok || !namespaceUnavailable(result.error)) {
+			if (result.ok) this.namespace = true;
+			return result;
+		}
+		// No `unshare` on this host (macOS), or user namespaces are off: the file tools still guard
+		// (GUARD-01), and a `bash` call runs as it did before, once. The next call skips the wrapper.
+		this.namespace = false;
+		return super.exec(command, execOptions, context);
 	}
 }
 
@@ -140,6 +284,7 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 			sessionId: row?.id,
 			scratchDir: scratch,
 			stateDir: runtime.paths.dir,
+			protectCheckouts: runtime.config.tools.protectCheckouts,
 		});
 	};
 }

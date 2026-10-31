@@ -10,6 +10,7 @@ import { handlers as search } from "../search/handlers.ts";
 import { handlers as sessions } from "../sessions/handlers.ts";
 import { handlers as threads } from "../threads/handlers.ts";
 import { handlers as web } from "../web/handlers.ts";
+import { handlers as worktrees } from "../worktrees/handlers.ts";
 
 export const defaultHandlers: Handlers = {
 	...threads,
@@ -21,4 +22,5 @@ export const defaultHandlers: Handlers = {
 	...search,
 	...push,
 	...web,
+	...worktrees,
 };
