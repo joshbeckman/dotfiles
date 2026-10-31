@@ -197,16 +197,17 @@ export async function escalationHold(
 	db: SqliteExecutor,
 	runtime: Runtime,
 	sessionId: string,
-): Promise<{ escalation: EscalationRow; view: EscalationView } | undefined> {
+): Promise<{ escalation: EscalationRow; view: EscalationView; lead: boolean } | undefined> {
 	const session = await db.get<{ objective_id: string | null }>("SELECT objective_id FROM sessions WHERE id = ?", sessionId);
 	if (session?.objective_id === null || session?.objective_id === undefined) return undefined;
 	const objective = await objectiveRow(db, session.objective_id);
 	if (objective === undefined || objective.phase !== "active") return undefined;
 	const open = await openEscalations(db, runtime, objective.id);
 	if (open.length === 0) return undefined;
-	if (objective.lead_id === sessionId) return { escalation: open[0]!, view: escalationView(runtime, open[0]!) };
+	const lead = objective.lead_id === sessionId;
+	if (lead) return { escalation: open[0]!, view: escalationView(runtime, open[0]!), lead };
 	const scoped = open.find((row) => row.member_id === sessionId);
-	return scoped === undefined ? undefined : { escalation: scoped, view: escalationView(runtime, scoped) };
+	return scoped === undefined ? undefined : { escalation: scoped, view: escalationView(runtime, scoped), lead };
 }
 
 export interface ClearEscalationsOptions {

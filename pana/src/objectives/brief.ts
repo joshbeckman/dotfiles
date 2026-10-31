@@ -9,18 +9,21 @@
 // its profile, its working directory, and the credentials its `bash` carries (ISO-03), so the
 // member roster names each member's profile. No code path reads `Scope` as a permission check.
 //
-// Fields owned by packages landing beside this one are rendered when their rows exist and marked
-// where they do not: the daily cost ledger (`objective_costs`, obj/lead-limits), the metric
-// aggregation (`metric_readings`' latest value is OBJ-32's "latest value"; OBJ-27's windowed
-// aggregate is obj/metrics), and the report rows (obj/metrics). None of them is invented here.
+// Money, lead runs, user messages, and the hold are `limits.ts`' answers, and each metric's value is
+// `metrics.ts`' aggregation: this file renders them and never counts or averages on its own, so the
+// briefing cannot disagree with the gate that stopped a run or the chart a reader sees. The report
+// rows are the one field still owned by a package landing later (obj/metrics' report writes).
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
-import { localDay } from "../sessions/budget.ts";
+import { nextDayStart } from "../sessions/budget.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { heldDeliveries } from "./hold.ts";
+import { objectiveConditions, type ObjectiveConditions } from "./limits.ts";
+import { listMetrics, type MetricView } from "./metrics.ts";
 import { CHARTER_SECTIONS, type CharterSection, type ObjectiveMemberRow, type ObjectiveRow } from "./schema.ts";
 import { objectiveMembers, objectiveState, objectiveUrl, sessionUrl } from "./state.ts";
 import { charterSections, type CharterRevisionRow } from "./charter.ts";
-import { escalationView, openEscalations, type EscalationView } from "./escalation.ts";
+import { escalationView, openEscalations } from "./escalation.ts";
 
 /** The first line of every briefing. A handoff message is recognised by it, so a lead's own
  * briefing is not prepended a second time to the run that carries it (see `leadRunInput`). */
@@ -85,76 +88,33 @@ function money(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
 
-interface MemberSpend {
-	leadRunsToday: number;
-	leadRunsTotal: number;
-	costTotal: number;
-	costToday: number;
-}
-
 /**
- * Money and lead runs for the objective. Lifetime money is the sum of every session's cost
- * (`sessions.cost_usd`, which OBJ-15's rollup always includes the lead in). Today's money reads
- * `objective_costs`, the per-local-day ledger `obj/lead-limits` keeps (OBJ-20); until that package
- * writes it, today reads zero and the total is still right. Lead runs are the lead's deliveries
- * that a run carried, which is one run per delivery OBJ-18 does not coalesce; `obj/lead-limits`
- * owns the exact count OBJ-19 caps and should replace `leadRunCounts` when it lands.
+ * OBJ-20..OBJ-24: money today and in total, lead runs today, and messages to the user today, all
+ * from `limits.ts` — the same reads the admission gate and the objective view use. `held` counts the
+ * deliveries `hold.ts` would release: unread, with no run carrying them.
  */
-async function spendOf(db: SqliteExecutor, runtime: Runtime, row: ObjectiveRow): Promise<MemberSpend> {
-	const total = await db.get<{ total: number }>("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM sessions WHERE objective_id = ?", row.id);
-	const todayRow = await db.get<{ total: number }>("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM objective_costs WHERE objective_id = ? AND day = ?", row.id, localDay(runtime.clock.now(), runtime.config.timezone));
-	return { costTotal: total?.total ?? 0, costToday: todayRow?.total ?? 0, ...(await leadRunCounts(db, runtime, row)) };
-}
-
-async function leadRunCounts(db: SqliteExecutor, runtime: Runtime, row: ObjectiveRow): Promise<{ leadRunsToday: number; leadRunsTotal: number }> {
-	if (row.lead_id === null) return { leadRunsToday: 0, leadRunsTotal: 0 };
-	const start = localDayStart(runtime);
-	const total = await db.get<{ n: number }>("SELECT count(*) AS n FROM deliveries WHERE recipient_id = ? AND wake_submission_id IS NOT NULL", row.lead_id);
-	const today = await db.get<{ n: number }>(
-		"SELECT count(*) AS n FROM deliveries WHERE recipient_id = ? AND wake_submission_id IS NOT NULL AND created_at >= ?",
-		row.lead_id,
-		start,
+async function conditionsOf(
+	db: SqliteExecutor,
+	runtime: Runtime,
+	row: ObjectiveRow,
+	members: readonly ObjectiveMemberRow[],
+): Promise<ObjectiveConditions & { held: number; leadRunsTotal: number }> {
+	const conditions = await objectiveConditions(db, runtime, row);
+	let held = 0;
+	for (const member of members) held += (await heldDeliveries(db, member.id)).length;
+	// OBJ-19's limit is per day; the lifetime count is history, not a limit, and comes from the
+	// same `run.started` events the daily count uses rather than a second definition of a run.
+	const total = await db.get<{ n: number }>(
+		"SELECT COUNT(*) AS n FROM objective_events WHERE objective_id = ? AND kind = 'run.started' AND json_extract(detail, '$.lead') = 1",
+		row.id,
 	);
-	return { leadRunsTotal: total?.n ?? 0, leadRunsToday: today?.n ?? 0 };
+	return { ...conditions, held, leadRunsTotal: total?.n ?? 0 };
 }
 
-/** The first millisecond of the local day, by search, the way the budget day is found (LIM-03). */
-function localDayStart(runtime: Runtime): number {
-	const now = runtime.clock.now();
-	const day = localDay(now, runtime.config.timezone);
-	let lo = now - 26 * 3_600_000;
-	let hi = now;
-	while (hi - lo > 1000) {
-		const mid = Math.floor((lo + hi) / 2);
-		if (localDay(mid, runtime.config.timezone) === day) hi = mid;
-		else lo = mid;
-	}
-	return hi;
-}
-
-interface MetricBrief {
-	name: string;
-	unit: string;
-	direction: "up" | "down";
-	target: number | null;
-	latest: { value: number; at: number; source: string } | null;
-}
-
-async function metricsOf(db: SqliteExecutor, objectiveId: string): Promise<MetricBrief[]> {
-	const metrics = await db.all<{ name: string; unit: string; direction: "up" | "down"; target: number | null }>(
-		"SELECT name, unit, direction, target FROM objective_metrics WHERE objective_id = ? ORDER BY name",
-		objectiveId,
-	);
-	const out: MetricBrief[] = [];
-	for (const metric of metrics) {
-		const latest = await db.get<{ value: number; at: number; source: string }>(
-			"SELECT value, at, source FROM metric_readings WHERE objective_id = ? AND name = ? ORDER BY at DESC, id DESC LIMIT 1",
-			objectiveId,
-			metric.name,
-		);
-		out.push({ ...metric, latest: latest ?? null });
-	}
-	return out;
+/** OBJ-25..OBJ-28: every metric as `metrics.ts` derives it, current value and target included. */
+async function metricsOf(runtime: Runtime, row: ObjectiveRow): Promise<{ metrics: MetricView[]; atTarget: { count: number; of: number } }> {
+	const listed = await listMetrics(runtime, row.id);
+	return { metrics: listed.metrics, atTarget: listed.atTarget };
 }
 
 interface WakeBrief {
@@ -195,18 +155,6 @@ async function lastReports(db: SqliteExecutor, objectiveId: string): Promise<Rep
 	return rows.map((row) => ({ id: row.id, at: row.created_at, body: row.body, redacted: row.redacted === 1 }));
 }
 
-async function heldDeliveries(db: SqliteExecutor, members: readonly ObjectiveMemberRow[]): Promise<number> {
-	if (members.length === 0) return 0;
-	const ids = members.map((member) => member.id);
-	const row = await db.get<{ n: number }>(
-		`SELECT count(*) AS n FROM deliveries
-		  WHERE recipient_id IN (${ids.map(() => "?").join(",")})
-		    AND read_at IS NULL AND wake_submission_id IS NULL`,
-		...ids,
-	);
-	return row?.n ?? 0;
-}
-
 function limitLine(label: string, spent: number, limit: number | null, unit: (value: number) => string): string {
 	return limit === null ? `${label}: ${unit(spent)} (no limit)` : `${label}: ${unit(spent)} of ${unit(limit)}`;
 }
@@ -219,13 +167,11 @@ export async function leadBriefing(runtime: Runtime, row: ObjectiveRow, options:
 	const url = objectiveUrl(runtime, row.id);
 	const members = (await objectiveMembers(db, row.id)).map((member) => ({ ...member, lead: member.id === row.lead_id }));
 	const sections = await charterSections(db, row.id);
-	const spend = await spendOf(db, runtime, row);
-	const metrics = await metricsOf(db, row.id);
+	const conditions = await conditionsOf(db, runtime, row, members);
+	const metrics = await metricsOf(runtime, row);
 	const wakes = await pendingWakes(db, members);
 	const escalations = (await openEscalations(db, runtime, row.id)).map((open) => escalationView(runtime, open));
 	const reports = await lastReports(db, row.id);
-	const held = await heldDeliveries(db, members);
-	const lead = members.find((member) => member.lead);
 
 	const lines: string[] = [BRIEF_TITLE, ""];
 	const state = await objectiveState(db, runtime, row);
@@ -263,10 +209,16 @@ export async function leadBriefing(runtime: Runtime, row: ObjectiveRow, options:
 			`${scope} escalation waits on the user at ${escalation.url} in ${escalation.thread.url} (raised ${iso(escalation.createdAt)}${escalation.timeoutAt === null ? ", no timeout" : `, times out ${iso(escalation.timeoutAt)}`}).`,
 		);
 	}
-	if (lead?.hold_until !== null && lead?.hold_until !== undefined && lead.hold_until > runtime.clock.now()) {
-		holding.push(`Your next run is held until ${iso(lead.hold_until)} (OBJ-18's quiet interval).`);
+	if (conditions.paused !== null) {
+		const resumes = conditions.paused === "budget_total" ? "until the user raises the budget or resumes it" : `until ${iso(nextDayStart(runtime.clock.now(), runtime.config.timezone))}`;
+		holding.push(`The objective is paused (${conditions.paused}): no run starts ${resumes}.`);
 	}
-	if (held > 0) holding.push(`${held} ${held === 1 ? "delivery is" : "deliveries are"} held, waiting for a run that may carry them.`);
+	if (conditions.holdUntil !== null && conditions.holdUntil > runtime.clock.now()) {
+		holding.push(`Your next run is held until ${iso(conditions.holdUntil)} (OBJ-18's quiet interval or a cap).`);
+	}
+	if (conditions.held > 0) {
+		holding.push(`${conditions.held} ${conditions.held === 1 ? "delivery is" : "deliveries are"} held, waiting for a run that may carry them.`);
+	}
 	lines.push(...(holding.length === 0 ? ["No holding condition."] : holding.map((line) => `- ${line}`)));
 
 	lines.push("", "## Charter", "");
@@ -284,28 +236,27 @@ export async function leadBriefing(runtime: Runtime, row: ObjectiveRow, options:
 	}
 
 	lines.push("", "## Limits and spend", "");
-	const limits = row;
-	lines.push(`- ${limitLine("Money today", spend.costToday, limits.max_daily_usd, money)}`);
-	lines.push(`- ${limitLine("Money in total", spend.costTotal, limits.max_total_usd, money)}`);
-	lines.push(`- ${limitLine("Lead runs today", spend.leadRunsToday, limits.max_daily_lead_turns, String)}`);
-	lines.push(`- Lead runs in total: ${spend.leadRunsTotal}`);
-	// OBJ-24's message count is obj/lead-limits' ledger; this build has no row to read, so it says so
-	// rather than claiming zero.
+	lines.push(`- ${limitLine("Money today", conditions.spendTodayUsd, conditions.maxDailyUsd, money)}`);
+	lines.push(`- ${limitLine("Money in total", conditions.spendTotalUsd, conditions.maxTotalUsd, money)}`);
+	lines.push(`- ${limitLine("Lead runs today", conditions.leadRunsToday, conditions.maxDailyLeadTurns, String)} (your runs that started today)`);
+	lines.push(`- Lead runs in total: ${conditions.leadRunsTotal}`);
 	lines.push(
-		`- Messages to the user today: not counted by this build (limit ${limits.max_daily_user_messages ?? runtime.config.objectives.maxDailyUserMessages})`,
+		`- ${limitLine("Messages to the user today", conditions.userMessagesToday, conditions.maxDailyUserMessages, String)} (sent by this objective's sessions)`,
 	);
 	lines.push(
-		`- Members active: ${members.filter((member) => member.state !== "stopped" && member.state !== "archived").length}${limits.max_active_members === null ? " (no limit)" : ` of ${limits.max_active_members}`}`,
+		`- Members active: ${members.filter((member) => member.state !== "stopped" && member.state !== "archived").length}${row.max_active_members === null ? " (no limit)" : ` of ${row.max_active_members}`}`,
 	);
-	lines.push(`- Quiet interval between your runs: ${limits.wake_min_minutes ?? runtime.config.objectives.wakeMinMinutes} minutes`);
-	lines.push(`- Held deliveries: ${held}`);
+	lines.push(`- Quiet interval between your runs: ${row.wake_min_minutes ?? runtime.config.objectives.wakeMinMinutes} minutes`);
+	lines.push(`- Held deliveries: ${conditions.held}`);
 
 	lines.push("", "## Metrics", "");
-	if (metrics.length === 0) lines.push("No metrics declared.");
-	for (const metric of metrics) {
-		const target = metric.target === null ? "no target (the infinite case)" : `target ${metric.target} ${metric.unit}`;
-		const latest = metric.latest === null ? "no readings yet" : `latest ${metric.latest.value} ${metric.unit} at ${iso(metric.latest.at)} (${metric.latest.source})`;
-		lines.push(`- ${metric.name} (${metric.direction} is progress): ${latest}; ${target}`);
+	if (metrics.metrics.length === 0) lines.push("No metrics declared.");
+	else lines.push(`At target: ${metrics.atTarget.count} of ${metrics.atTarget.of}.`);
+	for (const metric of metrics.metrics) {
+		const target = metric.targetDisplay === null ? "no target (the infinite case)" : `target ${metric.targetDisplay}`;
+		const current = metric.current.value === null ? "no readings in its window (stale)" : `${metric.current.display} as of ${iso(metric.current.at ?? runtime.clock.now())}`;
+		const at = metric.atTarget === null ? "" : metric.atTarget ? "; at target" : "; short of target";
+		lines.push(`- ${metric.name} (${metric.direction} is progress, ${metric.aggregation}${metric.window === null ? "" : ` over ${metric.window}`}): ${current}; ${target}${at}`);
 	}
 
 	lines.push("", "## Pending wakes", "");

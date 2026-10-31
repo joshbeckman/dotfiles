@@ -341,11 +341,11 @@ export class SessionRuntime {
 	}
 
 	/** STA-07: stop the session for good. Its threads become read-only. */
-	async archive(sessionId: string): Promise<void> {
+	async archive(sessionId: string, stoppedBy: "user" | "objective" | null = null): Promise<void> {
 		const session = await this.runtime.db.get<SessionRow>("SELECT state FROM sessions WHERE id = ?", sessionId);
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") return;
-		await this.stop(sessionId);
+		await this.stop(sessionId, stoppedBy);
 		await this.runtime.db.write((tx) =>
 			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
 		);

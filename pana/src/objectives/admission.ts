@@ -1,80 +1,48 @@
-// Run admission for an objective (OBJ-23, OBJ-33, OBJ-34): one question, asked wherever a run
-// would start, composed of every reason a run must wait.
+// The escalation half of run admission (OBJ-33, OBJ-34).
 //
-// `obj/lead-limits` owns the hold's *mechanics*: the quiet interval (OBJ-18), the budgets
-// (OBJ-20..22), and the lead-turn and message caps (OBJ-19, OBJ-24). It plugs in with
-// `configureObjectiveRunAdmission`, and this module calls it after the escalation reason, so an
-// escalation always holds the runs it covers even when lead-limits has also configured a hold.
+// `admitRun` in `hold.ts` is the one decision about whether a run may start. It asks this module
+// first, so an escalation the user owes an answer on outranks a budget pause or a turn cap, and it
+// answers in `admitRun`'s own shape (`RunAdmission`) rather than inventing a second one. There is
+// one gate over one decision; a caller that reaches `admitRun` — the delivery hook, retried mail,
+// a scheduled wake, a resume, a hold release — cannot start a covered run by another path.
 //
-// A held delivery stays unread and carries no wake request (`holdRun`), so `deliverHeld` delivers
-// it exactly once when the hold clears (OBJ-18's "held deliveries wait"). A path that starts a
-// run without a delivery — a scheduled wake, a hold's own wake — must ask `objectiveRunHold`
-// before it submits; `obj/lead-limits` owns those paths.
+// A held delivery stays unread with no wake request, so `deliverHeld` carries it exactly once when
+// the escalation clears (OBJ-18's "held deliveries wait"). Clearing happens in `escalation.ts`: a
+// user message in the objective's thread, or the charter's timeout.
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { Runtime } from "../server/runtime.ts";
-import { escalationHold, type EscalationRow, type EscalationView } from "./escalation.ts";
+import { escalationHold } from "./escalation.ts";
+import type { RunAdmission, RunIntent } from "./hold.ts";
 import { recordObjectiveEvent } from "./state.ts";
 
-/** What would start a run. `deliveryId` is present when a message is behind it. */
-export interface ObjectiveRunRequest {
-	sessionId: string;
-	deliveryId?: string;
-	threadId?: string;
-}
-
-/** Why a run may not start. `kind` names the condition; `detail` is what the brief and events show. */
-export interface RunHold {
-	kind: "escalation" | (string & {});
-	detail: Record<string, unknown>;
-	escalation?: { row: EscalationRow; view: EscalationView };
-}
-
 /**
- * OBJ-18..24: the admission `obj/lead-limits` supplies. Returning a hold holds the run; returning
- * nothing admits it. It may write through `tx`, which commits with the delivery it is holding.
+ * OBJ-33/34: does an open escalation hold this session's run? The lead is covered by either
+ * scope; a member only by an escalation that names it. Returns nothing when no escalation covers
+ * the session, so `admitRun` goes on to its own conditions.
  */
-export type ObjectiveRunAdmission = (tx: SqliteExecutor, runtime: Runtime, request: ObjectiveRunRequest) => Promise<RunHold | undefined>;
-
-const admissions = new WeakMap<Runtime, ObjectiveRunAdmission>();
-
-/** Replace the lead-limits half of admission. `obj/lead-limits` calls this before panad serves. */
-export function configureObjectiveRunAdmission(runtime: Runtime, admission: ObjectiveRunAdmission | undefined): void {
-	if (admission) admissions.set(runtime, admission);
-	else admissions.delete(runtime);
-}
-
-/** OBJ-33/34: an escalation always holds what it covers, whatever else is configured. */
-export async function objectiveRunHold(tx: SqliteExecutor, runtime: Runtime, request: ObjectiveRunRequest): Promise<RunHold | undefined> {
-	const escalation = await escalationHold(tx, runtime, request.sessionId);
-	if (escalation) {
-		return {
-			kind: "escalation",
-			detail: {
-				escalation: escalation.escalation.id,
-				scope: escalation.escalation.member_id === null ? "objective" : "member",
-				...(escalation.escalation.member_id === null ? {} : { member: escalation.escalation.member_id }),
-				session: request.sessionId,
-			},
-			escalation: { row: escalation.escalation, view: escalation.view },
-		};
-	}
-	return (await admissions.get(runtime)?.(tx, runtime, request)) ?? undefined;
-}
-
-/**
- * Hold a delivery: leave it unread and without a wake request, so no run starts for it now and a
- * later `deliverHeld` carries it exactly once. Records why (OBJ-23).
- */
-export async function holdRun(tx: SqliteExecutor, runtime: Runtime, request: ObjectiveRunRequest, hold: RunHold): Promise<void> {
-	const session = await tx.get<{ objective_id: string | null }>("SELECT objective_id FROM sessions WHERE id = ?", request.sessionId);
-	if (request.deliveryId !== undefined) {
-		await tx.run("UPDATE deliveries SET wake_request_id = NULL WHERE id = ?", request.deliveryId);
-	}
-	if (session?.objective_id === null || session?.objective_id === undefined) return;
+export async function objectiveRunHold(tx: SqliteExecutor, runtime: Runtime, sessionId: string, intent?: RunIntent): Promise<RunAdmission | undefined> {
+	const hold = await escalationHold(tx, runtime, sessionId);
+	if (hold === undefined) return undefined;
+	// OBJ-23/34: record why the run waited, naming the scope and the message the user answers.
 	await recordObjectiveEvent(tx, runtime, {
-		objectiveId: session.objective_id,
+		objectiveId: hold.escalation.objective_id,
 		kind: "run.held",
-		detail: { ...hold.detail, ...(request.deliveryId === undefined ? {} : { delivery: request.deliveryId }), ...(request.threadId === undefined ? {} : { thread: request.threadId }) },
+		detail: {
+			condition: "awaiting_user",
+			session: sessionId,
+			escalation: hold.escalation.id,
+			scope: hold.escalation.member_id === null ? "objective" : "member",
+			...(hold.escalation.member_id === null ? {} : { member: hold.escalation.member_id }),
+			...(intent?.deliveryId === undefined ? {} : { delivery: intent.deliveryId }),
+		},
 	});
+	return {
+		admit: false,
+		objectiveId: hold.escalation.objective_id,
+		lead: hold.lead,
+		condition: "awaiting_user",
+		// A timeout is when the hold lifts by itself; without one the user's answer is the only exit.
+		...(hold.escalation.timeout_at === null ? {} : { until: hold.escalation.timeout_at }),
+	};
 }

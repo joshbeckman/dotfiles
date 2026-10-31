@@ -49,12 +49,11 @@ it("OBJ-32 the brief carries the goal, phase, charter, roster, spend, metrics, w
 			objective.id,
 			now,
 		);
-		await tx.run(
-			"INSERT INTO objective_costs (day, objective_id, cost_usd) VALUES (?, ?, 1.25)",
-			new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now)),
-			objective.id,
-		);
-		await tx.run("UPDATE sessions SET cost_usd = 2.5 WHERE id = ?", lead);
+		// OBJ-20/21: today and lifetime spend both come from the per-day ledger (limits.ts).
+		const day = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now));
+		const yesterday = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now - 86_400_000));
+		await tx.run("INSERT INTO objective_costs (day, objective_id, cost_usd) VALUES (?, ?, 1.25)", day, objective.id);
+		await tx.run("INSERT INTO objective_costs (day, objective_id, cost_usd) VALUES (?, ?, 1.25)", yesterday, objective.id);
 		// Five newer reports and one older than the window, so "the last five" is visible.
 		for (let index = 0; index < 6; index++) {
 			const messageId = t!.runtime.newId();
@@ -107,8 +106,12 @@ it("OBJ-32 the brief carries the goal, phase, charter, roster, spend, metrics, w
 	expect(text).toContain("Members active: 1 of 4");
 	expect(text).toContain("Quiet interval between your runs: 7 minutes");
 	expect(text).toContain("Held deliveries: 0");
-	expect(text).toContain("kilowatt-hours (down is progress): latest 210.5 kWh");
-	expect(text).toContain("target 200 kWh");
+	// OBJ-24's message count is limits.ts', and the escalation is one message to the user.
+	// Two messages so far: the first run's reply to the user, and the escalation.
+	expect(text).toContain("Messages to the user today: 2 of 10");
+	expect(text).toMatch(/kilowatt-hours \(down is progress, raw\): 210\.5 kWh as of /);
+	expect(text).toContain("target 200 kWh; short of target");
+	expect(text).toContain("At target: 0 of 1.");
 	expect(text).toContain(new Date(now + 3_600_000).toISOString());
 	expect(text).toContain("## Awaiting the user");
 	expect(text).toContain(escalated.body.escalation.url);
@@ -126,7 +129,7 @@ it("OBJ-32 the brief carries the goal, phase, charter, roster, spend, metrics, w
 	// A held delivery and a held run are both conditions the brief names.
 	await t!.runtime.db.write((tx) => tx.run("UPDATE deliveries SET read_at = NULL, wake_submission_id = NULL, wake_request_id = NULL WHERE recipient_id = ?", lead));
 	const held = await brief(objective.id);
-	expect(held).toMatch(/Held deliveries: \d+/);
+	expect(held).not.toContain("Held deliveries: 0");
 	await t!.runtime.db.write((tx) => tx.run("UPDATE sessions SET hold_until = ? WHERE id = ?", now + 600_000, lead));
 	expect(await brief(objective.id)).toContain(`Your next run is held until ${new Date(now + 600_000).toISOString()}`);
 
@@ -175,6 +178,8 @@ it("OBJ-37 the lead's prompt text says to coordinate, keep state in Notes, use m
 	expect(text).toContain("## Limits and spend");
 
 	// Every run starts with it: the next message's input begins with the briefing, then the mail.
+	// The quiet interval between lead runs (OBJ-18) has to pass first, or the message waits.
+	await t!.clock.advance(6 * 60_000);
 	await reply(t!, shown.thread!.id, "How is it going?");
 	await settle(t!);
 	const last = (await inputs(t!, lead)).filter((text) => text.length > 0).at(-1)!;

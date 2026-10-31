@@ -150,6 +150,6 @@ export async function regenerateLead(runtime: Runtime, caller: Caller, value: st
 	announce(runtime, "delivery", result, recipients);
 	// After the swap is durable: abort the old run, withdraw what it never answered, archive it and
 	// sweep its scratch (REF-02). A failure here leaves a stopped lead, never a second live one.
-	await sessionRuntime(runtime).archive(previousLead);
+	await sessionRuntime(runtime).archive(previousLead, "objective");
 	return showObjective(runtime, id);
 }

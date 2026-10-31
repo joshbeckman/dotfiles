@@ -72,6 +72,8 @@ it("OBJ-33 an escalation posts to the objective thread, marks the objective, and
 	expect((await events(t!, objective.id, "run.held")).length).toBeGreaterThan(0);
 
 	// A user message in the objective thread clears it, records why, and delivers what it held.
+	// The lead's quiet interval (OBJ-18) has passed by the time the user answers.
+	await t!.clock.advance(6 * 60_000);
 	const answer = await reply(t!, threadId, "Night tariff.");
 	expect(answer.status).toBe(200);
 	await settle(t!);
