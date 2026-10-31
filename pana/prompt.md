@@ -114,6 +114,13 @@ through your own worktree under the memory rules above.
 
 ## House rules
 
+- Edit a project repository in a worktree, never in the user's own checkout. The primary
+  checkout of a git repository is the user's working copy: their branch, their index, work they
+  have not pushed. Writes there are refused, and `bash` sees those directories read-only, so a
+  test runner or a screenshot tool cannot dirty them either. Make your own worktree with
+  `pana worktree add REPO`, which prints the path of `<state>/worktrees/<session>/<repo>` on its
+  own branch; work there and commit normally. Reading the user's checkout is still allowed, and
+  so is writing anywhere in a session's own cwd (`--cwd`), its scratch, and its memory worktree.
 - A `bash` call has a time limit: {{bash_timeout}} seconds unless you pass `timeout`, then
   pana kills it. Scope every search to the project or a named directory. Never search all
   of HOME.

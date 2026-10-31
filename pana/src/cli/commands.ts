@@ -538,6 +538,26 @@ export const COMMANDS: readonly CommandSpec[] = [
 	// commands there and not here.
 	...OBJECTIVE_COMMANDS,
 	{
+		path: ["worktree", "add"],
+		usage: "pana worktree add REPO [--branch NAME] [--name NAME]",
+		summary: "Create a worktree of a repository for this session and print its path",
+		flags: [
+			string("branch", "--branch NAME", "Branch to create (default: pana/<session>/<repo>)"),
+			string("name", "--name NAME", "Directory name under <state>/worktrees/<session>"),
+		],
+		positionals: [{ name: "REPO", param: "repo", required: true }],
+		request: (params) => ({
+			method: "POST",
+			path: "/worktrees",
+			body: compact({ repo: text(params, "repo"), branch: text(params, "branch"), name: text(params, "name") }),
+		}),
+		// Like `pana scratch`: the point is the path, so a shell can use it directly.
+		formatText: (value) => {
+			const path = (value as { path?: unknown } | null | undefined)?.path;
+			return typeof path === "string" ? `${path}\n` : renderText(value);
+		},
+	},
+	{
 		path: ["schedule", "session", "create"],
 		usage: 'pana schedule session create --cron "0 22 * * 1-5" --prompt TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 		altUsage: ["pana schedule session create --at 2026-10-25T18:26:14Z --prompt TEXT"],

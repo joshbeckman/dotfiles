@@ -31,6 +31,8 @@ export interface HttpConfig {
 export interface ToolsConfig {
 	/** The time limit of a `bash` call that names none of its own (ISO-05). */
 	bashTimeoutSec: number;
+	/** Keep the user's primary checkouts read-only for a session (GUARD-01); true unless turned off. */
+	protectCheckouts: boolean;
 }
 
 export interface ScratchConfig {
@@ -73,7 +75,7 @@ export const DEFAULTS = {
 	budget: { sessionUsd: 100, domainDailyUsd: 500 },
 	files: { maxBytes: 26214400 },
 	http: { port: 8766 },
-	tools: { bashTimeoutSec: 600 },
+	tools: { bashTimeoutSec: 600, protectCheckouts: true },
 	scratch: { ttlDays: 8 },
 	objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 } as const;
@@ -148,6 +150,8 @@ export function loadConfig(dir = stateDir()): Config {
 		},
 		tools: {
 			bashTimeoutSec: positive(tools.bashTimeoutSec, "tools.bashTimeoutSec") ?? DEFAULTS.tools.bashTimeoutSec,
+			protectCheckouts:
+				typeof tools.protectCheckouts === "boolean" ? tools.protectCheckouts : DEFAULTS.tools.protectCheckouts,
 		},
 		scratch: {
 			ttlDays: positive(scratch.ttlDays, "scratch.ttlDays", "days") ?? DEFAULTS.scratch.ttlDays,

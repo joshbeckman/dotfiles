@@ -38,7 +38,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 - [x] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
 - [x] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
-- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600), `scratch.ttlDays` (8), `scratch.maxTotalMB` (none).
+- [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600), `tools.protectCheckouts` (true), `scratch.ttlDays` (8), `scratch.maxTotalMB` (none).
 - [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `web-token`. `web-token` has mode 0600.
 - [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
@@ -99,6 +99,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/objectives/:id/artifacts` | link an uploaded file |
 | DELETE | `/objectives/:id/artifacts/:fileId` | unlink an uploaded file |
 | GET, POST | `/push/key`, `/push/subscriptions` | Web Push |
+| POST | `/worktrees` | a session makes a worktree of a repository (GUARD-03) |
 | GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake` |
 
 - [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`.
@@ -509,3 +510,20 @@ read, the way a thread's working chip is (UX-09).
 - [x] **OBJ-38** `pana objective --help` lists every command above (CLI-06), and each route in this package is added to `ROUTES` and to the SPEC API table when built (CONTRIBUTING, "Add a route"). Errors map by API-02, so a refused budget gate exits 5.
 - [x] **OBJ-39** The PWA has an Objectives section: a list with phase, derived state, holding condition, goal, lead, spend today, and runs today, and a view with the goal, charter, metrics chart, latest report, artifacts, member roster with live states linked to sessions (UX-09 events), money and run meters, pending wakes (WAK-08 shape), and the escalation. Launch, stop, regenerate, and charter edit are actions there. Objective URLs render as links everywhere (REF-08) and no view scrolls sideways at 390 px (MOB-01). Browser test: `OBJ-39 shows an objective's state, metrics, roster, and spend, and stops and regenerates it`.
 - [x] **OBJ-40** One test drives an objective's whole life against the faux model: launch, a member that works and reports, held deliveries coalescing into one lead run, a metric read by `--check`, a lead stopped mid-run, the stranded notice, the user's regenerate, the new lead waking on its schedule with the briefing, a budget gate that pauses and resumes at the next local day, and `done` waiting for the user's confirmation. It proves the layer is real: the objective survives its lead's death, wakes on its own, and says why it stopped.
+
+---
+
+## WP19: Project checkouts
+
+A session edits a worktree, never the user's primary checkout. A primary checkout is the user's
+own working copy: its branch, its index, and work it has not pushed. A session that edits it
+leaves changes the user never asked for, tests a build the user is not running (panad itself
+runs from one), and can commit to the user's branch by accident. A session in another agent's
+worktree or in its scratch is doing what it was told; a session in the user's checkout is not.
+
+- [x] **GUARD-01** The pana extension's file tools refuse to write into a primary checkout: a path whose nearest `.git`, resolving symlinks, is a directory. `writeFile`, `appendFile`, `truncateFile`, `renameFile` (both ends), `remove`, and `createDir` all refuse, returning `permission_denied` with a message that names the repository and `pana worktree add REPO`. A path inside a linked worktree (`.git` is a file) or a submodule is not a primary checkout. Symlinks resolve through their deepest existing ancestor, so `~/pana/web/app.js` is refused as `~/dotfiles/pana/web/app.js`.
+- [x] **GUARD-02** A session's `bash` runs in a mount namespace of its own: `unshare --map-root-user --mount`, with every primary checkout bind-mounted onto itself and remounted read-only before the command runs. The command cannot write to the checkout however it is spelled, so a test runner, a screenshot tool, or a shell redirect cannot dirty the user's tree. The namespace needs no root, and a session's worktree, scratch, memory worktree, `~/.npm`, and the panad socket keep working. Where `unshare` is absent (macOS) or user namespaces are off, the first wrapped command fails with `spawn_error`, the command runs again unwrapped, and that interpreter stops wrapping for the life of the process: GUARD-01 still applies there.
+- [x] **GUARD-03** `pana worktree add REPO [--branch NAME] [--name NAME]` (`POST /worktrees`, sessions only, 201 when created and 200 when reused) resolves `REPO` to its git top level, creates `<state>/worktrees/<session>/<name>`, and prints that path. The branch defaults to `pana/<session>/<name>`, and an existing branch of that name is reused rather than refused. It runs in panad because `git worktree add` writes the primary checkout's `.git`, which GUARD-02 mounts read-only: the one command a refused session needs is the one its own shell cannot run.
+- [x] **GUARD-04** The set of primary checkouts is a scan, not a config list: every directory with a `.git` directory under HOME to depth 4, skipping `node_modules`, `Library`, media and cache directories, and `.local` (pana's own state, whose worktrees are where writing belongs). The result is cached for ten minutes, so a repository cloned since panad started is protected within that window, and the scan costs one directory walk per ten minutes rather than per command.
+- [x] **GUARD-05** The escape hatch is the session's own cwd: a session created in a checkout (`--cwd /home/josh/dotfiles`, or that checkout's subdirectory) writes there and that checkout is not mounted read-only for it. `tools.protectCheckouts: false` in config.json turns the whole guard off, which a host without `unshare` and without a checkout to protect may want. `pana/prompt.md` tells every session to edit a repository in a worktree, to make one with `pana worktree add`, and that reads of the user's checkout are still allowed.
+
