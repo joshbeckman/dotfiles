@@ -103,3 +103,36 @@ work, not transfer size or server query cost. Run the large-thread regression wi
 ```sh
 npm run test:web -- test/browser/thread-window.spec.ts
 ```
+
+### Images in a thread
+
+A message body carries its pictures inline, and one page of messages can hold dozens
+of them, each a megabyte or more. The page therefore never waits for bytes:
+`renderMessage()` puts the prose, links, and tables in place and returns, and the
+files and Mermaid diagrams finish behind it. Three rules keep the bytes from
+stalling a thread:
+
+- **One queue.** Every message on the page shares a single line of six requests
+  (`FILE_CONCURRENCY`), so the picture the reader is looking at is not stuck behind
+  forty others on the same phone connection.
+- **Visible first.** An image is fetched when it comes within 800 px of the viewport
+  (`FILE_MARGIN`) and not before; the rest arrive as the reader scrolls to them.
+  Without `IntersectionObserver`, everything loads at once through the same queue.
+- **One copy per file.** `app.js` keeps a blob URL per file path for the life of the
+  window (`fileUrls`, capped at 256), and `GET /files/:id/:name` answers with
+  `cache-control: private, max-age=604800`, because a file's bytes never change. A
+  picture shown in three messages is one request, and reopening a thread costs none.
+
+On this host, a 20-message thread with two screen-sized photos per message, phone
+viewport, throttled to Slow 4G: first paint 49.5 s → 1.0 s, the pictures on screen
+49.5 s → 7.7 s, and a second visit in a fresh tab transferred 0 bytes instead of
+4.6 MB. The visible result is unchanged, which is why this change has no screenshot.
+Run the regression with:
+
+```sh
+npm run test:web -- test/browser/thread-images.spec.ts
+```
+
+Inline copies are only as small as the host's resizer makes them: with no `sips`,
+`magick`, or `convert` installed, `?w=1024` serves the original bytes (FIL-07), so a
+five-megabyte phone photo is still five megabytes. Install one to shrink them.

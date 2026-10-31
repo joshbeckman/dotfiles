@@ -159,7 +159,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
 - [x] **FIL-05** File bytes are never stored in SQLite.
 - [x] **FIL-06** Both PWA composers attach files: an Attach button, a file dropped on the composer, and a screenshot pasted into the message box each upload through `POST /files` and append the FIL-02 Markdown reference to the body, so the composer shows exactly the message it sends. A failed upload says why and leaves the body unchanged.
-- [x] **FIL-07** `GET /files/:id/:name?w=N` serves an image no wider than N pixels (16 to 2048, clamped; anything else serves the original). The copy is made on first request by the host's resizer (`sips`, `magick`, or `convert`) and kept in `files/<ulid>/.resized/`, so a second request and a reopened thread read it again. The original bytes are never modified and no derivative outlives a failed run. A request at or above the source width, a type the resizer does not handle (only JPEG and PNG are), a host with no resizer, and a resizer that fails all serve the original. The PWA asks for `?w=1024` for an inline image and links the original.
+- [x] **FIL-07** `GET /files/:id/:name?w=N` serves an image no wider than N pixels (16 to 2048, clamped; anything else serves the original). The copy is made on first request by the host's resizer (`sips`, `magick`, or `convert`) and kept in `files/<ulid>/.resized/`, so a second request and a reopened thread read it again. The original bytes are never modified and no derivative outlives a failed run. A request at or above the source width, a type the resizer does not handle (only JPEG and PNG are), a host with no resizer, and a resizer that fails all serve the original. The PWA asks for `?w=1024` for an inline image and links the original. File bytes answer with `cache-control: private, max-age=604800`, since a file never changes.
 
 ---
 
@@ -315,7 +315,7 @@ provenance is carried on PR descriptions/comments/reviews and discovered through
 - [x] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` prints a launch URL with the token in the fragment.
 - [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as in agent-mail-web.
 - [x] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
-- [x] **WEB-04** Messages render Markdown, images, and Mermaid. Reuse `apps/agent-mail-web/renderers.js` and `mermaid-renderer.js`.
+- [x] **WEB-04** Messages render Markdown, images, and Mermaid. Reuse `apps/agent-mail-web/renderers.js` and `mermaid-renderer.js`. The prose is in place before any image or diagram bytes arrive; images share one queue of a few requests, load only within 800 px of the viewport, and a file is read once however many messages show it.
 - [x] **WEB-05** `pana://` links render as links to the matching app routes or `/files/` URLs.
 - [x] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, compact, and reload controls.
 - [x] **WEB-07** A reply draft records the thread head when opened. On a 409, the app shows the new messages and keeps the draft.

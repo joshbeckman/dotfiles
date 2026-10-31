@@ -158,6 +158,13 @@ async function fetchFile(path) {
 	return response.blob();
 }
 
+/**
+ * FIL-07: one blob URL per file path, kept for the life of the window. A thread renders the same
+ * picture in several messages, and every new message or archive redraws the open thread; neither
+ * should read those bytes again.
+ */
+const fileUrls = new Map();
+
 // ---- Attachments ----------------------------------------------------------------------------
 
 /** FIL-01 from the browser: the bytes go to the same route `--attach` uploads to. */
@@ -1122,6 +1129,7 @@ async function messageElement(message, { focus }) {
 			DOMPurify,
 			domain: state.domain,
 			fetchFile,
+			cache: fileUrls,
 			ensureMermaid,
 			idPrefix: `diagram-${view.id ?? "x"}`,
 			dark: matchMedia("(prefers-color-scheme: dark)").matches,
@@ -1566,6 +1574,7 @@ function markdownElement(text, testid) {
 		DOMPurify,
 		domain: state.domain,
 		fetchFile,
+		cache: fileUrls,
 		ensureMermaid,
 		idPrefix: `transcript-diagram-${++diagramCount}`,
 		dark: matchMedia("(prefers-color-scheme: dark)").matches,
@@ -1797,6 +1806,7 @@ async function openMemoryFile(path, showSource = false) {
 			DOMPurify,
 			domain: state.domain,
 			fetchFile,
+			cache: fileUrls,
 			ensureMermaid,
 			idPrefix: `memory-${file.commit.slice(0, 8)}`,
 			dark: matchMedia("(prefers-color-scheme: dark)").matches,
