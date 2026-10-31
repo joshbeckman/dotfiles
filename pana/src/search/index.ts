@@ -38,6 +38,7 @@ export {
 	regenerateSubject,
 	scheduleSubject,
 	SUBJECT_MAX_LENGTH,
+	SUBJECT_MAX_TOKENS,
 	SUBJECT_SYSTEM_PROMPT,
 	SubjectError,
 	subjectHistory,
