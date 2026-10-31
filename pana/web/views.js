@@ -507,6 +507,14 @@ function optionalAmount(value) {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** OBJ-39: the limits a meter can draw, in the order the view names them. */
+const LIMIT_NAMES = ["maxDailyUsd", "maxTotalUsd", "wakeMinMinutes", "maxDailyLeadTurns", "maxDailyUserMessages", "maxActiveMembers"];
+
+/** OBJ-39: where an effective limit came from; anything unrecognized is "nothing bounds it". */
+function limitSource(value) {
+	return value === "objective" || value === "config" ? value : "none";
+}
+
 function urlOf(person) {
 	return String(person?.url ?? "");
 }
@@ -534,33 +542,41 @@ export function objectiveRow(objective) {
 }
 
 /**
- * OBJ-16..OBJ-24: the meters for money and runs. A null limit means the objective falls back to
- * the domain's configured default, which this app cannot read, so the meter says that instead of
- * drawing a bar against a limit it would have to invent.
+ * OBJ-16..OBJ-24, OBJ-39: the meters for money and runs. Each draws against the limit the gates
+ * actually apply — `effectiveLimits` resolves an objective's own value, the domain's configured
+ * default, or nothing — so a meter an objective left unset still shows the number that would stop
+ * it, and `source` says which of the three it is. A `none` limit draws no bar: there is nothing to
+ * be a share of.
  */
 export function objectiveMeters(objective) {
-	const limits = objective?.limits ?? {};
+	const limits = objective?.effectiveLimits ?? {};
 	const members = Array.isArray(objective?.members) ? objective.members : [];
 	const active = members.filter((member) => isActiveMember(member?.state)).length;
-	const meter = (id, label, value, limit, unit) => {
-		const bounded = optionalAmount(limit);
+	const source = (name) => {
+		const entry = limits[name];
+		return entry?.source === "objective" || entry?.source === "config" || entry?.source === "none" ? entry.source : "none";
+	};
+	const meter = (id, label, value, name, unit) => {
+		const bounded = optionalAmount(limits[name]?.value);
 		return {
 			id,
 			label,
 			value: amount(value),
 			limit: bounded,
 			unit,
+			// Where the number came from, so a reader is never surprised by where the bar sits.
+			source: source(name),
 			share: bounded !== null && bounded > 0 ? Math.min(1, amount(value) / bounded) : null,
 			// OBJ-20/OBJ-21: at or over the limit is what stops the objective, not only past it.
 			over: bounded !== null && amount(value) >= bounded,
 		};
 	};
 	return [
-		meter("spend-today", "Spend today", objective?.spendTodayUsd, limits.maxDailyUsd, "usd"),
-		meter("spend-total", "Spend in total", objective?.spendTotalUsd, limits.maxTotalUsd, "usd"),
-		meter("runs-today", "Lead runs today", objective?.leadRunsToday, limits.maxDailyLeadTurns, "count"),
-		meter("messages-today", "Messages to you today", objective?.userMessagesToday, limits.maxDailyUserMessages, "count"),
-		meter("members", "Active members", active, limits.maxActiveMembers, "count"),
+		meter("spend-today", "Spend today", objective?.spendTodayUsd, "maxDailyUsd", "usd"),
+		meter("spend-total", "Spend in total", objective?.spendTotalUsd, "maxTotalUsd", "usd"),
+		meter("runs-today", "Lead runs today", objective?.leadRunsToday, "maxDailyLeadTurns", "count"),
+		meter("messages-today", "Messages to you today", objective?.userMessagesToday, "maxDailyUserMessages", "count"),
+		meter("members", "Active members", active, "maxActiveMembers", "count"),
 	];
 }
 
@@ -662,6 +678,14 @@ export function objectiveView(objective) {
 			maxDailyUserMessages: optionalAmount(objective?.limits?.maxDailyUserMessages),
 			maxActiveMembers: optionalAmount(objective?.limits?.maxActiveMembers),
 		},
+		// OBJ-39: each limit with the value that applies and where it came from, so a meter can
+		// draw the domain's default instead of describing it.
+		effectiveLimits: Object.fromEntries(
+			LIMIT_NAMES.map((name) => [
+				name,
+				{ value: optionalAmount(objective?.effectiveLimits?.[name]?.value), source: limitSource(objective?.effectiveLimits?.[name]?.source) },
+			]),
+		),
 		spendTodayUsd: amount(objective?.spendTodayUsd),
 		spendTotalUsd: amount(objective?.spendTotalUsd),
 		leadRunsToday: amount(objective?.leadRunsToday),

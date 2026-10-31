@@ -11,8 +11,8 @@ import { sessionStates } from "../sessions/state.ts";
 import { objectiveArtifacts, type ObjectiveArtifactView } from "./artifacts.ts";
 import { escalationView, openEscalations, type EscalationView } from "./escalation.ts";
 import { newestReport, type ObjectiveReportView } from "./reports.ts";
-import { leadRunsToday, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, type ObjectivePaused } from "./limits.ts";
-import { limitsOf, type ObjectiveLimits, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow, type ObjectiveAutonomy, type ObjectiveDisplayState } from "./schema.ts";
+import { effectiveLimits, leadRunsToday, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, type ObjectivePaused } from "./limits.ts";
+import { limitsOf, type ObjectiveEffectiveLimits, type ObjectiveLimits, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow, type ObjectiveAutonomy, type ObjectiveDisplayState } from "./schema.ts";
 import { loadObjective, objectiveMembers, objectiveState, objectiveUrl, personView, type ObjectivePersonView } from "./state.ts";
 
 export type { ObjectivePersonView } from "./state.ts";
@@ -56,6 +56,12 @@ export interface ObjectiveView {
 	dueAt: number | null;
 	autonomy: ObjectiveAutonomy;
 	limits: ObjectiveLimits;
+	/**
+	 * OBJ-39: each limit as a meter draws it — the value the gates actually apply, and whether it is
+	 * the objective's own, the domain's default, or nothing. `limits` above stays what the objective
+	 * set, so a reader can see both the number that bites and the number this objective chose.
+	 */
+	effectiveLimits: ObjectiveEffectiveLimits;
 	charterRev: number;
 	members: ObjectiveMemberView[];
 	/**
@@ -118,6 +124,7 @@ export function objectiveView(
 		dueAt: row.due_at,
 		autonomy: row.autonomy,
 		limits: limitsOf(row),
+		effectiveLimits: effectiveLimits(runtime, row),
 		charterRev: row.charter_rev,
 		members: members.map((member) => ({
 			id: member.id,

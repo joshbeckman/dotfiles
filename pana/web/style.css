@@ -1656,8 +1656,9 @@ kbd {
 	color: var(--p-orange);
 }
 
-/* OBJ-20..OBJ-24: money and runs against their limits. A meter without a known limit draws no
-   bar rather than a bar against a number this app would be making up. */
+/* OBJ-20..OBJ-24, OBJ-39: money and runs against the limits that apply. A meter whose limit the
+   objective does not set draws the domain's default and names it, and one with no limit at all
+   draws no bar rather than a bar against a number this app would be making up. */
 .meters {
 	display: grid;
 	gap: var(--s3) var(--s4);
@@ -1695,6 +1696,11 @@ kbd {
 }
 .meter-value[data-over="true"] {
 	color: var(--p-red);
+}
+/* OBJ-39: where a meter's limit came from, when it is not the objective's own. */
+.meter-source {
+	font-size: 0.75rem;
+	color: var(--c-text-alt);
 }
 .meter-bar {
 	height: 0.35rem;

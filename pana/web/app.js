@@ -2550,6 +2550,9 @@ function renderObjectiveMeters() {
 		value.textContent = meterText(meter);
 		if (meter.over) value.dataset.over = "true";
 		head.append(value);
+		// OBJ-39: say where the number came from, so a bar that is not the objective's own is named.
+		row.dataset.source = meter.source;
+		if (meter.source !== "objective") head.append(span(meterSourceLabel(meter), "meter-source"));
 		row.append(head);
 		if (meter.share !== null) {
 			const bar = document.createElement("div");
@@ -2567,11 +2570,20 @@ function renderObjectiveMeters() {
 	}
 }
 
-/** A meter's reading. A null limit follows the domain's configuration, which this app cannot read. */
+/**
+ * A meter's reading (OBJ-20..OBJ-24, OBJ-39). The limit is the effective one: the objective's own,
+ * the domain's configured default, or nothing. `meterSourceLabel` names the second and third.
+ */
 function meterText(meter) {
 	const shown = meter.unit === "usd" ? (value) => cost(value) : (value) => String(value);
-	if (meter.limit === null) return `${shown(meter.value)} · the domain's default limit`;
+	if (meter.limit === null) return `${shown(meter.value)} · no limit`;
 	return `${shown(meter.value)} of ${shown(meter.limit)}`;
+}
+
+/** Where a meter's limit came from, in the small print a reader sees beside the number. */
+function meterSourceLabel(meter) {
+	if (meter.source === "config") return "from the domain's config";
+	return "no limit set";
 }
 
 /**
