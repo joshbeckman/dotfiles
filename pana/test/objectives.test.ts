@@ -1,20 +1,21 @@
 // WP18 foundation: the objectives schema, identity, launch, lifecycle gates, and route surface
-// (OBJ-01..OBJ-05, OBJ-07, OBJ-38). The packages that build on this one add their own tests here.
+// (OBJ-01..OBJ-05, OBJ-07, OBJ-17, OBJ-38). The packages that build on this one add their own tests here.
 
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, expect, it } from "vitest";
-import { ROUTES } from "../src/api/routes.ts";
+import { matchRoute, ROUTES } from "../src/api/routes.ts";
 import { COMMANDS, runPanaCommand } from "../src/cli/commands.ts";
 import { renderHelp } from "../src/cli/help.ts";
 import { main, type CliIo } from "../src/cli/index.ts";
 import { MIGRATIONS, SCHEMA_VERSION } from "../src/db/schema.ts";
 import { SimulatedCrash } from "../src/db/index.ts";
 import { formatUrl, parseRef } from "../src/ids/index.ts";
-import { admitRun, launchObjective, objectiveConditions, objectiveRow, type ObjectiveView } from "../src/objectives/index.ts";
+import { OBJECTIVE_COMMANDS } from "../src/objectives/cli.ts";
+import { admitRun, launchObjective, objectiveConditions, objectiveRow, sweepObjectives, type ObjectiveView } from "../src/objectives/index.ts";
 import { dayStart, nextDayStart, recordCost } from "../src/sessions/budget.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAKE_EPOCH, startTestPanad, TEST_USER, type TestPanad, type TestPanadOptions } from "./harness/index.ts";
@@ -657,6 +658,102 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 	}
 });
 
+it("OBJ-38 every objective command runs against panad without a usage error, and every route is in the API table", async () => {
+	await start({
+		script: [
+			{ text: "lead one." },
+			{ text: "lead two." },
+			{ text: "lead three." },
+			{ text: "lead four." },
+			{ text: "lead five." },
+			{ text: "lead six." },
+			{ text: "lead seven." },
+			{ text: "lead eight." },
+		],
+	});
+
+	// Fixtures the commands act on: a launched objective with a thread, a draft to launch, an
+	// active objective to stop and resume, an active one to finish and archive, and an artifact.
+	const main = await draft("Every command");
+	await t!.client.post(`/objectives/${main.id}/launch`);
+	const toLaunch = await draft("Launch me");
+	const toStop = await draft("Stop and resume me");
+	await t!.client.post(`/objectives/${toStop.id}/launch`);
+	const toFinish = await draft("Finish me");
+	await t!.client.post(`/objectives/${toFinish.id}/launch`);
+	await settle();
+
+	const source = join(t!.dir, "artifact.txt");
+	writeFileSync(source, "hello\n");
+	const uploaded = await t!.client.request<{ file: { id: string } }>("POST", "/files?name=note.txt", {
+		bytes: Buffer.from("already linked\n"),
+		headers: { "content-type": "text/plain" },
+	});
+	expect(uploaded.status).toBe(201);
+	const linked = await t!.client.post<{ artifact: { id: string } }>(`/objectives/${main.id}/artifacts`, { file: uploaded.body.file.id });
+	expect(linked.status).toBe(201);
+
+	// One entry per command in `OBJECTIVE_COMMANDS`, in the order the commands need to run.
+	const runs: Record<string, Params> = {
+		"objective create": { goal: "A command-created draft" },
+		"objective list": {},
+		"objective show": { id: main.id },
+		"objective launch": { id: toLaunch.id },
+		"objective stop": { id: toStop.id },
+		"objective resume": { id: toStop.id },
+		"objective done": { id: toFinish.id },
+		"objective archive": { id: toFinish.id },
+		"objective charter set": { id: main.id, section: "Notes", body: "Measured weekly." },
+		"objective charter log": { id: main.id },
+		"objective metric add": { id: main.id, name: "kilowatt-hours", unit: "kWh", direction: "down" },
+		"objective metric list": { id: main.id },
+		"objective metric set": { id: main.id, name: "kilowatt-hours", value: "296", source: "lead" },
+		"objective metric target": { id: main.id, name: "kilowatt-hours", target: "300" },
+		"objective brief": { id: main.id },
+		"objective report": { id: main.id, body: "Week one: 296 kWh." },
+		"objective escalate": { id: main.id, body: "Is 296 low enough?" },
+		"objective regenerate-lead": { id: main.id, reason: "The lead stopped answering." },
+		"objective artifact add": { id: main.id, path: source },
+		"objective artifact remove": { id: main.id, file: linked.body.artifact.id },
+	};
+	// Every advertised command is exercised, and no command is left out of this list.
+	expect(Object.keys(runs).sort()).toEqual(OBJECTIVE_COMMANDS.map((spec) => spec.path.join(" ")).sort());
+	for (const [name, params] of Object.entries(runs)) {
+		const outcome = await command(name, params);
+		// Not a usage error: whatever panad answers, the flags and positionals parsed and the
+		// request was built and sent. (Exit code 2 is also a 400, so `usage` is the exact flag.)
+		expect(outcome.usage, `${name} ${JSON.stringify(outcome.body)}`).toBeUndefined();
+	}
+	// `stop --all` is the same command's other form (OBJ-07 covers what it stops).
+	expect((await command("objective stop", { all: true })).exitCode).toBe(0);
+	// `artifact add` uploads through `POST /files` in the CLI itself, so it needs the whole command.
+	expect((await runCli(["objective", "artifact", "add", `pana://test.example/objectives/${main.id}`, source])).code).toBe(0);
+
+	// Every WP18 route is in the SPEC API table (CONTRIBUTING, "Add a route"), which groups a
+	// row's methods and its shared-prefix siblings, so both the table and the route are matched.
+	const spec = readFileSync(join(import.meta.dirname, "..", "SPEC.md"), "utf8");
+	const concrete = (path: string) => path.replace(/:\w+/g, "X");
+	const table = spec
+		.split("\n")
+		.filter((line) => /^\| (GET|POST|DELETE)/.test(line))
+		.flatMap((line) => {
+			const [, methods, routes] = line.split("|").map((cell) => cell.trim());
+			const items = [...routes!.matchAll(/`([^`]+)`/g)].map((match) => match[1]!);
+			const firstSegments = items[0]!.split("/").filter(Boolean);
+			return methods!.split(",").flatMap((method) =>
+				items.map((item) => {
+					const segments = item.split("/").filter(Boolean);
+					const path = segments.length === 1 && firstSegments.length >= 3 ? `/${[...firstSegments.slice(0, -1), segments[0]].join("/")}` : item;
+					return { method: method.trim(), path };
+				}),
+			);
+		});
+	for (const route of ROUTES.filter((entry) => entry.wp === "WP18")) {
+		const listed = table.some((row) => matchRoute(row.method, concrete(row.path))?.route.name === route.name);
+		expect(listed, `${route.method} ${route.pattern} is missing from the API table`).toBe(true);
+	}
+});
+
 // --- OBJ-13..OBJ-24: membership, lineage, run admission, and limits ------------
 
 interface SessionFacts {
@@ -906,6 +1003,51 @@ it("OBJ-16 maxActiveMembers bounds the roster: a create that would leave more me
 	expect(full.status).toBe(402);
 	expect((full.body as { error: { code: string } }).error.code).toBe("objective_roster_full");
 	expect((full.body as { error: { maxActiveMembers: number } }).error.maxActiveMembers).toBe(1);
+});
+
+// --- OBJ-17 --------------------------------------------------------------------
+
+it("OBJ-17 an objective with no members is measured, reported, and finished by its lone lead", async () => {
+	await start({ script: [{ text: "I will watch the meter." }] });
+	const objective = await draft("Watch the meter");
+	await t!.client.post(`/objectives/${objective.id}/launch`);
+	const lead = (await view(objective.id)).lead!.id;
+	await settle();
+
+	// The lead is the whole roster: nobody created a member, and with nothing pending the
+	// objective is stranded like any other (OBJ-03).
+	expect((await view(objective.id)).members.map((member) => member.id)).toEqual([lead]);
+	expect((await view(objective.id)).state).toBe("stranded");
+
+	// A memberless objective whose only work is a measurement: the lead declares the metric, the
+	// user sets the target, and the user adds a check due tomorrow.
+	expect((await command("objective metric add", { id: objective.id, name: "kilowatt-hours", unit: "kWh", direction: "down" }, lead)).exitCode).toBe(0);
+	expect((await command("objective metric target", { id: objective.id, name: "kilowatt-hours", target: "300" })).exitCode).toBe(0);
+	expect((await view(objective.id)).state).toBe("stranded");
+	const checked = await t!.client.post(`/objectives/${objective.id}/metrics/kilowatt-hours`, { check: "printf 312", checkEvery: "1d" });
+	expect(checked.status).toBe(200);
+	// The future check is the only pending thing, and that reads `idle`, never `stranded`
+	// (OBJ-03, OBJ-06): no member, no wake, and no notice.
+	expect((await view(objective.id)).state).toBe("idle");
+	expect((await sweepObjectives(t!.runtime)).stranded).toEqual([]);
+
+	// A lone lead measures, and a target is not met by a number on the wrong side of it.
+	expect((await command("objective metric set", { id: objective.id, name: "kilowatt-hours", value: "312" }, lead)).exitCode).toBe(0);
+	const short = await t!.client.post(`/objectives/${objective.id}/done`);
+	expect(short.status).toBe(409);
+	expect((short.body as { error: { code: string } }).error.code).toBe("metric_behind");
+	expect((await command("objective metric set", { id: objective.id, name: "kilowatt-hours", value: "296" }, lead)).exitCode).toBe(0);
+
+	// It reports in the objective's thread, which is the objective's only log (OBJ-30).
+	expect((await command("objective report", { id: objective.id, body: "Down to 296 kWh." }, lead)).exitCode).toBe(0);
+	expect((await view(objective.id)).report).toMatchObject({ body: "Down to 296 kWh.", sender: { id: lead } });
+
+	// `done` with every metric at target and no members needs nothing else, but the user's
+	// confirmation still applies on a manual objective (OBJ-07).
+	expect((await command("objective done", { id: objective.id }, lead)).exitCode).toBe(1);
+	const done = await t!.client.post<{ objective: ObjectiveView }>(`/objectives/${objective.id}/done`);
+	expect(done.status).toBe(200);
+	expect(done.body.objective.phase).toBe("done");
 });
 
 it("OBJ-18 a lead's runs are held to wakeMinMinutes, coalesce into one run, and each held delivery arrives once, in order", async () => {

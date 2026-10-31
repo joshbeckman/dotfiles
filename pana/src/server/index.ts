@@ -182,9 +182,8 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		const browsers = startBrowserSweeper(runtime, report, options.browserSweep);
 		cleanup.unshift(() => browsers.close());
 		// OBJ-06, OBJ-08: notice a stranded or a behind objective, now and every five minutes.
-		// A budget pause already reads as `idle` in `objectiveState` (OBJ-22), so nothing is wired
-		// into the sweeper's unused `budget` hook here.
-		// TODO(WP18): drop or wire `ObjectiveSweepOptions.budget` in the integration pass.
+		// A budget pause already reads as `idle` in `objectiveState` (OBJ-22), so the sweep needs
+		// no standing-condition hook of its own.
 		const objectives = startObjectiveSweeper(runtime, report);
 		cleanup.unshift(() => objectives.close());
 

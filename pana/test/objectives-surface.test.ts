@@ -305,13 +305,10 @@ it("OBJ-06 the sweep notices a stranded objective once, names it, and wakes noth
 	expect((await t!.runtime.db.get("SELECT stranded_noticed_at FROM objectives WHERE id = ?", objective.id))).toEqual({
 		stranded_noticed_at: null,
 	});
-	// `obj/lead-limits` owns the budget predicate; the sweep takes it, so a paused objective is
-	// not stranded (OBJ-20..22). The seam is what this asserts until that package lands.
 	await t!.runtime.db.write((tx) => tx.run("DELETE FROM objective_escalations WHERE objective_id = ?", objective.id));
-	expect((await sweepObjectives(t!.runtime, { budget: async () => "budget_day" })).stranded).toEqual([]);
-	// A real budget pause needs no hook: the derived state reads `idle` for it (OBJ-22), so the
-	// notice inherits `obj/lead-limits`'s condition, and with the stamp clear a stranded reading
-	// would have posted one.
+	// OBJ-20..22: `obj/lead-limits` owns the budget predicate and `objectiveState` reads it, so a
+	// paused objective is `idle` before the sweep looks and the notice inherits that. The stamp is
+	// clear here, so a `stranded` reading would have posted one: the sweep needs no budget hook.
 	await t!.runtime.db.write(async (tx) => {
 		await tx.run("UPDATE objectives SET max_daily_usd = 1 WHERE id = ?", objective.id);
 		await tx.run(
