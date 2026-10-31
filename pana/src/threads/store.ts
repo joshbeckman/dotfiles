@@ -387,6 +387,17 @@ async function messageView(tx: SqliteExecutor, runtime: Runtime, messageId: stri
 	return (await messageViews(tx, runtime, [await messageRow(tx, messageId)], readerId))[0]!;
 }
 
+/**
+ * One message's current body from its newest revision or redaction (EDT-03, EDT-04), without a
+ * reader's delivery times. For a package that shows a message it linked, as OBJ-30's newest
+ * report does, and needs the same rule the thread view applies. Undefined when the message is gone.
+ */
+export async function currentMessage(tx: SqliteExecutor, messageId: string): Promise<Pick<MessageView, "body" | "revised" | "redacted" | "display"> | undefined> {
+	const row = await tx.get<{ body: string }>("SELECT body FROM messages WHERE id = ?", messageId);
+	if (!row) return undefined;
+	return applyEvent(row.body, (await latestEvents(tx, [messageId])).get(messageId));
+}
+
 // --- Append and deliver --------------------------------------------------------
 
 interface AppendOptions {
@@ -539,25 +550,46 @@ export async function createThreadIn(
  * new head and gets 409, or comes first.
  */
 export async function respond(runtime: Runtime, caller: Caller, threadId: string, input: RespondInput): Promise<ThreadResult> {
-	const afterId = messageRefId(runtime, input.after);
+	const after = messageRefId(runtime, input.after);
+	const recipients: string[] = [];
+	const result = await runtime.db.atomically((tx) => respondIn(tx, runtime, caller, threadId, { ...input, after }, recipients));
+	announce(runtime, "delivery", result, recipients);
+	return result;
+}
+
+/**
+ * `respond`'s body without its transaction, for a caller that must commit other work with the
+ * message (OBJ-30's report marks the row it posts; the escalation package needs the same seam).
+ * `input.after` names the message the caller last read and keeps THR-07's stale-head check; a
+ * caller posting with no head of its own leaves it out and the message appends at the head.
+ * `recipients` collects each recipient's URL for `announce` after the transaction commits.
+ */
+export async function respondIn(
+	tx: SqliteExecutor,
+	runtime: Runtime,
+	caller: Caller,
+	threadId: string,
+	input: RespondInput,
+	recipients: string[] = [],
+): Promise<ThreadResult> {
+	const afterId = input.after === undefined || input.after === null || input.after === "" ? undefined : messageRefId(runtime, input.after);
 	const body = messageBody(input.body);
 	const cc = addressList(input.cc, "cc");
 	const now = runtime.clock.now();
-	const recipients: string[] = [];
 
-	const result = await runtime.db.atomically(async (tx) => {
-		const thread = await tx.get<ThreadRecord>("SELECT * FROM threads WHERE id = ?", threadId);
-		if (!thread) throw ApiError.notFound(`thread ${threadId}`);
+	const thread = await tx.get<ThreadRecord>("SELECT * FROM threads WHERE id = ?", threadId);
+	if (!thread) throw ApiError.notFound(`thread ${threadId}`);
 
-		const sender = await ensureCaller(tx, runtime, now, caller);
-		const member = await tx.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", threadId, sender.id);
-		if (!member) {
-			if (caller.kind !== "user") {
-				throw ApiError.forbidden(`session ${sender.id} is not a participant of thread ${threadId}`);
-			}
-			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, sender.id, now);
+	const sender = await ensureCaller(tx, runtime, now, caller);
+	const member = await tx.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", threadId, sender.id);
+	if (!member) {
+		if (caller.kind !== "user") {
+			throw ApiError.forbidden(`session ${sender.id} is not a participant of thread ${threadId}`);
 		}
+		await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, sender.id, now);
+	}
 
+	if (afterId !== undefined) {
 		const after = await tx.get<MessageRecord>("SELECT * FROM messages WHERE id = ?", afterId);
 		if (!after) throw ApiError.notFound(`message ${afterId}`);
 		if (after.thread_id !== threadId) {
@@ -572,24 +604,22 @@ export async function respond(runtime: Runtime, caller: Caller, threadId: string
 				newer: newer.map((row) => row.id),
 			});
 		}
+	}
 
-		const messageId = runtime.newId();
-		for (const raw of cc) {
-			const added = await participantFor(tx, runtime, now, raw);
-			await tx.run(
-				"INSERT OR IGNORE INTO thread_participants (thread_id, participant_id, joined_at, joined_message_id) VALUES (?, ?, ?, ?)",
-				threadId,
-				added.id,
-				now,
-				messageId,
-			);
-		}
+	const messageId = runtime.newId();
+	for (const raw of cc) {
+		const added = await participantFor(tx, runtime, now, raw);
+		await tx.run(
+			"INSERT OR IGNORE INTO thread_participants (thread_id, participant_id, joined_at, joined_message_id) VALUES (?, ?, ?, ?)",
+			threadId,
+			added.id,
+			now,
+			messageId,
+		);
+	}
 
-		const message = await appendMessage(tx, runtime, { messageId, threadId, sender, body, now, recipients });
-		return { thread: await threadView(tx, runtime, threadId), message };
-	});
-	announce(runtime, "delivery", result, recipients);
-	return result;
+	const message = await appendMessage(tx, runtime, { messageId, threadId, sender, body, now, recipients });
+	return { thread: await threadView(tx, runtime, threadId), message };
 }
 
 /** Resolve who is reading: the caller, or a named participant the user is allowed to act for. */

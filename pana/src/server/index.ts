@@ -16,6 +16,7 @@ import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry } from "../extension/index.ts";
 import { ensureMemoryRepo } from "../memory/index.ts";
 import { startMetricChecks } from "../objectives/index.ts";
+import { startObjectiveSweeper } from "../objectives/sweep.ts";
 import { initPush } from "../push/index.ts";
 import { startScheduler } from "../schedules/index.ts";
 import { startSessions } from "../sessions/runtime.ts";
@@ -176,6 +177,12 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		// ISO-07: stop the browser daemons of sessions that are archived or idle.
 		const browsers = startBrowserSweeper(runtime, report, options.browserSweep);
 		cleanup.unshift(() => browsers.close());
+		// OBJ-06, OBJ-08: notice a stranded or a behind objective, now and every five minutes.
+		// A budget pause already reads as `idle` in `objectiveState` (OBJ-22), so nothing is wired
+		// into the sweeper's unused `budget` hook here.
+		// TODO(WP18): drop or wire `ObjectiveSweepOptions.budget` in the integration pass.
+		const objectives = startObjectiveSweeper(runtime, report);
+		cleanup.unshift(() => objectives.close());
 
 		if (existsSync(paths.socket)) unlinkSync(paths.socket);
 		const socketServer = createServer(createApp(appOptions, "socket"));

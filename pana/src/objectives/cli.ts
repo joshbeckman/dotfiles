@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { CommandUsageError } from "../cli/args.ts";
-import type { CommandParams, CommandSpec, FlagSpec } from "../cli/commands.ts";
+import type { CommandParams, CommandSpec, FileAttachment, FlagSpec } from "../cli/commands.ts";
 import { parseRef } from "../ids/index.ts";
 
 function text(params: CommandParams, name: string): string | undefined {
@@ -93,7 +93,7 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		summary: "Draft an objective; only you can launch it",
 		flags: [
 			...GOAL_FLAGS,
-			string("due-at", "--due-at TIME", "The deadline the pace is measured against"),
+			string("due-at", "--due-at TIME", "The deadline pace is measured against; for a vote or a merge, the date that party meets"),
 			string("autonomy", "--autonomy manual|auto", "Whether the lead may finish without your confirmation"),
 			string("max-daily-usd", "--max-daily-usd N", "Daily spend limit for the objective's sessions"),
 			string("max-total-usd", "--max-total-usd N", "Lifetime spend limit for the objective's sessions"),
@@ -340,10 +340,14 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 			{ name: "OBJECTIVE", param: "id", required: true },
 			{ name: "PATH", param: "path", required: true },
 		],
+		// OBJ-31: the file goes through `POST /files` (FIL-01..FIL-07 unchanged) and the route only
+		// links the id, so panad never reads a path from a client.
+		uploads: "path",
+		validate: (params) => (text(params, "path") ? undefined : "give a PATH to upload"),
 		request: (params) => ({
 			method: "POST",
 			path: `/objectives/${objectiveSegment(text(params, "id"))}/artifacts`,
-			body: { path: text(params, "path") },
+			body: { file: uploaded(params)?.id },
 		}),
 	},
 	{
@@ -361,6 +365,12 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		}),
 	},
 ];
+
+/** The one file `uploads` put in `params.files`, when the CLI ran the command. */
+function uploaded(params: CommandParams): FileAttachment | undefined {
+	const value = params.files;
+	return Array.isArray(value) ? (value as FileAttachment[])[0] : undefined;
+}
 
 /** A numeric flag: passed through as a number so the API sees a number, never a numeric string. */
 function numberParam(params: CommandParams, name: string): number | undefined {

@@ -22,8 +22,9 @@ export class ApiResponseError extends Error {
 	}
 }
 
-/** What a message needs to reference an uploaded file (FIL-02). */
-export type FileAttachment = Pick<FileView, "name" | "url" | "mediaType">;
+/** What a message needs to reference an uploaded file (FIL-02). The id is how a command that
+ *  links a file instead of referencing it names the uploaded record (OBJ-31). */
+export type FileAttachment = Pick<FileView, "id" | "name" | "url" | "mediaType">;
 
 /** Read the body from the flags (CLI-04). `readStdin` is how `--body -` gets its text. */
 export async function readBody(flags: Flags, readStdin: () => Promise<string>): Promise<string> {

@@ -69,6 +69,13 @@ export interface CommandSpec {
 	positionals: readonly PositionalSpec[];
 	/** The command needs a body from the flags (CLI-04). */
 	needsBody?: boolean;
+	/**
+	 * The parameter holding a local file path this command uploads through `POST /files` before its
+	 * request (FIL-01), the way `--attach` does for a message. The uploaded file lands in
+	 * `params.files`, so a command that links a file (OBJ-31) sends its id and panad never reads a
+	 * client path.
+	 */
+	uploads?: string;
 	/** Text output for a handler's reply, when the generic record rendering reads badly. */
 	formatText?: (value: unknown) => string;
 	/** A usage problem the tool and the CLI both reject with exit code 2. */
@@ -741,6 +748,13 @@ export async function invocationFor(
 		const uploaded: FileAttachment[] = [];
 		for (const path of attach) uploaded.push(await io.upload(path));
 		params.files = uploaded;
+	}
+	if (spec.uploads !== undefined) {
+		const path = params[spec.uploads];
+		if (typeof path === "string" && path.length > 0) {
+			if (!io.upload) throw new CommandUsageError("this caller cannot upload files");
+			params.files = [await io.upload(path)];
+		}
 	}
 	return { spec, params };
 }

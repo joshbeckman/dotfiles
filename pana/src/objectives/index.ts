@@ -15,9 +15,15 @@
 // - `handlers.ts` — HTTP, one line per route.
 // - `cli.ts` — the `pana objective` command table.
 //
-// Later packages add `hold.ts`, `brief.ts` (replacing the stub), `escalation.ts`, and `reports.ts`
-// beside these, their routes to `src/api/routes.ts`, one handler line each to `handlers.ts`, and
-// their commands to `cli.ts`.
+// This package's reports, artifacts, and notices:
+// - `reports.ts` — a report is a message in the objective's thread plus its mark (OBJ-30).
+// - `artifacts.ts` — an artifact is an uploaded file plus a link (OBJ-31).
+// - `pace.ts` — the pace needed against the pace achieved for a `dueAt` (OBJ-08); the briefing
+//   calls it rather than growing a second copy.
+// - `sweep.ts` — the stranded notice (OBJ-06) and the behind notice (OBJ-08) on `runtime.clock`.
+//
+// Later packages add `hold.ts`, `brief.ts` (replacing the stub), and `escalation.ts` beside these,
+// one handler line each to `handlers.ts`, and their commands to `cli.ts`.
 
 export {
 	CHARTER_SECTIONS,
@@ -81,6 +87,35 @@ export {
 	type ObjectivePaused,
 } from "./limits.ts";
 export { launchObjective } from "./launch.ts";
+export { addArtifact, objectiveArtifacts, removeArtifact, type ObjectiveArtifactView } from "./artifacts.ts";
+export {
+	behindPaces,
+	metricPaces,
+	paceLine,
+	paceNumber,
+	paceOf,
+	DAY_MS as PACE_DAY_MS,
+	type MetricPace,
+	type MetricReading,
+	type PaceInput,
+} from "./pace.ts";
+export {
+	newestReport,
+	reportMessages,
+	reportObjective,
+	type ObjectiveReportView,
+	type ReportInput,
+} from "./reports.ts";
+export {
+	OBJECTIVE_SWEEP_MS,
+	startObjectiveSweeper,
+	sweepObjectives,
+	type BudgetCondition,
+	type ObjectiveNotice,
+	type ObjectiveSweepOptions,
+	type ObjectiveSweepResult,
+	type ObjectiveSweeper,
+} from "./sweep.ts";
 export { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
 export {
 	METRIC_AGGREGATIONS,
