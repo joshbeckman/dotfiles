@@ -297,20 +297,19 @@ it("OBJ-40 an objective survives its lead's death, wakes on its own, and says wh
 	expect((await view(t, objective.id)).state).toBe("idle");
 
 	// 7. The day budget pauses the objective, stops its running members as the objective's act,
-	// and wakes the lead at the next local day (OBJ-20).
-	// The replacement puts a member of its own to work: the retired lead's threads are read-only
-	// once it is archived (STA-07), so the work continues on a thread the new lead is part of.
+	// and wakes the lead at the next local day (OBJ-20). The member the *retired* lead hired is
+	// still the objective's worker: the successor took its predecessor's place in that member's
+	// thread (OBJ-35), so the same member goes back to work for it.
 	t.model.append([{ toolCalls: [{ name: "bash", args: { command: "sleep 2" } }], usage: { costUsd: 0.06 } }]);
-	const hired = await t.client.post<{ session: { id: string } }>("/sessions", { prompt: "Audit the boiler again and report." }, { caller: replacement });
-	expect(hired.status, JSON.stringify(hired.body)).toBe(201);
-	const worker = hired.body.session.id;
+	const workOrder = await pana(t, "thread respond", { thread: memberThread, after: await headOf(t, memberThread), body: "Run the cycle count again." }, replacement);
+	expect(workOrder.exitCode).toBe(0);
 	// Its own run crosses today's $0.05, which is the objective's act to stop, not the user's.
 	await vi.waitFor(async () => expect((await view(t!, objective.id)).paused).toBe("budget_day"));
 	const resumeAt = nextDayStart(t.clock.now(), "UTC");
 	await vi.waitFor(async () => expect((await sessionFacts(replacement)).hold_until).toBe(resumeAt));
 	const paused = await view(t, objective.id);
 	expect(paused.state).toBe("idle");
-	expect(await sessionFacts(worker)).toMatchObject({ state: "stopped", stopped_by: "objective" });
+	expect(await sessionFacts(member.id)).toMatchObject({ state: "stopped", stopped_by: "objective" });
 	const budgetWakes = await wakesFor(replacement);
 	expect(budgetWakes).toHaveLength(1);
 	expect(budgetWakes[0]!.next_at).toBe(resumeAt);
@@ -367,4 +366,85 @@ it("OBJ-40 an objective survives its lead's death, wakes on its own, and says wh
 	expect(done.status).toBe(200);
 	expect(done.body.objective).toMatchObject({ phase: "done", state: null });
 	expect((await events(t, objective.id, "done")).length).toBeGreaterThanOrEqual(1);
+});
+
+// --- OBJ-35: what a successor inherits ------------------------------------------
+
+// The gap the acceptance run above found: a regenerated lead used to take the retired lead's place
+// only in the objective's thread, so every `lead ↔ member` thread kept an archived participant.
+// STA-07 then made those threads read-only — the member could never be delivered to again — and
+// the successor was not a participant, so it could not post there either. The swap now covers
+// every thread the retired lead was in, and control follows the objective's lead role (OBJ-13).
+
+it("OBJ-35 a regenerated lead takes the retired lead's place in every thread and controls its members", async () => {
+	t = await startObjectives({ script: [{ text: "I am the lead." }] });
+	const objective = await draft(t, "Keep the boiler audited");
+	const launched = await launch(t, objective.id);
+	const previous = launched.lead!.id;
+
+	// The lead hires a member, which is the thread the swap has to carry.
+	t.model.append([{ text: "Understood; auditing." }]);
+	const hired = await t.client.post<{ session: { id: string } }>("/sessions", { prompt: "Audit the boiler." }, { caller: previous });
+	expect(hired.status, JSON.stringify(hired.body)).toBe(201);
+	const member = hired.body.session.id;
+	await settle(t);
+	const memberThread = await threadWith(member);
+	const participants = async () =>
+		(await t!.runtime.db.all<{ participant_id: string }>("SELECT participant_id FROM thread_participants WHERE thread_id = ?", memberThread)).map((row) => row.participant_id).sort();
+	expect(await participants()).toEqual([member, previous].sort());
+	const started = await t!.runtime.db.get<{ n: number }>(
+		"SELECT count(*) AS n FROM objective_events WHERE objective_id = ? AND kind = 'run.started' AND json_extract(detail, '$.session') = ?",
+		objective.id,
+		member,
+	);
+
+	// The user replaces the lead.
+	t.model.append([{ text: "The briefing is clear." }]);
+	const regenerated = await t.client.post(`/objectives/${objective.id}/regenerate-lead`, { reason: "It went quiet." });
+	expect(regenerated.status).toBe(200);
+	await settle(t);
+	const replacement = (await view(t, objective.id)).lead!.id;
+	expect(replacement).not.toBe(previous);
+
+	// The retired lead is in no thread at all, so none of them is read-only; the successor is in
+	// the member's thread; and the retired lead's own message is still there under its name.
+	expect(await t!.runtime.db.get("SELECT 1 AS one FROM thread_participants WHERE participant_id = ?", previous)).toBeUndefined();
+	expect(await participants()).toEqual([member, replacement].sort());
+	expect(await t!.runtime.db.get("SELECT 1 AS one FROM messages WHERE thread_id = ? AND sender_id = ?", memberThread, previous)).toBeDefined();
+	expect(await sessionFacts(previous)).toMatchObject({ state: "archived", stopped_by: "objective" });
+
+	// The member's thread still takes mail: the user's order wakes it, and its run is not refused
+	// as a read-only thread (STA-07).
+	t.model.append([{ text: "Auditing again." }]);
+	const userOrder = await reply(t, memberThread, "Audit it again, please.");
+	expect(userOrder.status).toBe(200);
+	await settle(t);
+	expect(await sessionFacts(member)).toMatchObject({ state: "idle" });
+	const after = await t!.runtime.db.get<{ n: number }>(
+		"SELECT count(*) AS n FROM objective_events WHERE objective_id = ? AND kind = 'run.started' AND json_extract(detail, '$.session') = ?",
+		objective.id,
+		member,
+	);
+	expect(after!.n).toBe(started!.n + 1);
+
+	// The successor may post in that thread too — the thing it could not do before.
+	t.model.append([{ text: "Report is in." }]);
+	const post = await pana(t, "thread respond", { thread: memberThread, after: await headOf(t, memberThread), body: "One more cycle count." }, replacement);
+	expect(post.exitCode, JSON.stringify(post.body)).toBe(0);
+	await settle(t);
+
+	// And it may retire and revive the member its predecessor hired (OBJ-13's control rule).
+	expect((await t.client.post(`/sessions/${member}/stop`, {}, { caller: replacement })).status).toBe(200);
+	expect(await sessionFacts(member)).toMatchObject({ state: "stopped", stopped_by: "objective" });
+	expect((await t.client.post(`/sessions/${member}/resume`, {}, { caller: replacement })).status).toBe(200);
+	expect((await sessionFacts(member)).stopped_by).toBeNull();
+
+	// A session that does not lead this objective still may not touch its members.
+	const outsider = await seedSession(t, null, "idle");
+	for (const action of ["stop", "resume", "compact"]) {
+		expect((await t.client.post(`/sessions/${member}/${action}`, {}, { caller: outsider })).status, action).toBe(403);
+	}
+	// The user's own stop stays inert to the objective even for a lead that can now control members.
+	expect((await t.client.post(`/sessions/${member}/stop`)).status).toBe(200);
+	expect((await t.client.post(`/sessions/${member}/resume`, {}, { caller: replacement })).status).toBe(403);
 });
