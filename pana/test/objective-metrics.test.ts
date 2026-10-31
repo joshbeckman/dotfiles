@@ -493,8 +493,18 @@ it("OBJ-28 GET metrics returns each metric's readings, target, and current value
 		"unit",
 		"window",
 	]);
-	const root = join(import.meta.dirname, "..", "src");
+	// The rest of the response is closed too: the whole view, and the current value inside it, name
+	// every field they have. A field implying a percentage would have to be added here first.
+	expect(Object.keys(view).sort()).toEqual(["atTarget", "metrics", "objective"]);
+	expect(Object.keys(view.metrics[0]!.current).sort()).toEqual(["at", "display", "stale", "value"]);
+	// OBJ-28's ban is on the objective package computing a percent-to-target total, not on the
+	// product using percentages anywhere: a diff view may say "40% changed" and the web client may
+	// have a `.pct` class without failing a test about metrics. A grep over all of `src` accused
+	// whatever code it found first, which is the worst kind of failure — right verdict, wrong
+	// accusation. So this scans this package, and no further.
+	const root = join(import.meta.dirname, "..", "src", "objectives");
 	const files = (readdirSync(root, { recursive: true }) as string[]).filter((name) => name.endsWith(".ts"));
+	expect(files.length).toBeGreaterThan(5);
 	const offenders: string[] = [];
 	for (const name of files) {
 		// Prose may say why no percentage exists; the code may not compute one.
