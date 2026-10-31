@@ -18,6 +18,7 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { addressList, createThread, messageBody, type ThreadResult } from "../threads/store.ts";
+import { assertObjectiveOpen } from "../objectives/state.ts";
 import { overDomainBudget } from "./budget.ts";
 import type { SessionRow } from "./runtime.ts";
 import { setSessionState } from "./state.ts";
@@ -210,10 +211,15 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	const thinking = parseThinking(optionalString(input.thinking, "thinking") ?? profile.thinking ?? DEFAULT_THINKING);
 	const chosen = selection(runtime, profile, profileName);
 
-	let parent: { id: string; depth: number } | undefined;
+	let parent: { id: string; depth: number; objective_id: string | null } | undefined;
 	if (caller.kind === "session") {
-		parent = await runtime.db.get<{ id: string; depth: number }>("SELECT id, depth FROM sessions WHERE id = ?", caller.id);
+		parent = await runtime.db.get<{ id: string; depth: number; objective_id: string | null }>(
+			"SELECT id, depth, objective_id FROM sessions WHERE id = ?",
+			caller.id,
+		);
 		if (!parent) throw ApiError.notFound(`session ${caller.id}`);
+		// OBJ-07: a member of a closed objective accepts no member create.
+		if (parent.objective_id !== null) await assertObjectiveOpen(runtime.db, parent.id);
 		// LIM-01: a session at the cap cannot create sessions.
 		if (parent.depth >= runtime.config.spawnDepth) {
 			throw ApiError.overBudget(`session ${caller.id} is at the spawn depth limit (${runtime.config.spawnDepth})`, {
@@ -261,8 +267,8 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 		await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, url, now);
 		// `idle` until the first message's wake sets `running`, in the thread's transaction (STA-01).
 		await tx.run(
-			`INSERT INTO sessions (id, conversation_id, state, parent, depth, model, thinking, profile, cwd, created_at, updated_at)
-			 VALUES (?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO sessions (id, conversation_id, state, parent, depth, model, thinking, profile, cwd, objective_id, created_at, updated_at)
+			 VALUES (?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id,
 			conversation.id,
 			parent?.id ?? null,
@@ -271,6 +277,8 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 			thinking ?? null,
 			profileName,
 			cwd ?? null,
+			// OBJ-15: inherited from the parent at create time, the way `depth` is.
+			parent?.objective_id ?? null,
 			now,
 			now,
 		);

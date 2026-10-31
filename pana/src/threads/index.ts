@@ -10,6 +10,7 @@ export {
 	addressList,
 	archiveThread,
 	createThread,
+	createThreadIn,
 	inbox,
 	inboxThreads,
 	isThreadArchived,

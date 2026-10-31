@@ -25,6 +25,7 @@ import {
 	type UsageState,
 } from "@earendil-works/pi-durable";
 import { ApiError } from "../api/errors.ts";
+import { assertObjectiveOpen } from "../objectives/state.ts";
 import { wakeRequestId, type PendingWake } from "../db/outbox.ts";
 import { indexSessionRun, type TranscriptEntry } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
@@ -153,6 +154,9 @@ export class SessionRuntime {
 					this.#checkedMessage = event.messageId;
 				}
 				if (event.recipientKind !== "session") return;
+				// OBJ-07: a closed objective refuses deliveries to its members, so it cannot spend
+				// by accident. The throw rolls back the append with it.
+				await assertObjectiveOpen(tx, event.recipientId);
 				if (event.requestId === null) return;
 				if (await overDomainBudget(tx, runtime)) {
 					// LIM-03: no new runs today. The delivery stays unread with no wake request, so

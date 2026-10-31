@@ -285,6 +285,178 @@ export const MIGRATIONS: readonly Migration[] = [
 			 ORDER BY d.created_at, m.seq;
 		`,
 	},
+	{
+		version: 12,
+		name: "objectives",
+		// WP18 in one migration (OBJ-02): the objectives packages ship in parallel and none of them
+		// may add a migration, so this holds every table and column the whole package needs.
+		// `src/objectives/` owns them.
+		//
+		// Nothing that is a function of other rows is stored: `running`, `idle`, `stranded` (OBJ-03),
+		// the budget conditions (OBJ-20..22), and `awaiting_user` (OBJ-33) are derived on read.
+		sql: `
+			CREATE TABLE IF NOT EXISTS objectives (
+				id                       TEXT PRIMARY KEY,
+				goal                     TEXT NOT NULL,
+				phase                    TEXT NOT NULL CHECK (phase IN ('drafting', 'active', 'stopped', 'done', 'archived')),
+				creator_id               TEXT NOT NULL, -- the user, or the session that proposed the draft
+				proposed_by              TEXT REFERENCES sessions(id), -- OBJ-04: the session that proposed it
+				-- OBJ-05: launch sets these with the phase, so an active objective always has exactly one lead.
+				lead_id                  TEXT REFERENCES sessions(id),
+				thread_id                TEXT REFERENCES threads(id), -- the objective's thread: the user and the lead
+				due_at                   INTEGER,
+				autonomy                 TEXT NOT NULL DEFAULT 'manual' CHECK (autonomy IN ('manual', 'auto')),
+				max_daily_usd            REAL,
+				max_total_usd            REAL,
+				wake_min_minutes         INTEGER,
+				max_daily_lead_turns     INTEGER,
+				max_daily_user_messages  INTEGER,
+				max_active_members       INTEGER,
+				charter_rev              INTEGER NOT NULL DEFAULT 0,
+				-- OBJ-06 and OBJ-08: when the stranded and behind notices last posted, so neither
+				-- repeats until the objective moves again. A notice record, not a state.
+				stranded_noticed_at      INTEGER,
+				behind_noticed_at        INTEGER,
+				created_at               INTEGER NOT NULL,
+				updated_at               INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS objectives_phase ON objectives(phase, created_at);
+			CREATE INDEX IF NOT EXISTS objectives_creator ON objectives(creator_id, created_at);
+
+			-- OBJ-09: append-only. The charter is the newest revision of each section.
+			CREATE TABLE IF NOT EXISTS objective_charter_revisions (
+				id            TEXT PRIMARY KEY,
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				rev           INTEGER NOT NULL,
+				section       TEXT NOT NULL CHECK (section IN ('Scope', 'Cancel', 'Done', 'Guidance', 'Escalation', 'Notes')),
+				body          TEXT NOT NULL,
+				created_by    TEXT NOT NULL,
+				created_at    INTEGER NOT NULL,
+				UNIQUE (objective_id, rev)
+			);
+			CREATE INDEX IF NOT EXISTS objective_charter_section ON objective_charter_revisions(objective_id, section, rev);
+
+			-- OBJ-25/26: one row per metric, with its optional check in the SCH-10 shape.
+			-- check_command and window_spec steer clear of SQLite's CHECK and WINDOW keywords.
+			CREATE TABLE IF NOT EXISTS objective_metrics (
+				objective_id   TEXT NOT NULL REFERENCES objectives(id),
+				name           TEXT NOT NULL,
+				unit           TEXT NOT NULL,
+				direction      TEXT NOT NULL CHECK (direction IN ('up', 'down')),
+				target         REAL,
+				aggregation    TEXT NOT NULL DEFAULT 'raw' CHECK (aggregation IN ('raw', 'mean')),
+				window_spec    TEXT,
+				check_command  TEXT,
+				check_cwd      TEXT,
+				check_every    TEXT,
+				check_cron     TEXT,
+				next_check_at  INTEGER,
+				last_check     TEXT,
+				frozen_at      INTEGER, -- OBJ-29: set by the first reading
+				created_at     INTEGER NOT NULL,
+				PRIMARY KEY (objective_id, name)
+			);
+			CREATE INDEX IF NOT EXISTS objective_metrics_checks ON objective_metrics(next_check_at) WHERE next_check_at IS NOT NULL;
+
+			-- OBJ-25/27: append-only readings; no code path issues UPDATE or DELETE.
+			CREATE TABLE IF NOT EXISTS metric_readings (
+				id            TEXT PRIMARY KEY,
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				name          TEXT NOT NULL,
+				at            INTEGER NOT NULL,
+				value         REAL NOT NULL,
+				source        TEXT NOT NULL CHECK (source IN ('lead', 'user', 'check'))
+			);
+			CREATE INDEX IF NOT EXISTS metric_readings_metric ON metric_readings(objective_id, name, at);
+
+			-- OBJ-30: a report is a thread message plus this row, so reports keep revisions, redaction,
+			-- deliveries, push, and FTS rather than starting a second append-only log.
+			CREATE TABLE IF NOT EXISTS objective_reports (
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				message_id    TEXT NOT NULL REFERENCES messages(id),
+				created_at    INTEGER NOT NULL,
+				PRIMARY KEY (objective_id, message_id)
+			);
+
+			-- OBJ-31: an artifact is an uploaded file plus this row; unlinking never deletes the file.
+			CREATE TABLE IF NOT EXISTS objective_files (
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				file_id       TEXT NOT NULL REFERENCES files(id),
+				created_at    INTEGER NOT NULL,
+				PRIMARY KEY (objective_id, file_id)
+			);
+
+			-- OBJ-23: every held or refused run records why. Append-only.
+			CREATE TABLE IF NOT EXISTS objective_events (
+				id            TEXT PRIMARY KEY,
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				at            INTEGER NOT NULL,
+				kind          TEXT NOT NULL,
+				detail        TEXT NOT NULL DEFAULT '{}',
+				actor_id      TEXT
+			);
+			CREATE INDEX IF NOT EXISTS objective_events_objective ON objective_events(objective_id, at);
+
+			-- OBJ-33/34: an escalation names its scope; a NULL member_id holds the whole objective.
+			CREATE TABLE IF NOT EXISTS objective_escalations (
+				id            TEXT PRIMARY KEY,
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				member_id     TEXT REFERENCES sessions(id),
+				thread_id     TEXT REFERENCES threads(id),
+				message_id    TEXT REFERENCES messages(id),
+				state         TEXT NOT NULL CHECK (state IN ('open', 'cleared')),
+				timeout_at    INTEGER,
+				cleared_at    INTEGER,
+				created_at    INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS objective_escalations_open ON objective_escalations(objective_id, state);
+
+			-- OBJ-20/21: the local-day ledger domain_costs keeps, per objective. maxTotalUsd reads
+			-- it as a lifetime sum.
+			CREATE TABLE IF NOT EXISTS objective_costs (
+				day           TEXT NOT NULL, -- YYYY-MM-DD in config.timezone
+				objective_id  TEXT NOT NULL REFERENCES objectives(id),
+				cost_usd      REAL NOT NULL DEFAULT 0,
+				noticed_at    INTEGER,
+				PRIMARY KEY (day, objective_id)
+			);
+
+			-- OBJ-15: objective_id, inherited at create the way depth is. OBJ-14: who stopped a
+			-- member. OBJ-18: hold_until on the lead.
+			--
+			-- SQLite cannot add a column twice, and a migration is re-runnable (DB-03), so the table
+			-- is rebuilt with the same rows rather than altered, as migration 7 rebuilt schedules.
+			CREATE TABLE sessions_new (
+				id                      TEXT PRIMARY KEY REFERENCES participants(id),
+				conversation_id         INTEGER UNIQUE, -- pi-durable ConversationId (a number)
+				state                   TEXT NOT NULL,
+				parent                  TEXT REFERENCES sessions_new(id),
+				depth                   INTEGER NOT NULL DEFAULT 0,
+				model                   TEXT,
+				thinking                TEXT,
+				profile                 TEXT,
+				cwd                     TEXT,
+				created_at              INTEGER NOT NULL,
+				updated_at              INTEGER NOT NULL,
+				cost_usd                REAL NOT NULL DEFAULT 0,
+				scratch_removed_at      INTEGER,
+				scratch_removed_bytes   INTEGER,
+				objective_id            TEXT REFERENCES objectives(id),
+				stopped_by              TEXT CHECK (stopped_by IN ('user', 'objective')),
+				hold_until              INTEGER
+			);
+			INSERT INTO sessions_new (id, conversation_id, state, parent, depth, model, thinking, profile, cwd,
+			                          created_at, updated_at, cost_usd, scratch_removed_at, scratch_removed_bytes)
+				SELECT id, conversation_id, state, parent, depth, model, thinking, profile, cwd,
+				       created_at, updated_at, cost_usd, scratch_removed_at, scratch_removed_bytes
+				  FROM sessions;
+			DROP TABLE sessions;
+			ALTER TABLE sessions_new RENAME TO sessions;
+			CREATE INDEX IF NOT EXISTS sessions_state ON sessions(state);
+			CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent);
+			CREATE INDEX IF NOT EXISTS sessions_objective ON sessions(objective_id);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
