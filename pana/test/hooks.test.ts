@@ -1,11 +1,11 @@
 // Repository hook ownership: session shells do not redirect Git hooks or add attribution.
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PanaExecutionEnv } from "../src/extension/env.ts";
+import { testGit } from "./harness/git.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -15,7 +15,11 @@ function setup() {
 	const home = join(root, "home");
 	const repo = join(root, "repo");
 	mkdirSync(home); mkdirSync(repo);
-	const plain = (args: string[]) => execFileSync("git", args, { cwd: repo, env: { PATH: process.env.PATH, HOME: home, GIT_CONFIG_NOSYSTEM: "1" } }).toString();
+	// The fixture home carries its own global config, so HOK-04 can write a global
+	// `core.hooksPath` and watch a session's shell respect it. Pointing git's global
+	// config at that file keeps the runner's own config out, which is what makes the
+	// plain repos here independent of the machine running the suite.
+	const plain = (args: string[]) => testGit(repo, args, { home, env: { GIT_CONFIG_GLOBAL: join(home, ".gitconfig") } });
 	plain(["init", "-q"]);
 	plain(["config", "user.name", "tester"]);
 	plain(["config", "user.email", "tester@example.test"]);

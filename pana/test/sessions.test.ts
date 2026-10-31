@@ -1,7 +1,6 @@
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { InboxDoc, LiveDoc, defineExtension, defineTool, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import { Type } from "@earendil-works/pi-ai";
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPanaRegistry } from "../src/extension/index.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAKE_EPOCH, startTestPanad, TEST_DOMAIN, TEST_USER, type Script, type TestPanad } from "./harness/index.ts";
+import { testGit } from "./harness/git.ts";
 
 interface Person {
 	id: string;
@@ -203,10 +203,11 @@ async function seedStoppedSession(): Promise<string> {
 function makeRepo(): string {
 	const repo = mkdtempSync(join(tmpdir(), "pana-wp3-repo-"));
 	dirs.push(repo);
-	const git = (args: string[]) => execFileSync("git", args, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] }).toString();
+	const git = (args: string[]) => testGit(repo, args);
 	git(["init", "-q", "-b", "main"]);
 	git(["config", "user.name", "tester"]);
 	git(["config", "user.email", `tester@${TEST_DOMAIN}`]);
+	git(["config", "commit.gpgsign", "false"]);
 	writeFileSync(join(repo, "README.md"), "hi\n");
 	git(["add", "."]);
 	git(["commit", "-q", "-m", "init"]);
@@ -273,7 +274,7 @@ describe("session create", () => {
 		const path = join(t!.dir, "worktrees", res.session.id);
 		expect(res.session.cwd).toBe(path);
 		expect(existsSync(join(path, "README.md"))).toBe(true);
-		const list = execFileSync("git", ["-C", repo, "worktree", "list", "--porcelain"]).toString();
+		const list = testGit(repo, ["worktree", "list", "--porcelain"]);
 		expect(list).toContain(path);
 		const conversation = await t!.runtime.harness.conversation(res.session.conversationId as ConversationId, ctx);
 		expect((await conversation!.agent(ctx)).cwd).toBe(path);
