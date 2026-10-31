@@ -199,6 +199,8 @@ class SetupTest(unittest.TestCase):
         self.assertIn('ripgrep', args)
         self.assertIn('fzf', args)
         self.assertIn('bat', args)
+        # .gitconfig sets delta as the pager; the Brewfile covers macOS only.
+        self.assertIn('git-delta', args)
 
     def test_ctags_uses_the_name_apt_knows(self):
         # exuberant-ctags is gone after Debian 12; naming it fails the whole
