@@ -4,7 +4,8 @@
 // SRC-04/SRC-05 in `search.test.ts`: a regression to a scan fails here, not just in a bench.
 
 import { afterEach, expect, it, vi } from "vitest";
-import { activate, draft, launch, seedSession, startObjectives, view, pana } from "./harness/objectives.ts";
+import { nextWakes } from "../src/schedules/live.ts";
+import { draft, launch, seedSession, startObjectives, view, pana } from "./harness/objectives.ts";
 import type { TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
@@ -84,11 +85,9 @@ it("OBJ-23 WAK-01 objectives reads plan through the event and wake indexes", asy
 		}
 		if (sql.includes("json_extract") && (sql.includes("payload")) && sql.includes("FROM schedules")) {
 			wakeReads += 1;
-			// The IN-list reads that also ORDER BY next_at keep the state index: paging in
-			// `next_at` order over an IN list needs a sort either way, and without `sqlite_stat1`
-			// SQLite prefers the order it already has (BENCH.md records both plans).
-			if (sql.includes("ORDER BY next_at")) expect(detail).toContain("schedules_state");
-			else expect(detail, `wake read misses the index: ${sql}\n${detail}`).toContain("schedules_wake_session");
+			expect(detail, `wake read misses the index: ${sql}\n${detail}`).toContain("schedules_wake_session");
+			// With the order applied in JS, no wake read leaves a sort behind in SQLite.
+			expect(detail, `wake read still sorts in SQLite: ${sql}\n${detail}`).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 		}
 	}
 	expect(eventReads).toBeGreaterThan(0);
@@ -96,4 +95,67 @@ it("OBJ-23 WAK-01 objectives reads plan through the event and wake indexes", asy
 	// The retired index served every read the new one now does, and cost a write per event.
 	expect(await t.runtime.db.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'objective_events_objective'")).toBeUndefined();
 	expect(await t.runtime.db.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'objective_events_kind'")).toBeDefined();
+});
+
+it("WAK-01 OBJ-32 wakes keep their (next_at, id) order now that the sort leaves SQL", async () => {
+	t = await startObjectives();
+	const objective = await draft(t, "Sort the wakes");
+	await launch(t, objective.id);
+	const lead = (await view(t, objective.id)).lead!.id;
+	const first = await seedSession(t, objective.id, "idle");
+	const second = await seedSession(t, objective.id, "idle");
+	const third = await seedSession(t, objective.id, "idle");
+	const now = t.clock.now();
+	const insert = (id: string, session: string, nextAt: number) =>
+		t!.runtime.db.write((tx) =>
+			tx.run(
+				`INSERT INTO schedules (id, kind, state, at, timezone, creator_id, payload, next_at, created_at, updated_at, stop_after_success, revision)
+				 VALUES (?, 'wake', 'active', ?, 'UTC', ?, ?, ?, ?, ?, 0, 0)`,
+				id,
+				nextAt,
+				lead,
+				JSON.stringify({ session, note: `wake ${id}` }),
+				nextAt,
+				now,
+				now,
+			),
+		);
+	// `first` has two wakes on the same instant whose ids disagree with insertion order.
+	await insert("01WAKEZZZZZZZZZZZZZZZZZZZZZ", first, now + 5_000);
+	await insert("01WAKEAAAAAAAAAAAAAAAAAAAAA", first, now + 5_000);
+	// `second` is earlier than both, `third` ties with `first` under a higher id.
+	await insert("01WAKEMIDDLEMIDDLEMIDDLEMID", second, now + 1_000);
+	await insert("01WAKEBBBBBBBBBBBBBBBBBBBBB", third, now + 5_000);
+
+	// The earliest wake per session, with the lower id breaking a tie.
+	const wakes = await nextWakes(t.runtime, [first, second, third]);
+	expect(wakes.get(first)!.at).toBe(now + 5_000);
+	expect(wakes.get(first)!.url).toContain("01WAKEAAAAAAAAAAAAAAAAAAAAA");
+	expect(wakes.get(second)!.url).toContain("01WAKEMIDDLEMIDDLEMIDDLEMID");
+	expect(wakes.get(third)!.url).toContain("01WAKEBBBBBBBBBBBBBBBBBBBBB");
+
+	// The brief lists them in the same order: earliest first, lower id on a tie.
+	const all = vi.spyOn(t.runtime.db, "all");
+	const res = await t.client.get<{ brief: string }>(`/objectives/${objective.id}/brief`);
+	const calls = [...all.mock.calls];
+	all.mockRestore();
+	expect(res.status).toBe(200);
+	const section = res.body.brief.split("## Pending wakes")[1]!.split("\n## ")[0]!;
+	const lines = section.split("\n").filter((line) => line.startsWith("- "));
+	const order = (session: string) => lines.findIndex((line) => line.includes(`/sessions/${session}`));
+	expect(order(second)).toBeGreaterThanOrEqual(0);
+	expect(order(second)).toBeLessThan(order(first));
+	expect(order(first)).toBeLessThan(order(third));
+	expect(lines.filter((line) => line.includes(`/sessions/${first} `))).toHaveLength(2);
+
+	// Both statements use the wake index with no sort left in SQLite.
+	let checked = 0;
+	for (const [sql, ...params] of calls) {
+		if (!(sql.includes("json_extract") && sql.includes("FROM schedules"))) continue;
+		const detail = (await t.runtime.db.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, ...params)).map((row) => row.detail).join("\n");
+		expect(detail, sql).toContain("schedules_wake_session");
+		expect(detail, sql).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+		checked += 1;
+	}
+	expect(checked).toBeGreaterThan(0);
 });

@@ -178,11 +178,26 @@ Plans, from `EXPLAIN QUERY PLAN` over the same statements (the test in `test/obj
 | every `objective_events` read | `objective_events_objective (objective_id=[ AND at>? AND at<?])` | `objective_events_kind (objective_id=? AND kind=?[ AND at>? AND at<?])` |
 | objectiveRunsToday | `objective_events_objective` range, table lookup per row | covering `objective_events_kind` |
 
-The two IN-list reads that also `ORDER BY next_at, id` keep the state index. An IN list over an expression index needs a sort either way, and without `sqlite_stat1` SQLite prefers the order it already has. Dropping the `ORDER BY` and sorting in JS moves both onto the index (143 µs and 80 µs, measured), and so does `ANALYZE` — 79 ms over this database. Neither is in this change.
+The two IN-list reads that also `ORDER BY next_at, id` kept the state index in migration 13. An IN list over an expression index needs a sort either way, and without `sqlite_stat1` SQLite prefers the order it already has. Dropping the `ORDER BY` and sorting in JS moves both onto the index, which is the follow-up measured in the next subsection.
 
 `leadRunsToday` (912 → 659 µs) and `member.created` (885 → 328 µs) still scan the `(objective_id, kind)` range and evaluate `json_extract(detail, …)` per row: the index narrows to the kind, and nothing narrows further. An expression index on `detail` is the next shape to try; it is not in this change.
 
 A malformed `payload` on an active wake row fails index creation at boot (`malformed JSON`), where the reads today only skip the row: the seed has zero such rows (checked with `NOT json_valid(payload)`), the partial predicate keeps session and non-active schedules out of the index, and every writer goes through `JSON.stringify`. A `session_id` column would remove the risk without query changes, at the cost of writing it from every schedule writer.
+
+### The two ordered wake reads
+
+`brief.pendingWakes` and `live.nextWakes` used to `ORDER BY next_at, id` in SQL. Over an IN list that is a temp B-tree, and with no statistics SQLite then chose `schedules_state` over the wake index. Same seeded database as the table above (600 active wakes over 600 sessions, one wake each), two copies each side, 200 calls:
+
+| Read | Members | `ORDER BY` in SQL, µs | Sorted in JS, µs |
+|---|---|---|---|
+| `brief.ts` pendingWakes | 5 | 1250 / 1252 | 29 / 28 |
+| `live.ts` nextWakes | 5 | 1294 / 1243 | 36 / 36 |
+| `brief.ts` pendingWakes | 50 | 1418 / 1438 | 191 / 187 |
+| `live.ts` nextWakes | 50 | 1470 / 1601 | 235 / 240 |
+
+At five members the index finds five rows and the read is 40× faster; at fifty members it does fifty seeks and reads fifty rows, so the win is 7×. The plans say the same thing: the ordered statement is `SEARCH schedules USING INDEX schedules_state (state=? AND next_at>?)` plus `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`, and the sorted one is `SEARCH schedules USING INDEX schedules_wake_session (kind=? AND <expr>=? AND next_at>?)` with nothing else.
+
+The sort moved from SQLite into V8: `bench-sql-ms` will not move measurably, and that is the expected shape, not a missing win — what the change buys is the index seek and the scan that stopped. `ANALYZE` was the alternative and is not in this change: it makes the ordered statement pick the index too (79 ms over this seeded database, measured with migration 13), but it stores statistics that go stale as `schedules` and `objective_events` grow, and it changes the planner's input everywhere, not only for these two reads. The order and its tie-break are unchanged: `(next_at, id)`, with ids compared in the ASCII byte order that `ORDER BY id` used. `test/objectives-indexes.test.ts` pins that with two wakes on one instant whose ids disagree with insertion order.
 
 ### The bench on this host
 
