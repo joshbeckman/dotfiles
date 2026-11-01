@@ -170,6 +170,8 @@ export async function regenerateLead(runtime: Runtime, caller: Caller, value: st
 	announce(runtime, "delivery", result, recipients);
 	// After the swap is durable: abort the old run, withdraw what it never answered, archive it and
 	// sweep its scratch (REF-02). A failure here leaves a stopped lead, never a second live one.
-	await sessionRuntime(runtime).archive(previousLead, "objective");
+	// `settleUnread` is OBJ-35's reset: the retired lead's inbox is settled as it goes, so no read
+	// anywhere shows mail addressed to a session that cannot answer.
+	await sessionRuntime(runtime).archive(previousLead, "objective", { settleUnread: true });
 	return showObjective(runtime, id);
 }

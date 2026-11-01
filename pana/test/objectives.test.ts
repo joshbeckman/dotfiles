@@ -560,6 +560,13 @@ it("OBJ-07 archive requires stopped or done, and cascades to member sessions thr
 	expect(early.status).toBe(409);
 	expect((early.body as { error: { code: string } }).error.code).toBe("wrong_phase");
 
+	// OBJ-35: mail that is waiting when the objective retires its sessions is settled, not left
+	// unread on a session that can never answer. The lead's delivery is held here (OBJ-18).
+	const threadId = (await view(objective.id)).thread!.id;
+	const mail = await t!.client.post<{ message: { id: string } }>(`/threads/${threadId}/messages`, { after: await objectiveThreadHead(threadId), body: "Before you close it." });
+	expect(mail.status, JSON.stringify(mail.body)).toBe(200);
+	expect(await t!.runtime.db.get("SELECT read_at FROM deliveries WHERE recipient_id = ? AND message_id = ?", lead, mail.body.message.id)).toEqual({ read_at: null });
+
 	await t!.client.post(`/objectives/${objective.id}/stop`);
 	const archived = await t!.client.post<{ objective: ObjectiveView }>(`/objectives/${objective.id}/archive`);
 	expect(archived.status).toBe(200);
@@ -567,6 +574,9 @@ it("OBJ-07 archive requires stopped or done, and cascades to member sessions thr
 	for (const session of [lead, member]) {
 		expect(await t!.runtime.db.get("SELECT state FROM sessions WHERE id = ?", session)).toEqual({ state: "archived" });
 	}
+	// The retired sessions have nothing left waiting on them, and the message itself survives.
+	expect(await t!.runtime.db.all("SELECT id FROM deliveries WHERE recipient_id IN (?, ?) AND read_at IS NULL", lead, member)).toEqual([]);
+	expect(await t!.runtime.db.get("SELECT body FROM messages WHERE id = ?", mail.body.message.id)).toMatchObject({ body: "Before you close it." });
 	// SCR-04: an archived session's scratch is gone, so archiving an objective sweeps it.
 	expect(existsSync(join(t!.runtime.paths.scratch, lead))).toBe(false);
 	// The user only: a session may not archive an objective.

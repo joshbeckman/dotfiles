@@ -398,6 +398,13 @@ it("OBJ-35 a regenerated lead takes the retired lead's place in every thread and
 		member,
 	);
 
+	// The member asks the lead a question it will never get to answer: the delivery is held (OBJ-18)
+	// and sits unread when the lead is retired.
+	const question = await pana(t, "thread respond", { thread: memberThread, after: await headOf(t, memberThread), body: "Which meter should I trust?" }, member);
+	expect(question.exitCode, JSON.stringify(question.body)).toBe(0);
+	const questionId = (question.body as { message: { id: string } }).message.id;
+	expect(await deliveryOf(t!, previous, questionId)).toMatchObject({ read_at: null });
+
 	// The user replaces the lead.
 	t.model.append([{ text: "The briefing is clear." }]);
 	const regenerated = await t.client.post(`/objectives/${objective.id}/regenerate-lead`, { reason: "It went quiet." });
@@ -405,6 +412,13 @@ it("OBJ-35 a regenerated lead takes the retired lead's place in every thread and
 	await settle(t);
 	const replacement = (await view(t, objective.id)).lead!.id;
 	expect(replacement).not.toBe(previous);
+
+	// OBJ-35: retiring the lead settles its inbox. Nothing waits on a session that cannot answer,
+	// and the mail itself is intact — the message, its delivery row, and the read mark, not a delete.
+	const unread = await t!.runtime.db.all<{ id: string }>("SELECT id FROM deliveries WHERE recipient_id = ? AND read_at IS NULL", previous);
+	expect(unread, "the retired lead has no unread mail").toEqual([]);
+	expect(await deliveryOf(t!, previous, questionId)).toMatchObject({ read_at: expect.any(Number) });
+	expect(await t!.runtime.db.get("SELECT body FROM messages WHERE id = ?", questionId)).toMatchObject({ body: "Which meter should I trust?" });
 
 	// The retired lead is in no thread at all, so none of them is read-only; the successor is in
 	// the member's thread; and the retired lead's own message is still there under its name.
@@ -432,6 +446,17 @@ it("OBJ-35 a regenerated lead takes the retired lead's place in every thread and
 	const post = await pana(t, "thread respond", { thread: memberThread, after: await headOf(t, memberThread), body: "One more cycle count." }, replacement);
 	expect(post.exitCode, JSON.stringify(post.body)).toBe(0);
 	await settle(t);
+
+	// And the thread's *next* message from the member reaches the successor, not the retired lead:
+	// settling the inbox emptied it of backlog without taking the mailbox away. The quiet interval
+	// holds the successor's run (OBJ-18), which is the point — the mail is queued for the live lead.
+	const followUp = await pana(t, "thread respond", { thread: memberThread, after: await headOf(t, memberThread), body: "Weather's turning; anything to change?" }, member);
+	expect(followUp.exitCode, JSON.stringify(followUp.body)).toBe(0);
+	const followUpId = (followUp.body as { message: { id: string } }).message.id;
+	expect(await deliveryOf(t!, replacement, followUpId)).toBeDefined();
+	expect(await deliveryOf(t!, previous, followUpId)).toBeUndefined();
+	expect((await sessionFacts(replacement)).hold_until).not.toBeNull();
+	expect(await t!.runtime.db.all("SELECT id FROM deliveries WHERE recipient_id = ? AND read_at IS NULL", previous)).toEqual([]);
 
 	// And it may retire and revive the member its predecessor hired (OBJ-13's control rule).
 	expect((await t.client.post(`/sessions/${member}/stop`, {}, { caller: replacement })).status).toBe(200);

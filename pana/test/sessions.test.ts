@@ -421,6 +421,25 @@ describe("session states", () => {
 		expect((await t!.client.post(`/sessions/${res.session.id}/stop`)).status).toBe(409);
 		expect((await t!.client.post(`/sessions/${res.session.id}/resume`)).status).toBe(409);
 	});
+
+	it("REF-02 the user's own archive keeps a session's unread mail, unlike an objective's retirement", async () => {
+		await start({ script: [{ text: "ok" }] });
+		const res = await create({ prompt: "go" });
+		await settled(res.session.id);
+		// A stopped session takes mail without reading it: the delivery row stays unread.
+		await t!.client.post(`/sessions/${res.session.id}/stop`);
+		const head = (await messages(res.thread.id)).at(-1)!.id;
+		const sent = await respond(res.thread.id, head, "one for the record");
+		expect(sent.status).toBe(200);
+		const unread = async () => t!.runtime.db.all("SELECT id FROM deliveries WHERE recipient_id = ? AND read_at IS NULL", res.session.id);
+		expect(await unread()).toHaveLength(1);
+
+		// REF-02: archiving an ordinary session by hand changes nothing about its mail. Only the
+		// objective's own retirements (OBJ-35's regenerate, OBJ-07's cascade) settle it.
+		expect((await t!.client.post(`/sessions/${res.session.id}/archive`)).status).toBe(200);
+		expect(await stateOf(res.session.id)).toBe("archived");
+		expect(await unread()).toHaveLength(1);
+	});
 });
 
 describe("mail delivery", () => {
