@@ -110,17 +110,13 @@ pana session create --prompt "What is the capital of France? Answer in one word.
 pana thread read THREAD
 ```
 
-### Replacing agent-mail-web
+### Pana took the tailnet address from agent-mail-web
 
-Pana's PWA replaces the Agent Mail web bridge. Both want the tailnet's `/`, so stop the bridge and move Tailscale Serve to pana. `launchctl disable` keeps the bridge off after a reboot, even though `dfm install` still links its plist.
+Pana's PWA replaced the Agent Mail web bridge, and both wanted the tailnet's `/`. The bridge and its units are retired now (`bin/retire-agent-automation` stops and disables them), so only the Tailscale Serve front stays as a step for a machine that already ran the old stack:
 
 ```sh
-launchctl bootout "gui/$(id -u)/org.joshbeckman.agent-mail-web"
-launchctl disable "gui/$(id -u)/org.joshbeckman.agent-mail-web"
 tailscale serve --bg 8766
 ```
-
-Agents still send mail with `agent-mail`, and `agent-mail inbox @josh` and `notify-josh` keep working; only the web UI moves. To bring the bridge back, run `launchctl enable` on the same label, `launchctl bootstrap` its plist, and `tailscale serve --bg 8765`.
 
 ### Other ways to run it
 
@@ -167,7 +163,7 @@ A session has no name. Its URL is its identity, its attribution, and its address
 - `panad` is the only process that opens `pana.sqlite`. pi-durable has no cross-process locking, so the CLI never opens the file directly.
 - State lives under `~/.local/state/pana/`: `pana.sqlite`, `files/`, `scratch/`, and `memory.git`.
 - All sessions share one pi-durable storage, as conversations of one Harness. pi-durable tables use the `pi_` prefix. Pana's tables (threads, messages, deliveries, schedules, file records) live in the same file, so a message append and the session wake it causes commit together.
-- `panad` binds HTTP to loopback. Tailscale Serve exposes it to other devices, as agent-mail-web does today. `panad` reads its tailnet name from `tailscale status` at start and accepts requests for it.
+- `panad` binds HTTP to loopback. Tailscale Serve exposes it to other devices, as the retired agent-mail-web bridge did. `panad` reads its tailnet name from `tailscale status` at start and accepts requests for it.
 - `panad` registers a model provider for each pi-ai provider whose API key is in its environment, such as `FIREWORKS_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`. A model ID is `provider/model-id`, e.g. `fireworks/accounts/fireworks/models/deepseek-v4p1-flash-1017`.
 - `panad` runs under launchd on macOS and a systemd user unit on Linux. Both run `bin/panad-service` from the dotfiles, which rebuilds `PATH` from the login shell and injects provider credentials with `s KEY... -- panad`. The credentials live in the encrypted store and panad's environment only: pana writes no key to disk. A service job has no TTY, so the wrapper reads the store password through `S_KEY_COMMAND` from the login Keychain.
 - Runtime is Node, because pi-durable is TypeScript.
@@ -526,8 +522,7 @@ Sessions show things to the user only through message Markdown (images, Mermaid)
 
 Pana starts empty and runs beside the old stack, so nothing has to change for it to work. Once pana has replaced daily use, remove:
 
-- `agent-mail`, `agent-mail2`, `agent-mail-web`, and their launchd and systemd units.
 - Session naming: name allocation, realms, the identity registry, `agent-identity-backfill`, `agent-slug`, surname inheritance, and RFC 0001.
 - `agent-trailer`, once `gw` and `gsw` derive session attribution from `PANA_SESSION` themselves. Project commits need no Pana trailer.
 - `agent-team`, scratchpads, and `agent-find`, unless pana keeps an equivalent.
-- The AGENTS.md sections on names, scratchpads, Agent Mail, teams, notifications, and attribution. Replace them with one section on pana.
+- The AGENTS.md sections on names, scratchpads, teams, notifications, and attribution. Replace them with one section on pana.

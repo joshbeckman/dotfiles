@@ -20,8 +20,12 @@ case "$(uname -s)" in
     ;;
   Linux)
     units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    # Mail delivery is retired, so every unit that ran it goes too: the timer that woke
+    # a parked session for unread mail, the verifier, and the web bridge.
+    retired_units=(agent-mail-wake.timer agent-mail-wake.service agent-mail-verify.timer
+                   agent-mail-verify.service agent-mail-web.service)
     if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
-      for unit in agent-mail-verify.timer agent-mail-verify.service agent-mail-web.service; do
+      for unit in "${retired_units[@]}"; do
         # Missing units are normal on new installs. Some systemd versions return
         # nonzero for them; accept only an explicit not-found result, not an
         # arbitrary manager error. Stop active units even if their source is gone.
@@ -40,11 +44,12 @@ case "$(uname -s)" in
         fi
       done
     else
-      echo 'retire-agent-automation: no user systemd bus; stop/disable agent-mail-verify.timer, agent-mail-verify.service and agent-mail-web.service when available' >&2
+      printf 'retire-agent-automation: no user systemd bus; stop/disable %s when available\n' \
+        "${retired_units[*]}" >&2
       # Keep unit links until they can be stopped and disabled successfully.
       exit 0
     fi
-    for unit in agent-mail-verify.timer agent-mail-verify.service agent-mail-web.service; do
+    for unit in "${retired_units[@]}"; do
       if [ -L "$units/$unit" ]; then rm "$units/$unit"; fi
       # An absent unit can still have dangling enablement/dependency links.
       # Remove only symlinks for these exact retired names, never regular files.

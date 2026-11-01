@@ -17,11 +17,13 @@ The PWA that `panad` serves at `/` (WEB-01..08). Plain HTML, CSS, and ES modules
 | `style.css`, `fonts.css`, `fonts/` | the site style guide: IBM Plex Sans, IBM Plex Mono (Berkeley Mono when installed), and the palette black `#0D0D0D`, white, blue `#002FA7`, orange `#FF7900`, purple `#903465`, green `#237F52`, red `#BD2024`, yellow `#FFCC00`; one spacing scale, `--s1` to `--s6` |
 | `manifest.webmanifest`, `favicon.svg` | installability |
 
-## Borrowed from agent-mail-web
+## Vendored bundles
 
-`renderers.js` and `mermaid-renderer.js` are copied from [`apps/agent-mail-web`](../../../apps/agent-mail-web), together with the prebuilt `vendor.js` (marked + DOMPurify) and `mermaid-vendor.js` (Mermaid). `THIRD_PARTY_LICENSES.txt` and `fonts/LICENSE.txt` come with them. To update a bundle, rebuild it there with `npm ci --ignore-scripts && npm run build`, then copy the output here. Do not edit the bundles by hand.
+Agent Mail is retired, so nothing in pana comes from it at runtime. Three bundles were built from it and stay here as artifacts: `vendor.js` (marked + DOMPurify), `mermaid-vendor.js` (Mermaid), and `memory-editor-vendor.js` (CodeMirror 6, global `PanaMemoryEditor`). `renderers.js` and `mermaid-renderer.js` are the two-line shims they were built from, and `THIRD_PARTY_LICENSES.txt` and `fonts/LICENSE.txt` came with them.
 
-`vendor.js` loads from `app.js` rather than a `<script defer>` tag, so the renderer is certainly present before the first message renders. `mermaid-vendor.js` loads only when a message contains a `language-mermaid` block, as agent-mail-web does. `memory-editor-vendor.js` is the same idea for the memory editor: built in agent-mail-web from a small `memory-editor.js` entry (esbuild, IIFE, global `PanaMemoryEditor`) and fetched by `app.js` on the first edit, so browsing memory never pays for CodeMirror.
+Their source is [`apps/agent-mail-web`](../../../apps/agent-mail-web), kept as build source only: it has no server and no UI that runs any more. To update a bundle, rebuild it there with `npm ci --ignore-scripts && npm run build`, then copy the output here. Do not edit the bundles by hand.
+
+`vendor.js` loads from `app.js` rather than a `<script defer>` tag, so the renderer is certainly present before the first message renders. `mermaid-vendor.js` loads only when a message contains a `language-mermaid` block, as the app that built it did. `memory-editor-vendor.js` is fetched by `app.js` on the first edit, so browsing memory never pays for CodeMirror.
 
 Memory files have canonical `pana://<domain>/memory/files/<path>` URLs, with each relative repository path segment percent-encoded. They resolve to the latest published file on `main`, not a writer worktree or a historical revision. The file API exposes these URLs and clicking an open file’s heading copies its URL, just like thread, message, session, and schedule self-identifiers (UX-17).
 
