@@ -177,6 +177,12 @@ export function primaryCheckoutRefusal(path: string, root: string): string {
  * - a mutating command (`rm`, `mv`, `sed -i`, …) whose arguments name a checkout path.
  *
  * Reads that name their file stay allowed: `grep -n foo ~/dotfiles/pana/src/x.ts`.
+ *
+ * The one writing git command it admits is the fast-forward PRM-05 already permits a session to run
+ * on explicit user request: `git -C <checkout> fetch`, `… pull --ff-only`, `… merge --ff-only`.
+ * Nothing else opens: a pull or merge without `--ff-only` (or with `--no-ff`, `--rebase`,
+ * `--autostash`, `--squash`) is refused, so a branch that cannot fast-forward fails in git instead
+ * of being merged, rebased, or stashed by the guard's permission.
  */
 export function checkoutCommandRefusal(
 	command: string,
@@ -195,13 +201,20 @@ export function checkoutCommandRefusal(
 		if (root !== undefined) return refusedEntry(root);
 	}
 
-	for (const match of command.matchAll(GIT_DIR)) {
-		const token = match[1] ?? match[2] ?? "";
-		const root = inside(token);
+	// `-C` names the checkout for a read or for the fast-forward; `--git-dir` names no work tree, so
+	// it stays read-only.
+	for (const match of command.matchAll(GIT_C)) {
+		const root = inside(match[1]!);
 		if (root === undefined) continue;
-		const rest = command.slice((match.index ?? 0) + match[0].length).trim().split(/\s+/);
-		const subcommand = rest[0]?.replace(/^["']|["']$/g, "") ?? "";
-		if (!READ_ONLY_GIT.has(subcommand)) return refusedEntry(root);
+		const refusal = gitRefusal(root, gitWords(command, match));
+		if (refusal !== undefined) return refusal;
+	}
+
+	for (const match of command.matchAll(GIT_DIR)) {
+		const root = inside(match[1]!);
+		if (root === undefined) continue;
+		const words = gitWords(command, match);
+		if (!READ_ONLY_GIT.has(words[0] ?? "")) return refusedGit(root, words[0] ?? "");
 	}
 
 	for (const match of command.matchAll(REDIRECT)) {
@@ -220,8 +233,10 @@ export function checkoutCommandRefusal(
 
 /** `cd` into a checkout, or `pushd`: the whole shell is then inside it. */
 const ENTER = /(?:^|[\s;&|(`])(?:cd|pushd)\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
-/** `git -C PATH` and `git --git-dir PATH|--git-dir=PATH`. */
-const GIT_DIR = /(?:^|[\s;&|(`])-C\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)|--git-dir[=\s]("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
+/** `git -C PATH`: how a session names the checkout for a read or a fast-forward. */
+const GIT_C = /(?:^|[\s;&|(`])-C\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
+/** `git --git-dir PATH|--git-dir=PATH`, which reads only. */
+const GIT_DIR = /(?:^|[\s;&|(`])--git-dir[=\s]("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 /** A shell redirect's target: `> path`, `>> path`. */
 const REDIRECT = /(?:^|[^0-9<>])>>?\s*("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 /** A command that writes its arguments, with everything up to the next separator as its words. */
@@ -251,6 +266,38 @@ const READ_ONLY_GIT = new Set([
 	"shortlog",
 ]);
 
+/**
+ * The subcommands a session may run in a checkout although they write, when they write only a
+ * fast-forward (PRM-05): `fetch` moves refs and never the working tree, and `pull`/`merge` are
+ * admitted below with `--ff-only` and nothing that turns them into a merge, rebase or stash.
+ */
+const FAST_FORWARD_GIT = new Set(["pull", "merge"]);
+
+/** A `pull`/`merge` flag that makes the command something other than a plain fast-forward. */
+const NOT_FAST_FORWARD = /^(?:--(?:no-ff|ff|rebase|rebase-merges|autostash|squash|no-commit|abort|continue|quit)(?:=|$)|-r$|-n$)/;
+
+/** The words of the git invocation `match` found, up to the next shell separator. */
+function gitWords(command: string, match: RegExpMatchArray): string[] {
+	const after = command.slice((match.index ?? 0) + match[0].length);
+	const segment = after.split(/&&|\|\||[;|`\n()]/)[0] ?? "";
+	return segment
+		.trim()
+		.split(/\s+/)
+		.map((word) => word.replace(/^["']|["']$/g, ""))
+		.filter((word) => word !== "");
+}
+
+/** Why this git invocation may not run against the checkout, or undefined when it may. */
+function gitRefusal(root: string, words: readonly string[]): string | undefined {
+	const subcommand = words[0] ?? "";
+	if (READ_ONLY_GIT.has(subcommand) || subcommand === "fetch") return undefined;
+	if (FAST_FORWARD_GIT.has(subcommand)) {
+		const flags = words.slice(1);
+		if (flags.includes("--ff-only") && !flags.some((flag) => NOT_FAST_FORWARD.test(flag))) return undefined;
+	}
+	return refusedGit(root, subcommand);
+}
+
 /** A shell word resolved to an absolute path, or undefined for a flag, a variable, or a non-path. */
 function tokenTarget(token: string, cwd: string, home: string): string | undefined {
 	let text = token.replace(/^["']|["']$/g, "").replace(/[),]+$/, "");
@@ -261,6 +308,26 @@ function tokenTarget(token: string, cwd: string, home: string): string | undefin
 	// by the mount (GUARD-02) rather than guessed at here.
 	if (text.includes("$")) return undefined;
 	return realPath(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) ? text : resolve(cwd, text));
+}
+
+/**
+ * The refusal a writing git command gets. It teaches the fast-forward a session *may* run, the way
+ * GUARD-01's names `pana worktree add`: a model told only "refused" retries variations of the same
+ * command.
+ */
+function refusedGit(root: string, subcommand: string): string {
+	const command = subcommand === "" ? "this command" : `\`git -C ${root} ${subcommand}\``;
+	return (
+		`pana refused this command: ${command} writes in ${root}, the user's primary checkout of a git ` +
+		"repository, not a worktree. A fast-forward is the one write a session may run there, and only when " +
+		`the user asked for it: \`git -C ${root} fetch <remote>\`, compare the incoming paths with the ` +
+		"checkout's staged, unstaged, and untracked files (PRM-05), then run " +
+		`\`git -C ${root} pull --ff-only --no-autostash <verified-remote> <inspected-commit>\`; ` +
+		`\`git -C ${root} merge --ff-only <ref>\` is that same fast-forward after a separate fetch. Anything ` +
+		`else belongs in a worktree: run \`pana worktree add ${root}\`, then \`cd\` to the path it prints and ` +
+		"run the command there. Reading the checkout is still allowed by naming the file, as in " +
+		`\`grep -n something ${root}/README.md\`.`
+	);
 }
 
 function refusedEntry(root: string): string {

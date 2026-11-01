@@ -191,6 +191,103 @@ describe("GUARD-06 the admission check costs no process", () => {
 		expect(refusal(`cat ${join(t.repo, "tracked.txt")}`)).toBeUndefined();
 		expect(refusal("npm test")).toBeUndefined();
 	});
+
+	it("admits the fast-forward PRM-05 permits: fetch, and pull or merge pinned to --ff-only", () => {
+		const t = setup();
+		const checkouts = [realPath(t.repo)];
+		const refusal = (command: string) => checkoutCommandRefusal(command, { cwd: t.scratch, home: t.home, checkouts });
+
+		expect(refusal(`git -C ${t.repo} fetch`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} fetch origin`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} pull --ff-only`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} pull --ff-only --no-autostash origin abc1234`)).toBeUndefined();
+		// The flag need not come first, and the pinned commit need not come last.
+		expect(refusal(`git -C ${t.repo} pull origin abc1234 --ff-only`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} pull --no-autostash --ff-only origin abc1234`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} merge --ff-only origin/master`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} merge --no-autostash --ff-only abc1234`)).toBeUndefined();
+		// In a chain or a pipeline, up to a separator: the words after it are another command.
+		expect(refusal(`npm test && git -C ${t.repo} pull --ff-only`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} fetch origin && git -C ${t.repo} pull --ff-only`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} pull --ff-only origin abc1234 | tail -3`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} merge --ff-only abc1234; git -C ${t.repo} log --oneline -1`)).toBeUndefined();
+		// `~` and `$HOME` resolve to the session's HOME, as they do for a read.
+		expect(refusal("git -C ~/pana fetch")).toBeUndefined();
+		expect(refusal("git -C ~/pana pull --ff-only")).toBeUndefined();
+		expect(refusal(`git -C "$HOME/pana" pull --ff-only`)).toBeUndefined();
+		expect(refusal("git -C $HOME/pana merge --ff-only origin/master")).toBeUndefined();
+	});
+
+	it("refuses every pull or merge that is not the fast-forward, and every other write", () => {
+		const t = setup();
+		const checkouts = [realPath(t.repo)];
+		const refusal = (command: string) => checkoutCommandRefusal(command, { cwd: t.scratch, home: t.home, checkouts });
+
+		for (const command of [
+			`git -C ${t.repo} pull`,
+			`git -C ${t.repo} pull origin master`,
+			`git -C ${t.repo} pull --no-ff`,
+			`git -C ${t.repo} pull --ff`,
+			`git -C ${t.repo} pull --ff-only --ff`,
+			`git -C ${t.repo} pull --rebase`,
+			`git -C ${t.repo} pull --rebase=merges`,
+			`git -C ${t.repo} pull --ff-only --rebase`,
+			`git -C ${t.repo} pull --autostash`,
+			`git -C ${t.repo} pull --ff-only --autostash`,
+			`git -C ${t.repo} pull --ff-only --squash`,
+			`git -C ${t.repo} pull --ff-only --no-commit`,
+			`git -C ${t.repo} merge`,
+			`git -C ${t.repo} merge origin/master`,
+			`git -C ${t.repo} merge --no-ff origin/master`,
+			`git -C ${t.repo} merge --ff-only --no-ff`,
+			`git -C ${t.repo} merge --ff-only --squash`,
+			// `--git-dir` names no work tree, so the fast-forward is not admitted through it.
+			`git --git-dir=${join(t.repo, ".git")} pull --ff-only`,
+			`git --git-dir=${join(t.repo, ".git")} fetch`,
+			// The mutator list and the read-only list are unchanged.
+			`git -C ${t.repo} reset --hard`,
+			`git -C ${t.repo} checkout main`,
+			`git -C ${t.repo} switch -c x`,
+			`git -C ${t.repo} stash`,
+			`git -C ${t.repo} commit -m x`,
+			`git -C ${t.repo} clean -fd`,
+			`git -C ${t.repo} rebase main`,
+			// A fast-forward in a chain does not carry the chain: the write after it is refused.
+			`git -C ${t.repo} pull --ff-only && git -C ${t.repo} reset --hard`,
+			// Inside a chain and a pipeline the same flag rule applies.
+			`npm test && git -C ${t.repo} pull`,
+			`git -C ${t.repo} pull | tee /dev/null`,
+		]) {
+			expect(refusal(command), command).toBeDefined();
+		}
+	});
+
+	it("teaches the allowed fast-forward instead of only naming a worktree", () => {
+		const t = setup();
+		const checkouts = [realPath(t.repo)];
+		const message = checkoutCommandRefusal(`git -C ${t.repo} pull`, {
+			cwd: t.scratch,
+			home: t.home,
+			checkouts,
+		});
+		expect(message).toContain(t.repo);
+		expect(message).toContain("pull --ff-only");
+		expect(message).toContain("--no-autostash");
+		expect(message).toContain("pana worktree add");
+	});
+
+	it("lets a fast-forward reach git in the checkout, and stops a bare pull before it runs", async () => {
+		const t = setup();
+		const e = env({ home: t.home, cwd: t.scratch });
+		// The checkout has no upstream, so git itself fails: the point is that the guard let it run.
+		const ran = await e.exec(["git", "-C", t.repo, "pull", "--ff-only"], undefined, ctx);
+		if (!ran.ok) throw new Error(ran.error.message);
+		expect(ran.value.exitCode).not.toBe(0);
+		const refused = await e.exec(["git", "-C", t.repo, "pull"], undefined, ctx);
+		expect(refused.ok).toBe(false);
+		if (refused.ok) throw new Error("expected a refusal");
+		expect(refused.error.message).toContain("pull --ff-only");
+	});
 });
 
 describe("GUARD-04 the scan finds checkouts, not worktrees", () => {

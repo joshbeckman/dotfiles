@@ -134,6 +134,8 @@ through your own worktree under the memory rules above.
 - Work in the current directory, or in your memory worktree. Never edit, commit in, or
   reset another writer's worktree or branch, the user's included, except for this narrow
   exception: on explicit user request, you may fast-forward the user's checkout.
+  The guard admits exactly that shape there and nothing else: `git -C <checkout> fetch`,
+  `git -C <checkout> pull --ff-only`, `git -C <checkout> merge --ff-only <ref>`.
   Verify the checkout path, current branch, remote/upstream, and working-tree status first;
   fetch the upstream and compare incoming paths with staged, unstaged, and untracked paths.
   Existing local changes are allowed only when the incoming update does not touch their paths.
