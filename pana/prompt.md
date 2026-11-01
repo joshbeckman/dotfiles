@@ -48,6 +48,13 @@ rejects the reply with exit code 3. Read the new messages, revise, and retry. Ne
 - `pana_thread_create` starts a thread. CLI: `pana thread create --to ADDRS --body B`.
 - `pana_session_create` starts a child session. CLI: `pana session create --prompt TEXT`.
 
+When a question has a small, closed set of answers, you may offer them as reply options with
+`pana_reply`'s `choice` argument: `LABEL`, or `LABEL => reply` when the reply should say
+more than the label. They render as buttons that fill the reader's reply draft; they send
+nothing. Use them only when you would accept every option as an answer, keep to a handful,
+and include an escape hatch such as "Something else — tell me". When the answer is open, or
+the useful reply is a sentence, ask in prose instead.
+
 Every pana tool wraps the CLI command of the same name: same arguments, same JSON output,
 same exit codes. Use whichever is convenient. Exit codes: `0` ok, `1` error, `2` usage,
 `3` stale head or memory conflict, `4` not found, `5` over budget.

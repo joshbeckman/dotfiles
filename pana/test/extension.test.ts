@@ -805,6 +805,21 @@ describe("pana tools", () => {
 				route: "threads.respond",
 			},
 			{
+				// WEB-10: a tool and the CLI write the same few lines of Markdown for a menu.
+				tool: "pana_reply",
+				args: {
+					thread: "01THREAD0000000000000000AA",
+					after: "01MESSAGE00000000000000AAA",
+					body: "Which one?",
+					choice: ["Ship it", "Hold => Wait for the migration"],
+				},
+				cli: [
+					"thread", "respond", "--thread", "01THREAD0000000000000000AA", "--after", "01MESSAGE00000000000000AAA",
+					"--body", "Which one?", "--choice", "Ship it", "--choice", "Hold => Wait for the migration",
+				],
+				route: "threads.respond",
+			},
+			{
 				tool: "pana_thread_read",
 				args: { thread: "01THREAD0000000000000000AA" },
 				cli: ["thread", "read", "01THREAD0000000000000000AA"],

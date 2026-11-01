@@ -57,7 +57,7 @@ import {
 	untilLabel,
 	workingParticipants,
 } from "./views.js";
-import { renderMessage } from "./render.js";
+import { renderMessage, syncChoices } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -1239,7 +1239,10 @@ async function messageElement(message, { focus }) {
 			ensureMermaid,
 			idPrefix: `diagram-${view.id ?? "x"}`,
 			dark: matchMedia("(prefers-color-scheme: dark)").matches,
+			// WEB-10: a reply option offers text for the draft under the thread, nothing else.
+			onPick: pickChoice,
 		});
+		syncChoices(body, draftHas);
 	}
 
 	if (focus) article.classList.add("focus");
@@ -1389,6 +1392,39 @@ async function openThread(id, focusMessage) {
 	if (focusMessage) await api("POST", `/messages/${focusMessage}/read`).catch(() => {});
 	// REF-06: reading the thread clears its unread count.
 	await refreshUnread().catch(() => {});
+}
+
+/**
+ * WEB-10: a choice is picked exactly when its reply is a line of the draft. Deleting the line
+ * unpicks the button, so the draft below is the only place a pick is stored.
+ */
+function draftHas(reply) {
+	return $("reply-body").value.split("\n").some((line) => line.trim() === reply);
+}
+
+/**
+ * WEB-10: add a clicked option's reply to the draft, or take it out again when it is already
+ * there. The composer's own `input` listener saves the draft from here, so a pick survives a
+ * reload the way typed text does. Nothing is sent: the draft is the reader's to revise.
+ */
+function pickChoice(option) {
+	if (!state.draft) return;
+	const box = $("reply-body");
+	const lines = box.value.split("\n");
+	const at = lines.findIndex((line) => line.trim() === option.reply);
+	if (at === -1) {
+		const head = box.value.replace(/\s+$/, "");
+		box.value = head ? `${head}\n${option.reply}` : option.reply;
+		status(`Added “${option.label}” to your reply.`);
+	} else {
+		lines.splice(at, 1);
+		box.value = lines.join("\n").replace(/^\s*\n+/, "").replace(/\s+$/, "");
+		status(`Removed “${option.label}” from your reply.`);
+	}
+	// Save the draft the way a keystroke does, then let the buttons follow it.
+	box.dispatchEvent(new Event("input", { bubbles: true }));
+	// Every message on screen, including the ones a stale reply lists above the box.
+	syncChoices(document, draftHas);
 }
 
 async function submitReply(event) {
@@ -3947,6 +3983,8 @@ $("reply-body").addEventListener("input", () => {
 	if (!draft) return;
 	draft.body = $("reply-body").value;
 	sessionStorage.setItem(`pana-draft:${draft.threadId}`, draft.body);
+	// WEB-10: an option is picked while its reply is a line of the draft.
+	syncChoices(document, draftHas);
 });
 $("confirm").addEventListener("submit", (event) => void confirmAction(event));
 $("confirm-no").addEventListener("click", cancelAction);

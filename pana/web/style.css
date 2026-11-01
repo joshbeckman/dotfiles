@@ -854,6 +854,48 @@ button.quiet:hover,
 .prose hr { border: 0; border-top: 1px solid var(--c-border); margin: var(--s6) 0; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
+/* WEB-10: reply options render as buttons a reader can click to fill the draft. They are prose
+   controls, not app controls, so they keep sentence case and stay readable at any length. */
+.choices {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	margin: 0 0 var(--s3);
+}
+.choice {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.1em;
+	max-width: 100%;
+	min-height: var(--control-h);
+	padding: var(--s1) var(--s3);
+	border-color: var(--c-border);
+	font-family: var(--font-sans);
+	text-transform: none;
+	letter-spacing: 0;
+	font-size: 0.9rem;
+	white-space: normal;
+	text-align: left;
+}
+.choice:hover {
+	border-color: var(--c-link);
+	color: var(--c-link);
+	background: none;
+}
+.choice[aria-pressed="true"] {
+	border-color: var(--c-link);
+	background: var(--c-selected);
+	color: var(--c-link);
+}
+.choice-reply {
+	display: block;
+	font-size: 0.78rem;
+	color: var(--c-text-alt);
+}
+.choice[aria-pressed="true"] .choice-reply {
+	color: inherit;
+}
 .message .confirm {
 	margin-top: var(--s3);
 }
