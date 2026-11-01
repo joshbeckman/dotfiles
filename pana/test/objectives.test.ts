@@ -249,8 +249,8 @@ it("OBJ-02 one migration at the end of MIGRATIONS adds every table the package n
 
 	// It is the last migration, numbered, and the schema version follows it.
 	const last = MIGRATIONS.at(-1)!;
-	expect(last).toMatchObject({ version: 12, name: "objectives" });
-	expect(SCHEMA_VERSION).toBe(12);
+	expect(last).toMatchObject({ version: 13, name: "objective and wake index" });
+	expect(SCHEMA_VERSION).toBe(13);
 	expect(MIGRATIONS.map((migration) => migration.version)).toEqual(MIGRATIONS.map((_, index) => index + 1));
 
 	// A database newer than the code still refuses to open (DB-03 holds for this version).
