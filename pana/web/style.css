@@ -1679,7 +1679,7 @@ kbd {
 	flex-wrap: wrap;
 	align-items: baseline;
 	justify-content: space-between;
-	gap: var(--s1) var(--s3);
+	gap: var(--s1) var(--s2);
 	min-width: 0;
 }
 .meter-label {
@@ -1697,10 +1697,14 @@ kbd {
 .meter-value[data-over="true"] {
 	color: var(--p-red);
 }
-/* OBJ-39: where a meter's limit came from, when it is not the objective's own. */
+/* OBJ-39: where a meter's limit came from, when it is not the objective's own. It takes the rest of
+   the row and wraps there, so "from the domain's config" is never cut off at a column's edge. */
 .meter-source {
+	flex: 1 1 100%;
+	min-width: 0;
 	font-size: 0.75rem;
 	color: var(--c-text-alt);
+	overflow-wrap: anywhere;
 }
 .meter-bar {
 	height: 0.35rem;
@@ -1828,4 +1832,34 @@ kbd {
 }
 #objective-wakes li {
 	overflow-wrap: anywhere;
+}
+
+/* OBJ-41: the limits a user sets. The inputs are the objective's own values, and a blank one means
+   the domain's default, which the placeholder names. Two to a row, one on a phone. */
+.limits-form {
+	margin-top: var(--s2);
+	padding-top: var(--s3);
+	border-top: 1px solid var(--c-border);
+}
+.limits-form h4 {
+	margin: 0;
+	font-family: var(--font-condensed);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-size: 0.9rem;
+}
+.limits-form .field-row > .field {
+	flex: 1 1 12rem;
+}
+.limits-form input {
+	font-family: var(--font-mono);
+	font-size: 0.9rem;
+}
+/* OBJ-39: a disabled action still reads as the thing it is; only its reachability changes. */
+#objective .header-actions button[disabled] {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+#objective-actions-note {
+	margin: 0;
 }

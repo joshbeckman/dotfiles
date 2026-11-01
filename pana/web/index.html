@@ -322,12 +322,17 @@
 						<a href="#/objectives" class="back" data-testid="objective-back">Objectives</a>
 						<h2 id="objective-goal" data-testid="objective-goal" tabindex="-1"></h2>
 						<div class="header-actions">
-							<button type="button" class="quiet" id="objective-launch" data-testid="objective-launch" hidden>Launch</button>
-							<button type="button" class="quiet" id="objective-stop" data-testid="objective-stop" hidden>Stop</button>
-							<button type="button" class="quiet" id="objective-regenerate" data-testid="objective-regenerate" hidden>Regenerate lead</button>
+							<button type="button" class="quiet" id="objective-launch" data-testid="objective-launch">Launch</button>
+							<button type="button" class="quiet" id="objective-stop" data-testid="objective-stop">Stop</button>
+							<button type="button" class="quiet" id="objective-resume" data-testid="objective-resume">Resume</button>
+							<button type="button" class="quiet" id="objective-done" data-testid="objective-done">Done</button>
+							<button type="button" class="quiet" id="objective-archive" data-testid="objective-archive">Archive</button>
+							<button type="button" class="quiet" id="objective-regenerate" data-testid="objective-regenerate">Regenerate lead</button>
 							<button type="button" class="quiet" data-testid="objective-reload" id="objective-reload">Reload</button>
 						</div>
 					</header>
+					<!-- OBJ-39: an action the phase forbids is shown disabled with its reason, never hidden. -->
+					<p id="objective-actions-note" data-testid="objective-actions-note" class="hint" hidden></p>
 					<p id="objective-meta" data-testid="objective-meta" class="meta-line"></p>
 
 					<div id="objective-escalation" data-testid="objective-escalation" class="notice" hidden></div>
@@ -349,6 +354,44 @@
 						<h3 id="objective-meters-title">Limits</h3>
 						<p class="hint" id="objective-meters-hint">Money and runs against the limits that stop this objective. A limit the objective does not set follows the domain's configuration, and the meter says so.</p>
 						<div id="objective-meters" data-testid="objective-meters" class="meters"></div>
+						<!-- OBJ-41: the limits are the user's; a blank field means the domain's default. -->
+						<form id="objective-limits" data-testid="objective-limits" class="limits-form">
+							<h4>Set the limits</h4>
+							<p class="hint">Blank means the domain's default. Each change is recorded on the objective.</p>
+							<div class="field-row">
+								<div class="field">
+									<label for="limit-maxDailyUsd">Spend a day (USD)</label>
+									<input id="limit-maxDailyUsd" data-testid="limit-maxDailyUsd" data-limit="maxDailyUsd" type="number" min="0.01" step="0.01" inputmode="decimal" autocomplete="off" />
+								</div>
+								<div class="field">
+									<label for="limit-maxTotalUsd">Spend in total (USD)</label>
+									<input id="limit-maxTotalUsd" data-testid="limit-maxTotalUsd" data-limit="maxTotalUsd" type="number" min="0.01" step="0.01" inputmode="decimal" autocomplete="off" />
+								</div>
+							</div>
+							<div class="field-row">
+								<div class="field">
+									<label for="limit-wakeMinMinutes">Minutes between runs</label>
+									<input id="limit-wakeMinMinutes" data-testid="limit-wakeMinMinutes" data-limit="wakeMinMinutes" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+								</div>
+								<div class="field">
+									<label for="limit-maxDailyLeadTurns">Lead runs a day</label>
+									<input id="limit-maxDailyLeadTurns" data-testid="limit-maxDailyLeadTurns" data-limit="maxDailyLeadTurns" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+								</div>
+							</div>
+							<div class="field-row">
+								<div class="field">
+									<label for="limit-maxDailyUserMessages">Messages to you a day</label>
+									<input id="limit-maxDailyUserMessages" data-testid="limit-maxDailyUserMessages" data-limit="maxDailyUserMessages" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+								</div>
+								<div class="field">
+									<label for="limit-maxActiveMembers">Active members</label>
+									<input id="limit-maxActiveMembers" data-testid="limit-maxActiveMembers" data-limit="maxActiveMembers" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+								</div>
+							</div>
+							<div class="form-actions">
+								<button type="submit" class="primary" data-testid="limits-save" id="limits-save">Save limits</button>
+							</div>
+						</form>
 					</section>
 
 					<section id="objective-metrics-section" aria-labelledby="objective-metrics-title">

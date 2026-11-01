@@ -73,6 +73,8 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/objectives/:id/regenerate-lead", name: "objectives.regenerateLead", wp: "WP18" },
 	{ method: "POST", pattern: "/objectives/:id/artifacts", name: "objectives.artifacts.add", wp: "WP18" },
 	{ method: "DELETE", pattern: "/objectives/:id/artifacts/:fileId", name: "objectives.artifacts.remove", wp: "WP18" },
+	// OBJ-41: the user's limits, recorded field by field.
+	{ method: "POST", pattern: "/objectives/:id/limits", name: "objectives.limits.set", wp: "WP18" },
 	{ method: "GET", pattern: "/push/key", name: "push.key", wp: "WP8" },
 	{ method: "GET", pattern: "/push/subscriptions", name: "push.subscriptions.list", wp: "WP8" },
 	{ method: "POST", pattern: "/push/subscriptions", name: "push.subscriptions.create", wp: "WP8" },

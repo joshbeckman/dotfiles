@@ -112,7 +112,7 @@ describeBrowser("objectives", () => {
 			wakes: string[];
 			wakeCount: string;
 			escalation: string;
-			actions: { launch: boolean; stop: boolean; regenerate: boolean };
+			actions: Record<string, string | undefined>;
 		}>(`
 			location.hash = "#/objectives/${active.id}";
 			await until(() => !document.getElementById("objective").hidden && document.querySelectorAll("#objective-members .item").length >= 2);
@@ -163,11 +163,13 @@ describeBrowser("objectives", () => {
 				wakes: [...document.querySelectorAll("#objective-wakes [data-testid=objective-wake]")].map((row) => row.textContent),
 				wakeCount: document.querySelector("[data-testid=objective-wake-count]").textContent,
 				escalation: document.getElementById("objective-escalation").hidden ? "" : document.getElementById("objective-escalation").textContent,
-				actions: {
-					launch: !document.getElementById("objective-launch").hidden,
-					stop: !document.getElementById("objective-stop").hidden,
-					regenerate: !document.getElementById("objective-regenerate").hidden,
-				},
+				// OBJ-39: every action is present; data-allowed says whether the phase permits it.
+				actions: Object.fromEntries(
+					["launch", "stop", "resume", "done", "archive", "regenerate"].map((action) => [
+						action,
+						document.getElementById("objective-" + action).dataset.allowed,
+					]),
+				),
 			};
 		`);
 
@@ -217,8 +219,15 @@ describeBrowser("objectives", () => {
 		// OBJ-33: the escalation, at the scope it holds, with the thread its answer comes from.
 		expect(view.escalation).toContain("the whole objective");
 		expect(view.escalation).toContain("Which reading should I trust");
-		// OBJ-04/OBJ-07/OBJ-35: what an active objective offers.
-		expect(view.actions).toEqual({ launch: false, stop: true, regenerate: true });
+		// OBJ-04/OBJ-07/OBJ-35: what an active objective offers, and what its phase forbids.
+		expect(view.actions).toEqual({
+			launch: "false",
+			stop: "true",
+			resume: "false",
+			done: "true",
+			archive: "false",
+			regenerate: "true",
+		});
 
 		// ---- UX-09: a member's state event moves its badge without a reload.
 		const memberId = seeded.active.memberIds[0]!;
@@ -310,7 +319,7 @@ describeBrowser("objectives", () => {
 		// ---- OBJ-04: a draft offers launch, asks first, and becomes active.
 		const launched = await evaluatePage<{ asked: boolean }>(`
 			location.hash = "#/objectives/${draft.id}";
-			await until(() => !document.getElementById("objective").hidden && !document.getElementById("objective-launch").hidden);
+			await until(() => !document.getElementById("objective").hidden && document.getElementById("objective-launch").dataset.allowed === "true");
 			document.getElementById("objective-launch").click();
 			const asked = !document.getElementById("objective-confirm").hidden;
 			document.getElementById("objective-confirm-yes").click();
@@ -355,5 +364,150 @@ describeBrowser("objectives", () => {
 		expect(overflow.offenders).toEqual([]);
 		expect(overflow.list).toBeLessThan(2);
 		expect(overflow.view).toBeLessThan(2);
+	});
+
+	it("OBJ-39 resumes, finishes, archives, edits the limits, and shows why a forbidden action is disabled", async () => {
+		seeded = await seedObjectives();
+		const { t, active } = seeded;
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+
+		// A fresh view of the active objective, with every action present and gated.
+		const opened = await evaluatePage<{ note: string; noteHidden: boolean; actions: Record<string, boolean>; doneText: string }>(`
+			location.hash = "#/objectives/${active.id}";
+			await until(() => !document.getElementById("objective").hidden && document.querySelectorAll("#objective-meters [data-testid=objective-meter]").length === 5);
+			await sleep(200);
+			return {
+				note: document.getElementById("objective-actions-note").textContent,
+				noteHidden: document.getElementById("objective-actions-note").hidden,
+				actions: Object.fromEntries(
+					["launch", "stop", "resume", "done", "archive", "regenerate"].map((action) => [action, document.getElementById("objective-" + action).disabled]),
+				),
+				doneText: "",
+			};
+		`);
+		expect(opened.noteHidden).toBe(false);
+		// OBJ-39: what the phase forbids is disabled with its reason, never absent.
+		expect(opened.actions).toEqual({ launch: true, stop: false, resume: true, done: false, archive: true, regenerate: false });
+		expect(opened.note).toContain("Launch is unavailable: only a draft is launched.");
+		expect(opened.note).toContain("Archive is unavailable: only a stopped or done objective is archived.");
+
+		// OBJ-07: finishing is the user's confirmation, and the dialog says what it is confirming.
+		const refused = await evaluatePage<{ question: string; status: string }>(`
+			document.getElementById("objective-done").click();
+			await until(() => !document.getElementById("objective-confirm").hidden);
+			const question = document.getElementById("objective-confirm-text").textContent;
+			document.getElementById("objective-confirm-yes").click();
+			await until(() => document.getElementById("status").textContent.includes("Not at target yet"));
+			return { question, status: document.getElementById("status").textContent };
+		`);
+		expect(refused.question).toContain("Every metric with a target has to be at that target");
+		// The refusal names the metric that is short, instead of only saying "conflict".
+		expect(refused.status).toContain("Not at target yet");
+		expect(refused.status).toContain("kwh");
+		expect((await shown(t, active.id)).phase).toBe("active");
+
+		// OBJ-41: the limits are editable, and a cleared limit falls back to the domain's default.
+		const limits = await evaluatePage<{ before: string; after: string; source: string; total: string; saved: string }>(`
+			const form = document.getElementById("objective-limits");
+			const before = form.querySelector("[data-limit=maxDailyUsd]").value;
+			form.querySelector("[data-limit=maxDailyUsd]").value = "9";
+			form.querySelector("[data-limit=maxTotalUsd]").value = "";
+			form.requestSubmit();
+			await until(() => document.querySelector("[data-meter=spend-today] [data-testid=objective-meter-value]").textContent.includes("9.0000"));
+			const day = document.querySelector("[data-meter=spend-today]");
+			const total = document.querySelector("[data-meter=spend-total]");
+			return {
+				before,
+				after: day.querySelector("[data-testid=objective-meter-value]").textContent,
+				source: day.dataset.source,
+				total: total.querySelector("[data-testid=objective-meter-value]").textContent,
+				saved: document.getElementById("status").textContent,
+			};
+		`);
+		expect(limits.before).toBe("5");
+		expect(limits.after).toBe("$1.7500 of $9.0000");
+		expect(limits.source).toBe("objective");
+		// A cleared lifetime limit has no default, so the meter says nothing bounds it and draws no bar.
+		expect(limits.total).toContain("no limit");
+		expect(limits.saved).toContain("Limits saved");
+		const stored = await t.client.get<{ objective: { limits: Record<string, number | null>; effectiveLimits: Record<string, { value: number | null; source: string }> } }>(
+			`/objectives/${active.id}`,
+		);
+		expect(stored.body.objective.limits).toMatchObject({ maxDailyUsd: 9, maxTotalUsd: null });
+		expect(stored.body.objective.effectiveLimits.maxDailyUsd).toEqual({ value: 9, source: "objective" });
+		expect(stored.body.objective.effectiveLimits.maxTotalUsd).toEqual({ value: null, source: "none" });
+
+		// OBJ-07: stop, then resume from the same screen.
+		await evaluatePage(`
+			document.getElementById("objective-stop").click();
+			await until(() => !document.getElementById("objective-confirm").hidden);
+			document.getElementById("objective-confirm-yes").click();
+			await until(() => document.getElementById("objective-meta").textContent.includes("stopped"));
+			return true;
+		`);
+		const stopped = await evaluatePage<{ note: string; actions: Record<string, boolean> }>(`
+			await until(() => document.getElementById("objective-resume").dataset.allowed === "true");
+			return {
+				note: document.getElementById("objective-actions-note").textContent,
+				actions: Object.fromEntries(
+					["launch", "stop", "resume", "done", "archive", "regenerate"].map((action) => [action, document.getElementById("objective-" + action).disabled]),
+				),
+			};
+		`);
+		expect(stopped.actions).toEqual({ launch: true, stop: true, resume: false, done: false, archive: false, regenerate: true });
+		// Resume is the one action a stopped objective offers, so it is the one the note leaves out.
+		expect(stopped.note).not.toContain("Resume is unavailable");
+
+		await evaluatePage(`
+			document.getElementById("objective-resume").click();
+			await until(() => !document.getElementById("objective-confirm").hidden);
+			document.getElementById("objective-confirm-yes").click();
+			await until(() => document.getElementById("objective-meta").textContent.includes("active"));
+			return true;
+		`);
+		expect((await shown(t, active.id)).phase).toBe("active");
+
+		// OBJ-07: with every target met, `done` takes the user's confirmation and then offers archive.
+		// kwh is a trailing mean, so it takes three readings to bring its window under its target.
+		for (const [name, value] of [["kwh", 18], ["kwh", 10], ["kwh", 10], ["bill-usd", 80], ["reads", 8]] as const) {
+			const read = await t.client.post(`/objectives/${active.id}/metrics/${name}/readings`, { value });
+			expect(read.status, JSON.stringify(read.body)).toBe(201);
+		}
+		await evaluatePage(`
+			document.getElementById("objective-reload").click();
+			await until(() => document.getElementById("objective-at-target").textContent.startsWith("3 of 3"));
+			return true;
+		`);
+		await evaluatePage(`
+			document.getElementById("objective-done").click();
+			await until(() => !document.getElementById("objective-confirm").hidden);
+			document.getElementById("objective-confirm-yes").click();
+			await until(() => document.getElementById("objective-meta").textContent.includes("done"));
+			await until(() => document.getElementById("objective-archive").dataset.allowed === "true");
+			return true;
+		`);
+		expect((await shown(t, active.id)).phase).toBe("done");
+
+		// OBJ-07/SCR-04: archiving asks first and archives the objective's member sessions with it.
+		const archived = await evaluatePage<{ question: string; actions: Record<string, boolean> }>(`
+			document.getElementById("objective-archive").click();
+			await until(() => !document.getElementById("objective-confirm").hidden);
+			const question = document.getElementById("objective-confirm-text").textContent;
+			document.getElementById("objective-confirm-yes").click();
+			await until(() => document.getElementById("objective-meta").textContent.includes("archived"));
+			return {
+				question,
+				actions: Object.fromEntries(
+					["launch", "stop", "resume", "done", "archive", "regenerate"].map((action) => [action, document.getElementById("objective-" + action).disabled]),
+				),
+			};
+		`);
+		expect(archived.question).toContain("Its member sessions are archived with it");
+		expect(archived.actions).toEqual({ launch: true, stop: true, resume: true, done: true, archive: true, regenerate: true });
+		expect((await shown(t, active.id)).phase).toBe("archived");
+		// Nothing is offered on a closed objective, and the note says why for each.
+		const note = await evaluatePage<string>(`return document.getElementById("objective-actions-note").textContent;`);
+		expect(note).toContain("Resume is unavailable: only a stopped objective is resumed.");
+		expect(note).toContain("Archive is unavailable: only a stopped or done objective is archived.");
 	});
 });

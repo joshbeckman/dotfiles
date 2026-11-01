@@ -39,6 +39,8 @@ import {
 	memoryHitView,
 	messageView,
 	metricChart,
+	LIMIT_FIELDS,
+	limitsBody,
 	metricsView,
 	objectiveRow,
 	objectiveView,
@@ -2480,6 +2482,7 @@ async function refreshObjective() {
 	current.view.meters = view.meters;
 	renderObjectiveHead();
 	renderObjectiveMeters();
+	renderObjectiveLimitsForm();
 	renderObjectiveMembers();
 	renderObjectiveWakes();
 	renderObjectiveEscalation();
@@ -2493,6 +2496,7 @@ function scheduleObjectiveRefresh() {
 function renderObjective() {
 	renderObjectiveHead();
 	renderObjectiveMeters();
+	renderObjectiveLimitsForm();
 	renderObjectiveMetrics();
 	renderObjectiveCharter();
 	renderObjectiveReport();
@@ -2524,12 +2528,41 @@ function renderObjectiveHead() {
 	url.dataset.testid = "objective-url";
 	url.append(copyLink(view.url || `pana://${state.domain}/objectives/${view.id}`, "objective"));
 	meta.append(url);
-	// OBJ-07/OBJ-35: the actions each phase offers. Launch is the user's alone, and a draft is the
-	// only phase that launches; regenerate replaces a lead, so it needs an active objective.
-	$("objective-launch").hidden = view.phase !== "drafting";
-	$("objective-stop").hidden = view.phase !== "active";
-	$("objective-regenerate").hidden = view.phase !== "active" || !view.lead;
+	renderObjectiveActions();
 	$("objective-charter-rev").textContent = `revision ${view.charterRev}`;
+}
+
+/**
+ * OBJ-39: every action the view offers, and the phases that permit it. An action the phase forbids
+ * is shown disabled with the reason rather than hidden, because "you cannot do that here" and
+ * "there is no such thing" are different things to learn from a screen that reports state.
+ */
+const OBJECTIVE_ACTION_GATES = {
+	launch: { phases: ["drafting"], label: "Launch", reason: "only a draft is launched" },
+	stop: { phases: ["active"], label: "Stop", reason: "only an active objective is stopped" },
+	resume: { phases: ["stopped"], label: "Resume", reason: "only a stopped objective is resumed" },
+	// OBJ-07: a stopped objective can be finished too, once its metrics are at target.
+	done: { phases: ["active", "stopped"], label: "Done", reason: "only an active or stopped objective is finished" },
+	archive: { phases: ["stopped", "done"], label: "Archive", reason: "only a stopped or done objective is archived" },
+	regenerate: { phases: ["active"], label: "Regenerate lead", reason: "only an active objective has a lead to replace" },
+};
+
+function renderObjectiveActions() {
+	const view = objectiveDetail.view;
+	const blocked = [];
+	for (const [action, gate] of Object.entries(OBJECTIVE_ACTION_GATES)) {
+		const button = $(`objective-${action}`);
+		if (!button) continue;
+		const allowed = gate.phases.includes(view.phase) && (action !== "regenerate" || Boolean(view.lead));
+		const reason = action === "regenerate" && !view.lead ? "this objective has no lead yet" : gate.reason;
+		button.disabled = !allowed;
+		button.dataset.allowed = String(allowed);
+		button.title = allowed ? "" : `${gate.label} is unavailable: ${reason}.`;
+		if (!allowed) blocked.push(`${gate.label} is unavailable: ${reason}.`);
+	}
+	const note = $("objective-actions-note");
+	note.hidden = blocked.length === 0;
+	note.textContent = blocked.join(" ");
 }
 
 /** OBJ-20..OBJ-24: money and runs against the limits that stop the objective. */
@@ -2584,6 +2617,56 @@ function meterText(meter) {
 function meterSourceLabel(meter) {
 	if (meter.source === "config") return "from the domain's config";
 	return "no limit set";
+}
+
+/**
+ * OBJ-41: the limits form arrives filled with the objective's own values, and an empty field means
+ * the domain's default — which the placeholder names, so clearing a budget shows what will apply.
+ */
+function renderObjectiveLimitsForm() {
+	const form = $("objective-limits");
+	const view = objectiveDetail.view;
+	for (const { field } of LIMIT_FIELDS) {
+		const input = form.querySelector(`[data-limit="${field}"]`);
+		if (!input) continue;
+		const own = view.limits?.[field];
+		input.value = own === null || own === undefined ? "" : String(own);
+		const effective = view.effectiveLimits?.[field];
+		input.placeholder = effective && effective.source !== "none" ? `default ${effective.value}` : "no limit";
+	}
+	form.querySelector("[data-testid=limits-save]").disabled = false;
+}
+
+/** OBJ-41: save the limits the reader changed; a blank field clears one back to the domain's. */
+async function saveObjectiveLimits(event) {
+	event.preventDefault();
+	if (!objectiveDetail) return;
+	const form = event.currentTarget;
+	const values = {};
+	for (const { field } of LIMIT_FIELDS) values[field] = form.querySelector(`[data-limit="${field}"]`)?.value ?? "";
+	const { body, invalid } = limitsBody(values, objectiveDetail.view.limits);
+	if (invalid.length > 0) {
+		return status(`${invalid.map((field) => LIMIT_FIELDS.find((entry) => entry.field === field)?.label ?? field).join(", ")} must be a positive number, or blank for the domain's default.`, true);
+	}
+	if (Object.keys(body).length === 0) return status("No limit changed.");
+	const save = form.querySelector("[data-testid=limits-save]");
+	save.disabled = true;
+	try {
+		const saved = await api("POST", `/objectives/${encodeURIComponent(objectiveDetail.view.id)}/limits`, body);
+		objectiveDetail.view = objectiveView(saved.objective);
+		status(`Limits saved: ${saved.changes?.length ?? Object.keys(body).length} changed.`);
+		// The holding condition and the meters are functions of the limits, so both are redrawn.
+		renderObjectiveHead();
+		renderObjectiveMeters();
+		renderObjectiveLimitsForm();
+		renderObjectiveMembers();
+		renderObjectiveWakes();
+		renderObjectiveEscalation();
+	} catch (error) {
+		fail(error);
+	} finally {
+		save.disabled = false;
+	}
 }
 
 /**
@@ -3008,6 +3091,25 @@ const OBJECTIVE_ACTIONS = {
 		label: "Yes, stop",
 		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/stop`, {}),
 	},
+	// OBJ-07: resuming starts its work again, which spends again, so it asks first too.
+	resume: {
+		question: "Resume this objective? Its work starts again, and spends against its limits again.",
+		label: "Yes, resume",
+		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/resume`, {}),
+	},
+	// OBJ-07: the confirmation is the reserved-for-human step; the check behind it is the server's.
+	done: {
+		question:
+			"Finish this objective? Every metric with a target has to be at that target, and this confirms the lead's claim rather than checking it for you. Its thread and members stay readable.",
+		label: "Yes, finish it",
+		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/done`, {}),
+	},
+	archive: {
+		question:
+			"Archive this objective? Its member sessions are archived with it, so their scratch is swept and their threads become read-only. This is not undone from the app.",
+		label: "Yes, archive it",
+		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/archive`, {}),
+	},
 	regenerate: {
 		question:
 			"Replace the lead? Its session is stopped and archived, and a new lead starts with the briefing. The old lead's transcript stays readable.",
@@ -3049,9 +3151,24 @@ async function confirmObjectiveAction() {
 	cancelObjectiveAction();
 	try {
 		await spec.run(id, reason);
-		status(action === "launch" ? "Objective launched." : action === "stop" ? "Objective stopped." : "The lead is replaced.");
+		const said = {
+			launch: "Objective launched.",
+			stop: "Objective stopped.",
+			resume: "Objective resumed.",
+			done: "Objective finished. Its thread stays readable.",
+			archive: "Objective archived.",
+			regenerate: "The lead is replaced.",
+		};
+		status(said[action] ?? "Done.");
 		await openObjective(id);
 	} catch (error) {
+		// OBJ-07: finishing needs every target met. Name the metrics short of theirs rather than
+		// leaving the reader with "conflict" and no idea which number to look at.
+		if (error?.status === 409 && error?.body?.error?.code === "metric_behind") {
+			const behind = Array.isArray(error.body.error.metrics) ? error.body.error.metrics : [];
+			status(`Not at target yet: ${behind.map((metric) => `${metric.name} at ${metric.value ?? "no reading"} of ${metric.target}`).join(", ")}.`, true);
+			return;
+		}
 		fail(error);
 	}
 }
@@ -3876,9 +3993,10 @@ $("objectives-phase").addEventListener("change", () => {
 	const phase = $("objectives-phase").value;
 	location.hash = phase ? `#/objectives?phase=${encodeURIComponent(phase)}` : "#/objectives";
 });
-$("objective-launch").addEventListener("click", () => askObjectiveAction("launch"));
-$("objective-stop").addEventListener("click", () => askObjectiveAction("stop"));
-$("objective-regenerate").addEventListener("click", () => askObjectiveAction("regenerate"));
+for (const action of ["launch", "stop", "resume", "done", "archive", "regenerate"]) {
+	$(`objective-${action}`).addEventListener("click", () => askObjectiveAction(action));
+}
+$("objective-limits").addEventListener("submit", (event) => void saveObjectiveLimits(event));
 $("objective-reload").addEventListener("click", () => {
 	if (objectiveDetail) void openObjective(objectiveDetail.view.id).catch(fail);
 });

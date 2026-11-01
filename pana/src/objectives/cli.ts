@@ -366,12 +366,64 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 			path: `/objectives/${objectiveSegment(text(params, "id"))}/artifacts/${encodeURIComponent(text(params, "file") ?? "")}`,
 		}),
 	},
+	{
+		path: ["objective", "limits", "set"],
+		usage: "pana objective limits set OBJECTIVE [--max-daily-usd N] [--max-total-usd N] [--wake-min-minutes N]",
+		altUsage: ["pana objective limits set OBJECTIVE [--max-daily-lead-turns N] [--max-daily-user-messages N] [--max-active-members N]"],
+		summary: "Set a limit, or clear one with `default`; you only, and each change is recorded",
+		flags: [
+			string("max-daily-usd", "--max-daily-usd N", "Daily spend limit, or default to clear it"),
+			string("max-total-usd", "--max-total-usd N", "Lifetime spend limit, or default to clear it"),
+			string("wake-min-minutes", "--wake-min-minutes N", "Quiet interval between the lead's runs, or default"),
+			string("max-daily-lead-turns", "--max-daily-lead-turns N", "Lead runs per local day, or default"),
+			string("max-daily-user-messages", "--max-daily-user-messages N", "Messages to you per local day, or default"),
+			string("max-active-members", "--max-active-members N", "Members not stopped or archived, or default"),
+		],
+		positionals: [{ name: "OBJECTIVE", param: "id", required: true }],
+		validate: (params) => (LIMIT_FLAGS.some((flag) => params[flag] !== undefined) ? undefined : "give at least one limit, or default to clear one"),
+		request: (params) => ({
+			method: "POST",
+			path: `/objectives/${objectiveSegment(text(params, "id"))}/limits`,
+			body: compact({
+				maxDailyUsd: limitParam(params, "max-daily-usd"),
+				maxTotalUsd: limitParam(params, "max-total-usd"),
+				wakeMinMinutes: limitParam(params, "wake-min-minutes"),
+				maxDailyLeadTurns: limitParam(params, "max-daily-lead-turns"),
+				maxDailyUserMessages: limitParam(params, "max-daily-user-messages"),
+				maxActiveMembers: limitParam(params, "max-active-members"),
+			}),
+		}),
+	},
 ];
 
 /** The one file `uploads` put in `params.files`, when the CLI ran the command. */
 function uploaded(params: CommandParams): FileAttachment | undefined {
 	const value = params.files;
 	return Array.isArray(value) ? (value as FileAttachment[])[0] : undefined;
+}
+
+/** The flags `objective limits set` writes, for its one required-argument check (OBJ-41). */
+const LIMIT_FLAGS = [
+	"max-daily-usd",
+	"max-total-usd",
+	"wake-min-minutes",
+	"max-daily-lead-turns",
+	"max-daily-user-messages",
+	"max-active-members",
+] as const;
+
+/**
+ * A limit flag (OBJ-41): a positive number, or the word `default` to clear it back to the domain's.
+ * Null is what the request carries then, which is not the same as leaving the flag out.
+ */
+function limitParam(params: CommandParams, name: string): number | null | undefined {
+	const value = text(params, name);
+	if (value === undefined || value.trim() === "") return undefined;
+	const word = value.trim().toLowerCase();
+	if (word === "default" || word === "none" || word === "clear") return null;
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) throw new CommandUsageError(`--${name} must be a positive number, or default to clear it, got ${value}`);
+	return parsed;
 }
 
 /** A numeric flag: passed through as a number so the API sees a number, never a numeric string. */

@@ -95,14 +95,26 @@ runs today — and `#/objectives/<id>` is the screen a person watches and steers
 the charter (one block per section, each edited with the revision it was read at, so a charter that
 moved answers 409 and keeps the text), one chart per metric with its own target line and a
 "3 of 5 at target" count, the newest report, the artifacts, the roster with each member's live
-state, money and run meters, the pending wakes, and the escalation. Launch, stop, regenerate the
-lead (with a reason), and charter edit are actions there; each that spends money or retires a
-session asks first.
+state, money and run meters, the pending wakes, and the escalation. Launch, stop, resume, done,
+archive, regenerate the lead (with a reason), and charter edit are actions there; each that spends
+money or retires a session asks first. `done` is the user's confirmation of the lead's claim, so its
+dialog says that every metric with a target has to be at it, and a refusal names the metrics that are
+short.
+
+Every action is on the screen in every phase: one the phase forbids is disabled, with its reason in
+the hover text and in the note under the header, because "you cannot do that here" and "there is no
+such thing" teach different things (OBJ-39).
+
+The limits are editable in place (OBJ-41). The form arrives filled with the objective's own values, a
+blank field clears a limit back to the domain's default, and only the fields the reader changed are
+sent. Each change is an `objective_events` row, and raising a lifetime budget lifts a `budget_total`
+pause and hands the lead's held mail back to the gate, so raising a budget resumes the work it
+stopped.
 
 There is no percent-to-target figure anywhere in this section (OBJ-28): metrics have different
-units, and one averaged number across them would become the only number the objective has. A meter
-whose limit the objective does not set says the domain's default governs, because the PWA cannot
-read panad's config.
+units, and one averaged number across them would become the only number the objective has. Meters
+read `effectiveLimits`, so a limit the objective does not set shows the domain's configured value
+with "from the domain's config" beside it, and one nothing bounds says so instead of drawing a bar.
 
 A member's `session.state` event patches its badge in place and re-reads the objective's derived
 state once the burst settles (UX-09), so the roster is live without redrawing the charter editor or
