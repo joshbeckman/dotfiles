@@ -119,7 +119,9 @@ export type ObjectiveEventKind =
 	| "stranded"
 	| "behind"
 	// OBJ-41: one row per limit a user sets or clears, naming the field and both values.
-	| "limits.set";
+	| "limits.set"
+	// OBJ-42: one row per goal the user sets on a draft, naming the old goal and the new one.
+	| "goal.set";
 
 // --- Input ---------------------------------------------------------------------
 

@@ -389,7 +389,7 @@ describeBrowser("objectives", () => {
 		// OBJ-39: what the phase forbids is disabled with its reason, never absent.
 		expect(opened.actions).toEqual({ launch: true, stop: false, resume: true, done: false, archive: true, regenerate: false });
 		expect(opened.note).toContain("Launch is unavailable: only a draft is launched.");
-		expect(opened.note).toContain("Archive is unavailable: only a stopped or done objective is archived.");
+		expect(opened.note).toContain("Archive is unavailable: only a drafting, stopped, or done objective is archived.");
 
 		// OBJ-07: finishing is the user's confirmation, and the dialog says what it is confirming.
 		const refused = await evaluatePage<{ question: string; status: string }>(`
@@ -508,6 +508,28 @@ describeBrowser("objectives", () => {
 		// Nothing is offered on a closed objective, and the note says why for each.
 		const note = await evaluatePage<string>(`return document.getElementById("objective-actions-note").textContent;`);
 		expect(note).toContain("Resume is unavailable: only a stopped objective is resumed.");
-		expect(note).toContain("Archive is unavailable: only a stopped or done objective is archived.");
+		expect(note).toContain("Archive is unavailable: only a drafting, stopped, or done objective is archived.");
+
+		// OBJ-07: a draft is archived where it stands. Nothing runs on it, so the question promises no
+		// member sessions to sweep, and the button is offered rather than disabled.
+		const unwanted = await t.client.post<{ objective: { id: string } }>("/objectives", { goal: "A draft I no longer want" });
+		expect(unwanted.status).toBe(201);
+		const draftArchived = await evaluatePage<{ allowed: string; note: string; question: string }>(`
+			location.hash = "#/objectives/${unwanted.body.objective.id}";
+			await until(() => !document.getElementById("objective").hidden && document.getElementById("objective-archive").dataset.allowed === "true");
+			const allowed = document.getElementById("objective-archive").dataset.allowed;
+			const note = document.getElementById("objective-actions-note").textContent;
+			document.getElementById("objective-archive").click();
+			await until(() => !document.getElementById("objective-confirm").hidden);
+			const question = document.getElementById("objective-confirm-text").textContent;
+			document.getElementById("objective-confirm-yes").click();
+			await until(() => document.getElementById("objective-meta").textContent.includes("archived"));
+			return { allowed, note, question };
+		`);
+		expect(draftArchived.allowed).toBe("true");
+		expect(draftArchived.note).not.toContain("Archive is unavailable");
+		expect(draftArchived.question).toContain("It was never launched");
+		expect(draftArchived.question).not.toContain("member sessions are archived with it");
+		expect((await shown(t, unwanted.body.objective.id)).phase).toBe("archived");
 	});
 });

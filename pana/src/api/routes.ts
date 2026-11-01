@@ -61,6 +61,7 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/objectives/:id/resume", name: "objectives.resume", wp: "WP18" },
 	{ method: "POST", pattern: "/objectives/:id/done", name: "objectives.done", wp: "WP18" },
 	{ method: "POST", pattern: "/objectives/:id/archive", name: "objectives.archive", wp: "WP18" },
+	{ method: "POST", pattern: "/objectives/:id/goal", name: "objectives.goal.set", wp: "WP18" },
 	{ method: "GET", pattern: "/objectives/:id/charter", name: "objectives.charter.log", wp: "WP18" },
 	{ method: "POST", pattern: "/objectives/:id/charter", name: "objectives.charter.set", wp: "WP18" },
 	{ method: "GET", pattern: "/objectives/:id/metrics", name: "objectives.metrics.list", wp: "WP18" },

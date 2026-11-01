@@ -15,6 +15,7 @@ import { leadBriefing } from "./brief.ts";
 import { charterLog, optionalCharterSection, setCharter } from "./charter.ts";
 import { escalateObjective } from "./escalation.ts";
 import { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
+import { setGoal } from "./goal.ts";
 import { launchObjective } from "./launch.ts";
 import { setLimits } from "./limits.ts";
 import { regenerateLead } from "./lead.ts";
@@ -98,6 +99,13 @@ export const handlers: Handlers = {
 		status: 200,
 		body: { objective: await archiveObjective(ctx.runtime, ctx.caller, ctx.params.id) },
 	}),
+
+	// OBJ-42: a draft's goal is the user's to correct until it launches; the change comes back with
+	// the goal it replaced, the way a limits write answers with its changes.
+	"objectives.goal.set": async (ctx): Promise<HandlerResult> => {
+		const written = await setGoal(ctx.runtime, ctx.caller, ctx.params.id, ctx.body);
+		return { status: 200, body: { objective: await showObjective(ctx.runtime, written.row.id), change: { from: written.from, to: written.to } } };
+	},
 
 	// OBJ-25..OBJ-29: metrics. The `GET` answers every metric's readings in time order, its target,
 	// and its current value; the writes answer with the one metric they touched.

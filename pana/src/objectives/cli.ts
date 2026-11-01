@@ -180,10 +180,24 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["objective", "archive"],
 		usage: "pana objective archive OBJECTIVE",
-		summary: "Archive a stopped or done objective and its member sessions",
+		summary: "Archive a draft, stopped, or done objective; a launched one takes its member sessions with it",
 		flags: [],
 		positionals: [{ name: "OBJECTIVE", param: "id", required: true }],
 		request: (params) => ({ method: "POST", path: `/objectives/${objectiveSegment(text(params, "id"))}/archive` }),
+	},
+	{
+		path: ["objective", "goal", "set"],
+		usage: "pana objective goal set OBJECTIVE --goal TEXT",
+		altUsage: ["pana objective goal set OBJECTIVE --goal-file PATH"],
+		summary: "Change a draft's goal; you only, and only before it launches",
+		flags: [...GOAL_FLAGS],
+		positionals: [{ name: "OBJECTIVE", param: "id", required: true }],
+		validate: validateGoal,
+		request: (params) => ({
+			method: "POST",
+			path: `/objectives/${objectiveSegment(text(params, "id"))}/goal`,
+			body: { goal: goalOf(params) },
+		}),
 	},
 	{
 		path: ["objective", "charter", "set"],
