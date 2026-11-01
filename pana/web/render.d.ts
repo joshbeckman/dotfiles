@@ -1,0 +1,36 @@
+// Types for the browser module `render.js`, which Node tests import directly.
+
+/** One reply option in a `choices` fence (WEB-10). */
+export interface Choice {
+	/** What the button says. */
+	label: string;
+	/** The line a click writes into the draft. */
+	reply: string;
+}
+
+export interface RenderOptions {
+	marked?: unknown;
+	DOMPurify?: unknown;
+	domain?: string;
+	fetchFile?: (path: string) => Promise<Blob>;
+	cache?: Map<string, Promise<string>>;
+	ensureMermaid?: () => Promise<unknown>;
+	fetchMargin?: string;
+	idPrefix?: string;
+	dark?: boolean;
+	onPick?: (option: Choice, button: unknown, group: unknown) => void;
+}
+
+export const CHOICES_LANGUAGE: string;
+
+export function parseChoices(text: string | null | undefined): Choice[] | null;
+export function renderChoices(root: unknown, options?: { onPick?: RenderOptions["onPick"] }): number;
+export function syncChoices(root: unknown, has: (reply: string) => boolean): void;
+
+export function markdownToHtml(text: string, options: RenderOptions): string;
+export function escapeHtml(value: unknown): string;
+export function rewriteLinks(root: unknown, domain?: string): unknown;
+export function linkifyTextNodes(root: unknown, domain?: string): unknown;
+export function hydrateFiles(root: unknown, fetchFile: unknown, options?: Record<string, unknown>): Promise<void>;
+export function renderDiagrams(root: unknown, options: RenderOptions): Promise<number>;
+export function renderMessage(target: unknown, text: string, options: RenderOptions): Promise<unknown>;

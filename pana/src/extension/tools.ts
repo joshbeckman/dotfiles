@@ -75,6 +75,12 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				after: Type.String({ description: "The newest message you read in this thread, as a URL or ULID" }),
 				body: Type.String({ description: "Markdown message body" }),
 				cc: Type.Optional(Type.Array(Type.String(), { description: "Participants to add" })),
+				choice: Type.Optional(
+					Type.Array(Type.String(), {
+						description:
+							"Reply options the user can click, as LABEL or LABEL => reply. At most 8. Use them when the answer set is small and closed; the user can always answer in their own words instead.",
+					}),
+				),
 			}),
 		),
 		tool(
@@ -93,6 +99,12 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 			Type.Object({
 				to: Type.Array(Type.String(), { description: "Participants: usernames, session ULIDs, or pana:// URLs" }),
 				body: Type.String({ description: "Markdown message body" }),
+				choice: Type.Optional(
+					Type.Array(Type.String(), {
+						description:
+							"Reply options the user can click, as LABEL or LABEL => reply. At most 8. Use them when the answer set is small and closed; the user can always answer in their own words instead.",
+					}),
+				),
 			}),
 		),
 		tool(

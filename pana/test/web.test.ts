@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
+import { runPanaCli } from "../src/cli/commands.ts";
+import { choiceProblem, snippetOf, withChoices } from "../src/threads/index.ts";
 import { matchRoute } from "../src/api/routes.ts";
 import { publish, subscriberCount } from "../src/web/events.ts";
 import { formatUrl } from "../src/ids/index.ts";
@@ -26,7 +28,8 @@ import {
 	tokenFromInput,
 	withReferences,
 } from "../web/links.js";
-import { makeStateDir, startTestPanad, TEST_DOMAIN, type TestPanad } from "./harness/index.ts";
+import { parseChoices } from "../web/render.js";
+import { makeStateDir, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
 afterEach(async () => {
@@ -241,6 +244,82 @@ describe("PWA shell and static assets", () => {
 		// The copied shims stay beside the bundles they were built from.
 		expect(statSync(fileURLToPath(new URL("../web/renderers.js", import.meta.url))).size).toBeGreaterThan(0);
 		expect(statSync(fileURLToPath(new URL("../web/mermaid-renderer.js", import.meta.url))).size).toBeGreaterThan(0);
+	});
+
+	it("WEB-10 a choices fence parses to options and reads back as labels in a row", async () => {
+		// The renderer's parse (web/render.js) and the writer's fence (src/threads/choices.ts) are
+		// two copies of one convention, pinned together here the way referenceFor and
+		// appendAttachmentMarkdown are.
+		expect(parseChoices("- Ship it\n- Hold => Wait for the migration")).toEqual([
+			{ label: "Ship it", reply: "Ship it" },
+			{ label: "Hold", reply: "Wait for the migration" },
+		]);
+		expect(parseChoices("* One\n* Two\n\n")).toEqual([
+			{ label: "One", reply: "One" },
+			{ label: "Two", reply: "Two" },
+		]);
+		// Not a list, so it is someone's code and stays code: a reader sees what was written.
+		expect(parseChoices("Ship it\nHold")).toBeNull();
+		expect(parseChoices("- ")).toBeNull();
+		expect(parseChoices("")).toBeNull();
+		// An arrow inside a label without spaces stays part of the label.
+		expect(parseChoices("- a=>b")).toEqual([{ label: "a=>b", reply: "a=>b" }]);
+
+		expect(withChoices("Which one?", ["Ship it", "Hold => Wait"])).toBe(
+			"Which one?\n\n```choices\n- Ship it\n- Hold => Wait\n```",
+		);
+		expect(withChoices("Which one?\n\n", ["Ship it"])).toBe("Which one?\n\n```choices\n- Ship it\n```");
+		expect(withChoices("", ["Ship it"])).toBe("```choices\n- Ship it\n```");
+		expect(withChoices("Which one?", [])).toBe("Which one?");
+		expect(choiceProblem(["Ship it"])).toBeUndefined();
+		expect(choiceProblem(Array.from({ length: 8 }, (_, index) => `Option ${index}`))).toBeUndefined();
+		expect(choiceProblem(Array.from({ length: 9 }, (_, index) => `Option ${index}`))).toContain("at most 8");
+		expect(choiceProblem([""])).toContain("needs a label");
+		expect(choiceProblem([`${"a".repeat(201)}`])).toContain("200 characters");
+		// UX-03: a row shows the options, so the fence never becomes the subject of an inbox row.
+		expect(snippetOf("Which one?\n\n```choices\n- Ship it\n- Hold => Wait\n```")).toBe("Which one? Ship it / Hold");
+		expect(snippetOf("```choices\n- Only\n```")).toBe("Only");
+
+		// End to end: the CLI appends the fence, and the message reads back with it intact.
+		t = await startTestPanad();
+		const created = await t.client.post<{ thread: { id: string }; message: { id: string } }>("/threads", {
+			to: [TEST_USER],
+			body: "Pick a plan",
+		});
+		expect(created.status).toBe(201);
+		const cli = await runPanaCli(
+			[
+				"thread", "respond",
+				"--thread", created.body.thread.id,
+				"--after", created.body.message.id,
+				"--body", "Which one?",
+				"--choice", "Ship it",
+				"--choice", "Hold => Wait for the migration",
+			],
+			{ endpoint: { socketPath: t.panad.socketPath } },
+		);
+		expect(cli.exitCode, JSON.stringify(cli.body)).toBe(0);
+		const read = await t.client.get<{ messages: Array<{ body: string }> }>(`/threads/${created.body.thread.id}`);
+		expect(read.body.messages.at(-1)?.body).toBe(
+			"Which one?\n\n```choices\n- Ship it\n- Hold => Wait for the migration\n```",
+		);
+		// The mailbox answers with the labels, not the fence.
+		const inbox = await t.client.get<{ threads: Array<{ latest: { snippet: string } }> }>("/inbox?view=threads");
+		expect(inbox.body.threads[0]?.latest.snippet).toBe("Which one? Ship it / Hold");
+
+		// Too many options is a usage error before any request leaves the CLI.
+		const tooMany = await runPanaCli(
+			[
+				"thread", "respond",
+				"--thread", created.body.thread.id,
+				"--after", created.body.message.id,
+				"--body", "Which one?",
+				...Array.from({ length: 9 }, (_, index) => ["--choice", `Option ${index}`]).flat(),
+			],
+			{ endpoint: { socketPath: t.panad.socketPath } },
+		);
+		expect(tooMany.exitCode).toBe(2);
+		expect(tooMany.message).toContain("at most 8");
 	});
 
 	it("WEB-05 pana:// links map to app routes and /files/ URLs", () => {

@@ -41,6 +41,17 @@ export {
 } from "./store.ts";
 export { announce } from "./announce.ts";
 export {
+	choiceProblem,
+	choicesMarkdown,
+	parseChoice,
+	summarizeChoices,
+	withChoices,
+	CHOICES_LANGUAGE,
+	MAX_CHOICE_LENGTH,
+	MAX_CHOICES,
+	type Choice,
+} from "./choices.ts";
+export {
 	configureDelivery,
 	defaultDeliveryHooks,
 	deliveryHooks,

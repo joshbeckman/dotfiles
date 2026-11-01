@@ -12,6 +12,7 @@ import { statusToExitCode } from "../api/errors.ts";
 import type { Method } from "../api/routes.ts";
 import { parseRef } from "../ids/index.ts";
 import { appendAttachmentMarkdown } from "../threads/files.ts";
+import { choiceProblem, withChoices } from "../threads/choices.ts";
 import { CommandUsageError, parseArgv, resolveFlags, resolvePositionals, type Flags } from "./args.ts";
 
 export { CommandUsageError, UsageError } from "./args.ts";
@@ -132,9 +133,12 @@ function files(params: CommandParams): FileAttachment[] {
 	return Array.isArray(value) ? (value as FileAttachment[]) : [];
 }
 
-/** The body with one Markdown reference appended per uploaded attachment (FIL-02). */
+/**
+ * The body with one Markdown reference appended per uploaded attachment (FIL-02), and the reply
+ * options after them as one `choices` fence (WEB-10).
+ */
 function bodyWithAttachments(params: CommandParams): string {
-	return appendAttachmentMarkdown(text(params, "body") ?? "", files(params));
+	return withChoices(appendAttachmentMarkdown(text(params, "body") ?? "", files(params)), items(params, "choice"));
 }
 
 type RefKind = "session" | "thread" | "message" | "schedule";
@@ -231,6 +235,11 @@ const BODY_FLAGS = [
 	string("body", "--body TEXT", "Message body, or - to read stdin"),
 	string("body-file", "--body-file PATH", "Read the message body from a file"),
 	list("attach", "--attach PATH", "Attach a file (repeatable)"),
+] as const;
+
+/** WEB-10: reply options a message offers, appended to the body as one `choices` fence. */
+const CHOICE_FLAGS = [
+	list("choice", "--choice TEXT", "Offer a reply option, LABEL or LABEL => reply (repeatable)"),
 ] as const;
 
 /** SCALE-03: every list command pages. `nextCursor` in the output is the next page's `--cursor`. */
@@ -365,11 +374,16 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["thread", "create"],
 		tool: "pana_thread_create",
-		usage: "pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...]",
+		usage: "pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...] [--choice TEXT...]",
 		summary: "Create a thread with a first message",
-		flags: [list("to", "--to ADDRS", "Participants, comma-separated", { required: true }), ...BODY_FLAGS],
+		flags: [
+			list("to", "--to ADDRS", "Participants, comma-separated", { required: true }),
+			...BODY_FLAGS,
+			...CHOICE_FLAGS,
+		],
 		positionals: [],
 		needsBody: true,
+		validate: (params) => choiceProblem(items(params, "choice")),
 		request: (params) => ({
 			method: "POST",
 			path: "/threads",
@@ -379,16 +393,18 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["thread", "respond"],
 		tool: "pana_reply",
-		usage: "pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...]",
+		usage: "pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...] [--choice TEXT...]",
 		summary: "Append a message to a thread you have read to its head",
 		flags: [
 			string("thread", "--thread THREAD", "The thread to append to", { required: true }),
 			string("after", "--after MESSAGE", "The newest message you have read", { required: true }),
 			list("cc", "--cc ADDRS", "Add participants, comma-separated"),
 			...BODY_FLAGS,
+			...CHOICE_FLAGS,
 		],
 		positionals: [],
 		needsBody: true,
+		validate: (params) => choiceProblem(items(params, "choice")),
 		request: (params) => ({
 			method: "POST",
 			path: `/threads/${segment(text(params, "thread"), "thread")}/messages`,

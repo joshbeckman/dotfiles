@@ -28,6 +28,7 @@ import { sessionStates, workingSessions, type SessionState, type WorkingSession 
 import { liveActivities } from "../sessions/live.ts";
 import { nextWakes, type NextWake } from "../schedules/live.ts";
 import { announce } from "./announce.ts";
+import { summarizeChoices } from "./choices.ts";
 import { deliveryHooks } from "./delivery.ts";
 
 export type ParticipantKind = "user" | "session" | "domain";
@@ -977,9 +978,12 @@ export interface InboxThread {
 
 export const SNIPPET_LENGTH = 140;
 
-/** One line of a message body for a list row: whitespace collapsed, cut at a word near `max`. */
+/**
+ * One line of a message body for a list row: whitespace collapsed, cut at a word near `max`.
+ * Reply options (WEB-10) read as their labels, so a row shows `Yes / No`, not the fence.
+ */
 export function snippetOf(body: string | undefined, max = SNIPPET_LENGTH): string {
-	const text = String(body ?? "").replace(/\s+/g, " ").trim();
+	const text = summarizeChoices(String(body ?? "")).replace(/\s+/g, " ").trim();
 	if (text.length <= max) return text;
 	const cut = text.slice(0, max);
 	const space = cut.lastIndexOf(" ");

@@ -7,6 +7,35 @@
 
 import { appHref, panaLinkSegments } from "./links.js";
 
+/**
+ * WEB-10: a fenced `choices` block, the way `src/threads/choices.ts` writes one. Each option is
+ * `- LABEL` or `- LABEL => reply`; the label is the button and the reply is the line a click puts
+ * in the draft. A click toggles, so no selection state is stored anywhere but the draft itself.
+ */
+export const CHOICES_LANGUAGE = "choices";
+
+/** One option line: a list marker and the text after it. */
+const OPTION_LINE = /^[-*][ \t]+(.*)$/;
+
+/** Parse a choices fence, or null when it is not one a reader should click on. */
+export function parseChoices(text) {
+	const options = [];
+	for (const raw of String(text ?? "").split("\n")) {
+		const line = raw.trim();
+		if (!line) continue;
+		const match = OPTION_LINE.exec(line);
+		// A line that is not a list item means this is someone's code, not an offer: leave it.
+		if (!match) return null;
+		const body = match[1];
+		const at = body.indexOf(" => ");
+		const label = (at === -1 ? body : body.slice(0, at)).trim();
+		if (!label) return null;
+		const reply = at === -1 ? label : body.slice(at + 4).trim() || label;
+		options.push({ label, reply });
+	}
+	return options.length > 0 ? options : null;
+}
+
 // DOMPurify strips an unknown scheme from href/src unless it is listed. Pana links are ours,
 // and they are rewritten to app routes before the HTML reaches the DOM.
 const ALLOWED_URI = /^(?:(?:https?|mailto|pana):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i;
@@ -220,6 +249,65 @@ export async function hydrateFiles(root, fetchFile, options = {}) {
 	for (const item of images) observer.observe(item.image);
 }
 
+/**
+ * Replace fenced `choices` blocks with a group of buttons (WEB-10). `onPick(option, button, group)`
+ * runs when one is clicked; with no handler the block stays code, which is what a reader with no
+ * draft below it (a memory file, a session transcript) should see.
+ *
+ * The buttons carry `data-reply`, and `syncChoices` decides which look picked, so the draft stays
+ * the only place a pick is stored: delete the line and the button goes back to unpressed.
+ */
+export function renderChoices(root, { onPick } = {}) {
+	if (typeof onPick !== "function") return 0;
+	let rendered = 0;
+	for (const code of root.querySelectorAll(`pre > code.language-${CHOICES_LANGUAGE}`)) {
+		const options = parseChoices(code.textContent);
+		// Malformed stays visible as code: a reader should see what was written, not nothing.
+		if (!options) continue;
+		const document_ = code.ownerDocument;
+		const group = document_.createElement("div");
+		group.className = "choices";
+		group.dataset.testid = "message-choices";
+		group.setAttribute("role", "group");
+		group.setAttribute("aria-label", "Reply options");
+		for (const option of options) {
+			const button = document_.createElement("button");
+			button.type = "button";
+			button.className = "choice";
+			button.dataset.choice = "";
+			button.dataset.reply = option.reply;
+			button.dataset.testid = "message-choice";
+			button.setAttribute("aria-pressed", "false");
+			button.textContent = option.label;
+			// Where the reply says more than the label, the button shows both: the short one to
+			// scan and the sentence that will be sent.
+			if (option.reply !== option.label) {
+				const reply = document_.createElement("span");
+				reply.className = "choice-reply";
+				reply.textContent = option.reply;
+				button.append(reply);
+			}
+			button.addEventListener("click", () => onPick(option, button, group));
+			group.append(button);
+		}
+		code.parentNode.replaceWith(group);
+		rendered += 1;
+	}
+	return rendered;
+}
+
+/**
+ * Mark each option pressed or not from `has(reply)`, which reads the draft (WEB-10). Called after
+ * a render, after a click, and on every edit of the reply box.
+ */
+export function syncChoices(root, has) {
+	if (typeof has !== "function" || !root) return;
+	for (const button of root.querySelectorAll("button[data-choice]")) {
+		const picked = Boolean(has(button.dataset.reply ?? ""));
+		button.setAttribute("aria-pressed", String(picked));
+	}
+}
+
 /** Replace fenced mermaid blocks with rendered diagrams, loading the bundle only when needed. */
 export async function renderDiagrams(root, { ensureMermaid, DOMPurify, idPrefix = "pana-diagram", dark = false }) {
 	const blocks = [...root.querySelectorAll("pre > code.language-mermaid")];
@@ -280,6 +368,8 @@ export async function renderMessage(target, text, options) {
 	}
 	rewriteLinks(target, options.domain);
 	linkifyTextNodes(target, options.domain);
+	// WEB-10: the buttons are in place before the prose is, so a click never waits on bytes.
+	renderChoices(target, options);
 	void hydrateFiles(target, options.fetchFile, options).catch(() => {});
 	void renderDiagrams(target, options).catch(() => {});
 	return target;
