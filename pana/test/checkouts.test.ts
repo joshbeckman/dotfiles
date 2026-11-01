@@ -199,6 +199,12 @@ describe("GUARD-06 the admission check costs no process", () => {
 
 		expect(refusal(`git -C ${t.repo} fetch`)).toBeUndefined();
 		expect(refusal(`git -C ${t.repo} fetch origin`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} fetch --all --prune`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} fetch --tags origin`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} fetch -v --no-tags origin`)).toBeUndefined();
+		// A remote URL carries a colon and is still not a refspec.
+		expect(refusal(`git -C ${t.repo} fetch https://github.com/joshbeckman/dotfiles.git main`)).toBeUndefined();
+		expect(refusal(`git -C ${t.repo} fetch git@github.com:joshbeckman/dotfiles.git`)).toBeUndefined();
 		expect(refusal(`git -C ${t.repo} pull --ff-only`)).toBeUndefined();
 		expect(refusal(`git -C ${t.repo} pull --ff-only --no-autostash origin abc1234`)).toBeUndefined();
 		// The flag need not come first, and the pinned commit need not come last.
@@ -244,6 +250,16 @@ describe("GUARD-06 the admission check costs no process", () => {
 			// `--git-dir` names no work tree, so the fast-forward is not admitted through it.
 			`git --git-dir=${join(t.repo, ".git")} pull --ff-only`,
 			`git --git-dir=${join(t.repo, ".git")} fetch`,
+			// `fetch` writes no working tree, but a refspec into a local ref moves the user's branch.
+			`git -C ${t.repo} fetch origin main:main`,
+			`git -C ${t.repo} fetch --force origin foo:refs/heads/main`,
+			`git -C ${t.repo} fetch --force --update-head-ok origin main:main`,
+			`git -C ${t.repo} fetch -f origin`,
+			`git -C ${t.repo} fetch -fv origin`,
+			`git -C ${t.repo} fetch --update-head-ok origin`,
+			`git -C ${t.repo} fetch --mirror origin`,
+			`git -C ${t.repo} fetch --prune-tags origin`,
+			`git -C ${t.repo} fetch origin +main:refs/heads/main`,
 			// The mutator list and the read-only list are unchanged.
 			`git -C ${t.repo} reset --hard`,
 			`git -C ${t.repo} checkout main`,

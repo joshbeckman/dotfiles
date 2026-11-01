@@ -182,7 +182,8 @@ export function primaryCheckoutRefusal(path: string, root: string): string {
  * on explicit user request: `git -C <checkout> fetch`, `… pull --ff-only`, `… merge --ff-only`.
  * Nothing else opens: a pull or merge without `--ff-only` (or with `--no-ff`, `--rebase`,
  * `--autostash`, `--squash`) is refused, so a branch that cannot fast-forward fails in git instead
- * of being merged, rebased, or stashed by the guard's permission.
+ * of being merged, rebased, or stashed by the guard's permission, and a `fetch` may not carry a
+ * refspec into a local ref (the branch HEAD points at is the user's too).
  */
 export function checkoutCommandRefusal(
 	command: string,
@@ -268,13 +269,25 @@ const READ_ONLY_GIT = new Set([
 
 /**
  * The subcommands a session may run in a checkout although they write, when they write only a
- * fast-forward (PRM-05): `fetch` moves refs and never the working tree, and `pull`/`merge` are
- * admitted below with `--ff-only` and nothing that turns them into a merge, rebase or stash.
+ * fast-forward (PRM-05): `fetch` moves remote-tracking refs and never the working tree, and
+ * `pull`/`merge` are admitted below with `--ff-only` and nothing that turns them into a merge,
+ * rebase or stash.
  */
 const FAST_FORWARD_GIT = new Set(["pull", "merge"]);
 
 /** A `pull`/`merge` flag that makes the command something other than a plain fast-forward. */
 const NOT_FAST_FORWARD = /^(?:--(?:no-ff|ff|rebase|rebase-merges|autostash|squash|no-commit|abort|continue|quit)(?:=|$)|-r$|-n$)/;
+
+/**
+ * A `fetch` flag that writes a local ref instead of only fetching: `--force`/`-f` (alone or in a
+ * bundle like `-fv`), which lets a refspec replace the branch HEAD points at; `--update-head-ok`,
+ * which allows exactly that on the current branch; `--mirror`, which is `--prune --force` over every
+ * ref; and `--prune-tags`, which deletes local tags. A plain `fetch`, `--all`, `--prune`, `--tags`,
+ * `--depth`, `-v` and the rest stay admitted: they never move a branch or the working tree.
+ */
+const UNSAFE_FETCH = /^(?:--(?:force|update-head-ok|mirror|prune-tags)(?:=|$)|-[A-Za-z]*f[A-Za-z]*$)/;
+/** A remote URL, which may carry a `:` (`https://…`, `git@host:path`) but is not a refspec. */
+const REMOTE_URL = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|[^/\s:]+@[^/\s:]+:)/;
 
 /** The words of the git invocation `match` found, up to the next shell separator. */
 function gitWords(command: string, match: RegExpMatchArray): string[] {
@@ -290,10 +303,15 @@ function gitWords(command: string, match: RegExpMatchArray): string[] {
 /** Why this git invocation may not run against the checkout, or undefined when it may. */
 function gitRefusal(root: string, words: readonly string[]): string | undefined {
 	const subcommand = words[0] ?? "";
-	if (READ_ONLY_GIT.has(subcommand) || subcommand === "fetch") return undefined;
-	if (FAST_FORWARD_GIT.has(subcommand)) {
-		const flags = words.slice(1);
-		if (flags.includes("--ff-only") && !flags.some((flag) => NOT_FAST_FORWARD.test(flag))) return undefined;
+	if (READ_ONLY_GIT.has(subcommand)) return undefined;
+	const args = words.slice(1);
+	if (subcommand === "fetch") {
+		// A refspec with a destination (`main:refs/heads/main`) moves a local ref, which is the
+		// user's branch as far as this guard is concerned, so only the fetch itself is admitted.
+		const writesRef = args.some((arg) => UNSAFE_FETCH.test(arg) || (arg.includes(":") && !REMOTE_URL.test(arg)));
+		if (!writesRef) return undefined;
+	} else if (FAST_FORWARD_GIT.has(subcommand)) {
+		if (args.includes("--ff-only") && !args.some((flag) => NOT_FAST_FORWARD.test(flag))) return undefined;
 	}
 	return refusedGit(root, subcommand);
 }
