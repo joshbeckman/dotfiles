@@ -457,6 +457,38 @@ export const MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX IF NOT EXISTS sessions_objective ON sessions(objective_id);
 		`,
 	},
+	{
+		version: 13,
+		name: "objective and wake index",
+		// OBJ-23 and WAK-01: every objectives read filters `objective_id` + `kind` and then a
+		// `detail` key, and every wake read filters `kind='wake' AND state='active'` and then the
+		// `payload` session. Neither filter had an index, so both scanned: `objective_events` grows
+		// with every run start and end, and the wake reads ran once per member on every objective
+		// status read.
+		//
+		// `(objective_id, kind, at)` leads with both equality columns and ends with `at`, so the
+		// `MAX(at)` and `ORDER BY at DESC LIMIT 1` reads are index seeks. It replaces
+		// `objective_events_objective (objective_id, at)`: every production read also filters
+		// `kind`, which the new index carries, and no read orders by `at` alone, so keeping the old
+		// one only paid index writes on the fastest-growing table (BENCH.md records the pairs).
+		//
+		// The wake index is partial and trailing-keyed: `kind` leads because the reads pass an IN
+		// list of members and only a leading equality term lets SQLite seek once per member;
+		// `next_at, id` last so the single-session reads get their order from the index. Only active
+		// wakes are indexed, so the cost tracks pending work, not schedule history.
+		//
+		// The expression is the plain one every call site writes, so no query changes. A malformed
+		// `payload` would fail this index at boot (`json_extract` errors on invalid JSON) where the
+		// reads merely skip the row; a seeded database has none, and every writer goes through
+		// `JSON.stringify` (`schedules/store.ts`). A `session_id` column would remove that risk at
+		// the cost of writing it from every schedule writer — a separate change, not this one.
+		sql: `
+			CREATE INDEX IF NOT EXISTS objective_events_kind ON objective_events(objective_id, kind, at);
+			DROP INDEX IF EXISTS objective_events_objective;
+			CREATE INDEX IF NOT EXISTS schedules_wake_session ON schedules(kind, json_extract(payload, '$.session'), next_at, id)
+				WHERE kind = 'wake' AND state = 'active';
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

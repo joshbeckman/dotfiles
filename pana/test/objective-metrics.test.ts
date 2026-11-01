@@ -666,6 +666,8 @@ it("OBJ-29 a reading records where it came from, and a session reports only its 
 	expect((await t!.client.post(`/objectives/${objective.id}/metrics/weight/readings`, { value: "not a number" })).status).toBe(400);
 	expect((await t!.client.post(`/objectives/${objective.id}/metrics/weight/readings`, { value: 1, source: "oracle" })).status).toBe(400);
 
-	// The last migration is still the objectives one: metrics arrived without a schema change.
-	expect(MIGRATIONS.at(-1)).toMatchObject({ version: 12, name: "objectives" });
+	// Metrics arrived without a schema change of their own: migration 12 still holds them, and the
+	// last migration is a later, index-only one.
+	expect(MIGRATIONS.at(-1)).toMatchObject({ version: 13, name: "objective and wake index" });
+	expect(MIGRATIONS.find((migration) => migration.version === 12)).toMatchObject({ version: 12, name: "objectives" });
 });

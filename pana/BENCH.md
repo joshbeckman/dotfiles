@@ -130,3 +130,86 @@ Each was found with a CPU profile of the bench's `panad` or with `PANA_BENCH_SQL
 - After these fixes `panad` is CPU-bound, and SQLite is about 55% of its CPU. BEGIN and COMMIT alone are a quarter.
 - The inbox's `unreadTotal` reads every unread delivery of the reader through the partial index: 1.9 ms with 13,859 unread. A counter column would make it constant, at the cost of state to keep right.
 - Searches page by offset, so a deep page re-reads the hits before it.
+
+## Objectives reads: the JSON-scan indexes (migration 13)
+
+Every objectives read filtered a JSON key with nothing behind it: `json_extract(detail, '$.session')` and friends on `objective_events`, `json_extract(payload, '$.session')` on `schedules`. `objective_events` grows with every run start and end, and the wake reads ran once per member on every objective status read.
+
+Two indexes and one drop, in migration 13:
+
+- `objective_events_kind (objective_id, kind, at)` replaces `objective_events_objective (objective_id, at)`. Every production read filters `kind` as well, and none orders by `at` alone (the one `SELECT … ORDER BY at` left is in a test), so the old index paid a write on the fastest-growing table for nothing. At 200,000 events the new index is 10.8 MB, the dropped one was 8.4 MB.
+- `schedules_wake_session (kind, json_extract(payload, '$.session'), next_at, id) WHERE kind = 'wake' AND state = 'active'`. `kind` leads because the reads pass an IN list of members and only a leading equality term lets SQLite seek once per member; `next_at, id` last so a single-session read takes its order from the index. Partial, so its cost tracks pending wakes rather than schedule history: 48 KB with 5,000 schedules and 600 active wakes.
+
+Measured on a VACUUMed copy of the seeded database below: 51,044,352 → 53,424,128 bytes, +2.38 MB net.
+
+### The seeded database
+
+The default bench never drives the objectives routes, so this is the direct evidence. A throwaway database under scratch, 5,000 schedules (3,000 session, 1,250 thread, 750 wake — 600 of them active, 150 of those hold wakes) against 500 sessions and 50 objectives, and 200,000 `objective_events` across those 50 objectives: 40% `run.started`, 35% `run.ended`, 8% `member.created`, 2% `member.refused`, 2% `run.refused`, and 1% each of `budget`, `charter.set`, `escalated`, `stranded`, `limits.set`, `behind`, `regenerated`. `detail` carries `{session, run, lead}` on a start, `{session, run}` on an end, `{condition}` on a budget or refusal. Each query shape was prepared, warmed for 10 calls, then timed over 100–300 calls on identical copies of the file; updates ran inside a savepoint and were rolled back. Two independent copies each side.
+
+| Query shape (call site) | Before, µs/call | After, µs/call |
+|---|---|---|
+| `state.ts` hasPendingWake (IN list, LIMIT 1) | 14.2 / 15.0 | 13.5 / 10.8 |
+| `gates.ts` memberWakes (IN list) | 1452.6 / 1302.0 | 29.1 / 21.8 |
+| `store.ts` sessionWakes | 1515.1 / 1370.1 | 13.5 / 14.0 |
+| `lead.ts` cancelWakes (UPDATE) | 1552.7 / 1297.1 | 20.6 / 19.7 |
+| `hold.ts` clearHold (UPDATE) | 1925.8 / 1256.2 | 20.8 / 19.9 |
+| `hold.ts` upsertHoldWake select | 697.6 / 631.4 | 8.5 / 8.7 |
+| `brief.ts` pendingWakes (IN list, ORDER BY next_at) | 1670.2 / 1383.8 | 1628.1 / 1404.2 |
+| `live.ts` nextWakes (IN list, ORDER BY next_at) | 1525.9 / 1331.5 | 1625.3 / 1443.8 |
+| `limits.ts` leadRunsToday | 912.0 / 801.0 | 659.2 / 628.7 |
+| `limits.ts` lastLeadRunEnd | 8.7 / 8.1 | 9.2 / 9.1 |
+| `brief.ts` leadRunsTotal | 1228.7 / 1169.1 | 884.3 / 791.0 |
+| `hold.ts` budget prior | 18.8 / 18.8 | 9.9 / 9.1 |
+| `hold.ts` run.refused prior | 11.8 / 11.6 | 10.9 / 10.1 |
+| `hold.ts` member.created count | 884.7 / 825.0 | 328.4 / 277.6 |
+| `hold.ts` currentLeadRun | 16.6 / 14.5 | 15.6 / 11.2 |
+| `hold.ts` member.refused prior | 621.3 / 590.0 | 75.9 / 65.9 |
+| `limits.ts` objectiveRunsToday (no JSON) | 354.5 / 316.8 | 71.2 / 67.9 |
+
+An inserted `objective_events` row costs 5.8 / 5.0 µs before and 5.9 / 5.4 µs after — one index replaced another. An inserted active wake costs 14.3 / 12.7 µs before and 17.0 / 16.9 µs after.
+
+Plans, from `EXPLAIN QUERY PLAN` over the same statements (the test in `test/objectives-indexes.test.ts` asserts these through the routes):
+
+| Read | Before | After |
+|---|---|---|
+| hasPendingWake, memberWakes, cancelWakes, clearHold, upsertHoldWake | `schedules_state (state=?)` or `(state=? AND next_at>?)` | `schedules_wake_session (kind=? AND <expr>=?[ AND next_at>?])` |
+| sessionWakes | `schedules_state (state=? AND next_at>?)`, temp B-tree for the last ORDER BY term | `schedules_wake_session (kind=? AND <expr>=? AND next_at>?)` |
+| pendingWakes, nextWakes | `schedules_state (state=? AND next_at>?)`, temp B-tree | unchanged |
+| every `objective_events` read | `objective_events_objective (objective_id=[ AND at>? AND at<?])` | `objective_events_kind (objective_id=? AND kind=?[ AND at>? AND at<?])` |
+| objectiveRunsToday | `objective_events_objective` range, table lookup per row | covering `objective_events_kind` |
+
+The two IN-list reads that also `ORDER BY next_at, id` keep the state index. An IN list over an expression index needs a sort either way, and without `sqlite_stat1` SQLite prefers the order it already has. Dropping the `ORDER BY` and sorting in JS moves both onto the index (143 µs and 80 µs, measured), and so does `ANALYZE` — 79 ms over this database. Neither is in this change.
+
+`leadRunsToday` (912 → 659 µs) and `member.created` (885 → 328 µs) still scan the `(objective_id, kind)` range and evaluate `json_extract(detail, …)` per row: the index narrows to the kind, and nothing narrows further. An expression index on `detail` is the next shape to try; it is not in this change.
+
+A malformed `payload` on an active wake row fails index creation at boot (`malformed JSON`), where the reads today only skip the row: the seed has zero such rows (checked with `NOT json_valid(payload)`), the partial predicate keeps session and non-active schedules out of the index, and every writer goes through `JSON.stringify`. A `session_id` column would remove the risk without query changes, at the cost of writing it from every schedule writer.
+
+### The bench on this host
+
+Raspberry Pi 5, 4 cores, 16 GB, Debian 13, Node 24.21.0, SQLite 3.53.4. `pana/scripts/bench --list-threads 10000 --json`, `PANA_BENCH_SQL` per run, two runs each, interleaved base → branch → base → branch. The bench drives no objectives route, so this only shows that the change costs nothing elsewhere. The 5-minute load average before each of the four runs was 0.09, 0.58, 0.69, 0.75.
+
+| Phase | Base `0fb36aa`, run 1 | Base, run 2 | Branch, run 1 | Branch, run 2 |
+|---|---|---|---|---|
+| sessions: 200 created at once | 6.9 s, 28.8/s | 6.9 s, 29.1/s | 6.8 s, 29.4/s | 6.9 s, 28.9/s |
+| threads: 10,000 messages | 43.9 s, 227.7/s; answer p50 / p99 427 / 609 ms | 44.5 s, 224.8/s; 428 / 659 ms | 43.5 s, 230.0/s; 420 / 618 ms | 44.1 s, 226.6/s; 425 / 609 ms |
+| broadcast: 1,000 wakes | 7.5 s, 133.1/s; post p50 / p99 189 / 1369 ms | 7.5 s, 133.1/s; 172 / 727 ms | 7.6 s, 131.1/s; 162 / 714 ms | 7.5 s, 132.6/s; 169 / 693 ms |
+| fan-out: 150 sessions | 8.3 s, 18.2/s | 8.1 s, 18.5/s | 8.1 s, 18.5/s | 7.9 s, 19.1/s |
+| Requests | 14,965 | 14,967 | 14,967 | 14,965 |
+| `panad` RSS peak | 488 MB | 455 MB | 478 MB | 462 MB |
+| Database | 46,288,896 B | 46,276,608 B | 46,252,032 B | 46,268,416 B |
+
+Lists at 10,000 threads, first page p50 / p99 in ms, and every-page p99:
+
+| List | Base, run 1 | Base, run 2 | Branch, run 1 | Branch, run 2 |
+|---|---|---|---|---|
+| `/inbox` (13,859) | 5.28 / 8.89, pages 8.21 | 5.23 / 7.38, pages 8.24 | 5.21 / 7.13, pages 8.98 | 5.18 / 7.21, pages 9.52 |
+| `/threads` (10,000) | 1.32 / 6.08, pages 2.94 | 1.29 / 6.11, pages 2.98 | 1.40 / 5.34, pages 2.87 | 1.36 / 4.76, pages 3.09 |
+| `/sessions` (350) | 1.62 / 1.98, pages 1.73 | 1.65 / 3.64, pages 1.92 | 1.63 / 2.25, pages 1.87 | 1.61 / 2.06, pages 1.72 |
+| `/schedules` (200) | 1.41 / 10.63, pages 3.12 | 1.41 / 5.67, pages 1.55 | 1.41 / 1.79, pages 1.59 | 1.42 / 3.52, pages 5.94 |
+
+Every difference above is inside the run-to-run spread (threads 224.8–230.0 msg/s over the four runs). The branch was 1% faster in the threads phase and 1% slower in broadcast; neither is larger than the spread between two base runs.
+
+Total SQLite time, summing every statement in `PANA_BENCH_SQL`'s output: 26,033 ms and 26,346 ms base, 25,801 ms and 26,271 ms branch — 1.4% and 0.3% apart, inside the same spread. The ten most expensive statements are the same ten, in the same order, on both sides: `COMMIT` 5,048–5,154 ms over 48,190 commits, pi-durable's `INSERT INTO pi_tasks` 1,446–1,469 ms over 26,940 calls, `SELECT record FROM pi_conversations` 1,045–1,075 ms over 103,858 calls, the inbox's unread count 1,040–1,042 ms over 328 calls, `INSERT OR IGNORE INTO pi_record_ids` 879–916 ms, `SELECT record FROM pi_entries` 890–908 ms and 679–697 ms over 5,623 calls, `DELETE FROM pi_document_revisions` 750–768 ms, `INSERT INTO deliveries` 545–554 ms, `INSERT OR REPLACE INTO sessions_fts` 533–543 ms.
+
+This bench creates no objectives, so the two new indexes have almost no rows to hold there: the database is 46.25–46.29 MB on both sides, and the migration moves no measured statement. The seeded database above is what shows the indexes paying.
+
