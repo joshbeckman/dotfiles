@@ -158,7 +158,12 @@ describe("schedule conditions", () => {
 		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
 		const schedule = await create({ cron: "* * * * * *", check: "echo run >> runs; while [[ ! -f release ]]; do :; done", checkCwd: dir });
 		await t.clock.advanceTo(schedule.nextAt!);
-		await vi.waitFor(() => expect(existsSync(join(dir!, "runs"))).toBe(true));
+		// `echo run >> runs` creates the file before it writes it, so existence alone
+		// lets a slow runner read the empty file. Wait for the line the check echoes.
+		await vi.waitFor(() => {
+			expect(existsSync(join(dir!, "runs"))).toBe(true);
+			expect(readFileSync(join(dir!, "runs"), "utf8")).toBe("run\n");
+		});
 		await t.clock.advance(5_000);
 		expect(readFileSync(join(dir, "runs"), "utf8")).toBe("run\n");
 		writeFileSync(join(dir, "release"), "");
