@@ -257,3 +257,54 @@ The statement itself: `SELECT COUNT(*) … read_at IS NULL … thread_archives` 
 What the counter costs: one `unread_counts` upsert per delivery and per wake mark-read, 26,839 calls at 13 µs — **349 ms**, about 1.3% of SQLite time. The delivery insert itself is flat at **27 / 28 µs before, 28 / 28 µs after**. Net, the run's SQLite total is 178–309 ms lower, which is inside the spread between two base runs (345 ms); the place the change shows is the route, where the inbox's p50 falls from 4.9 ms to 1.7 ms.
 
 
+
+## Disk: what a pana database holds, and what churn leaves behind
+
+The live file was 83.3 → 93.5 MiB in about two hours on a `panad` that never restarted (`du -b` on the file and its WAL: 98,242,560 B main, 4,165,352 B `-wal` at the end). This section measures where bytes go in a pana database and what churn leaves behind, on throwaway databases built through the real routes (a script, not the bench: no bench was run). It says what the growth is not as much as what it is.
+
+### Where the bytes are
+
+A database after 2,000 messages across 4 threads, 6 sessions, with reads, archives and replies: 3,944,448 B, `freelist_count` 0.
+
+| Object | Bytes | Share |
+|---|---|---|
+| `deliveries` | 996 K | 25% |
+| its indexes: `deliveries_recipient` 296 K, `deliveries_recipient_submission` 264 K, `deliveries_recipient_unread` 56 K, primary key 464 K | 1,080 K | 27% |
+| `messages` + its two indexes | 544 K | 14% |
+| `messages_fts_{content,data,docsize,idx}` | 476 K | 12% |
+| `subjects_fts_*`, `subjects_thread` | 12 K | — |
+| everything else (`threads`, `participants`, `sessions`, `unread_counts`, …) | under 40 K | — |
+
+**Deliveries and their indexes are 53% of the file — more than twice the message text and its full-text index together.** The FTS tables are not the disk story. One row per recipient per message, with four indexes behind it, is.
+
+Transcript tables (`pi_*`) are not in this build: a session with a conversation adds them, and the bench's 10,400-message run ends at 46 MB with those included. This table measures the tables pana defines.
+
+### What churn leaves behind
+
+Redacting 1,389 of those 2,000 messages, which shrinks each body and drops its search row: 3,985,408 B with `freelist_count` 21 (**86,016 B free, 2%**). Rebuilding the same content with `VACUUM`: **3,584,000 B, 401,408 B recovered (10%)** in 49 ms — of which only 86 KB was the freelist; the rest is pages left underfull by the rewrites. An append-only sequence leaves **nothing** free: rows are added, pages fill, no page is handed back.
+
+So the live growth is not a churn artifact of free pages: at this shape, two hours of rewriting would leave ~2% free and ~10% recoverable in total, and the file grows because it is holding more rows — mostly deliveries. A file that never shrinks is holding them at their peak, not leaking space.
+
+### What reclaims it
+
+| | Recovered | File after | Cost |
+|---|---|---|---|
+| nothing | 0 | 3,985,408 B | — |
+| `PRAGMA incremental_vacuum` on a file created with `auto_vacuum=incremental` | 86,016 B (the freelist exactly) | 3,903,488 B | 21 ms |
+| `VACUUM` | 401,408 B (freelist + underfull pages) | 3,584,000 B | 49 ms on 4 MB; needs room for a second copy of the file while it runs |
+| `auto_vacuum=full` | — | — | no measurable write cost at this scale: the same 600-message build took 632 / 612 ms without it and 625 / 628 ms with it |
+
+`auto_vacuum` can only be switched on an existing database by a full `VACUUM` at boot (or before the first table exists), which is a change to how panad starts and is not in this section's scope. `incremental_vacuum` reclaims the freelist and nothing more; it is cheap enough (21 ms for 4 MB) to run when idle, which is the shape to consider if free pages ever matter.
+
+### WAL at rest
+
+`panad` runs `journal_mode=WAL`, `synchronous=NORMAL`, `wal_autocheckpoint=1000` pages (4 MB), and `journal_size_limit=-1`; it never checkpoints on a timer, and a clean shutdown truncates the WAL to zero (chord's `close()` does). The 4 MB `-wal` on the live file is one autocheckpoint interval. Measured with 16,000 single-row transactions on a copy:
+
+| Setting | `-wal` at rest | 16,000 transactions |
+|---|---|---|
+| default (`journal_size_limit=-1`, 1,000 pages) | 4,157,112 B | 1,941 ms |
+| `journal_size_limit=4 MB` | 4,157,112 B (no change) | 1,952 ms |
+| `journal_size_limit=1 MB` | 2,533,832 B | 2,019 / 2,084 ms |
+| `wal_autocheckpoint=250` pages | 1,054,752 B | 978 ms for 4,000 transactions against 478 ms at 1,000 pages — the same bytes written, checkpoints four times as often |
+
+A passive checkpoint does not shrink the WAL; only a checkpoint that reaches the limit does, which is why 1 MB parks it at 2.5 MB rather than 1 MB. The limit buys **1.5 MiB at rest** for what looks like a 4–7% write cost on this worst case (tiny transactions), and lowering `wal_autocheckpoint` buys 3 MB for roughly double the write time. Neither is a default worth taking without the user: they trade disk for write latency on a database whose other half of the goal is speed.
