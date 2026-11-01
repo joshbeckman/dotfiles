@@ -18,7 +18,21 @@ Node 22.18 or newer runs the `.ts` sources directly, so there is no build step. 
 
 ## UI changes
 
-A change to the PWA shows its effect in the PR: a screenshot of the before and after, or a short video, taken from the browser test domain. `node test/browser/screens.ts DIR LABEL` shoots every section; a single feature takes its own script the way `test/browser/palette-shots.ts` does. Put the PNGs in `pana/docs/` and reference them from the PR body, as #79 does.
+A change to the PWA shows its effect in the PR: a screenshot of the before and after, or a short video, taken from the browser test domain. `node test/browser/screens.ts DIR LABEL` shoots every section; a single feature takes its own script the way `test/browser/palette-shots.ts` does.
+
+Attach the shots to the PR. Do not commit them.
+
+```sh
+gw pr create --body-file body.md --attach ./shots/before.png --attach ./shots/after.png
+gw pr edit 123 --body-file body.md --attach ./shots/after.png # an existing PR
+gw pr comment 123 --attach './shots/shot.png#the phone width' # evidence after the fact
+```
+
+`--attach` (gh 2.99 or newer; `gw` passes it through) uploads each file to GitHub and rewrites the body's reference to it, `![before](./shots/before.png)`, into the uploaded URL. It takes images and video, up to 50 files per command. The branch and `master` then never carry the evidence.
+
+Do not link a relative path to a file that stays out of the commit: GitHub resolves it against the default branch, so it renders as a broken image until the merge. Without `--attach`, an absolute `raw.githubusercontent.com` URL pinned to the commit renders (as #79 did), but the file still merges.
+
+`pana/docs/` holds only the shots `pana/README.md` shows. Evidence for a single PR does not go there.
 
 ## Layout
 
