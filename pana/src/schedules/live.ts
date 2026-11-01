@@ -39,10 +39,13 @@ export async function nextWakes(runtime: Runtime, sessionIds: readonly string[])
 		`SELECT s.id AS id, json_extract(s.payload, '$.session') AS session_id, s.subject AS subject, s.cron AS cron, s.next_at AS next_at
 		   FROM schedules s
 		  WHERE s.kind = 'wake' AND s.state = 'active' AND s.next_at IS NOT NULL
-		    AND json_extract(s.payload, '$.session') IN (${sessionIds.map(() => "?").join(",")})
-		  ORDER BY s.next_at, s.id`,
+		    AND json_extract(s.payload, '$.session') IN (${sessionIds.map(() => "?").join(",")})`,
 		...sessionIds,
 	);
+	// Sorted here, before the loop below, for the same reason and in the same `(next_at, id)`
+	// order as `brief.ts`'s pendingWakes: the sort leaves SQL, where the IN list made it a temp
+	// B-tree. Ids are ASCII, so this is the byte order `ORDER BY s.id` gave.
+	rows.sort((left, right) => left.next_at - right.next_at || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
 	// The order puts each session's earliest first, so the first row kept per session is its next.
 	for (const row of rows) {
 		if (out.has(row.session_id)) continue;

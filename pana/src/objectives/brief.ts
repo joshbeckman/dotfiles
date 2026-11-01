@@ -126,14 +126,18 @@ interface WakeBrief {
 async function pendingWakes(db: SqliteExecutor, members: readonly ObjectiveMemberRow[]): Promise<WakeBrief[]> {
 	if (members.length === 0) return [];
 	const ids = members.map((member) => member.id);
-	const rows = await db.all<{ session: string; next_at: number }>(
-		`SELECT json_extract(payload, '$.session') AS session, next_at
+	// The index finds the rows; the order is applied here because an `ORDER BY next_at, id` over
+	// an IN list costs SQLite a temp B-tree and it then prefers another index (BENCH.md,
+	// migration 13's follow-up). Ids are ASCII, so this comparison is the byte order that
+	// `ORDER BY id` gave. The order and its tie-break are unchanged.
+	const rows = await db.all<{ id: string; session: string; next_at: number }>(
+		`SELECT id, json_extract(payload, '$.session') AS session, next_at
 		   FROM schedules
 		  WHERE kind = 'wake' AND state = 'active' AND next_at IS NOT NULL
-		    AND json_extract(payload, '$.session') IN (${ids.map(() => "?").join(",")})
-		  ORDER BY next_at, id`,
+		    AND json_extract(payload, '$.session') IN (${ids.map(() => "?").join(",")})`,
 		...ids,
 	);
+	rows.sort((left, right) => left.next_at - right.next_at || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
 	return rows.map((row) => ({ session: row.session, nextAt: row.next_at }));
 }
 
