@@ -16,7 +16,7 @@ export const SECTIONS = [
 export const TOKEN_KEY = "pana-token";
 
 /**
- * Accept the whole launch URL or a bare token, as agent-mail-web does. The fragment is the only
+ * Accept the whole launch URL or a bare token, as the app this came from did. The fragment is the only
  * part of a launch URL that is not guessable.
  */
 export function tokenFromInput(raw) {

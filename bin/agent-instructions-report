@@ -22,9 +22,6 @@ DEFAULT_OUTPUT = pathlib.Path(os.environ.get('XDG_STATE_HOME', pathlib.Path.home
 # What to do about each section, keyed by its heading. Sizes come from the file; only the
 # judgement is written down here, because a heuristic cannot tell a rule from a mechanism.
 SUGGESTIONS = {
-    '### Conversation ownership and Agent Mail':
-        ('split', 'The handles, group-mail and inbox-browser paragraphs are reference material. '
-                  'Keep the rules an agent must not get wrong; move the reference to a linked doc.'),
     '### Avatars':
         ('helper', 'The render-and-check recipe took five defects to get right. Move it to a bin/ '
                    'helper that runs the checks and exits non-zero, leaving the rule and a pointer.'),
@@ -38,8 +35,6 @@ SUGGESTIONS = {
         ('compress', 'Four bullets that restate one rule: ask the owner before editing their artifact.'),
     '### Memory-pressure backpressure':
         ('move', 'Platform-specific mechanism rather than agent guidance; belongs with the tooling.'),
-    '### Notifications':
-        ('compress', 'Two paragraphs say: use Agent Mail, or notify-josh for a one-shot.'),
     '### Scratchpad':
         ('keep', 'Short, and an agent cannot work without knowing where to write.'),
     '### Secrets':

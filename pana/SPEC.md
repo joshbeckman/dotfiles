@@ -328,9 +328,9 @@ provenance is carried on PR descriptions/comments/reviews and discovered through
 ## WP8: PWA and Web Push
 
 - [x] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` prints a launch URL with the token in the fragment.
-- [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as in agent-mail-web.
+- [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as the retired agent-mail-web app did.
 - [x] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
-- [x] **WEB-04** Messages render Markdown, images, and Mermaid. Reuse `apps/agent-mail-web/renderers.js` and `mermaid-renderer.js`. The prose is in place before any image or diagram bytes arrive; images share one queue of a few requests, load only within 800 px of the viewport, and a file is read once however many messages show it.
+- [x] **WEB-04** Messages render Markdown, images, and Mermaid from the vendored bundles. `apps/agent-mail-web` is their build source and nothing else: no service, no server, no UI of its own. The prose is in place before any image or diagram bytes arrive; images share one queue of a few requests, load only within 800 px of the viewport, and a file is read once however many messages show it.
 - [x] **WEB-05** `pana://` links render as links to the matching app routes or `/files/` URLs.
 - [x] **WEB-06** The Sessions view streams a live transcript through `/events` and has stop, compact, and reload controls.
 - [x] **WEB-07** A reply draft records the thread head when opened. On a 409, the app shows the new messages and keeps the draft.

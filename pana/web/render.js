@@ -1,5 +1,5 @@
 // Rendering one message body (WEB-04, WEB-05): Markdown through the bundled marked and
-// DOMPurify from agent-mail-web, `pana://` links rewritten to app routes, authenticated file
+// DOMPurify from the vendored bundle, `pana://` links rewritten to app routes, authenticated file
 // bytes turned into blob URLs, and Mermaid diagrams rendered on demand.
 //
 // The functions take their inputs instead of reading globals, so tests can drive them with

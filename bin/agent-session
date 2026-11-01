@@ -2,8 +2,8 @@
 """Change agent session lifecycle state; `agent-find @+handle` is the read-only view.
 
 park/resume/retire keep durable records outside scratchpads. A per-session lease,
-held by the running Pi process, stops manual and automatic resumes from running
-one transcript twice. Resume refuses unless memory pressure is normal.
+held by the running Pi process, stops two resumes from running one transcript
+twice. Resume refuses unless memory pressure is normal.
 
 repair-inbox validates retained identity evidence, then previews or explicitly
 reconstructs an empty inbox. No liveness inference, transcript hydration, or execution.
@@ -161,7 +161,7 @@ def pad_state(fd, handle, sid, session_file, cwd):
             values = [line[len(key) + 4:] for line in text.splitlines() if line.startswith(f'- {key}: ')]
             if values != [value]:
                 raise ValueError(f'existing session.md has conflicting {key} metadata')
-        # agent-mail creates inbox directories on first delivery; absent is valid, linked is not.
+        # Legacy mail delivery created these directories; absent is valid, a link is not.
         try:
             with child_directory(pad, 'inbox') as inbox:
                 for name in ('new', 'cur'):
@@ -177,9 +177,6 @@ def pad_state(fd, handle, sid, session_file, cwd):
 
 def roots():
     scratch = absolute(os.environ.get('AGENT_SCRATCH_ROOT', '~/.local/state/agent/scratchpads'))
-    mail = absolute(os.environ.get('AGENT_MAIL_ROOT', str(scratch)))
-    if mail != scratch:
-        raise ValueError('AGENT_MAIL_ROOT and AGENT_SCRATCH_ROOT must agree for this command')
     return (absolute(os.environ.get('AGENT_IDENTITIES_DIR', '~/.pi/agent/identities/by-name')),
             absolute(os.environ.get('PI_SESSIONS_DIR', '~/.pi/agent/sessions')), scratch)
 
@@ -424,13 +421,13 @@ def validate_jobs(jobs):
 
 
 def fresh_record(sid):
-    """Describe a session that never parked, so the wake job can see it.
+    """Describe a session that never parked, so it can be resumed by hand.
 
-    wake-mail reads records, so a session with none is invisible to it: four of the five
-    running sessions here were in that state. This writes the same shape park writes, with
-    state awake and wake enabled, so the job can start the session once its process is
-    gone. Returns None when the session cannot be described well enough to resume later,
-    since a record that cannot be resumed is worse than no record at all.
+    Park and exit write a record; a session that was already running when this tool
+    arrived had none, so `resume` could not find it. This writes the same shape park
+    writes, with state awake and wake enabled, so the session can be started once its
+    process is gone. Returns None when the session cannot be described well enough to
+    resume later, since a record that cannot be resumed is worse than no record at all.
     """
     registry, sessions, scratch = roots()
     try:
@@ -687,10 +684,8 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         pressure = memory_pressure()
         if pressure != 1:
             raise ValueError(f'memory pressure is {pressure}; defer this wake')
-        mailbox = Path(evidence['scratchpad']).name
         prompt = (f"You were parked and have been woken by agent-session. Read {record['notes']} for the jobs "
-                  f"you stopped and your notes. Then read your mail with `agent-mail read --to {mailbox}`. "
-                  'Restart a job only if it is still needed. Once the mail is dealt with and nothing else '
+                  'you stopped and your notes. Restart a job only if it is still needed. Once nothing else '
                   'needs doing, call the park_session tool with no jobs: a session left awake holds its '
                   'memory, and every wake makes the next one more likely to be deferred by the pressure gate.')
         # Pi needs its provider key, and a new tmux window inherits the server's
@@ -727,110 +722,6 @@ def resume(handle, tmux_session, dry_run, extensions=()):
         return dict(record, status='waking')
 
 
-WAKES_PER_HOUR = 4
-
-
-def store_mode(human_root):
-    # Byte for byte the grammar bin/agent-mail checks, beside the resolved human root.
-    try:
-        raw = (human_root.resolve().parent / 'store').read_bytes()
-    except OSError:
-        return 'maildir'
-    match = re.fullmatch(rb'(maildir|both|sqlite)\n*', raw)
-    return match.group(1).decode() if match else 'maildir'
-
-
-def unread_sqlite(pad, human_root):
-    """Under the SQLite store there is no inbox/new to list, so agent-mail answers. Names keep
-    the Maildir's <id>.md shape, so wokeFor recorded before the flip still matches after it."""
-    import subprocess
-    env = dict(os.environ, AGENT_MAIL_ROOT=str(pad.parent), AGENT_HUMAN_MAIL_ROOT=str(human_root))
-    env.pop('AGENT_SCRATCHPAD', None)
-    messages, cursor = [], None
-    # Every page: a human's message past the first must still bypass the wake budget.
-    for _ in range(100):
-        result = subprocess.run([str(Path(__file__).resolve().with_name('agent-mail')), 'scan', '--to', pad.name,
-                                 '--json', '--limit', '1000', *(['--after', cursor] if cursor else [])],
-                                capture_output=True, text=True, env=env, timeout=30)
-        if result.returncode:
-            raise ValueError(f'agent-mail scan failed for {pad.name}: {result.stderr.strip()}')
-        page = json.loads(result.stdout)
-        messages += page['messages']
-        cursor = page.get('next')
-        if not cursor:
-            break
-    humans = {n for n in os.listdir(human_root) if not n.startswith('.')} if human_root.is_dir() else set()
-    names = sorted(m['message_id'] + '.md' for m in messages)
-    return names, {m['message_id'] + '.md' for m in messages if m['from'].removeprefix('@') in humans}
-
-
-def unread(pad, human_root):
-    """Unread message names and whether any came from a human."""
-    if store_mode(human_root) == 'sqlite':
-        return unread_sqlite(pad, human_root)
-    try:
-        names = sorted(n for n in os.listdir(pad / 'inbox/new') if not n.startswith('.'))
-    except FileNotFoundError:
-        return [], set()
-    humans = {n for n in os.listdir(human_root) if not n.startswith('.')} if human_root.is_dir() else set()
-    from_human = set()
-    for name in names:
-        try:
-            head = (pad / 'inbox/new' / name).read_text(encoding='utf-8', errors='replace')[:4096]
-        except OSError:
-            continue
-        sender = next((line[6:].strip() for line in head.splitlines() if line.startswith('From: ')), '')
-        if sender.removeprefix('@') in humans:
-            from_human.add(name)
-    return names, from_human
-
-
-def wake_mail(tmux_session, dry_run):
-    """Wake at most one parked session per run for mail it has not been woken for."""
-    import subprocess
-    scratch = roots()[2]
-    human_root = absolute(os.environ.get('AGENT_HUMAN_MAIL_ROOT', '~/.local/state/agent-mail/humans'))
-    root = state_root()
-    for path in sorted(root.glob('*.json')):
-        record = load(path) or {}
-        if effective_state(root, record.get('sessionId', ''), record) not in ('parked', 'waking') \
-                or not record.get('wake'):
-            continue
-        sid, handle = record['sessionId'], record['handle'][2:]
-        try:
-            names, from_human = unread(scratch / f'{handle}-{sid[:8]}', human_root)
-        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-            # One mailbox that cannot be read must not hide the others' mail.
-            print(f'agent-session: {error}', file=sys.stderr)
-            continue
-        fresh = [n for n in names if n not in record.get('wokeFor', [])]
-        if not fresh:
-            continue
-        cutoff = datetime.now().astimezone().timestamp() - 3600
-        recent = [t for t in record.get('wakes', []) if datetime.fromisoformat(t).timestamp() > cutoff]
-        # Josh's mail bypasses the autonomous budget, matching in-process wakes.
-        if len(recent) >= WAKES_PER_HOUR and not from_human.intersection(fresh):
-            continue
-        if not dry_run and subprocess.run(['tmux', 'has-session', '-t', tmux_session], capture_output=True).returncode:
-            subprocess.run(['tmux', 'new-session', '-d', '-s', tmux_session], check=True, capture_output=True)
-        try:
-            result = resume(handle, tmux_session, dry_run)
-        except ValueError as error:
-            # One session's refusal (pressure, missing cwd) must not hide others' mail.
-            print(f'agent-session: skipped @+{handle}: {error}', file=sys.stderr)
-            if 'memory pressure' in str(error):
-                break
-            continue
-        if not dry_run:
-            with locked(sid):
-                record = load(path)
-                record['wakes'] = recent + [now()]
-                record['wokeFor'] = sorted(set(record.get('wokeFor', [])) | set(fresh))[-200:]
-                save(path, record)
-        return dict(result, messages=fresh)
-    return dict(status='idle')
-
-
 def exact_handle(value):
     if not value.startswith('@+') or not HANDLE.fullmatch(value[2:]):
         raise ValueError('expected an exact @+handle')
@@ -863,9 +754,6 @@ def main():
     # For sessions launched without the global extensions directory.
     command.add_argument('--extension', action='append', default=[], help='extra Pi extension to load')
     commands.add_parser('retire', help='never wake this session again').add_argument('handle')
-    command = commands.add_parser('wake-mail', help='wake one parked session with new unread mail (for launchd)')
-    command.add_argument('--tmux-session', required=True)
-    command.add_argument('--dry-run', action='store_true')
     for name in ('started', 'exited', 'park'):
         # Called by the Pi extension for its own process, not by hand.
         command = commands.add_parser(name)
@@ -884,10 +772,6 @@ def main():
             result = {key: result[key] for key in ('handle', 'sessionId', 'status', 'scratchpad', 'cwd', 'cwdExists')}
         elif args.command == 'resume':
             result = resume(exact_handle(args.handle), args.tmux_session, args.dry_run, args.extension)
-        elif args.command == 'wake-mail':
-            result = wake_mail(args.tmux_session, args.dry_run)
-            if result['status'] == 'idle' and not args.json:
-                return 0
         elif args.command == 'retire':
             result = retire(exact_handle(args.handle))
         elif args.command == 'started':

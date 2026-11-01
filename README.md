@@ -65,7 +65,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.panad.plist
 ```
 
-Legacy mail wake jobs, the mail web supervisor, and the mail verifier timer are retired. `setup` runs `bin/retire-agent-automation` to stop and disable existing installations. Mail, transcripts, scratchpads, and manual archive commands remain available; nothing in this migration deletes history. The web archive can still be opened explicitly with `agent-mail web`.
+Agent Mail is retired: `bin/agent-mail`, `agent-mail2`, `agent-mail-web`, `agent-mail-id`, `agent-mail-verify`, `agent-mail-migrate`, and `agent-pr-monitor` are gone, and `setup` runs `bin/retire-agent-automation` to stop and disable every unit that ran them. New work reaches a person or a session through pana (`pana thread create`, `pana schedule wake`). Nothing in the retirement deletes history: `~/.local/state/agent-mail` (the SQLite store and the Maildirs), transcripts, and scratchpads stay on disk, and `git log` keeps every removed command.
 
 ### Tools
 

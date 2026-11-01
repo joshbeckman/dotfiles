@@ -228,7 +228,7 @@ describe("PWA shell and static assets", () => {
 		expect(html).toContain('data-testid="reply-attach"');
 	});
 
-	it("WEB-04 the shell reuses the agent-mail renderers and the Mermaid bundle", async () => {
+	it("WEB-04 the shell uses the vendored renderers and the Mermaid bundle", async () => {
 		t = await startTestPanad();
 		const vendor = await t.tcp.get("/vendor.js");
 		expect(vendor.status).toBe(200);

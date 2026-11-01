@@ -81,9 +81,9 @@ push_notify() {
   # The status MCP rejects a body over 150 characters with "too_big" instead of
   # shortening it, and most call sites discard the exit status, so a long message
   # used to vanish rather than arrive abbreviated. A notification is a pointer at
-  # the thing, not the thing. The title has the same 50-character cap, and
-  # "Agent mail: <subject>" overflows it for any subject past 38 characters, so it
-  # gets the same treatment rather than the same silence.
+  # the thing, not the thing. The title has the same 50-character cap, and a short
+  # prefix in it leaves little room for a subject, so it gets the same treatment rather
+  # than the same silence.
   if [ "${#message}" -gt 150 ]; then
     message="${message:0:147}..."
   fi

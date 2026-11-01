@@ -92,7 +92,8 @@ class RetirementTest(unittest.TestCase):
         service.write_text('local settings')
         result = self.run_migration('Linux', XDG_CONFIG_HOME=str(config))
         self.assertEqual(result.returncode, 0, result.stderr)
-        for unit in ('agent-mail-verify.timer', 'agent-mail-verify.service', 'agent-mail-web.service'):
+        for unit in ('agent-mail-wake.timer', 'agent-mail-wake.service', 'agent-mail-verify.timer',
+                     'agent-mail-verify.service', 'agent-mail-web.service'):
             self.assertIn(['systemctl', '--user', 'disable', '--now', unit], self.calls())
         self.assertIn(['systemctl', '--user', 'daemon-reload'], self.calls())
         self.assertFalse(timer.is_symlink())
@@ -117,12 +118,17 @@ class RetirementTest(unittest.TestCase):
         wants.mkdir(parents=True)
         retired = wants / 'agent-mail-verify.timer'
         retired.symlink_to('../agent-mail-verify.timer')
+        # The mail wake timer is enabled by hand on hosts that never ran `setup` from
+        # this branch, so its dangling link has to go with the rest.
+        wake = wants / 'agent-mail-wake.timer'
+        wake.symlink_to('../agent-mail-wake.timer')
         unrelated = wants / 'dotfiles-refresh.timer'
         unrelated.symlink_to('../dotfiles-refresh.timer')
         result = self.run_migration('Linux', NO_UNIT='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any('disable' in c for c in self.calls()))
         self.assertFalse(retired.is_symlink())
+        self.assertFalse(wake.is_symlink())
         self.assertTrue(unrelated.is_symlink())
 
     def test_removed_but_running_linux_units_are_stopped(self):
