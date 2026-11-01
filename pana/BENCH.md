@@ -308,3 +308,45 @@ So the live growth is not a churn artifact of free pages: at this shape, two hou
 | `wal_autocheckpoint=250` pages | 1,054,752 B | 978 ms for 4,000 transactions against 478 ms at 1,000 pages — the same bytes written, checkpoints four times as often |
 
 A passive checkpoint does not shrink the WAL; only a checkpoint that reaches the limit does, which is why 1 MB parks it at 2.5 MB rather than 1 MB. The limit buys **1.5 MiB at rest** for what looks like a 4–7% write cost on this worst case (tiny transactions), and lowering `wal_autocheckpoint` buys 3 MB for roughly double the write time. Neither is a default worth taking without the user: they trade disk for write latency on a database whose other half of the goal is speed.
+
+## Deliveries: the index budget
+
+`deliveries` was 53% of the P4 database, and the largest single object in it was the primary key: `sqlite_autoindex_deliveries_1`, 464 K for a 26-byte ULID per row in a 3.9 MB file. Two questions decide what can be dropped: does every index serve a statement, and would `WITHOUT ROWID` move the whole budget down rather than around?
+
+### Every index is selected
+
+Every SQL in `src/` that touches `deliveries` was planned against a database of 20,000 deliveries (4,000 messages to five recipients, one in ten read, one in five with a pending wake): 20 statements, `EXPLAIN QUERY PLAN` each.
+
+| Index | Selected by |
+|---|---|
+| `sqlite_autoindex_deliveries_1` (PK `id`) | `wakeDelivery`, the outbox settle, the hold release |
+| `sqlite_autoindex_deliveries_2` (`message_id, recipient_id`) | the inbox's delivery times, `markMessageRead` |
+| `deliveries_recipient` (`recipient_id, created_at`) | the inbox page, and nothing else |
+| `deliveries_recipient_submission` (`recipient_id, wake_submission_id`) | `triggeringDelivery`, the reply's starter and newer deliveries, the stop requeue, `heldDeliveries`, the daily user-message count |
+| `deliveries_recipient_unread` (`recipient_id, thread_id` where unread) | the archive settle, `markThreadRead`, the per-thread unread counts, the counter's recount |
+| `deliveries_pending_wake` (`wake_request_id` where pending) | the outbox's startup sweep |
+
+**No index is selected by nothing.** The one with a single caller, `deliveries_recipient`, serves the inbox page — 917 K for the read the inbox cannot do without. There is no bench-free drop in this table.
+
+### `WITHOUT ROWID` costs more, not less
+
+The same 20,000 rows and the same index definitions, rebuilt with `PRIMARY KEY (id) ... WITHOUT ROWID`, compared after a `VACUUM` on both sides:
+
+| Object | Rowid table | `WITHOUT ROWID` | Difference |
+|---|---|---|---|
+| `deliveries` (the table) | 2,883,584 B | 2,830,336 B | −53,248 B |
+| `sqlite_autoindex_deliveries_1` (PK) | 774,144 B | — | −774,144 B |
+| `sqlite_autoindex_deliveries_2` | 1,372,160 B | 1,961,984 B | +589,824 B |
+| `deliveries_recipient_unread` | 1,347,584 B | 1,921,024 B | +573,440 B |
+| `deliveries_recipient` | 917,504 B | 1,470,464 B | +552,960 B |
+| `deliveries_recipient_submission` | 798,720 B | 1,355,776 B | +557,056 B |
+| `deliveries_pending_wake` | 61,440 B | 147,456 B | +86,016 B |
+| **Total for the table and its indexes** | **8,155,136 B** | **9,687,040 B** | **+1,531,904 B (+16%)** |
+
+The table itself saves 53 KB and the key index saves 774 KB, but every secondary index now carries the 26-byte id where it carried an 8-byte rowid, and each of the four grows by 550–590 KB. `WITHOUT ROWID` is 16% more disk for this table, and it is a table rebuild in a migration besides. It is not proposed.
+
+### What that leaves
+
+Nothing here saves 5% of a file without losing a plan: the four indexes and the key cost what their statements need, and the cheapest structural change (dropping the rowid duplicate) costs 16% more elsewhere. The lever on this table is the number of rows, not the shape of them: one row per recipient per message is the 53%, and retention — what to do with deliveries whose mail is read and whose thread is archived — is a product decision, not an index.
+
+Source: `EXPLAIN QUERY PLAN` over the 20 delivery statements on a seeded database, and `dbstat` over the same rows rebuilt `WITHOUT ROWID`, 2026-11-02.
