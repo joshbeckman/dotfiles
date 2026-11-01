@@ -489,6 +489,34 @@ export const MIGRATIONS: readonly Migration[] = [
 				WHERE kind = 'wake' AND state = 'active';
 		`,
 	},
+	{
+		version: 14,
+		name: "unread counter",
+		// REF-06: `unreadTotal` was a COUNT over every unread delivery of the reader, and the inbox
+		// reads it on every call: 3.2 ms at 13,859 unread, the largest pana-owned statement in a bench
+		// run. This table is the cache of that COUNT, one row per participant and two buckets for the
+		// two ways the inbox reads it (`archived: false` and `archived: true`).
+		// `src/threads/unread.ts` is its only writer; the backfill is the same COUNT, so a migrated
+		// database and a recompute agree. `DELETE` first keeps the migration re-runnable (DB-03).
+		sql: `
+			CREATE TABLE IF NOT EXISTS unread_counts (
+				participant_id TEXT PRIMARY KEY REFERENCES participants(id),
+				unarchived     INTEGER NOT NULL DEFAULT 0,
+				archived       INTEGER NOT NULL DEFAULT 0
+			);
+			DELETE FROM unread_counts;
+			INSERT INTO unread_counts (participant_id, unarchived, archived)
+			SELECT p.id,
+			       (SELECT COUNT(*) FROM deliveries d
+			         WHERE d.recipient_id = p.id AND d.read_at IS NULL
+			           AND NOT EXISTS (SELECT 1 FROM thread_archives a WHERE a.thread_id = d.thread_id AND a.participant_id = d.recipient_id)),
+			       (SELECT COUNT(*) FROM deliveries d
+			         WHERE d.recipient_id = p.id AND d.read_at IS NULL
+			           AND EXISTS (SELECT 1 FROM thread_archives a WHERE a.thread_id = d.thread_id AND a.participant_id = d.recipient_id))
+			  FROM participants p
+			 WHERE EXISTS (SELECT 1 FROM deliveries d WHERE d.recipient_id = p.id AND d.read_at IS NULL);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
