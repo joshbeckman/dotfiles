@@ -30,7 +30,7 @@ export interface ToolCallSpec {
 }
 
 export type Turn =
-	| { text: string; thinking?: string; usage?: TurnUsage }
+	| { text: string; thinking?: string; usage?: TurnUsage; stopReason?: AssistantMessage["stopReason"] }
 	| { toolCalls: ToolCallSpec[]; text?: string; thinking?: string; usage?: TurnUsage }
 	| { fail: string; usage?: TurnUsage };
 
@@ -87,7 +87,7 @@ function toMessage(turn: Turn): AssistantMessage {
 	const blocks: FauxContentBlock[] = [];
 	if (turn.thinking) blocks.push(fauxThinking(turn.thinking));
 	blocks.push(fauxText(turn.text));
-	return fauxAssistantMessage(blocks);
+	return fauxAssistantMessage(blocks, turn.stopReason ? { stopReason: turn.stopReason } : undefined);
 }
 
 function patch(event: AssistantMessageEvent, usage: Usage): AssistantMessageEvent {

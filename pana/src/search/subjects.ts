@@ -10,11 +10,17 @@ import type { Runtime } from "../server/runtime.ts";
 import { publish } from "../web/events.ts";
 
 export const SUBJECT_MAX_LENGTH = 80;
-// The model's output budget, in the unit the model counts. Tokens are not characters: English
-// runs about four characters per token and denser scripts one or two, so half the character
-// limit is roughly this title in English and still enough for a shorter line in a denser script.
-// reply that ignores the 80-character instruction from rambling; `shorten` still owns the cut.
-export const SUBJECT_MAX_TOKENS = Math.ceil(SUBJECT_MAX_LENGTH / 2);
+// The model's output budget, in the unit the model counts. It must cover the thinking a reasoning
+// model does before it writes the one line, because reasoning and answer share one budget. Some
+// subject models cannot stop thinking at all: GLM-5.3 behind Fireworks' `glm-flash-latest` router
+// answers `reasoning_effort: none` with "GLM-5.3 is a thinking-only model", and a 40-token budget
+// sized for the answer alone left every reply mid-thought, with no text and `stopReason: length`.
+// Observed thinking runs 40-260 tokens over a 32,000-character conversation, so this leaves room
+// for it and still bounds a reply that ignores the 80-character instruction; `shorten` owns the cut.
+export const SUBJECT_MAX_TOKENS = 512;
+// A thinking phase that outran the first budget gets one wider try before the job reports failure.
+// The retry is the exception, so the ordinary subject call stays cheap.
+const SUBJECT_RETRY_MAX_TOKENS = 2_048;
 // Bound regeneration cost while retaining the conversation's most recent direction.
 const SUBJECT_CONTEXT_MESSAGES = 100;
 const SUBJECT_CONTEXT_CHARS = 32_000;
@@ -246,23 +252,35 @@ function resolveSubjectModel(runtime: Runtime): Model<Api> {
 
 export async function askSubjectModel(runtime: Runtime, body: string, systemPrompt = SUBJECT_SYSTEM_PROMPT): Promise<string> {
 	const model = resolveSubjectModel(runtime);
-	const response = await runtime.models.completeSimple(model, {
-		systemPrompt,
-		messages: [{ role: "user", content: body, timestamp: runtime.clock.now() }],
-	}, {
-		// SUB-04: spend about what an 80-character subject is worth, not the model's default.
-		maxTokens: SUBJECT_MAX_TOKENS,
-	});
-	if (response.stopReason === "error" || response.stopReason === "aborted") {
-		throw new SubjectError("model_failed", response.errorMessage ?? `subject model stopped: ${response.stopReason}`);
+	let budget = SUBJECT_MAX_TOKENS;
+	while (true) {
+		const response = await runtime.models.completeSimple(model, {
+			systemPrompt,
+			messages: [{ role: "user", content: body, timestamp: runtime.clock.now() }],
+		}, {
+			// SUB-04: spend about what an 80-character subject is worth, not the model's default.
+			maxTokens: budget,
+		});
+		if (response.stopReason === "error" || response.stopReason === "aborted") {
+			throw new SubjectError("model_failed", response.errorMessage ?? `subject model stopped: ${response.stopReason}`);
+		}
+		const text = response.content
+			.filter((block) => block.type === "text")
+			.map((block) => block.text)
+			.join(" ");
+		const subject = shorten(text);
+		if (subject) return subject;
+		// A reasoning model that spent the whole budget thinking has written nothing yet; one wider
+		// budget usually lets it finish, where the same call again would only think the same amount.
+		if (response.stopReason === "length" && budget < SUBJECT_RETRY_MAX_TOKENS) {
+			budget = SUBJECT_RETRY_MAX_TOKENS;
+			continue;
+		}
+		if (response.stopReason === "length") {
+			throw new SubjectError("model_failed", `subject model used its ${budget}-token budget without writing a subject`);
+		}
+		throw new SubjectError("model_failed", "subject model returned no text");
 	}
-	const text = response.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join(" ");
-	const subject = shorten(text);
-	if (!subject) throw new SubjectError("model_failed", "subject model returned no text");
-	return subject;
 }
 
 /**
