@@ -5,6 +5,7 @@
 // - `schema.ts` — the stored shape and the package's vocabulary (the migration is version 12).
 // - `state.ts` — reads, and the one derived display state every package reuses (OBJ-03).
 // - `store.ts` — create (OBJ-01, OBJ-04).
+// - `goal.ts` — the draft's goal after a typo, the user only (OBJ-42).
 // - `launch.ts` — launch in one transaction (OBJ-05).
 // - `gates.ts` — stop, resume, done, archive (OBJ-07).
 // - `metrics.ts` — declared metrics, append-only readings, and the derived baseline and current
@@ -63,6 +64,7 @@ export {
 	type ObjectivePersonView,
 } from "./state.ts";
 export { createObjective, type CreateObjectiveInput, type CreatedObjective } from "./store.ts";
+export { setGoal, type GoalWritten } from "./goal.ts";
 export {
 	BRIEF_TITLE,
 	MEMBER_SECTIONS,

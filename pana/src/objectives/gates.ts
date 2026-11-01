@@ -6,8 +6,10 @@
 // objective cannot spend by accident. The user resumes it to change that.
 //
 // Stopping stops the running members and cancels their wakes; archiving cascades to the member
-// sessions through the REF-02 path, so their scratch is swept (SCR-04). Obj004's draft has no
-// lead, so `stop` and `resume` and `finish` only accept the phases above.
+// sessions through the REF-02 path, so their scratch is swept (SCR-04). A draft has no lead, so
+// `stop` and `resume` and `finish` only accept the phases above — but `archive` accepts
+// `drafting` too: nothing on a draft runs, so a draft whose goal the user no longer wants can be
+// retired where it stands instead of sitting in the list until the end of the database.
 
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
@@ -18,7 +20,7 @@ import type { ObjectivePhase, ObjectiveRow } from "./schema.ts";
 import { loadObjective, objectiveId, objectiveMembers, recordObjectiveEvent } from "./state.ts";
 import { showObjective, type ObjectiveView } from "./view.ts";
 
-const ARCHIVABLE_PHASES: readonly ObjectivePhase[] = ["stopped", "done"];
+const ARCHIVABLE_PHASES: readonly ObjectivePhase[] = ["drafting", "stopped", "done"];
 
 function userOnly(caller: Caller, what: string): void {
 	if (caller.kind !== "user") throw ApiError.forbidden(`only the user may ${what} an objective`);
@@ -149,8 +151,11 @@ export async function finishObjective(runtime: Runtime, caller: Caller, value: s
 }
 
 /**
- * `pana objective archive` (OBJ-07): `archived` requires `stopped` or `done`. The member sessions
- * go through the REF-02 path, so their scratch is swept (SCR-04) and their threads stay readable.
+ * `pana objective archive` (OBJ-07): `archived` requires `drafting`, `stopped`, or `done`. Archiving
+ * a draft is the one transition it needs — no lead, no members, no wakes, and no readings to stop
+ * (OBJ-04) — recorded as one `archived` event, exactly like the other gates. A launched objective's
+ * member sessions go through the REF-02 path, so their scratch is swept (SCR-04) and their threads
+ * stay readable.
  */
 export async function archiveObjective(runtime: Runtime, caller: Caller, value: string | null | undefined): Promise<ObjectiveView> {
 	userOnly(caller, "archive");

@@ -583,6 +583,47 @@ it("OBJ-07 archive requires stopped or done, and cascades to member sessions thr
 	expect((await t!.client.post(`/objectives/${objective.id}/archive`, {}, { caller: member })).status).toBe(403);
 });
 
+it("OBJ-07 a draft is archived where it stands, in one transaction, and only by the user", async () => {
+	await start();
+	const superseded = await draft("Cut the energy bill and dollars");
+	const live = await draft("Cut the energy bill");
+
+	// A session may not archive, whatever the phase: this is REF-02's rule for objectives.
+	const proposer = await seedSession(superseded.id);
+	const refused = await t!.client.post(`/objectives/${superseded.id}/archive`, {}, { caller: proposer });
+	expect(refused.status).toBe(403);
+	// A draft has no lead, so `stop` still refuses it; archiving is the one path out (OBJ-04), and a
+	// refused gate records nothing.
+	const notStopped = await t!.client.post(`/objectives/${superseded.id}/stop`);
+	expect(notStopped.status).toBe(409);
+	expect((await t!.runtime.db.get<{ n: number }>("SELECT count(*) AS n FROM objective_events WHERE objective_id = ?", superseded.id))!.n).toBe(1);
+	const countsBefore = await counts();
+
+	// Archiving a draft has nothing to stop: no lead, no members, no wakes, no readings.
+	const archived = await t!.client.post<{ objective: ObjectiveView }>(`/objectives/${superseded.id}/archive`);
+	expect(archived.status, JSON.stringify(archived.body)).toBe(200);
+	expect(archived.body.objective.phase).toBe("archived");
+	expect((await view(superseded.id)).phase).toBe("archived");
+	// One `archived` event, and nothing else: no session was touched, and the live draft stands.
+	const events = await t!.runtime.db.all<{ kind: string; detail: string }>(
+		"SELECT kind, detail FROM objective_events WHERE objective_id = ? ORDER BY at, id",
+		superseded.id,
+	);
+	expect(events.map((event) => event.kind)).toEqual(["created", "archived"]);
+	// A draft normally has no members (OBJ-04); the one seeded here for the 403 is the only one, and
+	// archiving reaches it through the same REF-02 path a launched objective's members take.
+	expect(JSON.parse(events.at(-1)!.detail)).toEqual({ members: [proposer] });
+	expect(await t!.runtime.db.get("SELECT state FROM sessions WHERE id = ?", proposer)).toEqual({ state: "archived" });
+	expect((await counts()).sessions).toBe(countsBefore.sessions);
+	expect((await view(live.id)).phase).toBe("drafting");
+
+	// The CLI reaches the same route, and archiving an archived objective is a phase error.
+	expect((await command("objective archive", { id: superseded.id })).exitCode).toBe(3);
+	const byCommand = await draft("A typo I can put away");
+	expect((await command("objective archive", { id: byCommand.id })).exitCode).toBe(0);
+	expect((await view(byCommand.id)).phase).toBe("archived");
+});
+
 // --- OBJ-38 --------------------------------------------------------------------
 
 it("OBJ-38 pana objective --help lists every command, and every WP18 route is registered", async () => {
@@ -599,6 +640,8 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		"pana objective resume OBJECTIVE",
 		"pana objective done OBJECTIVE",
 		"pana objective archive OBJECTIVE",
+		"pana objective goal set OBJECTIVE --goal TEXT",
+		"pana objective goal set OBJECTIVE --goal-file PATH",
 		"pana objective charter set OBJECTIVE --section SECTION",
 		"pana objective charter log OBJECTIVE [--section SECTION]",
 		"pana objective metric add OBJECTIVE --name NAME --unit UNIT --direction up|down",
@@ -634,6 +677,7 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		"objectives.resume",
 		"objectives.done",
 		"objectives.archive",
+		"objectives.goal.set",
 		"objectives.charter.set",
 		"objectives.charter.log",
 		"objectives.metrics.add",
@@ -709,6 +753,8 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 		"objective create": { goal: "A command-created draft" },
 		"objective list": {},
 		"objective show": { id: main.id },
+		// OBJ-42: a draft's goal, set before the draft is launched.
+		"objective goal set": { id: toLaunch.id, goal: "Launch me, carefully" },
 		"objective launch": { id: toLaunch.id },
 		"objective stop": { id: toStop.id },
 		"objective resume": { id: toStop.id },
