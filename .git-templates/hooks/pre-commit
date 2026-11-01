@@ -17,10 +17,31 @@ fi
 # -- the command is not a secret, only a pointer to one. Without this, the hook
 # fails even in repos that have no store at all, because s needs the key before
 # it can discover there is nothing to scan.
+#
+# That reasoning was macOS-only: it named a key source only when `security`
+# existed, so on Linux -- no Keychain -- S_KEY_COMMAND stayed unset and the
+# same TTY abort blocked every commit in every repo cloned from these
+# templates, whether or not the machine had a store. The Linux box keeps the
+# key in a plain file, so point S_KEY_COMMAND at it. It is a command line, not
+# a path: s execs the value, and a bare path is not executable (exit 126) while
+# `cat` reads it fine. When there is no key source at all, warn once and skip
+# the scan instead of prompting: a hook that bricks every commit on a machine
+# without a store is worse than a skipped scan, and the warning keeps the skip
+# honest. A caller-provided S_KEY/S_KEY_COMMAND always wins, so nobody who
+# knows their own key source is overridden.
 if command -v s >/dev/null 2>&1; then
-  if [ -z "${S_KEY:-}" ] && [ -z "${S_KEY_COMMAND:-}" ] && command -v security >/dev/null 2>&1; then
-    S_KEY_COMMAND='security find-generic-password -s s-secrets -w'
-    export S_KEY_COMMAND
+  if [ -z "${S_KEY:-}" ] && [ -z "${S_KEY_COMMAND:-}" ]; then
+    if command -v security >/dev/null 2>&1; then
+      S_KEY_COMMAND='security find-generic-password -s s-secrets -w'
+      export S_KEY_COMMAND
+    elif [ -r "$HOME/.config/senv/key" ]; then
+      S_KEY_COMMAND='cat "$HOME"/.config/senv/key'
+      export S_KEY_COMMAND
+    else
+      echo "pre-commit: s has no key source (no macOS Keychain, no readable \$HOME/.config/senv/key); skipping secret scan" >&2
+    fi
   fi
-  s scan --staged
+  if [ -n "${S_KEY:-}" ] || [ -n "${S_KEY_COMMAND:-}" ]; then
+    s scan --staged
+  fi
 fi
