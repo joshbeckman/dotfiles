@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Tests bin/emporia against a stub Emporia API; never touches the real account."""
+import base64
+import http.server
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+import urllib.parse
+
+
+REPO = Path(__file__).resolve().parents[1]
+CLI = REPO / 'bin/emporia'
+GID = 609754
+CHANNEL = '1,2,3'
+
+
+def claims(token):
+    payload = token.split('.')[1]
+    payload += '=' * (-len(payload) % 4)
+    return json.loads(base64.urlsafe_b64decode(payload))
+
+
+def token(exp, marker='original'):
+    def part(payload):
+        return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+    return f"{part({'alg': 'RS256'})}.{part({'exp': exp, 'marker-eye': marker})}.sig"
+
+
+class Stub:
+    """Records requests and answers like the Emporia API and Cognito."""
+
+    def __init__(self):
+        self.requests = []
+        self.tokens = {}
+        self.unavailable = set()
+        stub = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def record(self, body=None):
+                stub.requests.append({
+                    'method': self.command,
+                    'path': self.path,
+                    'auth': self.headers.get('authtoken'),
+                    'target': self.headers.get('X-Amz-Target'),
+                    'body': body,
+                })
+
+            def reply(self, payload, code=200):
+                data = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                length = int(self.headers.get('Content-Length') or 0)
+                body = json.loads(self.rfile.read(length) or b'{}')
+                self.record(body)
+                self.reply({'AuthenticationResult': stub.tokens})
+
+            def do_GET(self):
+                self.record()
+                url = urllib.parse.urlsplit(self.path)
+                query = dict(urllib.parse.parse_qsl(url.query))
+                if url.path == '/customers/devices':
+                    return self.reply({'devices': [{
+                        'deviceGid': GID, 'model': 'ZIG001', 'firmware': 'Zigbee-557',
+                        'deviceName': None,
+                        'channels': [{'channelNum': CHANNEL, 'name': 'Main',
+                                      'type': 'Main', 'channelId': 'Mains'}],
+                    }]})
+                if query.get('apiMethod') == 'getDeviceListUsages':
+                    usage = None if query['scale'] in stub.unavailable else \
+                        {'1MIN': 0.01, '1H': 0.25, '1D': 9.5}[query['scale']]
+                    return self.reply({'deviceListUsages': {
+                        'instant': query['instant'], 'scale': query['scale'],
+                        'devices': [{'deviceGid': GID, 'channelUsages': [
+                            {'name': 'Main', 'channelNum': CHANNEL, 'deviceGid': GID,
+                             'usage': usage}]}],
+                    }})
+                if query.get('apiMethod') == 'getChartUsage':
+                    return self.reply({'firstUsageInstant': '2026-11-01T09:00:00Z',
+                                       'usageList': [0.5, 1.0, 0.25]})
+                self.reply({'message': 'unexpected ' + self.path}, 404)
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.base = f'http://127.0.0.1:{self.server.server_port}'
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+
+
+class EmporiaTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.stub = Stub()
+        cls.addClassCleanup(cls.stub.stop)
+
+    def setUp(self):
+        self.stub.requests.clear()
+        self.stub.unavailable.clear()
+        self.stub.tokens = {'IdToken': token(time.time() + 3600, 'refreshed'),
+                            'AccessToken': 'access-refreshed', 'ExpiresIn': 3600}
+        temp = tempfile.TemporaryDirectory(prefix='emporia-test-')
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.keys = self.root / 'keys.json'
+
+    def write_keys(self, id_exp=None, refresh='refresh-original'):
+        self.id_token = token(id_exp or time.time() + 86400)
+        self.keys.write_text(json.dumps({
+            'id_token': self.id_token,
+            'access_token': 'access-original',
+            'refresh_token': refresh,
+        }))
+        os.chmod(self.keys, 0o600)
+
+    def run_cli(self, *args, keys=True, expected=0):
+        command = [str(CLI), *args]
+        if keys:
+            command += ['--keys', str(self.keys)]
+        env = dict(os.environ, EMPORIA_API=self.stub.base, EMPORIA_COGNITO=self.stub.base + '/cognito')
+        result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, expected, result.stderr + result.stdout)
+        return result
+
+    def usage_calls(self):
+        return [r for r in self.stub.requests if 'getDeviceListUsages' in r['path']]
+
+    def test_devices_reports_the_utility_connect_channel(self):
+        self.write_keys()
+        out = self.run_cli('devices').stdout
+        self.assertIn(str(GID), out)
+        self.assertIn('ZIG001', out)
+        self.assertIn(CHANNEL, out)
+        self.assertEqual(self.stub.requests[0]['auth'], self.id_token)
+
+    def test_now_json_converts_the_minute_bucket_to_kilowatts(self):
+        self.write_keys()
+        data = json.loads(self.run_cli('--json', 'now').stdout)
+        self.assertEqual(data['kw'], 0.6)
+        self.assertEqual(data['hour_kwh'], 0.25)
+        self.assertEqual(data['today_kwh'], 9.5)
+        self.assertEqual({self.scale(r) for r in self.usage_calls()}, {'1MIN', '1H', '1D'})
+
+    @staticmethod
+    def scale(request):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(request['path']).query)
+        return query['scale'][0]
+
+    def test_now_text_names_all_three_scales(self):
+        self.write_keys()
+        out = self.run_cli('now').stdout
+        for label in ('now', 'hour', 'today'):
+            self.assertIn(label, out)
+        self.assertIn('0.600 kW', out)
+
+    def test_day_lists_one_row_per_day_and_a_mean(self):
+        self.write_keys()
+        out = self.run_cli('day', '3').stdout
+        rows = [line for line in out.splitlines() if 'kWh' in line and 'mean' not in line]
+        self.assertEqual(len(rows), 3)
+        self.assertIn('mean', out)
+
+    def test_hour_draws_a_bar_per_bucket(self):
+        self.write_keys()
+        out = self.run_cli('hour', '3').stdout
+        self.assertEqual(len(out.splitlines()), 3)
+        self.assertIn('#', out)
+
+    def test_missing_key_exits_three_with_a_pointer_to_the_web_app(self):
+        result = self.run_cli('now', expected=3)
+        self.assertIn('web.emporiaenergy.com', result.stderr)
+
+    def test_expiring_token_is_refreshed_and_written_back_owner_only(self):
+        self.write_keys(id_exp=time.time() + 30, refresh='refresh-kept')
+        self.run_cli('devices')
+        cognito = [r for r in self.stub.requests if r['target']]
+        self.assertEqual(len(cognito), 1)
+        self.assertEqual(cognito[0]['path'], '/cognito')
+        self.assertEqual(cognito[0]['body']['AuthFlow'], 'REFRESH_TOKEN_AUTH')
+        self.assertEqual(cognito[0]['body']['AuthParameters']['REFRESH_TOKEN'], 'refresh-kept')
+        saved = json.loads(self.keys.read_text())
+        self.assertEqual(claims(saved['id_token'])['marker-eye'], 'refreshed')
+        self.assertEqual(saved['access_token'], 'access-refreshed')
+        self.assertEqual(saved['refresh_token'], 'refresh-kept')
+        self.assertEqual(stat.S_IMODE(self.keys.stat().st_mode), 0o600)
+
+    def test_fresh_token_skips_cognito_entirely(self):
+        self.write_keys()
+        self.run_cli('devices')
+        self.assertEqual([r for r in self.stub.requests if r['target']], [])
+
+    def test_unavailable_reading_does_not_crash_the_report(self):
+        self.write_keys()
+        self.stub.unavailable.add('1H')
+        out = self.run_cli('now').stdout
+        self.assertIn('hour   unavailable', out)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

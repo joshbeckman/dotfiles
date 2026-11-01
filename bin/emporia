@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Read Josh's Emporia Vue Utility Connect through Emporia's (unofficial) cloud API.
+
+Usage:
+  emporia                 current power, this hour, today
+  emporia day [N]         daily totals for the last N days (default 8)
+  emporia hour [N]        hourly buckets for the last N hours (default 12)
+  emporia devices         devices and channels on the account
+  emporia --json ...      machine-readable output
+  emporia --keys PATH     credentials file (default ~/.config/emporia/keys.json)
+
+EMPORIA_API and EMPORIA_COGNITO override the endpoints, which exists so the test
+suite can point at a stub server.
+
+Credentials: a JSON file holding id_token, access_token and refresh_token from a
+signed-in https://web.emporiaenergy.com tab (the account uses Sign in with Apple,
+so tokens are the only credential; there is no password). The id token expires
+hourly and is refreshed here, and the file is rewritten in place. When the
+refresh token itself lapses (Cognito expires it after weeks) this exits 3 and
+says so.
+
+The device reports once a minute, so nothing is gainable by polling faster; the
+API's second-scale data is each minute's value spread flat across its 60 buckets.
+"""
+import argparse
+import base64
+import datetime as dt
+import json
+import os
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+
+API = os.environ.get('EMPORIA_API', 'https://api.emporiaenergy.com')
+COGNITO = os.environ.get('EMPORIA_COGNITO', 'https://cognito-idp.us-east-2.amazonaws.com/')
+CLIENT_ID = '4qte47jbstod8apnfic0bunmrq'
+KEYS = os.path.expanduser(os.environ.get('EMPORIA_KEYS', '~/.config/emporia/keys.json'))
+UTC = dt.timezone.utc
+
+
+def die(message, code=1):
+    print(f'emporia: {message}', file=sys.stderr)
+    sys.exit(code)
+
+
+def request(url, headers=None, body=None, timeout=25):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode() or 'null')
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode()[:400].strip()
+        raise SystemExit(f'emporia: {url} -> HTTP {error.code} {detail}')
+    except urllib.error.URLError as error:
+        raise SystemExit(f'emporia: cannot reach {url}: {error.reason}')
+
+
+def claims(token):
+    payload = token.split('.')[1]
+    payload += '=' * (-len(payload) % 4)
+    return json.loads(base64.urlsafe_b64decode(payload))
+
+
+def stamp(moment):
+    return moment.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+class Account:
+    def __init__(self, keys_path):
+        self.path = keys_path
+        if not os.path.exists(keys_path):
+            die(f'no credentials at {keys_path}; copy id_token/access_token/refresh_token '
+                'from a signed-in https://web.emporiaenergy.com tab', 3)
+        with open(keys_path) as stream:
+            self.tokens = json.load(stream)
+        for name in ('id_token', 'access_token', 'refresh_token'):
+            if not self.tokens.get(name):
+                die(f'{keys_path} is missing {name}', 3)
+        self.ensure_fresh()
+
+    def ensure_fresh(self, margin=120):
+        expires = dt.datetime.fromtimestamp(claims(self.tokens['id_token'])['exp'], UTC)
+        if (expires - dt.datetime.now(UTC)).total_seconds() > margin:
+            return
+        result = request(
+            COGNITO,
+            {
+                'Content-Type': 'application/x-amz-json-1.1',
+                'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+            },
+            {
+                'AuthFlow': 'REFRESH_TOKEN_AUTH',
+                'ClientId': CLIENT_ID,
+                'AuthParameters': {'REFRESH_TOKEN': self.tokens['refresh_token']},
+            },
+        ).get('AuthenticationResult')
+        if not result:
+            die('token refresh returned nothing; sign in at https://web.emporiaenergy.com '
+                'and copy fresh tokens', 3)
+        self.tokens.update(id_token=result['IdToken'], access_token=result['AccessToken'])
+        self.tokens['refresh_token'] = result.get('RefreshToken', self.tokens['refresh_token'])
+        directory = os.path.dirname(os.path.abspath(self.path))
+        handle, temporary = tempfile.mkstemp(dir=directory)
+        with os.fdopen(handle, 'w') as stream:
+            json.dump(self.tokens, stream, indent=2)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.path)
+
+    def get(self, path):
+        return request(f'{API}{path}', {'authtoken': self.tokens['id_token']})
+
+    def devices(self):
+        found = []
+        for device in self.get('/customers/devices').get('devices') or []:
+            channels = [c for c in device.get('channels') or [] if c.get('channelNum')]
+            found.append({
+                'gid': device['deviceGid'],
+                'model': device.get('model'),
+                'firmware': device.get('firmware'),
+                'name': device.get('deviceName'),
+                'channel': channels[0]['channelNum'] if channels else None,
+                'channel_name': (channels[0].get('name') or channels[0].get('channelId')) if channels else None,
+            })
+        if not found:
+            die('this account has no devices')
+        return found
+
+    def usage(self, devices, scale, instant=None):
+        instant = instant or dt.datetime.now(UTC)
+        gids = '+'.join(str(d['gid']) for d in devices)
+        data = self.get(f'/AppAPI?apiMethod=getDeviceListUsages&deviceGids={gids}'
+                        f'&instant={stamp(instant)}&scale={scale}&energyUnit=KilowattHours')
+        total = 0.0
+        missing = False
+        for device in (data.get('deviceListUsages') or {}).get('devices') or []:
+            for channel in device.get('channelUsages') or []:
+                if channel.get('usage') is None:
+                    missing = True
+                else:
+                    total += channel['usage']
+        return None if missing else total
+
+    def chart(self, device, hours):
+        end = dt.datetime.now(UTC)
+        start = end - dt.timedelta(hours=hours)
+        data = self.get(f'/AppAPI?apiMethod=getChartUsage&deviceGid={device["gid"]}'
+                        f'&channel={device["channel"]}&start={stamp(start)}&end={stamp(end)}'
+                        '&scale=1H&energyUnit=KilowattHours')
+        first = dt.datetime.fromisoformat(data['firstUsageInstant'].replace('Z', '+00:00'))
+        return [
+            {'at': first + dt.timedelta(hours=i), 'kwh': value}
+            for i, value in enumerate(data.get('usageList') or [])
+        ]
+
+
+def report_now(account, devices):
+    minute = account.usage(devices, '1MIN')
+    hour = account.usage(devices, '1H')
+    day = account.usage(devices, '1D')
+    return {
+        'at': stamp(dt.datetime.now(UTC)),
+        'kw': None if minute is None else round(minute * 60, 3),
+        'hour_kwh': None if hour is None else round(hour, 3),
+        'today_kwh': None if day is None else round(day, 3),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Read the Emporia Vue through its cloud API.')
+    parser.add_argument('command', nargs='?', default='now',
+                        choices=['now', 'day', 'hour', 'devices'])
+    parser.add_argument('count', nargs='?', type=int, default=None,
+                        help='days for "day" (default 8) or hours for "hour" (default 12)')
+    parser.add_argument('--json', action='store_true', help='machine-readable output')
+    parser.add_argument('--keys', default=KEYS, help='credentials file')
+    args = parser.parse_args()
+
+    account = Account(os.path.expanduser(args.keys))
+    devices = account.devices()
+
+    if args.command == 'devices':
+        if args.json:
+            print(json.dumps(devices, indent=2))
+            return
+        for device in devices:
+            print(f'{device["gid"]}  {device["model"]}  firmware {device["firmware"]}  '
+                  f'channel {device["channel"]} ({device["channel_name"]})  '
+                  f'name {device["name"] or "-"}')
+        return
+
+    if args.command == 'now':
+        current = report_now(account, devices)
+        if args.json:
+            print(json.dumps(current, indent=2))
+            return
+        moment = dt.datetime.fromisoformat(current['at'].replace('Z', '+00:00')).astimezone()
+        print(f'{moment:%Y-%m-%d %H:%M %Z}')
+        if current['kw'] is not None:
+            print(f'  now    {current["kw"]:.3f} kW')
+        print(f'  hour   {current["hour_kwh"]:.3f} kWh' if current['hour_kwh'] is not None
+              else '  hour   unavailable')
+        print(f'  today  {current["today_kwh"]:.3f} kWh' if current['today_kwh'] is not None
+              else '  today  unavailable')
+        return
+
+    if args.command == 'day':
+        days = args.count or 8
+        now = dt.datetime.now(UTC)
+        rows = []
+        for offset in range(days):
+            moment = now - dt.timedelta(days=offset)
+            total = account.usage(devices, '1D', moment)
+            rows.append({'date': moment.astimezone().date().isoformat(),
+                         'kwh': None if total is None else round(total, 3)})
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return
+        known = [r['kwh'] for r in rows if r['kwh'] is not None]
+        for row in rows:
+            value = 'unavailable' if row['kwh'] is None else f'{row["kwh"]:7.3f} kWh'
+            print(f'{row["date"]}  {value}')
+        if known:
+            print(f'mean   {sum(known) / len(known):7.3f} kWh over {len(known)} day(s)')
+        return
+
+    hours = args.count or 12
+    rows = account.chart(devices[0], hours)
+    if args.json:
+        print(json.dumps([{'at': stamp(r['at']), 'kwh': r['kwh']} for r in rows], indent=2))
+        return
+    for row in rows:
+        local = row['at'].astimezone()
+        value = row['kwh']
+        bar = '' if value is None else '#' * int(round(value * 20))
+        shown = 'unavailable' if value is None else f'{value:5.3f} kWh  {value:5.2f} kW avg'
+        print(f'{local:%m-%d %H}h  {shown}  {bar}')
+
+
+if __name__ == '__main__':
+    main()
