@@ -23,6 +23,7 @@ import { MESSAGE_ENTRY_KIND, renderMessage, sessionConversation, submitScheduled
 import { leadRunInput } from "./brief.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { postNotice } from "../threads/store.ts";
+import { lastChanges, noteRead } from "../threads/unread.ts";
 import { objectiveRunHold } from "./admission.ts";
 import { CLOSED_PHASES, type ObjectiveRow } from "./schema.ts";
 import { objectiveDay, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, lastLeadRunEnd, leadRunsToday, type ObjectivePaused } from "./limits.ts";
@@ -546,12 +547,14 @@ export async function releaseLeadHold(runtime: Runtime, input: { sessionId: stri
 			);
 			for (const item of held) {
 				await tx.run(
-					"UPDATE deliveries SET wake_request_id = ?, wake_submission_id = ?, read_at = COALESCE(read_at, ?) WHERE id = ?",
+					"UPDATE deliveries SET wake_request_id = ?, wake_submission_id = ?, read_at = ? WHERE id = ? AND read_at IS NULL",
 					wakeRequestId(item.deliveryId),
 					submission.id,
 					now,
 					item.deliveryId,
 				);
+				// REF-06: the release marks each held delivery read, if it was not already.
+				await noteRead(tx, input.sessionId, item.threadId, await lastChanges(tx));
 			}
 		} else {
 			await conversation.submit(

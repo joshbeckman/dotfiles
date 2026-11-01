@@ -30,6 +30,7 @@ import { nextWakes, type NextWake } from "../schedules/live.ts";
 import { announce } from "./announce.ts";
 import { summarizeChoices } from "./choices.ts";
 import { deliveryHooks } from "./delivery.ts";
+import { lastChanges, moveUnread, noteRead, noteUnread, unreadTotal as unreadTotalFor } from "./unread.ts";
 
 export type ParticipantKind = "user" | "session" | "domain";
 
@@ -457,6 +458,9 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 			options.now,
 			requestId,
 		);
+		// REF-06: a new delivery is unread, in whichever bucket the thread is in now; the
+		// unarchive below moves it if this thread was archived.
+		await noteUnread(tx, recipient.id, options.threadId);
 		options.recipients?.push(recipient.url);
 		// REF-04: new mail shows the thread again for the participant who receives it.
 		await setThreadArchived(tx, options.threadId, recipient.id, false, options.now);
@@ -642,6 +646,8 @@ async function markThreadRead(tx: SqliteExecutor, readerId: string, threadId: st
 		readerId,
 		threadId,
 	);
+	// REF-06: exactly the rows that statement changed went from unread to read.
+	await noteRead(tx, readerId, threadId, await lastChanges(tx));
 }
 
 /**
@@ -728,6 +734,7 @@ export async function readMessage(runtime: Runtime, caller: Caller, messageId: s
 				reader.id,
 				messageId,
 			);
+			await noteRead(tx, reader.id, row.thread_id, await lastChanges(tx));
 		}
 		return { message: (await messageViews(tx, runtime, [row], reader.id))[0]! };
 	});
@@ -777,8 +784,12 @@ export async function redactMessage(runtime: Runtime, caller: Caller, messageId:
 async function setThreadArchived(tx: SqliteExecutor, threadId: string, participantId: string, archived: boolean, now: number): Promise<void> {
 	if (!archived) {
 		await tx.run("DELETE FROM thread_archives WHERE thread_id = ? AND participant_id = ?", threadId, participantId);
+		// REF-06: only a thread that was archived has unread rows to move back.
+		if ((await lastChanges(tx)) > 0) await moveUnread(tx, participantId, threadId, false);
 		return;
 	}
+	// A thread that stays archived keeps its bucket: re-archiving only updates the time.
+	const wasArchived = await isThreadArchived(tx, threadId, participantId);
 	await tx.run(
 		`INSERT INTO thread_archives (thread_id, participant_id, archived_at) VALUES (?, ?, ?)
 		 ON CONFLICT (thread_id, participant_id) DO UPDATE SET archived_at = excluded.archived_at`,
@@ -786,6 +797,7 @@ async function setThreadArchived(tx: SqliteExecutor, threadId: string, participa
 		participantId,
 		now,
 	);
+	if (!wasArchived) await moveUnread(tx, participantId, threadId, true);
 }
 
 /** True when this participant has the thread archived. */
@@ -916,12 +928,7 @@ export async function inbox(
 						...messageIds,
 					);
 		// REF-06 counts every unread delivery, and a page holds only some of them (SCALE-03).
-		const unreadTotal = (await tx.get<{ n: number }>(
-			`SELECT COUNT(*) AS n FROM deliveries d
-			  WHERE d.recipient_id = ? AND d.read_at IS NULL
-			    AND ${archivedFilter} (SELECT 1 FROM thread_archives a WHERE a.thread_id = d.thread_id AND a.participant_id = d.recipient_id)`,
-			reader.id,
-		))!.n;
+		const unreadTotal = await unreadTotalFor(tx, reader.id, options.archived ?? false);
 		const byMessage = new Map<string, InboxRecipient[]>();
 		for (const row of recipients) {
 			const list = byMessage.get(row.message_id) ?? [];
@@ -1068,12 +1075,7 @@ export async function inboxThreads(
 		}
 		const unread = await unreadCounts(tx, reader.id, threadIds);
 		const working = await workingSessions(tx, threadIds);
-		const unreadTotal = (await tx.get<{ n: number }>(
-			`SELECT COUNT(*) AS n FROM deliveries d
-			  WHERE d.recipient_id = ? AND d.read_at IS NULL
-			    AND ${archivedFilter} (SELECT 1 FROM thread_archives a WHERE a.thread_id = d.thread_id AND a.participant_id = d.recipient_id)`,
-			reader.id,
-		))!.n;
+		const unreadTotal = await unreadTotalFor(tx, reader.id, options.archived ?? false);
 		return {
 			participant: { id: reader.id, kind: reader.kind, url: reader.url },
 			threads: rows.map((row) => {
@@ -1190,6 +1192,7 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 				recipient.id,
 				now,
 			);
+			await noteUnread(tx, recipient.id, threadId);
 			delivered.push(recipient.url);
 			// REF-04: a notice is a message too, so it unarchives the thread for its recipient.
 			await setThreadArchived(tx, threadId, recipient.id, false, now);

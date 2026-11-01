@@ -228,3 +228,32 @@ Total SQLite time, summing every statement in `PANA_BENCH_SQL`'s output: 26,033 
 
 This bench creates no objectives, so the two new indexes have almost no rows to hold there: the database is 46.25–46.29 MB on both sides, and the migration moves no measured statement. The seeded database above is what shows the indexes paying.
 
+
+### The inbox's unread total (migration 14)
+
+`unreadTotal` was a `COUNT(*)` over every unread delivery of the reader, run on every inbox call: **1,040–1,042 ms over 328 calls in the bench, 3.2 ms a call at 13,859 unread, 4% of all SQLite time** — everything larger was `COMMIT` or pi-durable. Migration 14 adds `unread_counts`, one row per participant with two buckets for the two ways the inbox reads it (`archived: false` and `archived: true`), and `src/threads/unread.ts` is the only code that writes it. The inbox now reads one row.
+
+The counter is a cache of the same COUNT, so its cost is the write paths that keep it exact. Single deliveries, single reads, and wake marks move it by the number of rows the statement changed (`changes()`); a new delivery lands in the bucket its thread is in, and REF-04's unarchive moves the thread's unread rows with it. The rare writes that touch an open-ended set of rows — a stop returning queued mail to unread — recompute that participant from the deliveries instead of counting the delta, because a stop is rare and the truth is cheap there.
+
+Migration 14 backfills from the same COUNT, so a migrated database and a recompute agree; it deletes first, so re-running it is a no-op rebuild (DB-03). The state is 24 bytes a participant plus a page: on a database with 49 participants it is one page, and on the bench's 350 sessions it is **4–12 KB** (two b-trees for 351 rows: 24 bytes a row plus its primary-key entry).
+
+`test/unread-counter.test.ts` is the argument that the cache stays true: a seeded random sequence of deliveries, thread reads, message reads, per-participant archives and unarchives, notices, a session retired with `settleUnread`, and recounts, comparing the counter with the original SQL after every step, in both buckets, for every participant, and again after closing and reopening the database. It fails if a write path forgets the counter (checked by removing one).
+
+The bench on this host, quiet (5-minute load 0.98 → 1.16 → 1.29 → 1.34 before the four runs, no other suite): base `8bbd390` → branch → base → branch, `--list-threads 10000 --json`, `PANA_BENCH_SQL` per run.
+
+| Phase | Base, run 1 | Base, run 2 | Branch, run 1 | Branch, run 2 |
+|---|---|---|---|---|
+| sessions: 200 created at once | 6.8 s, 29.4/s | 7.0 s, 28.5/s | 7.0 s, 28.7/s | 7.2 s, 27.6/s |
+| threads: 10,000 messages | 44.5 s, 224.6/s | 45.2 s, 221.3/s | 45.1 s, 221.7/s | 45.9 s, 217.8/s |
+| broadcast: 1,000 wakes | 7.5 s, 133.7/s | 7.6 s, 132.3/s | 7.4 s, 134.8/s | 7.6 s, 131.3/s |
+| fan-out: 150 sessions | 8.1 s, 18.6/s | 8.6 s, 17.5/s | 8.3 s, 18.2/s | 8.3 s, 18.0/s |
+| `/inbox` route p50 / p99 | 4.89 / 6.56 ms | 4.92 / 5.82 ms | 1.71 / 2.35 ms | 1.71 / 3.16 ms |
+| `/inbox` first page p50 / p99 | 5.25 / 9.14 ms | 5.34 / 7.34 ms | 2.09 / 3.93 ms | 2.11 / 4.04 ms |
+| Total SQLite ms | 26,432 | 26,777 | 26,123 | 26,599 |
+| Database | 46,288,896 B | 46,301,184 B | 46,301,184 B | 46,292,992 B |
+
+The statement itself: `SELECT COUNT(*) … read_at IS NULL … thread_archives` was **1,039 / 1,053 ms over 328 calls, 3.17 / 3.21 ms a call**, and is gone from the run. In its place the inbox reads one row: **4 ms over 328 calls, 13 µs a call** — a 240× drop on that read, and 4% of all SQLite time removed. It is no longer in the top ten; the largest pana-owned statement now is the sessions FTS insert at 533–543 ms.
+
+What the counter costs: one `unread_counts` upsert per delivery and per wake mark-read, 26,839 calls at 13 µs — **349 ms**, about 1.3% of SQLite time. The delivery insert itself is flat at **27 / 28 µs before, 28 / 28 µs after**. Net, the run's SQLite total is 178–309 ms lower, which is inside the spread between two base runs (345 ms); the place the change shows is the route, where the inbox's p50 falls from 4.9 ms to 1.7 ms.
+
+

@@ -35,6 +35,7 @@ import { indexSessionRun, type TranscriptEntry } from "../search/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { configureDelivery, type DeliveredEvent, type DeliveryHooks } from "../threads/delivery.ts";
 import { postNotice } from "../threads/store.ts";
+import { clearUnread, lastChanges, noteRead, recountUnread } from "../threads/unread.ts";
 import { publish, subscriberCount } from "../web/index.ts";
 import { nextDayStart, overDomainBudget, recordCost, usageCost } from "./budget.ts";
 import { LiveFeed } from "./live.ts";
@@ -308,14 +309,17 @@ export class SessionRuntime {
 		for (const id of pending) {
 			const record = await (await harness.submission(id, ctx))?.status(ctx);
 			if (record?.status !== "unanswered" || record.entry !== undefined) continue;
-			await db.write((tx) =>
-				tx.run(
+			await db.write(async (tx) => {
+				await tx.run(
 					`UPDATE deliveries SET read_at = NULL, wake_request_id = NULL, wake_submission_id = NULL
 					  WHERE recipient_id = ? AND wake_submission_id = ?`,
 					sessionId,
 					id,
-				),
-			);
+				);
+				// REF-06: returned mail can sit in several threads (and buckets), so the counter is
+				// recomputed rather than nudged per row. A stop is rare; the truth is cheap here.
+				await recountUnread(tx, sessionId);
+			});
 		}
 	}
 
@@ -358,13 +362,15 @@ export class SessionRuntime {
 		if (options.settleUnread) {
 			// After `stop`, which returns mail the abort withdrew to unread so a resume delivers it: a
 			// retirement settles that mail too, and there is no resume to deliver it to.
-			await this.runtime.db.write((tx) =>
-				tx.run(
+			await this.runtime.db.write(async (tx) => {
+				await tx.run(
 					"UPDATE deliveries SET read_at = ? WHERE recipient_id = ? AND read_at IS NULL",
 					this.runtime.clock.now(),
 					sessionId,
-				),
-			);
+				);
+				// That statement settles every unread delivery this participant has.
+				await clearUnread(tx, sessionId);
+			});
 		}
 		await this.runtime.db.write((tx) =>
 			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
@@ -599,7 +605,9 @@ async function rejectArchived(tx: SqliteExecutor, event: DeliveredEvent): Promis
 export async function wakeDelivery(tx: SqliteExecutor, runtime: Runtime, wake: PendingWake): Promise<void> {
 	const submissionId = await runtime.wake(wake);
 	const now = runtime.clock.now();
-	await tx.run("UPDATE deliveries SET wake_submission_id = ?, read_at = COALESCE(read_at, ?) WHERE id = ?", submissionId, now, wake.deliveryId);
+	await tx.run("UPDATE deliveries SET wake_submission_id = ?, read_at = ? WHERE id = ? AND read_at IS NULL", submissionId, now, wake.deliveryId);
+	// REF-06: the wake marks its delivery read, if it was not already.
+	await noteRead(tx, wake.recipientId, wake.threadId, await lastChanges(tx));
 	await setSessionState(tx, runtime, { sessionId: wake.recipientId, state: "running", from: ["idle", "failed"] });
 }
 

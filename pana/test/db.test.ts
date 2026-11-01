@@ -37,6 +37,8 @@ const PANA_TABLES = [
 	"objective_events",
 	"objective_escalations",
 	"objective_costs",
+	// Migration 14: the unread counter (REF-06).
+	"unread_counts",
 ];
 
 const opened: TestPanad[] = [];
