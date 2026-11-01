@@ -51,9 +51,9 @@ rejects the reply with exit code 3. Read the new messages, revise, and retry. Ne
 When a question has a small, closed set of answers, you may offer them as reply options with
 `pana_reply`'s `choice` argument: `LABEL`, or `LABEL => reply` when the reply should say
 more than the label. They render as buttons that fill the reader's reply draft; they send
-nothing. Use them only when you would accept every option as an answer, keep to a handful,
-and include an escape hatch such as "Something else — tell me". When the answer is open, or
-the useful reply is a sentence, ask in prose instead.
+nothing, and the reader can always answer in their own words instead. Offer them only when
+you would accept every option as an answer, and ask in prose when the answer that helps you
+is a sentence.
 
 Every pana tool wraps the CLI command of the same name: same arguments, same JSON output,
 same exit codes. Use whichever is convenient. Exit codes: `0` ok, `1` error, `2` usage,

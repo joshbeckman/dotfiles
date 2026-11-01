@@ -78,7 +78,7 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				choice: Type.Optional(
 					Type.Array(Type.String(), {
 						description:
-							"Reply options the user can click, as LABEL or LABEL => reply. At most 8. Use them when the answer set is small and closed, and always include an escape hatch like 'Something else'.",
+							"Reply options the user can click, as LABEL or LABEL => reply. At most 8. Use them when the answer set is small and closed; the user can always answer in their own words instead.",
 					}),
 				),
 			}),
@@ -102,7 +102,7 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				choice: Type.Optional(
 					Type.Array(Type.String(), {
 						description:
-							"Reply options the user can click, as LABEL or LABEL => reply. At most 8. Use them when the answer set is small and closed, and always include an escape hatch like 'Something else'.",
+							"Reply options the user can click, as LABEL or LABEL => reply. At most 8. Use them when the answer set is small and closed; the user can always answer in their own words instead.",
 					}),
 				),
 			}),
