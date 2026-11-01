@@ -7,6 +7,7 @@
 
 import { ApiError } from "../api/errors.ts";
 import { parseLimit } from "../api/pagination.ts";
+import { sessionRuntime } from "../sessions/index.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { addArtifact, removeArtifact } from "./artifacts.ts";
@@ -15,6 +16,7 @@ import { charterLog, optionalCharterSection, setCharter } from "./charter.ts";
 import { escalateObjective } from "./escalation.ts";
 import { archiveObjective, finishObjective, resumeObjective, stopAllObjectives, stopObjective } from "./gates.ts";
 import { launchObjective } from "./launch.ts";
+import { setLimits } from "./limits.ts";
 import { regenerateLead } from "./lead.ts";
 import { addMetric, appendReading, listMetrics, setMetric } from "./metrics.ts";
 import { reportObjective } from "./reports.ts";
@@ -159,6 +161,15 @@ export const handlers: Handlers = {
 	"objectives.escalate": async (ctx): Promise<HandlerResult> => {
 		const escalated = await escalateObjective(ctx.runtime, ctx.caller, ctx.params.id, ctx.body);
 		return { status: 201, body: { escalation: escalated.escalation, thread: escalated.thread } };
+	},
+
+	// OBJ-41: the user sets or clears a limit, and each change is an `objective_events` row. Raising
+	// a lifetime budget is the only way back from a `budget_total` pause (OBJ-21), so the lead's held
+	// mail is handed to the gate that now admits it — the gate itself still decides.
+	"objectives.limits.set": async (ctx): Promise<HandlerResult> => {
+		const written = await setLimits(ctx.runtime, ctx.caller, ctx.params.id, ctx.body);
+		if (written.row.lead_id !== null) await sessionRuntime(ctx.runtime).deliverHeld(written.row.lead_id);
+		return { status: 200, body: { objective: await showObjective(ctx.runtime, written.row.id), changes: written.changes } };
 	},
 
 	// OBJ-35: replace a failed lead in one transaction; the user only.

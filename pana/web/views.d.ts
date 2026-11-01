@@ -317,3 +317,14 @@ export interface ObjectiveWakeView {
 	cron: string | null;
 }
 export function objectiveWakes(details: any[]): ObjectiveWakeView[];
+
+/** OBJ-41: one limit the editor writes. */
+export interface LimitFieldView {
+	field: "maxDailyUsd" | "maxTotalUsd" | "wakeMinMinutes" | "maxDailyLeadTurns" | "maxDailyUserMessages" | "maxActiveMembers";
+	label: string;
+}
+export const LIMIT_FIELDS: LimitFieldView[];
+export function limitsBody(
+	values: Record<string, string | number | null | undefined>,
+	current?: Record<string, number | null> | null,
+): { body: Record<string, number | null>; invalid: string[] };

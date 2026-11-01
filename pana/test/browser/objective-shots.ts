@@ -48,6 +48,19 @@ try {
 	await resizePage(390, 844);
 	await shot("list-phone", "#/objectives", LIST);
 	await shot("view-phone", `#/objectives/${active.id}`, VIEW);
+
+	// OBJ-39/OBJ-07: a stopped objective, where Resume is the one action the phase allows and the
+	// note names why the rest are not. Back to the list first: re-setting the same hash routes nothing.
+	const stopped = await t.client.post(`/objectives/${active.id}/stop`, {});
+	if (stopped.status !== 200) throw new Error(`stop: ${JSON.stringify(stopped.body)}`);
+	await emulateViewport("", "light");
+	await resizePage(1280, 900);
+	await evaluatePage(`
+		location.hash = "#/objectives";
+		await until(() => document.querySelectorAll("#objectives-list .item").length >= 2);
+		return true;
+	`);
+	await shot("view-stopped", `#/objectives/${active.id}`, `document.getElementById("objective-resume").dataset.allowed === "true"`);
 } finally {
 	await emulateViewport("", "auto");
 	await resizePage(1280, 900);

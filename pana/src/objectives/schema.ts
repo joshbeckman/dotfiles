@@ -117,7 +117,9 @@ export type ObjectiveEventKind =
 	| "escalation.cleared"
 	| "regenerated"
 	| "stranded"
-	| "behind";
+	| "behind"
+	// OBJ-41: one row per limit a user sets or clears, naming the field and both values.
+	| "limits.set";
 
 // --- Input ---------------------------------------------------------------------
 

@@ -611,6 +611,7 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		"pana objective regenerate-lead OBJECTIVE --reason TEXT",
 		"pana objective artifact add OBJECTIVE PATH",
 		"pana objective artifact remove OBJECTIVE ID",
+		"pana objective limits set OBJECTIVE [--max-daily-usd N]",
 	]) {
 		expect(help, usage).toContain(usage);
 	}
@@ -725,6 +726,8 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 		"objective regenerate-lead": { id: main.id, reason: "The lead stopped answering." },
 		"objective artifact add": { id: main.id, path: source },
 		"objective artifact remove": { id: main.id, file: linked.body.artifact.id },
+		// OBJ-41: the limits a user sets, and one the command clears with `default`.
+		"objective limits set": { id: main.id, "max-daily-usd": "5", "max-total-usd": "default" },
 	};
 	// Every advertised command is exercised, and no command is left out of this list.
 	expect(Object.keys(runs).sort()).toEqual(OBJECTIVE_COMMANDS.map((spec) => spec.path.join(" ")).sort());

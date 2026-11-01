@@ -9,9 +9,12 @@
 // arithmetic, so SCH-08's DST behavior applies here too.
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
+import { ApiError } from "../api/errors.ts";
+import type { Caller } from "../api/types.ts";
 import { localDay, localDayRange, overDomainBudget } from "../sessions/budget.ts";
 import type { Runtime } from "../server/runtime.ts";
-import type { EffectiveLimit, ObjectiveEffectiveLimits, ObjectiveRow } from "./schema.ts";
+import { objectBody, type EffectiveLimit, type ObjectiveEffectiveLimits, type ObjectiveRow } from "./schema.ts";
+import { loadObjective, objectiveId, recordObjectiveEvent } from "./state.ts";
 
 /**
  * The condition that stops an objective's runs (OBJ-20, OBJ-21, OBJ-22). `budget_total` outranks
@@ -182,4 +185,87 @@ export function effectiveLimits(runtime: Runtime, row: ObjectiveRow): ObjectiveE
 		maxDailyUserMessages: one(row.max_daily_user_messages, config.maxDailyUserMessages),
 		maxActiveMembers: one(row.max_active_members, undefined),
 	};
+}
+
+// --- Writes (OBJ-41) -------------------------------------------------------------
+
+/** The six limits a user may set: the request field, the column it lives in, and how to read it. */
+export const LIMIT_FIELDS = [
+	{ field: "maxDailyUsd", column: "max_daily_usd", of: (row: ObjectiveRow) => row.max_daily_usd },
+	{ field: "maxTotalUsd", column: "max_total_usd", of: (row: ObjectiveRow) => row.max_total_usd },
+	{ field: "wakeMinMinutes", column: "wake_min_minutes", of: (row: ObjectiveRow) => row.wake_min_minutes },
+	{ field: "maxDailyLeadTurns", column: "max_daily_lead_turns", of: (row: ObjectiveRow) => row.max_daily_lead_turns },
+	{ field: "maxDailyUserMessages", column: "max_daily_user_messages", of: (row: ObjectiveRow) => row.max_daily_user_messages },
+	{ field: "maxActiveMembers", column: "max_active_members", of: (row: ObjectiveRow) => row.max_active_members },
+] as const;
+
+export type LimitField = (typeof LIMIT_FIELDS)[number]["field"];
+
+/**
+ * OBJ-41: one limit from a request body. A positive number sets it, and `null` or an empty string
+ * clears it back to the domain's configured default. A limit of zero would stop the objective at
+ * birth, so it is refused the way `create` refuses one.
+ */
+function limitUpdate(value: unknown, field: string): number | null {
+	if (value === null || value === "") return null;
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		throw ApiError.badRequest(`invalid_${field}`, `${field} must be a positive number, or null to use the domain's default`);
+	}
+	return value;
+}
+
+/** What `setLimits` wrote: the objective's row after the write, and the changes it recorded. */
+export interface LimitsWritten {
+	row: ObjectiveRow;
+	changes: Array<{ field: LimitField; from: number | null; to: number | null }>;
+}
+
+/**
+ * `POST /objectives/:id/limits` (OBJ-41) and `pana objective limits set`. The user only: a lead that
+ * could raise its own budget would not have one. Each field the body names is written — `null`
+ * clearing it — and each change appends an `objective_events` row naming the field and both values,
+ * the way a metric's target change does (OBJ-29). A field the body leaves out is left alone, so a
+ * caller changes one limit without restating the rest, and a write that changes nothing records no
+ * revision and answers 400.
+ *
+ * Nothing is cached: the values written here are what the next read and the next `admitRun` see, so
+ * raising `maxTotalUsd` lifts a `budget_total` pause (`objectivePaused` compares against the row).
+ * The caller hands the lead's held mail to that gate afterwards; the gate still has the last word.
+ */
+export async function setLimits(runtime: Runtime, caller: Caller, value: string | null | undefined, raw: unknown): Promise<LimitsWritten> {
+	if (caller.kind !== "user") throw ApiError.forbidden("only the user may change an objective's limits");
+	const id = objectiveId(value, runtime.config.domain);
+	const input = objectBody(raw);
+	// Parse every field before writing anything, so one bad value writes none of them.
+	const wanted = LIMIT_FIELDS.filter((entry) => entry.field in input).map((entry) => ({
+		...entry,
+		to: limitUpdate(input[entry.field], entry.field),
+	}));
+	if (wanted.length === 0) {
+		throw ApiError.badRequest(
+			"no_limits",
+			`give one of ${LIMIT_FIELDS.map((entry) => entry.field).join(", ")}, or null to clear it`,
+		);
+	}
+
+	return runtime.db.atomically(async (tx) => {
+		const current = await loadObjective(tx, id);
+		const now = runtime.clock.now();
+		const changes: LimitsWritten["changes"] = [];
+		for (const change of wanted) {
+			const from = change.of(current);
+			// A write that changes nothing is not a revision; the events table is the objective's history.
+			if (from === change.to) continue;
+			await tx.run(`UPDATE objectives SET ${change.column} = ?, updated_at = ? WHERE id = ?`, change.to, now, id);
+			await recordObjectiveEvent(tx, runtime, {
+				objectiveId: id,
+				kind: "limits.set",
+				actorId: caller.id,
+				detail: { field: change.field, from, to: change.to },
+			});
+			changes.push({ field: change.field, from, to: change.to });
+		}
+		if (changes.length === 0) throw ApiError.badRequest("no_change", `objective ${id} already has those limits`, { objective: id });
+		return { row: await loadObjective(tx, id), changes };
+	});
 }

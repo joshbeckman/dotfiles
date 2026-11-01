@@ -866,3 +866,40 @@ export function objectiveWakes(details) {
 	}
 	return out.sort((a, b) => a.at - b.at || a.url.localeCompare(b.url));
 }
+
+/**
+ * OBJ-41: the six limits the editor writes, in the order the form shows them, with the label a
+ * person reads and the field the API takes.
+ */
+export const LIMIT_FIELDS = [
+	{ field: "maxDailyUsd", label: "spend a day" },
+	{ field: "maxTotalUsd", label: "spend in total" },
+	{ field: "wakeMinMinutes", label: "minutes between runs" },
+	{ field: "maxDailyLeadTurns", label: "lead runs a day" },
+	{ field: "maxDailyUserMessages", label: "messages to you a day" },
+	{ field: "maxActiveMembers", label: "active members" },
+];
+
+/**
+ * OBJ-41: the body of `POST /objectives/:id/limits` from the limits form. A blank field clears that
+ * limit back to the domain's default, which is what an empty input means on a form that arrives
+ * filled with the current values; given `current`, only the fields the reader changed are sent, so a
+ * save that changes nothing asks panad nothing. A value that is not a positive number is reported
+ * rather than sent.
+ */
+export function limitsBody(values, current) {
+	const body = {};
+	const invalid = [];
+	for (const { field } of LIMIT_FIELDS) {
+		const raw = values?.[field];
+		const text = raw === undefined || raw === null ? "" : String(raw).trim();
+		const parsed = text === "" ? null : Number(text);
+		if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) {
+			invalid.push(field);
+			continue;
+		}
+		if (current !== undefined && current !== null && (optionalAmount(current[field]) ?? null) === parsed) continue;
+		body[field] = parsed;
+	}
+	return { body, invalid };
+}
