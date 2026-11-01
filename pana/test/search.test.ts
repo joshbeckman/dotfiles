@@ -522,6 +522,43 @@ it("SRC-04 participant membership scopes domain-wide listing and both subject/me
 	expect(await t.runtime.db.get("SELECT * FROM thread_participants WHERE participant_id = ?", outsider)).toBeUndefined();
 	expect(await t.runtime.db.get("SELECT * FROM participants WHERE id = 'unknown-user'")).toBeUndefined();
 });
+it("UX-20 thread listing and search carry the creation time, the newest message's time, and the counts", async () => {
+	t = await startTestPanad();
+	const panad = t;
+	const seeded = await seed(panad, "Counted one");
+	await panad.clock.advance(60_000);
+	await panad.client.post(`/threads/${seeded.threadId}/messages`, { body: "Counted two", after: seeded.messageId });
+	await panad.clock.advance(60_000);
+	// A thread row with no message at all: the counts say zero and the newest time is null.
+	const bare = panad.runtime.newId();
+	await panad.runtime.db.write(async (tx) => {
+		await tx.run("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, ?, ?, ?)", bare, "Counted empty", TEST_USER, panad.clock.now());
+	});
+
+	interface Row {
+		threadId: string;
+		createdAt: number;
+		lastMessageAt: number | null;
+		messageCount: number;
+		participantCount: number;
+		participants: Array<{ id: string }>;
+	}
+	// Both discovery paths carry them: the plain listing and a search hit.
+	for (const url of ["/threads", "/threads?query=Counted"]) {
+		const rows = (await panad.client.get<{ threads: Row[] }>(url)).body.threads.filter((row) => row.threadId === seeded.threadId);
+		expect(rows.length).toBeGreaterThan(0);
+		for (const row of rows) {
+			expect(row.messageCount).toBe(2);
+			expect(row.participantCount).toBe(row.participants.length);
+			expect(row.participantCount).toBe(1);
+			expect(row.lastMessageAt).toBeGreaterThan(row.createdAt);
+		}
+	}
+
+	// A thread that never got a message still lists, with zeroes rather than a missing row.
+	const listing = (await panad.client.get<{ threads: Row[] }>("/threads")).body.threads;
+	expect(new Map(listing.map((row) => [row.threadId, row])).get(bare)).toMatchObject({ messageCount: 0, participantCount: 0, lastMessageAt: null });
+});
 
 
 it("SRC-04 SRC-05 discovery query plans retain ranked FTS top-N and indexed sparse membership paging", async () => {

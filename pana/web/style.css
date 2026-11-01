@@ -598,6 +598,27 @@ button.quiet:hover,
 	color: var(--c-text-alt);
 	font-size: 0.8rem;
 }
+/* UX-20: a thread row names both of its times, so a reader knows which one it sees. */
+.aside-times {
+	display: grid;
+	grid-template-columns: auto auto;
+	align-items: baseline;
+	gap: 0 var(--s2);
+	white-space: nowrap;
+}
+.aside-times .aside-label {
+	font-size: 0.72rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--c-text-alt);
+}
+.aside-times time {
+	color: var(--c-text);
+	font-variant-numeric: tabular-nums;
+}
+.thread-counts {
+	white-space: nowrap;
+}
 .item-actions {
 	display: flex;
 	gap: var(--s2);

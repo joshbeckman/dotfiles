@@ -18,7 +18,10 @@ export interface ThreadHit {
 	messageUrl?: string;
 	snippet: string;
 	matched: "subject" | "message";
+	/** When the thread was created, the same field a listing row carries. */
 	createdAt: number;
+	/** When the matching message was sent; absent on a subject hit. */
+	matchedAt?: number;
 }
 
 export interface SessionHit {
@@ -118,9 +121,10 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 		subject: string | null;
 		snippet: string;
 		createdAt: number;
+		matchedAt: number;
 	}>(
 		`SELECT messages_fts.thread_id AS threadId, messages_fts.message_id AS messageId, t.subject AS subject,
-		        snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet, m.created_at AS createdAt
+		        snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet, t.created_at AS createdAt, m.created_at AS matchedAt
 		 FROM messages_fts
 		 JOIN messages m ON m.id = messages_fts.message_id
 		 JOIN threads t ON t.id = messages_fts.thread_id
@@ -150,6 +154,7 @@ export async function searchThreads(runtime: Runtime, query: string, options: Th
 			snippet: row.snippet,
 			matched: "message" as const,
 			createdAt: row.createdAt,
+			matchedAt: row.matchedAt,
 		})),
 	];
 	return hits.slice(options.offset ?? 0, limit);
