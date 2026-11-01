@@ -46,12 +46,24 @@ run() {
   (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git "$@")
 }
 
+# Capture to a file before matching. `run ... | grep -q` looks equivalent but is not:
+# grep -q exits as soon as it matches, and under `set -o pipefail` the write end then
+# dies with SIGPIPE, which the script reports as exit 141. It only shows up when the
+# producer has not finished writing yet -- it failed on a macOS runner and never here.
+expect_line() {
+  local want="$1"
+  shift
+  local out="$tmp/expect.$$"
+  run "$@" >"$out"
+  grep -Fq -- "$want" "$out"
+}
+
 [[ "$(run pr-url)" == 'https://reviews.example.test/pulls/42' ]]
 [[ "$(run pr-url 41)" == 'https://reviews.example.test/pulls/41' ]]
 [[ "$(run pr-view 41)" == '# Full Gitstream PR' ]]
 [[ "$(run pr-merged 41)" == '2026-02-03T04:05:06Z' ]]
-run pr-checks 41 | grep -Fq 'Required CI  success'
-run pr-checks 41 --required | grep -Fq '| Required CI | success | Required |'
+expect_line 'Required CI  success' pr-checks 41
+expect_line '| Required CI | success | Required |' pr-checks 41 --required
 if FAKE_CHECK_STATE=failure run pr-checks 41 --required >"$tmp/out"; then
   printf 'expected a failed required check to return nonzero\n' >&2
   exit 1
@@ -60,7 +72,7 @@ grep -Fq '| Required CI | failure | Required |' "$tmp/out"
 [[ "$(run pr-url https://github.com/example/project/pull/7)" == 'https://github.com/example/project/pull/7' ]]
 [[ "$(run pr-view https://github.com/example/project/pull/7)" == '# Full GitHub PR' ]]
 [[ "$(run pr-merged https://github.com/example/project/pull/7)" == '2026-01-02T03:04:05Z' ]]
-run pr-checks https://github.com/example/project/pull/7 --required | grep -Fq '| Check | Status | Result |'
+expect_line '| Check | Status | Result |' pr-checks https://github.com/example/project/pull/7 --required
 
 git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
 gitstream_url='https://reviews.example.test/pulls/41'
