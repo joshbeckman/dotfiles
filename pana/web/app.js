@@ -2579,7 +2579,9 @@ const OBJECTIVE_ACTION_GATES = {
 	resume: { phases: ["stopped"], label: "Resume", reason: "only a stopped objective is resumed" },
 	// OBJ-07: a stopped objective can be finished too, once its metrics are at target.
 	done: { phases: ["active", "stopped"], label: "Done", reason: "only an active or stopped objective is finished" },
-	archive: { phases: ["stopped", "done"], label: "Archive", reason: "only a stopped or done objective is archived" },
+	// OBJ-07: a draft is archived where it stands — nothing on it runs, so nothing is stopped — and
+	// the reason names that phase too, so a reader of the note sees why an active objective is barred.
+	archive: { phases: ["drafting", "stopped", "done"], label: "Archive", reason: "only a drafting, stopped, or done objective is archived" },
 	regenerate: { phases: ["active"], label: "Regenerate lead", reason: "only an active objective has a lead to replace" },
 };
 
@@ -3141,8 +3143,12 @@ const OBJECTIVE_ACTIONS = {
 		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/done`, {}),
 	},
 	archive: {
-		question:
-			"Archive this objective? Its member sessions are archived with it, so their scratch is swept and their threads become read-only. This is not undone from the app.",
+		// OBJ-07: a draft has no lead, no members and no wakes, so the launch-shaped warning would be
+		// a lie about it; it gets the sentence its own state deserves.
+		question: (view) =>
+			view.phase === "drafting"
+				? "Archive this draft? It was never launched, so it has no lead, no members, and nothing to stop or sweep; it leaves the list and nothing else changes. This is not undone from the app."
+				: "Archive this objective? Its member sessions are archived with it, so their scratch is swept and their threads become read-only. This is not undone from the app.",
 		label: "Yes, archive it",
 		run: (id) => api("POST", `/objectives/${encodeURIComponent(id)}/archive`, {}),
 	},
@@ -3159,7 +3165,7 @@ function askObjectiveAction(action) {
 	const spec = OBJECTIVE_ACTIONS[action];
 	if (!spec || !objectiveDetail) return;
 	objectivePending = action;
-	$("objective-confirm-text").textContent = spec.question;
+	$("objective-confirm-text").textContent = typeof spec.question === "function" ? spec.question(objectiveDetail.view) : spec.question;
 	$("objective-reason-field").hidden = !spec.reason;
 	$("objective-reason").value = "";
 	$("objective-confirm-yes").textContent = spec.label;
