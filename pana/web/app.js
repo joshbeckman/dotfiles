@@ -1137,10 +1137,10 @@ async function searchThreads(event, cursor) {
 		learnDomain(thread.url);
 		const aside = document.createElement("div");
 		aside.className = "item-aside";
-		aside.append(timeEl(thread.at));
+		aside.append(threadTimes(thread));
 		const row = item(
 			span(thread.subject, "thread-subject-label"),
-			[thread.snippet],
+			[threadCounts(thread), thread.snippet],
 			() => {
 				location.hash = `#/threads/${thread.id}`;
 			},
@@ -1153,6 +1153,38 @@ async function searchThreads(event, cursor) {
 		list.append(row);
 	}
 	showMore(list, nextCursor(body), (next) => searchThreads(undefined, next).catch(fail));
+}
+
+/**
+ * UX-20: a thread row's two times, each with the word that says which one it is, so a reader never
+ * has to guess what the timestamp is. `last` is the newest message; `created` is the thread's own.
+ */
+function threadTimes(thread) {
+	const times = span("", "aside-times");
+	for (const [label, title, at] of [
+		["created", "When the thread was created", thread.createdAt],
+		["last", "When the newest message was sent", thread.lastMessageAt],
+	]) {
+		if (!at) continue;
+		const when = timeEl(at);
+		when.dataset.testid = `thread-${label}`;
+		const name = span(label, "aside-label");
+		name.title = title;
+		times.append(name, when);
+	}
+	return times;
+}
+
+/** UX-20: how many messages and how many participants a thread holds. */
+function threadCounts(thread) {
+	const countText = span("", "thread-counts");
+	countText.dataset.testid = "thread-counts";
+	const parts = [
+		`${thread.messageCount} ${thread.messageCount === 1 ? "message" : "messages"}`,
+		`${thread.participantCount} ${thread.participantCount === 1 ? "participant" : "participants"}`,
+	];
+	countText.textContent = parts.join(" · ");
+	return countText;
 }
 
 async function messageElement(message, { focus }) {

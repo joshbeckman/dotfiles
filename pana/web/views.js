@@ -173,7 +173,11 @@ export function threadRow(thread) {
 		url: thread.threadUrl,
 		subject: thread.subject ?? "(no subject)",
 		snippet: thread.snippet,
-		at: thread.createdAt,
+		// UX-20: a row names both of a thread's times, so a reader knows which one it is seeing.
+		createdAt: thread.createdAt,
+		lastMessageAt: thread.lastMessageAt ?? thread.createdAt,
+		messageCount: count(thread.messageCount),
+		participantCount: count(thread.participantCount ?? thread.participants?.length),
 		working: workingOf(thread),
 	};
 }

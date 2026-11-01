@@ -85,7 +85,10 @@ export function threadRow(thread: any): {
 	url: string;
 	subject: string;
 	snippet?: string;
-	at: number;
+	createdAt: number;
+	lastMessageAt: number;
+	messageCount: number;
+	participantCount: number;
 	working: WorkingSessionRef[];
 };
 export function messageView(message: any): {

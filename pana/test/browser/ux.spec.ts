@@ -566,6 +566,50 @@ describeBrowser("pana usability in a browser", () => {
 		for (const gap of layout.gaps as string[]) expect(["2px", "4px", "8px", "12px", "16px", "24px"], gap).toContain(gap);
 	});
 
+	it("UX-20 the threads list names both of a row's times and shows its message and participant counts", async () => {
+		const { t } = await start();
+		interface Shown {
+			id: string;
+			labels: string[];
+			titles: string[];
+			counts: string;
+		}
+		const shown = await evaluatePage<Shown[]>(`
+			location.hash = "#/threads";
+			await until(() => document.querySelectorAll("#threads-list .item").length >= 3);
+			return [...document.querySelectorAll("#threads-list .item")].map((row) => ({
+				id: row.dataset.thread,
+				labels: [...row.querySelectorAll(".aside-label")].map((label) => label.textContent),
+				titles: [...row.querySelectorAll(".aside-times time")].map((time) => time.title),
+				counts: row.querySelector("[data-testid=thread-counts]")?.textContent ?? "",
+			}));
+		`);
+		interface ApiRow {
+			threadId: string;
+			createdAt: number;
+			lastMessageAt: number;
+			messageCount: number;
+			participantCount: number;
+		}
+		const rows = (await t.client.get<{ threads: ApiRow[] }>("/threads")).body.threads;
+		const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+		expect(shown.length).toBeGreaterThanOrEqual(3);
+		for (const row of shown) {
+			const api = rows.find((candidate) => candidate.threadId === row.id)!;
+			expect(row.labels).toEqual(["created", "last"]);
+			// Each named time is the time the server sent under that name, not one field shown twice.
+			expect(row.titles).toEqual([new Date(api.createdAt).toLocaleString(), new Date(api.lastMessageAt).toLocaleString()]);
+			expect(row.counts).toBe(`${plural(api.messageCount, "message")} · ${plural(api.participantCount, "participant")}`);
+		}
+		// The seeded group thread has a history, so its two times and its count are not all ones.
+		const busy = shown.find((row) => rows.find((api) => api.threadId === row.id)!.messageCount > 1);
+		expect(busy, "a thread with more than one message").toBeDefined();
+		expect(busy!.counts).toMatch(/^[2-9]\d* messages · /);
+		expect(new Date(rows.find((api) => api.threadId === busy!.id)!.lastMessageAt).getTime()).toBeGreaterThan(
+			new Date(rows.find((api) => api.threadId === busy!.id)!.createdAt).getTime(),
+		);
+	});
+
 	it("UX-08 vim-like keys select, open, navigate, search, reply, archive, go back, and show help", async () => {
 		const { t } = await start();
 		const inbox = await evaluatePage<{ first?: string; second?: string; back?: string; hash: string }>(`

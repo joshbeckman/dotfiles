@@ -6,6 +6,7 @@
 import { ApiError } from "../api/errors.ts";
 import { decodeCursor, decodeOffset, pageOf, parseLimit } from "../api/pagination.ts";
 import type { Handlers, RequestContext } from "../api/types.ts";
+import type { Runtime } from "../server/runtime.ts";
 import { workingSessions, type WorkingSession } from "../sessions/state.ts";
 import { DEFAULT_SEARCH_LIMIT, participantFilterId, listThreads, searchThreads, type ThreadSearchOptions } from "./query.ts";
 import { regenerateSubject, SubjectError, subjectHistory } from "./subjects.ts";
@@ -69,11 +70,46 @@ interface DiscoveryParticipant {
 	url: string;
 }
 
-/** Shared membership and UX-09 working-session marks, fetched once per page. */
-async function withSharedMetadata<T extends { threadId: string }>(ctx: RequestContext, rows: readonly T[]): Promise<Array<T & { working: WorkingSession[]; participants: DiscoveryParticipant[] }>> {
+/** How big a thread is: how many messages it holds and when the newest one landed. */
+interface ThreadSize {
+	messageCount: number;
+	/** The newest message's time; absent for a thread with no messages. */
+	lastMessageAt: number | null;
+}
+
+/**
+ * Per-thread message counts and the newest message time, for one page of threads. Counting is an
+ * index range per thread over `messages_thread`, and the newest message is a seek by `seq`, so a
+ * page of 25 costs about 0.2 ms at 10,000 threads (SCALE-03). Nothing is denormalized onto
+ * `threads` for it: a `message_count` column would be state every writer has to keep true.
+ */
+async function threadSizes(runtime: Runtime, ids: readonly string[]): Promise<Map<string, ThreadSize>> {
+	const sizes = new Map<string, ThreadSize>();
+	if (ids.length === 0) return sizes;
+	const rows = await runtime.db.all<{ threadId: string; messageCount: number; lastMessageAt: number | null }>(
+		`SELECT t.id AS threadId,
+		        (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS messageCount,
+		        newest.created_at AS lastMessageAt
+		   FROM threads t
+		   LEFT JOIN messages newest
+		     ON newest.thread_id = t.id
+		    AND newest.seq = (SELECT MAX(seq) FROM messages m2 WHERE m2.thread_id = t.id)
+		  WHERE t.id IN (${ids.map(() => "?").join(",")})`,
+		...ids,
+	);
+	for (const row of rows) sizes.set(row.threadId, { messageCount: row.messageCount, lastMessageAt: row.lastMessageAt ?? null });
+	return sizes;
+}
+
+/** Shared membership, UX-09 working-session marks, and thread sizes, fetched once per page. */
+async function withSharedMetadata<T extends { threadId: string }>(
+	ctx: RequestContext,
+	rows: readonly T[],
+): Promise<Array<T & { working: WorkingSession[]; participants: DiscoveryParticipant[]; participantCount: number; messageCount: number; lastMessageAt: number | null }>> {
 	const working = await workingSessions(ctx.runtime.db, rows.map((row) => row.threadId));
 	const participants = new Map<string, DiscoveryParticipant[]>();
 	const ids = [...new Set(rows.map((row) => row.threadId))];
+	const sizes = await threadSizes(ctx.runtime, ids);
 	if (ids.length > 0) {
 		const people = await ctx.runtime.db.all<DiscoveryParticipant & { threadId: string }>(
 			`SELECT tp.thread_id AS threadId, p.id, p.kind, p.url FROM thread_participants tp
@@ -86,7 +122,19 @@ async function withSharedMetadata<T extends { threadId: string }>(ctx: RequestCo
 			participants.set(threadId, list);
 		}
 	}
-	return rows.map((row) => ({ ...row, working: working.get(row.threadId) ?? [], participants: participants.get(row.threadId) ?? [] }));
+	const none: ThreadSize = { messageCount: 0, lastMessageAt: null };
+	return rows.map((row) => {
+		const members = participants.get(row.threadId) ?? [];
+		const size = sizes.get(row.threadId) ?? none;
+		return {
+			...row,
+			working: working.get(row.threadId) ?? [],
+			participants: members,
+			participantCount: members.length,
+			messageCount: size.messageCount,
+			lastMessageAt: size.lastMessageAt,
+		};
+	});
 }
 
 function wantsRegeneration(body: unknown, query: string | null): boolean {

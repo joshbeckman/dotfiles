@@ -909,4 +909,20 @@ describe("UX-09 working indicators", () => {
 		expect(css).toMatch(/\.working-dot,[\s\S]*?animation: pana-working/);
 		expect(css).toContain("@media (prefers-reduced-motion: reduce)");
 	});
+
+	it("UX-20 a thread row carries both of its times and its counts, and says what each one is", () => {
+		const created = Date.UTC(2026, 0, 1, 9, 0, 0);
+		const last = created + 3 * 3_600_000;
+		const row = threadRow({ threadId: "T", threadUrl: "pana://x/threads/T", subject: "S", createdAt: created, lastMessageAt: last, messageCount: 3, participantCount: 2 });
+		expect(row).toMatchObject({ createdAt: created, lastMessageAt: last, messageCount: 3, participantCount: 2 });
+		// A payload that predates the fields, or one thread of many with no message yet, still renders.
+		expect(threadRow({ threadId: "T", subject: "S", createdAt: created, participants: [{ url: "pana://x/users/U" }, { url: "pana://x/users/V" }] })).toMatchObject({
+			lastMessageAt: created,
+			messageCount: 0,
+			participantCount: 2,
+		});
+		// The row's own labels are in the app, so the reader is never shown a bare time.
+		const app = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+		expect(app).toMatch(/\["created", ".*", thread\.createdAt\][\s\S]*?\["last", ".*", thread\.lastMessageAt\]/);
+	});
 });
