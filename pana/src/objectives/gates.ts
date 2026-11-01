@@ -162,8 +162,10 @@ export async function archiveObjective(runtime: Runtime, caller: Caller, value: 
 	await setPhase(runtime, row, "archived", "archived", caller, { members: members.map((member) => member.id) });
 	for (const member of members) {
 		// An archived member is already done; a stopped one is archived here too, so its scratch goes.
+		// `settleUnread`: the objective retires these sessions itself, so their unread mail is
+		// settled rather than left waiting on a session that cannot answer (OBJ-07, OBJ-35).
 		if (member.state === "archived") continue;
-		await sessionRuntime(runtime).archive(member.id);
+		await sessionRuntime(runtime).archive(member.id, null, { settleUnread: true });
 	}
 	return showObjective(runtime, id);
 }

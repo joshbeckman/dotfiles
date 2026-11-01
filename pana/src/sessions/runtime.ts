@@ -340,12 +340,32 @@ export class SessionRuntime {
 		await this.deliverHeld(sessionId);
 	}
 
-	/** STA-07: stop the session for good. Its threads become read-only. */
-	async archive(sessionId: string, stoppedBy: "user" | "objective" | null = null): Promise<void> {
+	/**
+	 * STA-07: stop the session for good. Its threads become read-only.
+	 *
+	 * `settleUnread` is for the cases where the objective itself retires a session — regenerating a
+	 * lead (OBJ-35) and archiving an objective, which archives its members (OBJ-07) — and not for
+	 * REF-02's user archive, which keeps an ordinary session's unread mail exactly as it was. A
+	 * retired session cannot answer anything addressed to it, so a backlog in its inbox is litter:
+	 * every unread delivery is marked read rather than deleted, so the delivery history survives and
+	 * no reader sees mail waiting on a session that will never run.
+	 */
+	async archive(sessionId: string, stoppedBy: "user" | "objective" | null = null, options: { settleUnread?: boolean } = {}): Promise<void> {
 		const session = await this.runtime.db.get<SessionRow>("SELECT state FROM sessions WHERE id = ?", sessionId);
 		if (!session) throw ApiError.notFound(`session ${sessionId}`);
 		if (session.state === "archived") return;
 		await this.stop(sessionId, stoppedBy);
+		if (options.settleUnread) {
+			// After `stop`, which returns mail the abort withdrew to unread so a resume delivers it: a
+			// retirement settles that mail too, and there is no resume to deliver it to.
+			await this.runtime.db.write((tx) =>
+				tx.run(
+					"UPDATE deliveries SET read_at = ? WHERE recipient_id = ? AND read_at IS NULL",
+					this.runtime.clock.now(),
+					sessionId,
+				),
+			);
+		}
 		await this.runtime.db.write((tx) =>
 			setSessionState(tx, this.runtime, { sessionId, state: "archived", from: UNARCHIVED_STATES }),
 		);
