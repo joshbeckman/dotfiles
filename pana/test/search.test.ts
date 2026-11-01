@@ -186,6 +186,48 @@ describe("SUB subjects", () => {
 		expect(logged[0]).toContain("provider error");
 	});
 
+	it("SUB-04 a reply that spends the whole budget thinking is retried with room to finish", async () => {
+		// A reasoning subject model cannot always stop thinking, and reasoning and answer share the
+		// output budget: this is the shape that failed live, where every token went to thinking and
+		// the reply carried no text and `stopReason: "length"`.
+		t = await startTestPanad({
+			config: { subjectModel: "faux/faux-1" },
+			script: [
+				{ text: "", thinking: "The conversation is about choice options.", stopReason: "length" },
+				{ text: "Multiple choice options in threads" },
+			],
+		});
+		const panad = t;
+		const seeded = await seed(panad, "choice options\nbody");
+		const ask = vi.spyOn(panad.runtime.models, "completeSimple");
+
+		const regenerated = await panad.client.post<{ subject: string }>(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(regenerated.status).toBe(200);
+		expect(regenerated.body.subject).toBe("Multiple choice options in threads");
+		const budgets = ask.mock.calls.map((call) => call[2]?.maxTokens);
+		expect(budgets[0]).toBe(SUBJECT_MAX_TOKENS);
+		expect(budgets[1]).toBeGreaterThan(SUBJECT_MAX_TOKENS!);
+	});
+
+	it("SUB-04 a reply that never leaves its thinking phase fails naming the budget it used", async () => {
+		t = await startTestPanad({
+			config: { subjectModel: "faux/faux-1" },
+			script: [
+				{ text: "", thinking: "still thinking", stopReason: "length" },
+				{ text: "", thinking: "still thinking", stopReason: "length" },
+			],
+		});
+		const panad = t;
+		const seeded = await seed(panad, "keep this subject\nbody");
+
+		const failed = await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(failed.status).toBe(502);
+		expect(failed.body).toMatchObject({ error: { code: "model_failed", message: expect.stringContaining("without writing a subject") } });
+		// The wider retry ran and the old subject stayed current.
+		expect(panad.model.calls()).toBe(2);
+		expect(await currentSubject(panad, seeded.threadId)).toBe("keep this subject");
+	});
+
 	it("SUB-04 thread subject --regenerate makes a new subject and keeps the old ones in subjects", async () => {
 		t = await startTestPanad({
 			config: { subjectModel: "faux/faux-1" },
