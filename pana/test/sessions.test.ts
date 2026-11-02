@@ -1,9 +1,9 @@
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { InboxDoc, LiveDoc, defineExtension, defineTool, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import { Type } from "@earendil-works/pi-ai";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { realpathSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPanaRegistry } from "../src/extension/index.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
@@ -271,7 +271,7 @@ describe("session create", () => {
 		writeFileSync(join(t!.runtime.paths.profiles, "isolated.json"), JSON.stringify({ cwd: "worktree" }));
 		const res = await create({ prompt: "hi", profile: "isolated", cwd: repo });
 
-		const path = join(t!.dir, "worktrees", res.session.id);
+		const path = join(realpathSync(t!.dir), "worktrees", res.session.id, basename(repo));
 		expect(res.session.cwd).toBe(path);
 		expect(existsSync(join(path, "README.md"))).toBe(true);
 		const list = testGit(repo, ["worktree", "list", "--porcelain"]);
@@ -281,6 +281,20 @@ describe("session create", () => {
 
 		const missing = await t!.client.post<{ error: { code: string } }>("/sessions", { prompt: "hi", profile: "isolated" });
 		expect(missing.status).toBe(400);
+		await settled(res.session.id);
+	});
+
+	it("SES-04 profile worktrees use the configured adapter and record ownership", async () => {
+		await start({ script: [{ text: "ok" }] });
+		const repo = makeRepo();
+		const common = testGit(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+		t!.runtime.config.worktreeAdapters = [{ repo: common, root: join(t!.dir, "managed"), subdir: "src",
+			create: ["git", "-C", "{repo}", "worktree", "add", "-qb", "{branch}", "{path}", "HEAD"] }];
+		writeFileSync(join(t!.runtime.paths.profiles, "managed.json"), JSON.stringify({ cwd: "worktree" }));
+		const res = await create({ prompt: "hi", profile: "managed", cwd: repo });
+		expect(res.session.cwd).toContain(`/managed/pana-${res.session.id}-`);
+		expect(res.session.cwd).toMatch(/\/src$/);
+		expect(existsSync(join(res.session.cwd!, "README.md"))).toBe(true);
 		await settled(res.session.id);
 	});
 

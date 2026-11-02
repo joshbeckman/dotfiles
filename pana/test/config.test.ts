@@ -80,6 +80,7 @@ describe("config and state", () => {
 	it("CFG-03 optional keys take documented defaults and accept overrides", () => {
 		const defaults = loadConfig(tempConfig({ domain: TEST_DOMAIN, user: TEST_USER }));
 		expect(defaults).toEqual({
+			worktreeAdapters: [],
 			domain: TEST_DOMAIN,
 			user: TEST_USER,
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
