@@ -1127,6 +1127,12 @@ async function searchThreads(event, cursor) {
 	if (!cursor) list.replaceChildren();
 	const threads = asList(body, ["threads"]);
 	if (threads.length === 0 && !cursor) return empty(list, query ? `No threads match “${query}”.` : "No threads yet.");
+	// UX-20: the four columns are named once at the top of the list, not on every row.
+	if (!cursor) {
+		list.append(threadsHeader());
+		// The header's own rule separates it from the first row, so the list's top rule would double it.
+		list.classList.add("has-header");
+	}
 	// A later page can hit a thread an earlier page listed.
 	const seen = new Set([...list.querySelectorAll("[data-thread]")].map((element) => element.dataset.thread));
 	for (const hit of threads) {
@@ -1136,11 +1142,11 @@ async function searchThreads(event, cursor) {
 		seen.add(thread.id);
 		learnDomain(thread.url);
 		const aside = document.createElement("div");
-		aside.className = "item-aside";
-		aside.append(threadTimes(thread));
+		aside.className = "item-aside thread-columns";
+		aside.append(...threadColumns(thread));
 		const row = item(
 			span(thread.subject, "thread-subject-label"),
-			[threadCounts(thread), thread.snippet],
+			[thread.snippet],
 			() => {
 				location.hash = `#/threads/${thread.id}`;
 			},
@@ -1156,35 +1162,64 @@ async function searchThreads(event, cursor) {
 }
 
 /**
- * UX-20: a thread row's two times, each with the word that says which one it is, so a reader never
- * has to guess what the timestamp is. `last` is the newest message; `created` is the thread's own.
+ * UX-20: the threads list's four columns, in order. The words live here — once, above the rows —
+ * rather than on every row, so a row repeats values and never labels.
  */
-function threadTimes(thread) {
-	const times = span("", "aside-times");
-	for (const [label, title, at] of [
-		["created", "When the thread was created", thread.createdAt],
-		["last", "When the newest message was sent", thread.lastMessageAt],
-	]) {
-		if (!at) continue;
-		const when = timeEl(at);
-		when.dataset.testid = `thread-${label}`;
-		const name = span(label, "aside-label");
-		name.title = title;
-		times.append(name, when);
+const THREAD_COLUMNS = [
+	{ label: "messages", title: "How many messages the thread holds" },
+	{ label: "participants", title: "How many people are in the thread" },
+	{ label: "created", title: "When the thread was created" },
+	{ label: "last message", title: "When the newest message was sent" },
+];
+
+/** UX-20: the header those columns are named by, drawn once at the top of the list. */
+function threadsHeader() {
+	const header = document.createElement("div");
+	header.className = "list-header thread-columns";
+	header.dataset.testid = "threads-header";
+	for (const column of THREAD_COLUMNS) {
+		const name = span(column.label, "column-label");
+		name.title = column.title;
+		header.append(name);
 	}
-	return times;
+	return header;
 }
 
-/** UX-20: how many messages and how many participants a thread holds. */
-function threadCounts(thread) {
-	const countText = span("", "thread-counts");
-	countText.dataset.testid = "thread-counts";
-	const parts = [
-		`${thread.messageCount} ${thread.messageCount === 1 ? "message" : "messages"}`,
-		`${thread.participantCount} ${thread.participantCount === 1 ? "participant" : "participants"}`,
-	];
-	countText.textContent = parts.join(" · ");
-	return countText;
+/**
+ * UX-20: one thread row's four cells — its message count, its participant count, and its creation
+ * and newest-message times. Each cell carries its own words only where they are not on screen: in
+ * `title` and `aria-label` for a reader who hovers or listens, and in the phone layout, where the
+ * header is gone and a cell names itself.
+ */
+function threadColumns(thread) {
+	const cells = [];
+	for (const [value, noun, testid] of [
+		[thread.messageCount, thread.messageCount === 1 ? "message" : "messages", "thread-message-count"],
+		[thread.participantCount, thread.participantCount === 1 ? "participant" : "participants", "thread-participant-count"],
+	]) {
+		const cell = span(String(value), "column-count");
+		cell.dataset.testid = testid;
+		cell.dataset.unit = noun;
+		cell.title = `${value} ${noun}`;
+		cell.setAttribute("aria-label", cell.title);
+		cells.push(cell);
+	}
+	for (const [label, at, name] of [
+		["created", thread.createdAt, "created"],
+		["last", thread.lastMessageAt, "last message"],
+	]) {
+		// A thread with no message still lines up: its cell is empty, not missing.
+		if (!at) {
+			cells.push(span("", "column-when"));
+			continue;
+		}
+		const when = timeEl(at);
+		when.dataset.testid = `thread-${label}`;
+		when.dataset.label = label;
+		when.setAttribute("aria-label", name);
+		cells.push(when);
+	}
+	return cells;
 }
 
 async function messageElement(message, { focus }) {

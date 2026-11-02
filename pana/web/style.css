@@ -598,26 +598,38 @@ button.quiet:hover,
 	color: var(--c-text-alt);
 	font-size: 0.8rem;
 }
-/* UX-20: a thread row names both of its times, so a reader knows which one it sees. */
-.aside-times {
+/* UX-20: the threads list names its four columns once, above the rows, and a row repeats values
+   only. Fixed widths keep the header over the values it names. */
+.thread-columns {
 	display: grid;
-	grid-template-columns: auto auto;
+	grid-template-columns: 4rem 6rem 5rem 6.5rem;
+	gap: 0 var(--s3);
 	align-items: baseline;
-	gap: 0 var(--s2);
+	justify-items: end;
 	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
-.aside-times .aside-label {
+.list.has-header {
+	border-top: none;
+}
+.list-header.thread-columns {
+	/* Sticky like the session header: a long list loses the column names exactly when they matter. */
+	position: sticky;
+	top: var(--topbar-h);
+	z-index: 2;
+	background: var(--c-bg);
+	/* The tracks ride at the right edge, over the aside the rows keep there. */
+	justify-content: end;
+	padding: var(--s1) var(--s3);
+	border-bottom: 1px solid var(--c-border);
+	color: var(--c-text-alt);
 	font-size: 0.72rem;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
-	color: var(--c-text-alt);
 }
-.aside-times time {
+.thread-columns time,
+.thread-columns .column-count {
 	color: var(--c-text);
-	font-variant-numeric: tabular-nums;
-}
-.thread-counts {
-	white-space: nowrap;
 }
 .item-actions {
 	display: flex;
@@ -1641,6 +1653,33 @@ kbd {
 	}
 	.item-main {
 		flex-basis: calc(100% - 6rem);
+	}
+	/* UX-20: four columns and their header do not fit a phone, so each value names itself instead. */
+	.list.has-header {
+	border-top: none;
+}
+.list-header.thread-columns {
+		display: none;
+	}
+	.item-aside.thread-columns {
+		display: flex;
+		flex-direction: row;
+		flex-wrap: wrap;
+		justify-content: flex-start;
+		gap: 0 var(--s3);
+		width: 100%;
+		font-size: 0.75rem;
+	}
+	.thread-columns .column-count::after {
+		content: " " attr(data-unit);
+		color: var(--c-text-alt);
+	}
+	.thread-columns time::before {
+		content: attr(data-label) " ";
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--c-text-alt);
 	}
 	.item-actions {
 		margin-left: auto;
