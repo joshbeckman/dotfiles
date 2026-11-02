@@ -688,24 +688,35 @@ button.quiet:hover,
 	text-transform: uppercase;
 	letter-spacing: 0.03em;
 }
-/* Keep pixel lettering inside bounded signals, not adjacent unread counts or metadata. */
-.state-badge {
+/* Keep pixel lettering inside bounded signals, not adjacent unread counts or metadata. Every
+   status the app draws is one of these — a session's or a member's state, an objective's phase or
+   derived state, and the condition holding an objective — so they share one face and one size
+   wherever they appear (UX-09, OBJ-03, OBJ-39). */
+.state-badge,
+.phase-badge,
+.holding-badge {
 	font-family: var(--font-signal);
 	font-size: 0.6875rem;
 	font-synthesis: none;
 	letter-spacing: normal;
 }
+/* A status's value is also its class, in three families, so a session's state and an objective's
+   phase or derived state that mean the same thing draw in the same color: in flight, stopped or
+   stuck, and quiet. A phase with nothing running yet — `drafting` — and `archived` stay neutral. */
 .badge.running,
-.badge.waiting {
+.badge.waiting,
+.badge.active {
 	border-color: var(--p-orange);
 	color: var(--p-orange);
 }
 .badge.failed,
-.badge.stopped {
+.badge.stopped,
+.badge.stranded {
 	border-color: var(--p-red);
 	color: var(--p-red);
 }
-.badge.idle {
+.badge.idle,
+.badge.done {
 	border-color: var(--p-green);
 	color: var(--p-green);
 }

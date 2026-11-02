@@ -38,6 +38,14 @@ interface Shown {
 	};
 }
 
+/** What a status badge looks like on the page: its classes, face, and color. */
+interface Look {
+	class: string;
+	font: string;
+	size: string;
+	color: string;
+}
+
 async function shown(t: TestPanad, id: string): Promise<Shown["objective"]> {
 	const res = await t.client.get<Shown>(`/objectives/${id}`);
 	expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -54,16 +62,30 @@ describeBrowser("objectives", () => {
 		// ---- The list: phase, derived state, holding condition, goal, lead, spend, runs.
 		const list = await evaluatePage<{
 			rows: Array<{ id: string; title: string; meta: string }>;
+			badges: Array<{ id: string; phase: Look | null; state: Look | null }>;
+			neutral: string;
 			hint: string;
 		}>(`
 			location.hash = "#/objectives";
 			await until(() => document.querySelectorAll("#objectives-list .item").length === 2);
+			const look = (node) => node ? { class: node.className, font: getComputedStyle(node).fontFamily, size: getComputedStyle(node).fontSize, color: getComputedStyle(node).color } : null;
+			const probe = document.createElement("span");
+			probe.className = "badge";
+			document.body.append(probe);
+			const neutral = getComputedStyle(probe).color;
+			probe.remove();
 			return {
 				rows: [...document.querySelectorAll("#objectives-list .item")].map((row) => ({
 					id: row.dataset.id,
 					title: row.querySelector(".title").textContent,
 					meta: row.querySelector(".meta").textContent,
 				})),
+				badges: [...document.querySelectorAll("#objectives-list .item")].map((row) => ({
+					id: row.dataset.id,
+					phase: look(row.querySelector(".phase-badge")),
+					state: look(row.querySelector(".state-badge")),
+				})),
+				neutral,
 				hint: document.querySelector("#objectives-browse > .hint").textContent,
 			};
 		`);
@@ -83,6 +105,20 @@ describeBrowser("objectives", () => {
 		expect(draftRow.meta).toContain("no lead yet");
 		expect(draftRow.meta).toContain("spent $0.0000 today");
 
+		// OBJ-39: a status badge is one bounded signal — the pixel face and size a session's state
+		// badge wears — whether it holds a phase or a derived state, in the list or in the view.
+		const listBadges = Object.fromEntries(list.badges.map((row) => [row.id, row]));
+		const activeBadges = listBadges[active.id]!;
+		const draftBadges = listBadges[draft.id]!;
+		expect(activeBadges.phase!.class).toContain("phase-badge");
+		expect(activeBadges.phase!.font).toContain("Departure Mono");
+		expect(activeBadges.phase!.font).toBe(activeBadges.state!.font);
+		expect(activeBadges.phase!.size).toBe(activeBadges.state!.size);
+		expect(draftBadges.phase!.font).toBe(activeBadges.phase!.font);
+		// A draft has nothing running, so its phase is neutral; an active objective is in flight.
+		expect(draftBadges.phase!.color).toBe(list.neutral);
+		expect(activeBadges.phase!.color).not.toBe(list.neutral);
+
 		// The phase filter is part of the list, and an unknown phase resets it.
 		const filtered = await evaluatePage<number>(`
 			location.hash = "#/objectives?phase=drafting";
@@ -100,6 +136,7 @@ describeBrowser("objectives", () => {
 		const view = await evaluatePage<{
 			goal: string;
 			meta: string;
+			phaseBadge: Look | null;
 			url: string;
 			charter: Array<{ name: string; text: string }>;
 			atTarget: string;
@@ -107,7 +144,7 @@ describeBrowser("objectives", () => {
 			metrics: Array<{ name: string; current: string; target: number | null; line: number; targetLine: number; points: number }>;
 			report: string;
 			artifacts: Array<{ title: string; meta: string; href: string | null }>;
-			members: Array<{ state: string; text: string; session: string | null; lead: boolean }>;
+			members: Array<{ state: string; text: string; session: string | null; lead: boolean; class: string; color: string }>;
 			meters: Array<{ id: string; label: string; value: string; bar: number; source: string; sourceLabel: string }>;
 			wakes: string[];
 			wakeCount: string;
@@ -121,6 +158,7 @@ describeBrowser("objectives", () => {
 			return {
 				goal: document.getElementById("objective-goal").textContent,
 				meta: document.getElementById("objective-meta").textContent,
+				phaseBadge: (() => { const node = document.querySelector("#objective-meta .phase-badge"); return node ? { class: node.className, font: getComputedStyle(node).fontFamily, size: getComputedStyle(node).fontSize, color: getComputedStyle(node).color } : null; })(),
 				url: document.querySelector("[data-testid=objective-url]").textContent,
 				charter: [...document.querySelectorAll("#objective-charter [data-testid=charter-section]")].map((block) => ({
 					name: block.dataset.section,
@@ -151,6 +189,8 @@ describeBrowser("objectives", () => {
 					text: row.textContent,
 					session: row.querySelector("a[data-testid=ref-link]")?.getAttribute("href") ?? null,
 					lead: row.textContent.includes("lead"),
+					class: row.querySelector(".state-badge").className,
+					color: getComputedStyle(row.querySelector(".state-badge")).color,
 				})),
 				meters: [...document.querySelectorAll("#objective-meters [data-testid=objective-meter]")].map((row) => ({
 					id: row.dataset.meter,
@@ -175,6 +215,12 @@ describeBrowser("objectives", () => {
 
 		expect(view.goal).toBe("Cut the house's energy bill by a fifth before the tariff changes");
 		expect(view.meta).toContain("active");
+		// OBJ-39: the head draws the same phase badge the list does, down to the face, the size, and
+		// the color, so one phase never reads two ways in one app.
+		expect(view.phaseBadge!.class).toContain("phase-badge");
+		expect(view.phaseBadge!.font).toBe(activeBadges.phase!.font);
+		expect(view.phaseBadge!.size).toBe(activeBadges.phase!.size);
+		expect(view.phaseBadge!.color).toBe(activeBadges.phase!.color);
 		expect(view.meta).toContain("waiting for you");
 		expect(view.meta).toContain("autonomy: manual");
 		expect(view.url).toContain(`pana://`);
@@ -200,6 +246,11 @@ describeBrowser("objectives", () => {
 		expect(view.members.filter((member) => member.lead)).toHaveLength(1);
 		expect(view.members.some((member) => member.state === "running")).toBe(true);
 		expect(view.members.every((member) => member.session?.startsWith("#/sessions/"))).toBe(true);
+		// UX-09/OBJ-39: a member's state badge is the badge a session row draws — its value as a
+		// class from the first paint — and `active` is in flight in the same color as `running`.
+		const runningMember = view.members.find((member) => member.state === "running")!;
+		expect(runningMember.class).toContain("running");
+		expect(runningMember.color).toBe(activeBadges.phase!.color);
 		// OBJ-20..OBJ-24: money and runs against the limits, each with a bar.
 		const meters = Object.fromEntries(view.meters.map((meter) => [meter.id, meter]));
 		expect(meters["spend-today"]).toMatchObject({ label: "Spend today", value: "$1.7500 of $5.0000", bar: 1 });

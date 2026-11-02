@@ -2474,9 +2474,9 @@ async function loadObjectives(cursor) {
 		const row = objectiveRow(raw);
 		learnDomain(row.url);
 		const title = document.createDocumentFragment();
-		title.append(span(row.phase, "badge phase-badge"), " ");
+		title.append(badge(row.phase, "phase-badge"), " ");
 		// OBJ-03: the derived state, which is a function of other rows and never stored.
-		if (row.state) title.append(span(row.state, "badge state-badge"), " ");
+		if (row.state) title.append(badge(row.state, "state-badge"), " ");
 		if (row.holding) title.append(span(row.holding, "badge holding-badge"), " ");
 		title.append(linkified(row.goal));
 		const meta = [
@@ -2578,7 +2578,7 @@ function renderObjectiveHead() {
 	const view = objectiveDetail.view;
 	$("objective-goal").textContent = view.goal;
 	const meta = $("objective-meta");
-	meta.replaceChildren(badge(view.phase, "state-badge"));
+	meta.replaceChildren(badge(view.phase, "phase-badge"));
 	if (view.state) meta.append(badge(view.state, "state-badge"));
 	if (view.holding) {
 		const holding = span(view.holding, "badge holding-badge");
@@ -3044,7 +3044,9 @@ function renderObjectiveMembers() {
 		const detail = sessions.get(member.id);
 		const state = String(detail?.state ?? member.state);
 		const title = document.createDocumentFragment();
-		title.append(span(state, "badge state-badge"));
+		// UX-09: the same state badge a session row draws, so its color is here from the first paint
+		// and a state event only rewrites it.
+		title.append(badge(state, "state-badge"));
 		const person = span("", "person");
 		person.dataset.color = participantColor({ url: member.url, kind: "session" });
 		person.append(refLink(member.url || member.id, "session", member.id, member.url));

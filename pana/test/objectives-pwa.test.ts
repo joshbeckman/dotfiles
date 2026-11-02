@@ -4,7 +4,10 @@
 // blanking a screen. The browser suite (`npm run test:web -- test/browser/objectives.spec.ts`)
 // drives the same view in Chrome.
 
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
+import { OBJECTIVE_PHASES } from "../src/objectives/schema.ts";
+import { SESSION_STATES } from "../src/sessions/runtime.ts";
 import { recordCost } from "../src/sessions/budget.ts";
 import { appHref, idHref, SECTIONS } from "../web/links.js";
 import { charterBody, charterView, metricChart, metricsView, objectiveRow, objectiveView, objectiveWakes } from "../web/views.js";
@@ -270,6 +273,53 @@ it("OBJ-39 charts one line per metric against its target, and never a percent-to
 	expect(flat.empty).toBe(false);
 	expect(flat.min).toBeLessThan(5);
 	expect(flat.max).toBeGreaterThan(5);
+});
+
+/** The palette color a status badge's value draws in, or "" for a value the app leaves neutral. */
+function badgeColor(css: string, value: string): string {
+	const colors = new Set<string>();
+	for (const rule of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+		const selectors = rule[1]!.split(",").map((selector) => selector.trim());
+		if (!selectors.includes(`.badge.${value}`)) continue;
+		for (const color of rule[2]!.matchAll(/var\(--p-([a-z]+)\)/g)) colors.add(color[1]!);
+	}
+	// A value belongs to one family: the rules that color a status never name two palettes.
+	expect(colors.size, value).toBeLessThanOrEqual(1);
+	return colors.size === 0 ? "" : [...colors][0]!;
+}
+
+it("OBJ-39 an objective's status badges wear a session badge's face and color families", () => {
+	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
+	const app = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+
+	// One signal face and one size for every status, so a phase reads the same in the list, in the
+	// view's head, and beside the state it holds against (UX-09).
+	const signal = css.match(/\.state-badge,\s*\.phase-badge,\s*\.holding-badge \{([^}]+)\}/)?.[1] ?? "";
+	expect(signal).toContain("font-family: var(--font-signal);");
+	expect(signal).toContain("font-size: 0.6875rem;");
+	expect(signal).toContain("font-synthesis: none;");
+	// Every objective phase, and every derived state a view can show, draws in the same three
+	// families a session's state badge does. `drafting` and `archived` are phases where nothing is
+	// running, so they stay neutral the way an archived session does.
+	const families: Record<string, string> = { drafting: "", active: "orange", stopped: "red", done: "green", archived: "", running: "orange", idle: "green", stranded: "red" };
+	for (const phase of OBJECTIVE_PHASES) expect(badgeColor(css, phase), phase).toBe(families[phase]);
+	for (const state of ["running", "idle", "stranded"]) expect(badgeColor(css, state), state).toBe(families[state]);
+	// The session vocabulary these families come from keeps its own mapping.
+	expect(SESSION_STATES.map((state) => [state, badgeColor(css, state)])).toEqual([
+		["running", "orange"],
+		["waiting", "orange"],
+		["idle", "green"],
+		["failed", "red"],
+		["stopped", "red"],
+		["archived", ""],
+	]);
+
+	// A badge is colored by its value, so the app must hand the value over as its class: the phase in
+	// the list and in the head, the derived state, and a member's own session state.
+	expect(app).toContain('badge(row.phase, "phase-badge")');
+	expect(app).toContain('badge(row.state, "state-badge")');
+	expect(app).toContain('badge(view.phase, "phase-badge")');
+	expect(app).toContain('badge(state, "state-badge")');
 });
 
 it("OBJ-39 sends a charter write with the revision it read, so a stale one is a conflict and not a loss", async () => {

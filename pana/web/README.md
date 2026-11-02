@@ -57,10 +57,13 @@ Memory saves send the editor's read commit as `baseCommit` (`null` for a new fil
 ### Signal typography
 
 Departure Mono is self-hosted under SIL OFL 1.1 (see `fonts/DepartureMono-LICENSE.txt`).
-Only session state badges and shortcut keycaps use it, at 0.6875rem (11px at the default
-root size), regular weight. Unread counts, generic badges (edited/file status), navigation,
-timestamps, prose, and source keep their existing Plex/Berkeley font roles. Avoid extending
-Departure into tightly adjacent metadata: the mixed lettering is visually tiring.
+Status badges and shortcut keycaps use it, at 0.6875rem (11px at the default root size),
+regular weight: a session's or a member's state, an objective's phase and derived state, the
+condition holding an objective, and a keycap. Every one of those is a bounded signal, and one
+face for all of them is what keeps the same phase from reading two ways on two screens.
+Unread counts, generic badges (edited/file status), navigation, timestamps, prose, and source
+keep their existing Plex/Berkeley font roles. Avoid extending Departure into tightly adjacent
+metadata: the mixed lettering is visually tiring.
 
 ### Message typography
 
@@ -117,6 +120,13 @@ There is no percent-to-target figure anywhere in this section (OBJ-28): metrics 
 units, and one averaged number across them would become the only number the objective has. Meters
 read `effectiveLimits`, so a limit the objective does not set shows the domain's configured value
 with "from the domain's config" beside it, and one nothing bounds says so instead of drawing a bar.
+
+A status badge is the signal a session row already draws, in the same face and the same three color
+families: `active`, `running`, and `waiting` share the in-flight orange, `done` and `idle` the quiet
+green, and `stopped`, `failed`, and `stranded` the red that asks for attention, while `drafting` and
+`archived` stay neutral because nothing is running. A badge's value is also its class, so the phase
+reads the same in the list and in the view's head, and a member's badge carries its color from the
+first paint instead of only after a state event rewrites it.
 
 A member's `session.state` event patches its badge in place and re-reads the objective's derived
 state once the burst settles (UX-09), so the roster is live without redrawing the charter editor or
