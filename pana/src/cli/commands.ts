@@ -558,7 +558,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		usage: "pana worktree add REPO [--branch NAME] [--name NAME]",
 		summary: "Create a worktree of a repository for this session and print its path",
 		flags: [
-			string("branch", "--branch NAME", "Branch to create (default: pana/<session>/<repo>)"),
+			string("branch", "--branch NAME", "Branch to create (default: pana/<session>/<repo>, flat fallback on collision)"),
 			string("name", "--name NAME", "Directory name under <state>/worktrees/<session>"),
 		],
 		positionals: [{ name: "REPO", param: "repo", required: true }],

@@ -284,6 +284,16 @@ describe("session create", () => {
 		await settled(res.session.id);
 	});
 
+	it("SES-04 profile worktrees avoid a remote pana branch prefix", async () => {
+		await start({ script: [{ text: "ok" }] });
+		const repo = makeRepo();
+		testGit(repo, ["update-ref", "refs/remotes/origin/pana", "HEAD"]);
+		writeFileSync(join(t!.runtime.paths.profiles, "isolated.json"), JSON.stringify({ cwd: "worktree" }));
+		const res = await create({ prompt: "hi", profile: "isolated", cwd: repo });
+		expect(testGit(res.session.cwd!, ["branch", "--show-current"]).trim()).toBe(`pana-${res.session.id}`);
+		await settled(res.session.id);
+	});
+
 	it("SES-05 a session created by a session records its parent, at the parent's depth plus one", async () => {
 		// The parent's empty answer to the child's reply posts nothing (RPL-05), so the child is not
 		// woken again with no scripted turn left, and both settle idle whatever the timing.

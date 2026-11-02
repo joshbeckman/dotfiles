@@ -25,6 +25,7 @@ import { overDomainBudget } from "./budget.ts";
 import type { SessionRow } from "./runtime.ts";
 import { setSessionState } from "./state.ts";
 import { ensureScratch } from "../scratch/index.ts";
+import { generatedBranch } from "../worktrees/branch.ts";
 
 const run = promisify(execFile);
 
@@ -183,7 +184,8 @@ async function createWorktree(runtime: Runtime, repo: string, id: string): Promi
 	mkdirSync(root, { recursive: true });
 	const path = join(root, id);
 	try {
-		await run("git", ["-C", repo, "worktree", "add", "-q", "-b", `pana/${id}`, path, "HEAD"]);
+		const branch = await generatedBranch(repo, [id]);
+		await run("git", ["-C", repo, "worktree", "add", "-q", "-b", branch, path, "HEAD"]);
 	} catch (error) {
 		const stderr = (error as { stderr?: string }).stderr?.trim();
 		throw ApiError.badRequest("invalid_cwd", `cannot create a worktree from ${repo}: ${stderr || (error as Error).message}`);

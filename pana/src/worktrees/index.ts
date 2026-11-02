@@ -11,13 +11,14 @@ import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { generatedBranch } from "./branch.ts";
 
 const run = promisify(execFile);
 
 export interface AddWorktreeInput {
 	/** The repository's path, or any directory inside it. */
 	repo: string;
-	/** The branch to create; default `pana/<session>/<name>`. */
+	/** The branch to create; default `pana/<session>/<name>`, with a flat fallback on collision. */
 	branch?: string;
 	/** The directory name under `<state>/worktrees/<session>`; default the repository's own name. */
 	name?: string;
@@ -63,16 +64,19 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 	const repo = await repoRoot(input.repo);
 	const name = safeName(input.name ?? basename(repo));
 	const path = join(runtime.paths.dir, "worktrees", sessionId, name);
-	const branch = input.branch ?? `pana/${sessionId}/${name}`;
-
 	if (existsSync(join(path, ".git"))) {
 		return { session: sessionId, repo, path, branch: await git(path, ["rev-parse", "--abbrev-ref", "HEAD"]), created: false };
 	}
 
+	let branch: string;
+	try {
+		branch = input.branch ?? await generatedBranch(repo, [sessionId, name]);
+	} catch (error) {
+		throw ApiError.badRequest("invalid_repo", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
+	}
 	mkdirSync(join(runtime.paths.dir, "worktrees", sessionId), { recursive: true });
-	const exists = await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
-	// A branch that already exists is reused rather than refused: a session resuming its own work
-	// asks for the same branch twice, and git refuses `-b` on an existing one.
+	const exists = input.branch === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
+	// Only explicit names may reuse a branch. A generated-name race must fail, not join another writer's branch.
 	await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
 	return { session: sessionId, repo, path, branch, created: true };
 }
