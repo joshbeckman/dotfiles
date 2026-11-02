@@ -59,6 +59,16 @@ describe("GUARD-07 managed worktrees", () => {
 		expect((await t.guarded("bob").exec(`git -C '${result.path}' fetch origin`, undefined, ctx)).ok).toBe(false);
 	});
 
+	it("passes the collision-free fallback to the adapter and reuses its owned checkout", async () => {
+		const t = fixture();
+		t.git(t.repo, ["update-ref", "refs/remotes/origin/pana", "HEAD"]);
+		const first = await addWorktree(t.runtime, "alice", { repo: t.repo });
+		expect(first.branch).toBe("pana-alice-repo");
+		expect(t.git(first.path, ["branch", "--show-current"])).toBe(first.branch);
+		expect(ownedPaths(t.state, "alice")).toEqual([first.path]);
+		expect(await addWorktree(t.runtime, "alice", { repo: t.repo })).toEqual({ ...first, created: false });
+	});
+
 	it("protects a newly registered peer tree even when the scan is cached", async () => {
 		const t = fixture(); const e = t.guarded("bob");
 		await e.exec("true", undefined, ctx);

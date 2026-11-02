@@ -339,6 +339,34 @@ describe("GUARD-03 pana worktree add", () => {
 		expect(again.path).toBe(first.path);
 	});
 
+	it("creates and reuses the fallback branch when a cached remote prefix conflicts", async () => {
+		const t = setup();
+		t.git(t.repo, ["update-ref", "refs/remotes/origin/pana", "HEAD"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const first = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(first.branch).toBe("pana-session-dotfiles");
+		expect(t.git(first.path, ["branch", "--show-current"]).trim()).toBe(first.branch);
+		const again = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(again).toEqual({ ...first, created: false });
+	});
+
+	it("does not reuse a colliding generated branch without an existing worktree", async () => {
+		const t = setup();
+		t.git(t.repo, ["branch", "pana/session/dotfiles"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		expect((await addWorktree(runtime, "session", { repo: t.repo })).branch).toBe("pana-session-dotfiles");
+	});
+
+	it("preserves explicit branch reuse and refuses explicit prefix collisions without renaming", async () => {
+		const t = setup();
+		t.git(t.repo, ["branch", "existing"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		expect((await addWorktree(runtime, "session", { repo: t.repo, branch: "existing" })).branch).toBe("existing");
+		t.git(t.repo, ["branch", "pana"]);
+		await expect(addWorktree(runtime, "other", { repo: t.repo, branch: "pana/explicit" })).rejects.toThrow(/cannot lock ref/);
+		expect(t.git(t.repo, ["branch", "--list", "pana-other-dotfiles"]).trim()).toBe("");
+	});
+
 	it("is for a session, not the user", async () => {
 		const t = setup();
 		const state = tmp("pana-state-");

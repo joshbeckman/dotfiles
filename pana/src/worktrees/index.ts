@@ -14,13 +14,14 @@ import { ApiError } from "../api/errors.ts";
 import { realPath } from "../extension/checkouts.ts";
 import { checkoutCommon, owners, saveOwner } from "./ownership.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { generatedBranch } from "./branch.ts";
 
 const run = promisify(execFile);
 
 export interface AddWorktreeInput {
 	/** The repository's path, or any directory inside it. */
 	repo: string;
-	/** The branch to create; default `pana/<session>/<name>`. */
+	/** The branch to create; default `pana/<session>/<name>`, with a flat fallback on collision. */
 	branch?: string;
 	/** Worktree name; default the repository's own name. External names include the session ID. */
 	name?: string;
@@ -74,7 +75,6 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 	const path = adapter
 		? join(realPath(adapter.root), treeName, adapter.subdir ?? "")
 		: join(realPath(runtime.paths.dir), "worktrees", sessionId, name);
-	const branch = input.branch ?? `pana/${sessionId}/${name}`;
 	const previous = pending.get(path) ?? Promise.resolve();
 	const work = previous.catch(() => {}).then(async () => {
 		if (realPath(path) !== resolve(path)) throw ApiError.badRequest("invalid_worktree", "worktree destination contains a symlink");
@@ -84,7 +84,13 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 		}
 		if (existsSync(path) && !owner && adapter) throw ApiError.badRequest("worktree_collision", `unowned destination already exists: ${path}`);
 		let created = false;
+		let branch = input.branch;
 		if (!existsSync(path)) {
+			try {
+				branch ??= await generatedBranch(repo, [sessionId, name]);
+			} catch (error) {
+				throw ApiError.badRequest("invalid_repo", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
+			}
 			if (adapter) {
 				const substitutions: Record<string, string> = { name: treeName, branch, path, repo };
 				const argv = adapter.create.map((arg) => arg.replace(/\{(name|branch|path|repo)\}/g, (_, key: string) => substitutions[key]!));
@@ -95,7 +101,8 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 				}
 			} else {
 				mkdirSync(join(runtime.paths.dir, "worktrees", sessionId), { recursive: true });
-				const exists = await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
+				// A generated-name race must fail rather than join another writer's branch.
+				const exists = input.branch === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
 				await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
 			}
 			created = true;
