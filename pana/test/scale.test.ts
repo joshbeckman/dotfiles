@@ -14,7 +14,8 @@ import { nextCursor, pagePath } from "../web/pages.js";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
 
-const SMALL = { sessions: 4, threads: 6, messages: 2, broadcast: 2, fanout: 1, branch: 2, spawnDepth: 2, concurrency: 3, latencyMs: 2, listThreads: 30, listSamples: 3, pageSize: 7, timeoutMs: 30_000 };
+// `objectives` keeps the opt-in phase under CI: one objective, twenty events, three reads of each route.
+const SMALL = { sessions: 4, threads: 6, messages: 2, broadcast: 2, fanout: 1, branch: 2, spawnDepth: 2, concurrency: 3, latencyMs: 2, listThreads: 30, listSamples: 3, pageSize: 7, objectives: 1, objectiveEvents: 20, objectiveSamples: 3, timeoutMs: 30_000 };
 
 describe("the bench", () => {
 	let result: BenchResult;
