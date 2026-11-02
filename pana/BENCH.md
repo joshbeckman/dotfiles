@@ -428,3 +428,30 @@ With `--objectives 3 --objective-events 2000`, three runs before and two after:
 The 6.1 ms statement is no longer in the run's top ten; the largest pana-owned statement there is now pi-durable's `pi_tasks` insert.
 
 `test/objectives-indexes.test.ts` asserts the plan through the routes: the OBJ-24 count must select `messages_sender_created` and must not scan `messages`. `test/objectives.test.ts` pins the set the count means — a member's report counts, the user's own reply and a domain notice do not, another objective's message does not, and yesterday's does not. `test/scale.test.ts` now runs the objectives phase at small N (one objective, twenty events, three samples), so the phase has CI coverage.
+
+### `objective_events` detail reads
+
+After migration 15 the objectives routes are 3.21 / 1.48 / 1.89 ms p50 (`list` / `show` / `brief`), and what is left in them is eight statements that filter a `detail` key — `$.session`, `$.lead`, `$.condition` — over the objective's `(objective_id, kind)` range, evaluating JSON per row. They are measured here on a database of 100,000 events over 50 objectives (six members each, realistic kind mix): the table is 15.6 MB, **156 bytes a row**, and `objective_events_kind` is 5.8 MB beside it.
+
+| Read | as it is | `session` | `session, at` | `lead, at` | both |
+|---|---|---|---|---|---|
+| `leadRunsToday` | 164 µs | 163 | **7.4** | 37.5 | 37 |
+| `leadRunsTotal` | 478 | 625 | 624 | **15.3** | 15.6 |
+| `lastLeadRunEnd` | 469 | 466 | **7.6** | 467 | 6.5 |
+| `member.created` count | 103 | **6.9** | 7.1 | 103 | 6.8 |
+| `member.refused` prior | 29 | 3.7 | 3.9 | 29 | 3.7 |
+| `currentLeadRun` | 565 | 566 | **5.6** | 565 | 5.6 |
+| `budget` prior | 7.8 | 7.4 | 7.6 | 7.5 | 7.7 |
+| `run.refused` prior | 8.3 | 8.1 | 8.6 | 8.6 | 8.2 |
+| **index bytes per event** | — | 80 | **88** | 59 | 147 |
+| **index bytes at 200,000 events** | — | 16.0 MB | **17.6 MB** | 11.8 MB | 29.4 MB |
+
+Three things this says:
+
+- **The keys cannot share one index.** `$.session`, `$.lead` and `$.condition` are three different expressions, so SQLite needs three indexes to seek on them — 80, 59 and 52 bytes an event each. What one index *can* do is carry `at` as its last column, which is why `(objective_id, kind, <key>, at)` is the shape to compare and the bare `(objective_id, kind, <key>)` is not: with `at` the same index serves both the plain equality counts and the `MAX(at)` / `ORDER BY at DESC` reads, for eight more bytes a row.
+- **The reshape is not available.** The JSON predicates *are* what selects the rows: `(objective_id, kind, at)` only narrows to the kind, and every one of these reads then has to look at each row's `detail`. The plans say so — `SEARCH … objective_events_kind (objective_id=? AND kind=?)` with the JSON evaluated on every row of that range.
+- **The bytes are out of proportion.** An entry in `(objective_id, kind, session, at)` is 88 bytes against a 156-byte row, because the indexed value is a 26-character ULID and the index carries two of them (the key and the key's own copy in `objective_id`). Two indexes, `session, at` and `lead, at`, would take `show` from 1.48 ms to roughly 0.3 and `list` from 3.21 to roughly 1.9, for **147 bytes an event — 94% of the table's own size, and 29 MB at 200,000 events.**
+
+Recommendation: **nothing, for now.** The reads cost 8–570 µs each on a 100,000-event history, they grow with that history, and the routes they sit in are already under 4 ms; spending 30–94% of the fastest-growing table's size to take a 1.5 ms route to 0.3 ms is the wrong side of this objective's trade. The thing that would change the arithmetic is a narrower key — the ULIDs are what make each entry nearly a row — and that is a schema shape decision, not an index: an integer or compact session reference, or a `detail` column set, would have to be brought back as a proposal rather than slipped in as an index.
+
+Measured with `--objectives 3 --objective-events 2000` at this head: `list` 3.21 / `show` 1.48 / `brief` 1.89 ms p50, unchanged from migration 15's pair (3.21 / 1.51 / 1.91), and no `detail` statement reaches the run's top ten at 2,000 events an objective.
