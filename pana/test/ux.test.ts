@@ -921,8 +921,13 @@ describe("UX-09 working indicators", () => {
 			messageCount: 0,
 			participantCount: 2,
 		});
-		// The row's own labels are in the app, so the reader is never shown a bare time.
+		// The column words live once, in the header, so a row repeats values and not labels.
 		const app = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
-		expect(app).toMatch(/\["created", ".*", thread\.createdAt\][\s\S]*?\["last", ".*", thread\.lastMessageAt\]/);
+		expect(app).toMatch(/const THREAD_COLUMNS = \[[\s\S]*?"messages"[\s\S]*?"participants"[\s\S]*?"created"[\s\S]*?"last message"[\s\S]*?\];/);
+		expect(app).toContain("list.append(threadsHeader())");
+		// A phone has no room for the header, so there the stylesheet makes each value name itself.
+		const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
+		expect(css).toMatch(/\.list-header\.thread-columns \{[^}]*justify-content: end/);
+		expect(css).toMatch(/@media \(max-width: 40rem\) \{[\s\S]*?\.list-header\.thread-columns \{[^}]*display: none[\s\S]*?content: " " attr\(data-unit\)[\s\S]*?content: attr\(data-label\) " "/);
 	});
 });

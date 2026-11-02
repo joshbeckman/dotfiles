@@ -8,7 +8,7 @@ import { loopbackOrigin } from "../../src/web/static.ts";
 import { INPUT_KEYMAP, KEYMAP } from "../../web/keys.js";
 import { PALETTE, participantColor, refLabel } from "../../web/views.js";
 import type { TestPanad } from "../harness/index.ts";
-import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage, resizePage } from "./cli.ts";
+import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
 
 const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
@@ -566,22 +566,29 @@ describeBrowser("pana usability in a browser", () => {
 		for (const gap of layout.gaps as string[]) expect(["2px", "4px", "8px", "12px", "16px", "24px"], gap).toContain(gap);
 	});
 
-	it("UX-20 the threads list names both of a row's times and shows its message and participant counts", async () => {
+	it("UX-20 the threads list names its columns once and every row repeats values only", async () => {
 		const { t } = await start();
 		interface Shown {
 			id: string;
-			labels: string[];
+			header: string[];
+			headers: number;
+			counts: number[];
+			countLabels: Array<string | null>;
 			titles: string[];
-			counts: string;
+			text: string;
 		}
 		const shown = await evaluatePage<Shown[]>(`
 			location.hash = "#/threads";
 			await until(() => document.querySelectorAll("#threads-list .item").length >= 3);
+			const header = document.querySelector("#threads-list [data-testid=threads-header]");
 			return [...document.querySelectorAll("#threads-list .item")].map((row) => ({
 				id: row.dataset.thread,
-				labels: [...row.querySelectorAll(".aside-label")].map((label) => label.textContent),
-				titles: [...row.querySelectorAll(".aside-times time")].map((time) => time.title),
-				counts: row.querySelector("[data-testid=thread-counts]")?.textContent ?? "",
+				header: header ? [...header.querySelectorAll(".column-label")].map((label) => label.textContent) : [],
+				headers: document.querySelectorAll("#threads-list [data-testid=threads-header]").length,
+				counts: [...row.querySelectorAll(".column-count")].map((cell) => Number(cell.textContent)),
+				countLabels: [...row.querySelectorAll(".column-count")].map((cell) => cell.getAttribute("aria-label")),
+				titles: [...row.querySelectorAll("time")].map((time) => time.title),
+				text: row.textContent,
 			}));
 		`);
 		interface ApiRow {
@@ -594,20 +601,42 @@ describeBrowser("pana usability in a browser", () => {
 		const rows = (await t.client.get<{ threads: ApiRow[] }>("/threads")).body.threads;
 		const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 		expect(shown.length).toBeGreaterThanOrEqual(3);
+		// The words appear once, above the list, in the order the cells use.
+		expect(shown[0]!.headers).toBe(1);
+		expect(shown[0]!.header).toEqual(["messages", "participants", "created", "last message"]);
 		for (const row of shown) {
 			const api = rows.find((candidate) => candidate.threadId === row.id)!;
-			expect(row.labels).toEqual(["created", "last"]);
-			// Each named time is the time the server sent under that name, not one field shown twice.
+			expect(row.counts).toEqual([api.messageCount, api.participantCount]);
+			// The words a row does not draw are still there for a reader who hovers or listens.
+			expect(row.countLabels).toEqual([plural(api.messageCount, "message"), plural(api.participantCount, "participant")]);
+			// Each time is the value the server sent under that column, not one field drawn twice.
 			expect(row.titles).toEqual([new Date(api.createdAt).toLocaleString(), new Date(api.lastMessageAt).toLocaleString()]);
-			expect(row.counts).toBe(`${plural(api.messageCount, "message")} · ${plural(api.participantCount, "participant")}`);
+			// No row repeats a column label or a unit word: that is the whole point of the header.
+			for (const word of ["message", "participant", "created", "last"]) expect(row.text.toLowerCase(), word).not.toContain(word);
 		}
-		// The seeded group thread has a history, so its two times and its count are not all ones.
-		const busy = shown.find((row) => rows.find((api) => api.threadId === row.id)!.messageCount > 1);
-		expect(busy, "a thread with more than one message").toBeDefined();
-		expect(busy!.counts).toMatch(/^[2-9]\d* messages · /);
-		expect(new Date(rows.find((api) => api.threadId === busy!.id)!.lastMessageAt).getTime()).toBeGreaterThan(
-			new Date(rows.find((api) => api.threadId === busy!.id)!.createdAt).getTime(),
-		);
+		// The seeded group thread has a history, so its two times are not all ones and differ.
+		const busy = rows.find((row) => row.messageCount > 1)!;
+		expect(busy.lastMessageAt).toBeGreaterThan(busy.createdAt);
+
+		// A phone has no room for the header, so there a row names its own values instead.
+		await emulateViewport("390x844x3,mobile,touch");
+		const phone = await evaluatePage<{ headerShown: boolean; units: string[]; labels: string[]; overflow: number }>(`
+			await until(() => document.querySelectorAll("#threads-list .item").length >= 3);
+			const header = document.querySelector("#threads-list [data-testid=threads-header]");
+			const row = document.querySelector("#threads-list .item");
+			const shown = (selector, pseudo) => getComputedStyle(row.querySelector(selector), pseudo).content;
+			return {
+				headerShown: Boolean(header && header.offsetParent !== null),
+				units: [shown(".column-count", "::after"), shown(".column-count + .column-count", "::after")],
+				labels: [shown("time", "::before"), shown("time + time", "::before")],
+				overflow: Math.max(...[...document.querySelectorAll("#threads-list *")].map((el) => el.getBoundingClientRect().right)) - innerWidth,
+			};
+		`);
+		expect(phone.headerShown).toBe(false);
+		expect(phone.units.map((unit) => unit.replace(/"/g, "").trim())).toEqual(["message", "participants"]);
+		expect(phone.labels.map((label) => label.replace(/"/g, "").trim())).toEqual(["created", "last"]);
+		expect(phone.overflow).toBeLessThan(1);
+		await emulateViewport("");
 	});
 
 	it("UX-08 vim-like keys select, open, navigate, search, reply, archive, go back, and show help", async () => {
