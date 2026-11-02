@@ -396,3 +396,35 @@ SELECT COUNT(DISTINCT m.id) AS n FROM messages m
 ```
 
 is **1,526 / 1,539 ms over 250 calls — 6.10 / 6.16 ms a call**, and it is most of the 2.4 s the three routes spent over 50 samples each. `objectives.list` issues it once per listed objective, which is why listing three costs 21.5 ms while showing one costs 7.8 ms. That count is the next package's target, not this one's: it walks the objective's sessions' deliveries and joins `messages` per row, so it grows with the objective's message history, and a covering index or a counter in the shape of migration 14 is the choice to make against it.
+
+### OBJ-24's user-message count
+
+`objectiveUserMessagesToday` was the cost the objectives phase found: **6.1 ms a call, 1,526–1,539 ms over 250 calls**, and once per listed objective, which is why `GET /objectives` cost 21.5 ms while `GET /objectives/:id` cost 7.8 ms. The query counted messages to the user from the objective's sessions in the local day, and nothing indexed `messages(sender_id, created_at)`, so it read `messages` once per session.
+
+Two ways out were measured on a 6,000-message build (200 threads, 60 sessions, three objectives of three members, deliveries to one user, ten days of history):
+
+| | µs a call | Bytes added |
+|---|---|---|
+| the query as it was | 4,698 | — |
+| read from the user's deliveries instead | 603 | 0 |
+| the query behind `messages(sender_id, created_at)` | 82 | 220,280 (37 a row) |
+
+The reshape is the free one, and it loses on the measurement that matters: in the bench's shape — where every message is from today, so "the user's deliveries in the window" is the whole table — the reshaped query costs **6.26 ms against the original's 6.10**, no better at all; it only wins when the day window is a small slice of history. The index wins in both shapes, so migration 15 adds it:
+
+```sql
+CREATE INDEX messages_sender_created ON messages(sender_id, created_at);
+```
+
+`SEARCH s USING INDEX sessions_objective (objective_id=?) | SEARCH m USING INDEX messages_sender_created (sender_id=? AND created_at>? AND created_at<?) | SEARCH d USING COVERING INDEX sqlite_autoindex_deliveries_2 (message_id=?)` — three sessions, a range each, no scan. Cost: 37 bytes a message (220 KB at 6,000; about 360 KB in the bench's own database), and **1.1 µs on a message insert** (4.8 → 5.9 µs for 2,000 inserts into a copy). No other statement needs the index: every other read of `messages` joins it by primary key or reads it by thread.
+
+With `--objectives 3 --objective-events 2000`, three runs before and two after:
+
+| Route | Before, p50 | After, p50 | |
+|---|---|---|---|
+| `objectives.list` | 21.53 / 21.57 / 21.68 ms | 3.28 / 3.21 ms | 6.5× |
+| `objectives.show` | 7.80 / 7.81 / 7.87 ms | 1.55 / 1.51 ms | 5.0× |
+| `objectives.brief` | 8.33 / 8.36 / 8.42 ms | 1.97 / 1.91 ms | 4.2× |
+
+The 6.1 ms statement is no longer in the run's top ten; the largest pana-owned statement there is now pi-durable's `pi_tasks` insert.
+
+`test/objectives-indexes.test.ts` asserts the plan through the routes: the OBJ-24 count must select `messages_sender_created` and must not scan `messages`. `test/objectives.test.ts` pins the set the count means — a member's report counts, the user's own reply and a domain notice do not, another objective's message does not, and yesterday's does not. `test/scale.test.ts` now runs the objectives phase at small N (one objective, twenty events, three samples), so the phase has CI coverage.

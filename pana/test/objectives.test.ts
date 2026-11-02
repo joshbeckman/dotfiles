@@ -16,6 +16,7 @@ import { SimulatedCrash } from "../src/db/index.ts";
 import { formatUrl, parseRef } from "../src/ids/index.ts";
 import { OBJECTIVE_COMMANDS } from "../src/objectives/cli.ts";
 import { admitRun, launchObjective, objectiveConditions, objectiveRow, sweepObjectives, type ObjectiveView } from "../src/objectives/index.ts";
+import { postNotice } from "../src/threads/index.ts";
 import { dayStart, nextDayStart, recordCost } from "../src/sessions/budget.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAKE_EPOCH, startTestPanad, TEST_USER, type TestPanad, type TestPanadOptions } from "./harness/index.ts";
@@ -249,8 +250,8 @@ it("OBJ-02 one migration at the end of MIGRATIONS adds every table the package n
 
 	// It is the last migration, numbered, and the schema version follows it.
 	const last = MIGRATIONS.at(-1)!;
-	expect(last).toMatchObject({ version: 14, name: "unread counter" });
-	expect(SCHEMA_VERSION).toBe(14);
+	expect(last).toMatchObject({ version: 15, name: "messages by sender" });
+	expect(SCHEMA_VERSION).toBe(15);
 	expect(MIGRATIONS.map((migration) => migration.version)).toEqual(MIGRATIONS.map((_, index) => index + 1));
 
 	// A database newer than the code still refuses to open (DB-03 holds for this version).
@@ -1340,6 +1341,53 @@ it("OBJ-24 maxDailyUserMessages holds the lead's next run and says why in the co
 	// The lead's next run was not admitted for that reason.
 	const admission = await t!.runtime.db.write((tx) => admitRun(tx, t!.runtime, lead, { kind: "delivery" }));
 	expect(admission).toMatchObject({ admit: false, condition: "messages_day" });
+});
+
+it("OBJ-24 the user-message count is the objective's sessions' messages to the user, inside the day", async () => {
+	await start({ script: [{ text: "here is my report." }, { text: "lead two." }, { text: "member reply." }] });
+	const objective = await draft("Count the messages");
+	const lead = await launchAndSettle(objective);
+	const member = await seedMember(objective.id, { parent: lead });
+	const thread = (await view(objective.id)).thread!.id;
+	// In the window: the lead's report (from launch), a report from a member, and a notice.
+	const memberReport = await t!.client.post<{ thread: { id: string } }>("/threads", { to: [TEST_USER], body: "a member reports in" }, { caller: member });
+	expect(memberReport.status).toBe(201);
+	await t!.clock.advance(1000);
+	await t!.client.post(`/threads/${thread}/messages`, { after: await objectiveThreadHead(thread), body: "and the user replies" });
+	await t!.clock.advance(1000);
+	await postNotice(t!.runtime, { to: [TEST_USER], body: "a notice to the user" });
+	// A message from outside the objective, to the user: delivered, in the window, not counted.
+	const outsider = await seedMember(null);
+	const outsiderThread = await t!.client.post<{ thread: { id: string } }>("/threads", { to: [TEST_USER], body: "an outsider writes" }, { caller: outsider });
+	expect(outsiderThread.status).toBe(201);
+	// Yesterday's report from the lead: delivered, from a member, outside the window.
+	const now = t!.clock.now();
+	await t!.runtime.db.write(async (tx) => {
+		const oldMessage = t!.runtime.newId();
+		await tx.run("INSERT INTO messages (id, thread_id, seq, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)", oldMessage, thread, 900, lead, "yesterday's report", now - 2 * 86_400_000);
+		await tx.run("INSERT INTO deliveries (id, message_id, thread_id, recipient_id, created_at) VALUES (?, ?, ?, ?, ?)", t!.runtime.newId(), oldMessage, thread, TEST_USER, now - 2 * 86_400_000);
+	});
+	const row = (await objectiveRow(t!.runtime.db, objective.id))!;
+	const counted = await objectiveConditions(t!.runtime.db, t!.runtime, row);
+	const windowStart = dayStart(now, "UTC");
+	const windowEnd = nextDayStart(now, "UTC");
+	// The same count written out, so a change to the query that changes the set fails here.
+	const before = await t!.runtime.db.get<{ n: number }>(
+		`SELECT COUNT(DISTINCT m.id) AS n
+		   FROM messages m
+		   JOIN sessions s ON s.id = m.sender_id
+		   JOIN deliveries d ON d.message_id = m.id
+		   JOIN participants p ON p.id = d.recipient_id AND p.kind = 'user'
+		  WHERE s.objective_id = ? AND m.created_at >= ? AND m.created_at < ?`,
+		objective.id,
+		windowStart,
+		windowEnd,
+	);
+	expect(counted.userMessagesToday).toBe(before!.n);
+	// Hand-counted: the lead's launch report and the member's reply. Not the user's own reply
+	// (not sent by a session), not the notice (sent by the domain), not the outsider's message
+	// (another objective's), and not yesterday's report (outside the window).
+	expect(counted.userMessagesToday).toBe(2);
 });
 
 it("OBJ-18 a scheduled wake joins the lead's hold, and its note arrives with the released run", async () => {

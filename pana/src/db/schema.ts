@@ -517,6 +517,22 @@ export const MIGRATIONS: readonly Migration[] = [
 			 WHERE EXISTS (SELECT 1 FROM deliveries d WHERE d.recipient_id = p.id AND d.read_at IS NULL);
 		`,
 	},
+	{
+		version: 15,
+		name: "messages by sender",
+		// OBJ-24: `objectiveUserMessagesToday` counts a message to the user from the objective's
+		// sessions in the local day, and it read `messages` once per session because nothing indexed
+		// `messages(sender_id, created_at)`: 6.1 ms a call on the bench's database, and most of what
+		// `GET /objectives` costs (BENCH.md). Reading the same set from the user's deliveries instead
+		// is free but no faster when the day window covers most of the table, and it still walks
+		// every delivery to the user in the window.
+		//
+		// Measured on a 6,000-message build: 4.7 ms before, 0.6 ms driven from deliveries, 0.08 ms
+		// behind this index. It costs 37 bytes a row (220 KB at 6,000 messages) and 1.1 us on a
+		// message insert. No other statement needs it: every other read of `messages` joins by
+		// primary key or reads by thread.
+		sql: `CREATE INDEX IF NOT EXISTS messages_sender_created ON messages(sender_id, created_at);`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

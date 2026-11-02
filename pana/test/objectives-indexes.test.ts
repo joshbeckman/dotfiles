@@ -76,12 +76,19 @@ it("OBJ-23 WAK-01 objectives reads plan through the event and wake indexes", asy
 
 	let eventReads = 0;
 	let wakeReads = 0;
+	let messageReads = 0;
 	for (const [sql, detail] of plans) {
 		// No read of either table may fall back to a table scan.
 		expect(detail, `scans a table: ${sql}\n${detail}`).not.toMatch(/^SCAN (objective_events|schedules)\b/);
 		if (sql.includes("json_extract(detail")) {
 			eventReads += 1;
 			expect(detail, `objective_events read misses the index: ${sql}\n${detail}`).toContain("objective_events_kind");
+		}
+		// OBJ-24's count: messages by a session, inside the day, for one objective.
+		if (sql.includes("FROM messages m") && sql.includes("JOIN sessions s")) {
+			messageReads += 1;
+			expect(detail, `messages read misses the index: ${sql}\n${detail}`).toContain("messages_sender_created");
+			expect(detail, `messages read scans: ${sql}\n${detail}`).not.toMatch(/SCAN m\b/);
 		}
 		if (sql.includes("json_extract") && (sql.includes("payload")) && sql.includes("FROM schedules")) {
 			wakeReads += 1;
@@ -92,6 +99,7 @@ it("OBJ-23 WAK-01 objectives reads plan through the event and wake indexes", asy
 	}
 	expect(eventReads).toBeGreaterThan(0);
 	expect(wakeReads).toBeGreaterThan(0);
+	expect(messageReads).toBeGreaterThan(0);
 	// The retired index served every read the new one now does, and cost a write per event.
 	expect(await t.runtime.db.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'objective_events_objective'")).toBeUndefined();
 	expect(await t.runtime.db.get("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'objective_events_kind'")).toBeDefined();
