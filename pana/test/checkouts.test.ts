@@ -192,6 +192,71 @@ describe("GUARD-06 the admission check costs no process", () => {
 		expect(refusal("npm test")).toBeUndefined();
 	});
 
+	it("GUARD-06 admits graph/object queries and only explicit mixed-mode reads", () => {
+		const t = setup();
+		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
+		const queries = [
+			"merge-base HEAD HEAD", "merge-base --is-ancestor HEAD HEAD", "merge-base --fork-point HEAD",
+			"cherry HEAD", "name-rev HEAD", "show-ref --head", "count-objects -v",
+			"diff-tree HEAD", "diff-index HEAD", "diff-files",
+			"branch -avv", "branch --color", "branch --column", "branch --list -- 'm*'",
+			"branch", "branch -vv", "branch --show-current", "branch --list 'feature*'",
+			'branch --list --format="%(refname)"', 'tag --list --format="%(refname)"',
+			"branch --contains HEAD", 'branch --list --sort=-committerdate --format="%(refname)"',
+			"tag --list -- 'v*'", "tag", "tag --list 'v*'", "tag -n1", "tag --contains HEAD",
+			"remote -v show -n origin", "remote", "remote -v", "remote get-url --all origin", "remote show -n origin",
+			"worktree list", "worktree list --porcelain -z",
+			"config --file .git/config --get user.name", "config --get --type bool core.bare",
+			"config get --all user.name", "config --get user.name", "config --global --get-all user.name",
+			"config --get-regexp 'user.*'", "config --get-urlmatch http https://example.test",
+			"config --list --show-origin", "config get user.name", "config list --show-scope",
+		];
+		for (const query of queries) {
+			for (const prefix of [`git -C ${t.repo}`, `git --git-dir=${join(t.repo, ".git")}`]) {
+				expect(checkoutCommandRefusal(`${prefix} ${query}`, options), query).toBeUndefined();
+				// Peer checkouts get the same read permission, never the fast-forward exception.
+				expect(checkoutCommandRefusal(`${prefix} ${query}`, { ...options, noFastForward: options.checkouts }), query).toBeUndefined();
+			}
+		}
+		// Execute the original failing query only in a disposable repository.
+		expect(t.git(t.repo, ["merge-base", "HEAD", "HEAD"]).trim()).toBe(t.git(t.repo, ["rev-parse", "HEAD"]).trim());
+	});
+
+	it("GUARD-06 refuses mixed-mode mutations, combined write flags, and output files", () => {
+		const t = setup();
+		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
+		const writes = [
+			'branch --format "" created', "branch --format '' created",
+			'tag --format "" created-tag', "tag --format '' created-tag",
+			'branch --sort "" created-sort', "branch --sort '' created-sort",
+			'branch --format ""', "branch --format ''",
+			"branch --format @(a|b)", "branch --format *", "branch --sort ?", "tag --format [ab]", "branch --format {a,b}",
+			"branch feature", "branch -v feature", "branch -d feature", "branch -D feature",
+			"branch -m renamed", "branch -c copied", "branch --set-upstream-to=origin/main",
+			'branch --format="%(refname)" -D feature', 'tag --format="%(refname)" --delete v1',
+			'branch --list --format="%(refname)" --delete feature',
+			"branch --list -D feature", "branch --list --delete feature", "branch --list --future-mode",
+			"tag v1", "tag -a v1 -m release", "tag -d v1", "tag --list --delete v1",
+			"remote add origin https://example.test/repo", "remote remove origin", "remote rename origin upstream",
+			"remote set-url origin https://example.test/repo", "remote update", "remote prune origin",
+			"remote show --future-mode origin", "worktree add ../other", "worktree remove ../other",
+			"worktree move ../old ../new", "worktree lock ../other", "worktree unlock ../other",
+			"worktree prune", "worktree repair", "worktree list --future-mode",
+			"config user.name changed", "config --add user.name changed", "config --unset user.name",
+			"config --replace-all user.name changed", "config --edit", "config set user.name changed",
+			"config unset user.name", "config --get --unset user.name", "config --list --edit", "config --file .git/config --unset user.name",
+			"config --rename-section old new", "config --remove-section old", "config --get --future-mode user.name",
+			"diff --out\\\nput=tracked.txt",
+			"diff --output=tracked.txt", "log --output tracked.txt", "show --output=tracked.txt",
+		];
+		for (const write of writes) {
+			for (const prefix of [`git -C ${t.repo}`, `git --git-dir=${join(t.repo, ".git")}`]) {
+				expect(checkoutCommandRefusal(`${prefix} ${write}`, options), write).toBeDefined();
+			}
+		}
+		expect(checkoutCommandRefusal(`git -C ${t.repo} merge-base HEAD HEAD && git -C ${t.repo} branch -D feature`, options)).toBeDefined();
+	});
+
 	it("admits the fast-forward PRM-05 permits: fetch, and pull or merge pinned to --ff-only", () => {
 		const t = setup();
 		const checkouts = [realPath(t.repo)];

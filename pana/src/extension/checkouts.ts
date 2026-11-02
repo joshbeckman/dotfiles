@@ -220,7 +220,7 @@ export function checkoutCommandRefusal(
 		const root = inside(match[1]!);
 		if (root === undefined) continue;
 		const words = gitWords(command, match);
-		if (!READ_ONLY_GIT.has(words[0] ?? "")) return refusedGit(root, words[0] ?? "");
+		if (!readOnlyGit(words)) return refusedGit(root, words[0] ?? "");
 	}
 
 	for (const match of command.matchAll(REDIRECT)) {
@@ -262,15 +262,88 @@ const READ_ONLY_GIT = new Set([
 	"ls-files",
 	"ls-tree",
 	"cat-file",
-	"remote",
-	"branch",
-	"tag",
-	"worktree",
-	"config",
+	"merge-base",
+	"cherry",
+	"name-rev",
+	"show-ref",
+	"count-objects",
+	"diff-tree",
+	"diff-index",
+	"diff-files",
 	"check-ignore",
 	"for-each-ref",
 	"shortlog",
 ]);
+
+/**
+ * Mixed-mode commands must opt into a known query, not merely avoid known write flags.
+ * Unknown options stay refused (including future Git write modes). Both -C and --git-dir
+ * use this classifier; neither spelling grants branch/config/worktree mutations.
+ */
+function readOnlyGit(words: readonly string[]): boolean {
+	const [command, ...args] = words;
+	// Several otherwise read-only commands can redirect their output themselves.
+	if (args.some((arg) => /^--output(?:=|$)/.test(arg))) return false;
+	if (READ_ONLY_GIT.has(command ?? "")) return true;
+	switch (command) {
+		case "branch":
+		case "tag": {
+			const branch = command === "branch";
+			let listing = args.length === 0;
+			let operands = false;
+			let patterns = false;
+			for (let i = 0; i < args.length; i++) {
+				const arg = args[i]!;
+				if (arg === "--list" || arg === "-l") { listing = true; patterns = true; continue; }
+				if (arg === "--" && patterns) { operands ||= i + 1 < args.length; break; }
+				if (branch && /^(?:--show-current|--all|--remotes|-[arv]+|--verbose)$/.test(arg)) {
+					listing = true; continue;
+				}
+				if (/^--(?:contains|no-contains|merged|no-merged|points-at)(?:=|$)/.test(arg)) {
+					listing = true; patterns = true;
+					if (!arg.includes("=") && args[i + 1] && !args[i + 1]!.startsWith("-")) i++;
+					continue;
+				}
+				if (/^--(?:format|sort|color|column)=/.test(arg) ||
+					/^(?:--ignore-case|--column|--color|--no-column|--no-color)$/.test(arg)) continue;
+				if (/^--(?:format|sort)$/.test(arg)) {
+					if (!args[i + 1] || args[i + 1]!.startsWith("-")) return false;
+					i++; continue;
+				}
+				if (!branch && /^-n[0-9]*$/.test(arg)) { listing = true; patterns = true; continue; }
+				if (arg.startsWith("-")) return false;
+				operands = true;
+			}
+			return (listing || !operands) && (!operands || patterns);
+		}
+		case "worktree":
+			return args[0] === "list" && args.slice(1).every((arg) => ["--porcelain", "-z", "-v", "--verbose"].includes(arg));
+		case "remote":
+			while (args[0] === "-v" || args[0] === "--verbose") args.shift();
+			if (args.every((arg) => arg === "-v" || arg === "--verbose")) return true;
+			if (args[0] === "get-url") return args.slice(1).every((arg) => !arg.startsWith("-") || ["--all", "--push"].includes(arg));
+			if (args[0] === "show") return args.slice(1).every((arg) => !arg.startsWith("-") || arg === "-n");
+			return false;
+		case "config": {
+			let queries = 0;
+			for (let i = 0; i < args.length; i++) {
+				const arg = args[i]!;
+				if (/^--(?:get|get-all|get-regexp|get-urlmatch|list)$/.test(arg) ||
+					(i === 0 && ["get", "list"].includes(arg)) || arg === "-l") { queries++; continue; }
+				if (/^--(?:local|global|system|worktree|show-origin|show-scope|includes|no-includes|null|name-only|names|bool|int|bool-or-int|path|expiry-date)$/.test(arg) ||
+					arg === "-z" || (args[0] === "get" && arg === "--all") || /^--(?:type|default|file)=/.test(arg)) continue;
+				if (["--type", "--default", "--file", "-f"].includes(arg)) {
+					if (!args[i + 1] || args[i + 1]!.startsWith("-")) return false;
+					i++; continue;
+				}
+				if (arg.startsWith("-")) return false;
+			}
+			return queries === 1;
+		}
+		default:
+			return false;
+	}
+}
 
 /**
  * The subcommands a session may run in a checkout although they write, when they write only a
@@ -297,18 +370,50 @@ const REMOTE_URL = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|[^/\s:]+@[^/\s:]+:)/;
 /** The words of the git invocation `match` found, up to the next shell separator. */
 function gitWords(command: string, match: RegExpMatchArray): string[] {
 	const after = command.slice((match.index ?? 0) + match[0].length);
-	const segment = after.split(/&&|\|\||[;|`\n()]/)[0] ?? "";
-	return segment
-		.trim()
-		.split(/\s+/)
-		.map((word) => word.replace(/^["']|["']$/g, ""))
-		.filter((word) => word !== "");
+	// Keep quoted format strings intact: splitting at a quoted `(` can hide later write flags.
+	const words: string[] = [];
+	let word = "";
+	let started = false;
+	let quote = "";
+	for (let i = 0; i < after.length; i++) {
+		const char = after[i]!;
+		if (char === "\\" && quote !== "'") {
+			if (i + 1 === after.length) return [];
+			if (after[i + 1] === "\n") { i++; continue; }
+			word += after[++i];
+			started = true;
+			continue;
+		}
+		// Expansions need a real shell; this admission check cannot classify their result.
+		if ((char === "$" || char === "`") && quote !== "'") return [];
+		// Unquoted glob/brace expansion can turn one option value into a value plus ref names.
+		if (!quote && /[*?\[{}(]/.test(char)) return [];
+		if (quote) {
+			if (char === quote) quote = "";
+			else word += char;
+		} else if (char === '"' || char === "'") {
+			quote = char;
+			started = true;
+		} else if (/[;&|\n()]/.test(char)) {
+			break;
+		} else if (/\s/.test(char)) {
+			if (started) words.push(word);
+			word = "";
+			started = false;
+		} else {
+			word += char;
+			started = true;
+		}
+	}
+	if (quote) return [];
+	if (started) words.push(word);
+	return words;
 }
 
 /** Why this git invocation may not run against the checkout, or undefined when it may. */
 function gitRefusal(root: string, words: readonly string[], fastForward = true): string | undefined {
 	const subcommand = words[0] ?? "";
-	if (READ_ONLY_GIT.has(subcommand)) return undefined;
+	if (readOnlyGit(words)) return undefined;
 	const args = words.slice(1);
 	if (!fastForward) return `pana refused this command: ${root} belongs to another session. ` +
 		`The fast-forward exception does not apply. Run \`pana worktree add ${root}\` and use your own checkout.`;
