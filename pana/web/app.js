@@ -441,6 +441,29 @@ function stopEvents() {
 	state.eventAbort = undefined;
 }
 
+/**
+ * WEB-11: a phone suspends an app it was launched into instead of closing it, and the `/events`
+ * stream it left open never delivers again — the read just never returns, so nothing retries.
+ * The stream therefore follows visibility: out of sight lets it go, and coming back opens a new
+ * one and re-reads what the deliveries the app missed would have redrawn (REF-06).
+ */
+let eventsPaused = false;
+
+function pauseEvents() {
+	eventsPaused = true;
+	stopEvents();
+}
+
+async function resumeApp() {
+	// A click that only focuses the window arrives no other way (PSH-05).
+	await followClick().catch(() => {});
+	if (!eventsPaused || !token || document.visibilityState === "hidden") return;
+	eventsPaused = false;
+	startEvents();
+	await refreshUnread().catch(() => {});
+	if (state.section === "inbox") await loadInbox().catch(fail);
+}
+
 function appendEntry(entry) {
 	const transcript = $("transcript");
 	// A live entry can also arrive in the transcript a reload just fetched.
@@ -4151,10 +4174,15 @@ document.addEventListener("click", (event) => {
 });
 window.addEventListener("hashchange", () => void route());
 window.addEventListener("online", () => void startEvents());
-// A click that only focuses the window arrives no other way (PSH-05).
-window.addEventListener("focus", () => void followClick().catch(() => {}));
+// Coming back into view, by any of the ways a browser says so (WEB-11, PSH-05).
+window.addEventListener("focus", () => void resumeApp().catch(() => {}));
+window.addEventListener("pageshow", (event) => {
+	if (event.persisted) void resumeApp().catch(() => {});
+});
+window.addEventListener("pagehide", () => pauseEvents());
 document.addEventListener("visibilitychange", () => {
-	if (document.visibilityState === "visible") void followClick().catch(() => {});
+	if (document.visibilityState === "hidden") pauseEvents();
+	else void resumeApp().catch(() => {});
 });
 
 // The thread from a notification click arrives as `?thread=<id>` (PSH-03).
