@@ -10,10 +10,8 @@
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { Extension, ModelRef, ToolRegistration } from "@earendil-works/pi-durable";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
@@ -24,9 +22,8 @@ import { assertObjectiveOpen, objectiveUrl, recordObjectiveEvent } from "../obje
 import { overDomainBudget } from "./budget.ts";
 import type { SessionRow } from "./runtime.ts";
 import { setSessionState } from "./state.ts";
+import { addWorktree } from "../worktrees/index.ts";
 import { ensureScratch } from "../scratch/index.ts";
-
-const run = promisify(execFile);
 
 export const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const DEFAULT_PROFILE = "default";
@@ -177,20 +174,6 @@ function directory(path: string, field: string): string {
 	return full;
 }
 
-/** SES-04: `git worktree add` under `<state>/worktrees/<id>` from the repo at `repo`. */
-async function createWorktree(runtime: Runtime, repo: string, id: string): Promise<string> {
-	const root = join(runtime.paths.dir, "worktrees");
-	mkdirSync(root, { recursive: true });
-	const path = join(root, id);
-	try {
-		await run("git", ["-C", repo, "worktree", "add", "-q", "-b", `pana/${id}`, path, "HEAD"]);
-	} catch (error) {
-		const stderr = (error as { stderr?: string }).stderr?.trim();
-		throw ApiError.badRequest("invalid_cwd", `cannot create a worktree from ${repo}: ${stderr || (error as Error).message}`);
-	}
-	return path;
-}
-
 export interface CreatedSession extends ThreadResult {
 	session: SessionRow;
 }
@@ -256,7 +239,7 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	let cwd: string | undefined;
 	if (profile.cwd === WORKTREE) {
 		if (cwdFlag === undefined) throw ApiError.badRequest("missing_cwd", `profile ${profileName} makes a worktree: pass --cwd REPO`);
-		cwd = await createWorktree(runtime, directory(cwdFlag, "cwd"), id);
+		cwd = (await addWorktree(runtime, id, { repo: directory(cwdFlag, "cwd") })).path;
 	} else {
 		const dir = cwdFlag ?? profile.cwd;
 		// SCR-02: with neither a flag nor a profile, the session starts in its own scratch, which
