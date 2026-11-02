@@ -14,14 +14,19 @@
 // panad's own request log (SRV-01), so it covers the sessions' tool calls too.
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import type { DatabaseSync as Database } from "node:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { request, type ApiResponse } from "../../src/api/client.ts";
+import { ulid } from "../../src/ids/index.ts";
 import { checkDatabase, failedRequests, type CheckResult, type LoggedRequest } from "./checks.ts";
 import { BENCH_MODEL } from "./model.ts";
+
+// Vitest's resolver drops the `node:` prefix of builtins it does not know, and `sqlite` is one.
+const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const DOMAIN = "bench.example";
@@ -44,6 +49,12 @@ export interface BenchOptions {
 	listSamples: number;
 	/** Page size for the list phase. */
 	pageSize: number;
+	/** Objectives to seed before timing the objective read routes; 0 skips the phase. */
+	objectives: number;
+	/** `objective_events` rows each seeded objective carries. */
+	objectiveEvents: number;
+	/** Timed requests per objective read route. */
+	objectiveSamples: number;
 	keep: boolean;
 	/** Give up on a phase after this long. */
 	timeoutMs: number;
@@ -63,6 +74,9 @@ export const DEFAULTS: BenchOptions = {
 	listThreads: 0,
 	listSamples: 50,
 	pageSize: 50,
+	objectives: 0,
+	objectiveEvents: 2000,
+	objectiveSamples: 50,
 	keep: false,
 	timeoutMs: 600_000,
 };
@@ -417,6 +431,11 @@ async function benchIn(state: string, options: BenchOptions): Promise<BenchResul
 		if (options.listThreads > 0) {
 			lists.push(...(await listPhase(call, sessionIds, options, log)));
 		}
+
+		// 6. Objectives (opt-in): seed them by direct SQL, then time the reads a person makes.
+		if (options.objectives > 0) {
+			await objectivePhase(state, call, sessionIds, options, log);
+		}
 		rssEnd = await rssKb(child.process.pid!);
 	} finally {
 		sampling = false;
@@ -524,6 +543,79 @@ const LIST_KEYS: Record<(typeof LIST_ROUTES)[number], string> = {
 interface Page {
 	items: unknown[];
 	nextCursor?: string | null;
+}
+
+/**
+ * 6. Objectives (opt-in, `--objectives K`): seed K active objectives with `--objective-events` rows
+ * each by direct SQL, then time the three reads a person actually makes. Seeding is deliberately
+ * not timed and not routed: the point is the read plan at realistic size, not the writers. The
+ * route timings land in the same `routes` table as every other phase, from panad's request log.
+ */
+async function objectivePhase(state: string, call: Call, sessionIds: readonly string[], options: BenchOptions, log: (line: string) => void): Promise<void> {
+	const sqlite = join(state, "pana.sqlite");
+	log(`objectives: seeding ${options.objectives} objectives with ${options.objectiveEvents} events each, then ${options.objectiveSamples} reads each`);
+	const ids: string[] = [];
+	const db: Database = new DatabaseSync(sqlite);
+	db.exec("PRAGMA busy_timeout = 10000");
+	try {
+		db.exec("BEGIN IMMEDIATE");
+		const insertThread = db.prepare("INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, ?, ?, ?)");
+		const insertMember = db.prepare("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)");
+		const insertObjective = db.prepare(
+			`INSERT INTO objectives (id, goal, phase, creator_id, lead_id, thread_id, autonomy, max_daily_usd, max_total_usd, max_daily_lead_turns, max_active_members, charter_rev, created_at, updated_at)
+			 VALUES (?, ?, 'active', ?, ?, ?, 'auto', 2, 8, 30, 3, 1, ?, ?)`,
+		);
+		const assign = db.prepare("UPDATE sessions SET objective_id = ? WHERE id = ?");
+		const insertCharter = db.prepare("INSERT INTO objective_charter_revisions (id, objective_id, rev, section, body, created_by, created_at) VALUES (?, ?, 1, 'Notes', ?, ?, ?)");
+		const insertMetric = db.prepare("INSERT INTO objective_metrics (objective_id, name, unit, direction, created_at) VALUES (?, 'latency', 'ms', 'down', ?)");
+		const insertReading = db.prepare("INSERT INTO metric_readings (id, objective_id, name, at, value, source) VALUES (?, ?, 'latency', ?, ?, 'check')");
+		const insertEvent = db.prepare("INSERT INTO objective_events (id, objective_id, at, kind, detail, actor_id) VALUES (?, ?, ?, ?, ?, NULL)");
+		const now = Date.now();
+		const kinds = ["run.started", "run.ended", "member.created", "run.refused", "budget", "charter.set", "stranded", "escalated"];
+		for (let index = 0; index < options.objectives; index++) {
+			const id = ulid();
+			const threadId = ulid();
+			const lead = sessionIds[index % sessionIds.length]!;
+			insertThread.run(threadId, `bench objective ${index}`, USER, now);
+			insertMember.run(threadId, USER, now);
+			insertMember.run(threadId, lead, now);
+			insertObjective.run(id, `bench objective ${index}: keep the meter readings honest`, USER, lead, threadId, now, now);
+			// The roster: sessions carry the objective (OBJ-15), so this is the read's member list.
+			for (let slot = 0; slot < 3; slot++) assign.run(id, sessionIds[(index * 3 + slot) % sessionIds.length]!);
+			insertCharter.run(ulid(), id, `Objective ${index} notes: measure first, then decide.`, USER, now);
+			insertMetric.run(id, now);
+			insertReading.run(ulid(), id, now, 12.5);
+			for (let event = 0; event < options.objectiveEvents; event++) {
+				const kind = kinds[event % kinds.length]!;
+				const at = now - (options.objectiveEvents - event) * 60_000;
+				const session = sessionIds[(index + (event % 3)) % sessionIds.length]!;
+				const detail =
+					kind === "run.started"
+						? { session, run: `run-${event}`, lead: session === lead ? 1 : 0 }
+						: kind === "run.ended"
+							? { session, run: `run-${event}` }
+							: kind === "member.created"
+								? { session, run: `run-${event}`, member: sessionIds[event % sessionIds.length] }
+								: kind === "budget"
+									? { condition: "budget_day" }
+									: kind === "charter.set"
+										? { section: "Notes" }
+										: { session };
+				insertEvent.run(ulid(), id, at, kind, JSON.stringify(detail));
+			}
+			ids.push(id);
+		}
+		db.exec("COMMIT");
+	} finally {
+		db.close();
+	}
+
+	for (let sample = 0; sample < options.objectiveSamples; sample++) {
+		const id = ids[sample % ids.length]!;
+		must(await call("GET", "/objectives"), "objectives list");
+		must(await call("GET", `/objectives/${id}`), "objective show");
+		must(await call("GET", `/objectives/${id}/brief`), "objective brief");
+	}
 }
 
 async function listPhase(call: Call, sessionIds: readonly string[], options: BenchOptions, log: (line: string) => void): Promise<ListResult[]> {

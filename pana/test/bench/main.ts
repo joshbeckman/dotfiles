@@ -15,6 +15,9 @@ const FLAGS: Record<string, keyof BenchOptions> = {
 	"--list-threads": "listThreads",
 	"--list-samples": "listSamples",
 	"--page-size": "pageSize",
+	"--objectives": "objectives",
+	"--objective-events": "objectiveEvents",
+	"--objective-samples": "objectiveSamples",
 	"--timeout-ms": "timeoutMs",
 };
 
@@ -36,6 +39,9 @@ Options (defaults in brackets):
   --latency-ms MS    faux model latency per request [${DEFAULTS.latencyMs}]
   --list-threads T   grow the inbox to T threads, then time the list routes [off]
   --list-samples S   timed first-page requests per list route [${DEFAULTS.listSamples}]
+  --objectives K     seed K active objectives with events, then time the objective reads [off]
+  --objective-events N  objective_events rows each seeded objective carries [${DEFAULTS.objectiveEvents}]
+  --objective-samples S timed requests per objective read route [${DEFAULTS.objectiveSamples}]
   --page-size P      list page size [${DEFAULTS.pageSize}]
   --timeout-ms MS    give up waiting for an answer after this long [${DEFAULTS.timeoutMs}]
   --json             print the result as JSON
