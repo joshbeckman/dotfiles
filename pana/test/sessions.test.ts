@@ -292,7 +292,7 @@ describe("session create", () => {
 			create: ["git", "-C", "{repo}", "worktree", "add", "-qb", "{branch}", "{path}", "HEAD"] }];
 		writeFileSync(join(t!.runtime.paths.profiles, "managed.json"), JSON.stringify({ cwd: "worktree" }));
 		const res = await create({ prompt: "hi", profile: "managed", cwd: repo });
-		expect(res.session.cwd).toContain(`/managed/pana-${res.session.id}-`);
+		expect(res.session.cwd).toContain(`/managed/pana-${res.session.id.toLowerCase()}-`);
 		expect(res.session.cwd).toMatch(/\/src$/);
 		expect(existsSync(join(res.session.cwd!, "README.md"))).toBe(true);
 		await settled(res.session.id);

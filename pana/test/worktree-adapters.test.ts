@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addWorktree } from "../src/worktrees/index.ts";
-import { ownedPaths, owners } from "../src/worktrees/ownership.ts";
+import { ownedPaths, owners, saveOwner } from "../src/worktrees/ownership.ts";
 import { realPath, resetCheckoutScan } from "../src/extension/checkouts.ts";
 import { PanaExecutionEnv } from "../src/extension/env.ts";
 import { loadConfig } from "../src/config/index.ts";
@@ -67,6 +67,27 @@ describe("GUARD-07 managed worktrees", () => {
 		expect(t.git(first.path, ["branch", "--show-current"])).toBe(first.branch);
 		expect(ownedPaths(t.state, "alice")).toEqual([first.path]);
 		expect(await addWorktree(t.runtime, "alice", { repo: t.repo })).toEqual({ ...first, created: false });
+	});
+
+	it("requests lowercase external IDs before a normalizing materializer creates an uppercase session/name tree", async () => {
+		const t = fixture();
+		const script = t.adapter.create[1]!;
+		writeFileSync(script, readFileSync(script, "utf8")
+			.replace("{dirname}", "{dirname,basename,join}")
+			.replace("const [repo,path,branch] = process.argv.slice(2);", "const [repo,requestedPath,branch] = process.argv.slice(2); const path = join(dirname(dirname(requestedPath)),basename(dirname(requestedPath)).toLowerCase(),basename(requestedPath));"));
+		const result = await addWorktree(t.runtime, "01HZZZZZZZZZZZZZZZZZZZZZZZ", { repo: t.repo, name: "REPO" });
+		expect(result.path).toBe(join(t.root, "pana-01hzzzzzzzzzzzzzzzzzzzzzzz-repo", "src"));
+		expect(result.branch).toBe("pana/01HZZZZZZZZZZZZZZZZZZZZZZZ/REPO");
+		expect(ownedPaths(t.state, "01HZZZZZZZZZZZZZZZZZZZZZZZ")).toEqual([result.path]);
+		expect((await addWorktree(t.runtime, "01HZZZZZZZZZZZZZZZZZZZZZZZ", { repo: t.repo, name: "REPO" })).created).toBe(false);
+	});
+
+	it("reuses a previously verified owned adapter tree with a case-preserving ID", async () => {
+		const t = fixture(); const legacy = join(t.root, "pana-ALICE-REPO", "src");
+		t.git(t.repo, ["worktree", "add", "-qb", "legacy-case", legacy]);
+		saveOwner(t.state, "legacy-case", { session: "ALICE", path: legacy, common: join(t.repo, ".git") });
+		const result = await addWorktree(t.runtime, "ALICE", { repo: t.repo, name: "REPO" });
+		expect(result.path).toBe(legacy); expect(result.created).toBe(false); expect(result.branch).toBe("legacy-case");
 	});
 
 	it("protects a newly registered peer tree even when the scan is cached", async () => {
