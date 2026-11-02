@@ -9,16 +9,17 @@ import { err, ExecutionError, FileError } from "@earendil-works/pi-durable/env";
 import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
 import { homedir, userInfo } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { memoryFor } from "../memory/handlers.ts";
 import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { checkoutCommon, owners, type WorktreeOwner } from "../worktrees/ownership.ts";
 import { browserScope } from "./browser.ts";
 import type { CheckoutGuard } from "../config/index.ts";
 import {
-	blockedCheckout,
+	primaryCheckoutOf,
 	checkoutCommandRefusal,
 	primaryCheckoutRefusal,
 	primaryCheckouts,
@@ -56,6 +57,9 @@ export interface PanaEnvOptions {
 	protectCheckouts?: CheckoutGuard;
 	/** Where to scan for primary checkouts (GUARD-04). HOME by default; a test names its own root. */
 	checkoutRoots?: readonly string[];
+	/** Managed tree roots, scanned independently of HOME depth. */
+	managedRoots?: readonly string[];
+	managedLayouts?: readonly { root: string; subdir?: string }[];
 }
 
 export const PANA_BIN = fileURLToPath(new URL("../../bin", import.meta.url));
@@ -140,11 +144,19 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 	readonly protectCheckouts: CheckoutGuard;
 	/** GUARD-04: the roots the read-only scan covers. */
 	readonly checkoutRoots: readonly string[];
+	readonly stateDir?: string;
+	readonly sessionId?: string;
+	readonly managedRoots: readonly string[];
+	readonly managedLayouts: readonly { root: string; subdir?: string }[];
 	/** undefined until the first wrapped command says whether this machine can make a namespace. */
 	private namespace: boolean | undefined = undefined;
 
 	constructor(options: PanaEnvOptions) {
 		super({ cwd: options.cwd });
+		this.stateDir = options.stateDir;
+		this.sessionId = options.sessionId;
+		this.managedRoots = options.managedRoots ?? [];
+		this.managedLayouts = options.managedLayouts ?? [];
 		this.panaEnv = panaShellEnv(options);
 		this.sessionCwd = realPath(options.cwd);
 		this.home = options.home ?? homedir();
@@ -155,7 +167,8 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 	/** GUARD-01: the refusal for a write to `path`, or undefined when the write may proceed. */
 	private refusal(path: string): string | undefined {
 		if (this.protectCheckouts === "off") return undefined;
-		const root = blockedCheckout(path, this.sessionCwd);
+		const root = primaryCheckoutOf(path, true);
+		if (root !== undefined && this.allowed(root)) return undefined;
 		return root === undefined ? undefined : primaryCheckoutRefusal(path, root);
 	}
 
@@ -207,16 +220,43 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 		return super.createDir(path, options, context);
 	}
 
-	/** The user's checkouts this session may not write, a scan that is cached for ten minutes (GUARD-04). */
-	private checkouts(): string[] {
-		if (this.protectCheckouts === "off") return [];
-		return primaryCheckouts({ roots: this.checkoutRoots }).filter((root) => !under(root, this.sessionCwd));
+	private allowed(root: string, receipts?: readonly WorktreeOwner[]): boolean {
+		if (this.stateDir && this.sessionId) {
+			const state = realPath(this.stateDir);
+			for (const group of [join(state, "worktrees"), join(state, "memory", "worktrees")]) {
+				if (!under(group, root)) continue;
+				const namespace = join(group, this.sessionId);
+				// A symlink must not turn Alice's legacy ownership boundary into Bob's.
+				return realPath(namespace) === namespace && under(namespace, root) && checkoutCommon(root) !== undefined;
+			}
+			const matching = (receipts ?? owners(this.stateDir)).filter((o) => under(o.path, root));
+			if (matching.length) return matching.every((o) => o.session === this.sessionId && checkoutCommon(o.path) === o.common);
+		}
+		// A cwd inside this checkout is explicit authority; an ancestor of many checkouts is not.
+		return under(root, this.sessionCwd);
 	}
 
-	/** GUARD-02: the checkouts to bind read-only, which is every one the session may not write. */
-	private mounts(): string[] {
-		if (this.protectCheckouts !== "sandbox" || this.namespace === false) return [];
-		return primaryCheckouts({ roots: this.checkoutRoots }).filter((root) => !under(root, this.sessionCwd));
+	private managedCheckouts(): string[] {
+		const result: string[] = [];
+		for (const layout of this.managedLayouts) {
+			let entries: string[];
+			try { entries = readdirSync(layout.root); } catch { continue; }
+			for (const name of entries) {
+				const path = realPath(join(layout.root, name, layout.subdir ?? ""));
+				// Follow the configured layout exactly, even if subdir is deep or named build.
+				if (primaryCheckoutOf(path, true) === path) result.push(path);
+			}
+		}
+		return result;
+	}
+
+	private checkouts(receipts: readonly WorktreeOwner[]): string[] {
+		if (this.protectCheckouts === "off") return [];
+		const roots = [...this.checkoutRoots, ...this.managedRoots];
+		if (this.stateDir) roots.push(join(this.stateDir, "worktrees"), join(this.stateDir, "memory", "worktrees"));
+		// Receipts bypass the scan TTL: a newly created peer tree is protected immediately.
+		const registered = receipts.map((o) => o.path);
+		return [...new Set([...primaryCheckouts({ roots, depth: 5, includeLinked: true }), ...this.managedCheckouts(), ...registered])].filter((root) => !this.allowed(root, receipts));
 	}
 
 	override async exec(
@@ -231,15 +271,27 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 		};
 		// GUARD-06: the admission check every call gets, which costs string work rather than a
 		// process. `sandbox` adds GUARD-02's mounts on top, for what the check cannot see.
+		let checkouts: string[] = [];
 		if (this.protectCheckouts !== "off") {
+			const receipts = this.stateDir ? owners(this.stateDir) : [];
+			const cwdRoot = primaryCheckoutOf(this.cwd, true);
+			if (cwdRoot && !this.allowed(cwdRoot, receipts)) {
+				return err(new ExecutionError("unknown", `pana refused execution in an unowned checkout: ${cwdRoot}. Use your own worktree as cwd.`));
+			}
+			checkouts = this.checkouts(receipts);
+			const peerPaths = new Set(receipts.filter((o) => o.session !== this.sessionId).map((o) => o.path));
 			const refusal = checkoutCommandRefusal(typeof command === "string" ? command : command.join(" "), {
 				cwd: this.cwd,
 				home: this.home,
-				checkouts: this.checkouts(),
+				checkouts,
+				noFastForward: this.stateDir ? checkouts.filter((root) =>
+					under(realPath(join(this.stateDir!, "worktrees")), root) ||
+					under(realPath(join(this.stateDir!, "memory", "worktrees")), root) ||
+					peerPaths.has(root)) : [],
 			});
 			if (refusal !== undefined) return err(new ExecutionError("unknown", refusal));
 		}
-		const mounts = this.mounts();
+		const mounts = this.protectCheckouts === "sandbox" && this.namespace !== false ? checkouts : [];
 		if (mounts.length === 0) return super.exec(command, execOptions, context);
 		const result = await super.exec(namespaced(mounts, command), execOptions, context);
 		if (result.ok || !namespaceUnavailable(result.error)) {
@@ -284,6 +336,7 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 			sessionId: row?.id,
 			scratchDir: scratch,
 			stateDir: runtime.paths.dir,
+			managedLayouts: runtime.config.worktreeAdapters,
 			protectCheckouts: runtime.config.tools.protectCheckouts,
 		});
 	};

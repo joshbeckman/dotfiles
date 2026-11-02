@@ -83,7 +83,7 @@ describe("GUARD-01 the file tools refuse the user's checkout", () => {
 		const t = setup();
 		const wt = join(t.scratch, "dotfiles-worktree");
 		t.git(t.repo, ["worktree", "add", "-q", "-b", "pana/work", wt, "HEAD"]);
-		const e = env({ home: t.home, cwd: t.scratch });
+		const e = env({ home: t.home, cwd: wt });
 
 		const refused = await e.writeFile(join(t.home, "pana", "new-file.txt"), "nope", ctx);
 		expect(refused.ok).toBe(false);
@@ -121,7 +121,7 @@ describe("GUARD-02 sandbox mode cannot write to the checkout", () => {
 		const t = setup();
 		const wt = join(t.scratch, "worktree");
 		t.git(t.repo, ["worktree", "add", "-q", "-b", "pana/bash", wt, "HEAD"]);
-		const e = env({ home: t.home, cwd: t.scratch, protect: "sandbox" });
+		const e = env({ home: t.home, cwd: wt, protect: "sandbox" });
 		// `$TARGET` is unreadable to the string check, so only the read-only mount can refuse it.
 		const script = ["sh", "-c", `printf nope > "$TARGET"`];
 
@@ -330,7 +330,7 @@ describe("GUARD-03 pana worktree add", () => {
 		const runtime = { paths: { dir: state } } as unknown as Runtime;
 		const first = await addWorktree(runtime, "01HZZZZZZZZZZZZZZZZZZZZZZZ", { repo: join(t.home, "pana") });
 		expect(first.created).toBe(true);
-		expect(first.path).toBe(join(state, "worktrees", "01HZZZZZZZZZZZZZZZZZZZZZZZ", "dotfiles"));
+		expect(first.path).toBe(join(realPath(state), "worktrees", "01HZZZZZZZZZZZZZZZZZZZZZZZ", "dotfiles"));
 		expect(first.branch).toBe("pana/01HZZZZZZZZZZZZZZZZZZZZZZZ/dotfiles");
 		expect(existsSync(join(first.path, "tracked.txt"))).toBe(true);
 

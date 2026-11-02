@@ -64,6 +64,18 @@ export interface ObjectivesConfig {
 	wakeMinMinutes: number;
 }
 
+/** Machine-local integration for repositories with a managed tree lifecycle. No shell evaluation. */
+export interface WorktreeAdapter {
+	/** Absolute shared git directory (`git rev-parse --git-common-dir`). */
+	repo: string;
+	/** Absolute directory containing managed trees. */
+	root: string;
+	/** Checkout directory within each tree, e.g. "src". */
+	subdir?: string;
+	/** Executable and arguments; placeholders: {name}, {branch}, {path}, {repo}. */
+	create: string[];
+}
+
 export interface Config {
 	domain: string;
 	user: string;
@@ -77,6 +89,7 @@ export interface Config {
 	tools: ToolsConfig;
 	scratch: ScratchConfig;
 	objectives: ObjectivesConfig;
+	worktreeAdapters?: WorktreeAdapter[];
 }
 
 export const DEFAULTS = {
@@ -140,6 +153,7 @@ export function loadConfig(dir = stateDir()): Config {
 	const maxTotalMB = positive(scratch.maxTotalMB, "scratch.maxTotalMB", "megabytes");
 
 	return {
+		worktreeAdapters: worktreeAdapters(obj.worktreeAdapters),
 		domain: obj.domain,
 		user: obj.user,
 		timezone: typeof obj.timezone === "string" ? obj.timezone : systemTimezone(),
@@ -175,6 +189,23 @@ export function loadConfig(dir = stateDir()): Config {
 				positive(objectives.wakeMinMinutes, "objectives.wakeMinMinutes", "minutes") ?? DEFAULTS.objectives.wakeMinMinutes,
 		},
 	};
+}
+
+function worktreeAdapters(value: unknown): WorktreeAdapter[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new ConfigError("worktreeAdapters must be an array", 2);
+	return value.map((item) => {
+		if (!item || typeof item !== "object" ||
+			typeof item.repo !== "string" || !item.repo.startsWith("/") ||
+			typeof item.root !== "string" || !item.root.startsWith("/") ||
+			!Array.isArray(item.create) || item.create.length === 0 ||
+			item.create.some((arg: unknown) => typeof arg !== "string" || arg.length === 0) ||
+			(item.subdir !== undefined && (typeof item.subdir !== "string" ||
+				!item.subdir || item.subdir.startsWith("/") || item.subdir.split("/").some((p: string) => p === "." || p === "..")))) {
+			throw new ConfigError("worktreeAdapters entries require absolute repo/root, relative subdir, and nonempty create argv", 2);
+		}
+		return { repo: item.repo, root: item.root, subdir: item.subdir, create: item.create };
+	});
 }
 
 /** `tools.protectCheckouts`: a mode name, or a boolean where `true` means the default mode. */

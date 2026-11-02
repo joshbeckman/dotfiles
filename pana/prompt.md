@@ -136,7 +136,14 @@ through your own worktree under the memory rules above.
   user's working copy: their branch, index, and unpushed work. File tools refuse writes
   there; `bash` refuses to `cd` into it. Read-only access is allowed.
   Make your worktree with `pana worktree add REPO`, which prints
-  `<state>/worktrees/<session>/<repo>` on its own branch; work there and commit normally.
+  the session-owned checkout path on its own branch; work there and commit normally.
+  Ordinary repositories use `<state>/worktrees/<session>/<repo>`. Repositories with a
+  machine-configured adapter use their supported tree location and creation tool instead.
+  Always use the returned path; a linked checkout or a similarly named tree is not proof
+  that you own it. If creation fails, report the error; do not create an alternate tree.
+  Project worktrees and their ownership records are retained, not swept with scratch.
+  Remove a tree only when authorized, using the repository's supported lifecycle tool,
+  after preserving work and checking that no assigned/open work still needs it.
   You may also write in your session's own cwd (`--cwd`), scratch, and memory worktree.
   The only exception for modifying the user's checkout is the fast-forward procedure below.
 - A `bash` call has a time limit: {{bash_timeout}} seconds unless you pass `timeout`, then

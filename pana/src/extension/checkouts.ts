@@ -2,8 +2,8 @@
 //
 // The primary checkout is the user's own working copy: its branch, its index, its unpushed work.
 // A session that edits it leaves changes the user never asked for, tests the wrong build (panad
-// runs from it), and can commit to the user's branch by accident. A linked worktree (`.git` is a
-// file) and a session's own scratch are that session's to dirty; a primary checkout is not.
+// runs from it), and can commit to the user's branch by accident. Linked worktrees need ownership
+// checks too; env.ts combines discovery here with receipts and legacy session namespaces.
 //
 // `primaryCheckoutOf` answers "which primary checkout is this path in" for one path, which is the
 // guard for the file tools. `primaryCheckouts` lists the checkouts under a root, which is what
@@ -78,11 +78,12 @@ function isPrimary(dir: string): boolean {
  * The root of the primary checkout containing `path`, or undefined outside one (including inside
  * a linked worktree, whose `.git` is a file, and inside a scratch directory).
  */
-export function primaryCheckoutOf(path: string): string | undefined {
+export function primaryCheckoutOf(path: string, includeLinked = false): string | undefined {
 	for (let dir = realPath(path); ; dir = dirname(dir)) {
 		try {
 			// A `.git` file is a linked worktree or a submodule: someone else's checkout, not the primary.
-			return statSync(join(dir, ".git")).isDirectory() ? dir : undefined;
+			const marker = statSync(join(dir, ".git"));
+			return includeLinked || marker.isDirectory() ? dir : undefined;
 		} catch {
 			// No `.git` here: keep walking up.
 		}
@@ -113,6 +114,7 @@ export interface ScanOptions {
 	/** Where to look; HOME by default. */
 	roots?: readonly string[];
 	depth?: number;
+	includeLinked?: boolean;
 }
 
 let cached: { key: string; at: number; checkouts: string[] } | undefined;
@@ -121,7 +123,7 @@ let cached: { key: string; at: number; checkouts: string[] } | undefined;
 export function primaryCheckouts(options: ScanOptions = {}, now = Date.now()): string[] {
 	const roots = (options.roots ?? [homedir()]).map(realPath);
 	const depth = options.depth ?? SCAN_DEPTH;
-	const key = `${roots.join("\n")}|${depth}`;
+	const key = `${roots.join("\n")}|${depth}|${options.includeLinked ?? false}`;
 	if (cached && cached.key === key && now - cached.at < SCAN_TTL_MS) return cached.checkouts;
 
 	const found: string[] = [];
@@ -130,7 +132,10 @@ export function primaryCheckouts(options: ScanOptions = {}, now = Date.now()): s
 	return found;
 
 	function walk(dir: string, level: number): void {
-		if (isPrimary(dir)) found.push(dir);
+		if (isPrimary(dir) || (options.includeLinked && primaryCheckoutOf(dir, true) === dir)) {
+			found.push(dir);
+			return;
+		}
 		if (level >= depth) return;
 		let entries;
 		try {
@@ -157,8 +162,8 @@ export function resetCheckoutScan(): void {
  */
 export function primaryCheckoutRefusal(path: string, root: string): string {
 	return (
-		`pana refused this write: ${path} is inside ${root}, the user's primary checkout of a git repository, ` +
-		`not a worktree. Work in a worktree of it instead: run \`pana worktree add ${root}\`, then edit files ` +
+		`pana refused this write: ${path} is inside ${root}, a checkout not owned by this session. ` +
+		`Work in your own worktree instead: run \`pana worktree add ${root}\`, then edit files ` +
 		"under the path it prints. Reading the checkout is still allowed, and a worktree is the same repository, " +
 		"so its tests, builds, and git commands behave as they would here."
 	);
@@ -187,7 +192,7 @@ export function primaryCheckoutRefusal(path: string, root: string): string {
  */
 export function checkoutCommandRefusal(
 	command: string,
-	options: { cwd: string; home: string; checkouts: readonly string[] },
+	options: { cwd: string; home: string; checkouts: readonly string[]; noFastForward?: readonly string[] },
 ): string | undefined {
 	if (options.checkouts.length === 0) return undefined;
 	const checkouts = options.checkouts;
@@ -207,7 +212,7 @@ export function checkoutCommandRefusal(
 	for (const match of command.matchAll(GIT_C)) {
 		const root = inside(match[1]!);
 		if (root === undefined) continue;
-		const refusal = gitRefusal(root, gitWords(command, match));
+		const refusal = gitRefusal(root, gitWords(command, match), !options.noFastForward?.includes(root));
 		if (refusal !== undefined) return refusal;
 	}
 
@@ -301,10 +306,12 @@ function gitWords(command: string, match: RegExpMatchArray): string[] {
 }
 
 /** Why this git invocation may not run against the checkout, or undefined when it may. */
-function gitRefusal(root: string, words: readonly string[]): string | undefined {
+function gitRefusal(root: string, words: readonly string[], fastForward = true): string | undefined {
 	const subcommand = words[0] ?? "";
 	if (READ_ONLY_GIT.has(subcommand)) return undefined;
 	const args = words.slice(1);
+	if (!fastForward) return `pana refused this command: ${root} belongs to another session. ` +
+		`The fast-forward exception does not apply. Run \`pana worktree add ${root}\` and use your own checkout.`;
 	if (subcommand === "fetch") {
 		// A refspec with a destination (`main:refs/heads/main`) moves a local ref, which is the
 		// user's branch as far as this guard is concerned, so only the fetch itself is admitted.
@@ -336,8 +343,8 @@ function tokenTarget(token: string, cwd: string, home: string): string | undefin
 function refusedGit(root: string, subcommand: string): string {
 	const command = subcommand === "" ? "this command" : `\`git -C ${root} ${subcommand}\``;
 	return (
-		`pana refused this command: ${command} writes in ${root}, the user's primary checkout of a git ` +
-		"repository, not a worktree. A fast-forward is the one write a session may run there, and only when " +
+		`pana refused this command: ${command} writes in ${root}, a checkout not owned by this session. ` +
+		"A fast-forward is the one write a session may run there, and only when " +
 		`the user asked for it: \`git -C ${root} fetch <remote>\`, compare the incoming paths with the ` +
 		"checkout's staged, unstaged, and untracked files (PRM-05), then run " +
 		`\`git -C ${root} pull --ff-only --no-autostash <verified-remote> <inspected-commit>\`; ` +
@@ -350,8 +357,8 @@ function refusedGit(root: string, subcommand: string): string {
 
 function refusedEntry(root: string): string {
 	return (
-		`pana refused this command: it enters ${root}, the user's primary checkout of a git repository, ` +
-		`not a worktree. Work in a worktree instead: run \`pana worktree add ${root}\`, then \`cd\` to the path ` +
+		`pana refused this command: it enters ${root}, a checkout not owned by this session. ` +
+		`Work in your own worktree instead: run \`pana worktree add ${root}\`, then \`cd\` to the path ` +
 		"it prints and run the command there. Reading the checkout is still allowed by naming the file, as in " +
 		`\`grep -n something ${root}/README.md\`.`
 	);

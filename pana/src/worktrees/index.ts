@@ -3,13 +3,16 @@
 // The guard keeps a session out of the user's primary checkout (extension/checkouts.ts), and the
 // read-only mount keeps `git worktree add` itself out of it too — the primary's `.git` is exactly
 // what that command writes. So the one command a refused session needs runs here, in panad, where
-// nothing is mounted read-only: `<state>/worktrees/<session>/<repo>` on its own branch.
+// nothing is mounted read-only. Managed repositories use a machine-configured creation adapter.
 
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
+import { realPath } from "../extension/checkouts.ts";
+import { checkoutCommon, owners, saveOwner } from "./ownership.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { generatedBranch } from "./branch.ts";
 
@@ -20,7 +23,7 @@ export interface AddWorktreeInput {
 	repo: string;
 	/** The branch to create; default `pana/<session>/<name>`, with a flat fallback on collision. */
 	branch?: string;
-	/** The directory name under `<state>/worktrees/<session>`; default the repository's own name. */
+	/** Worktree name; default the repository's own name. External names include the session ID. */
 	name?: string;
 }
 
@@ -59,24 +62,62 @@ async function repoRoot(repo: string): Promise<string> {
 	return top;
 }
 
+// Serialize a destination through validation, creation and receipt publication.
+const pending = new Map<string, Promise<unknown>>();
+
 /** GUARD-03: a worktree of `input.repo` for `sessionId`, made or reused. */
 export async function addWorktree(runtime: Runtime, sessionId: string, input: AddWorktreeInput): Promise<WorktreeResult> {
 	const repo = await repoRoot(input.repo);
+	const common = realPath(await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
 	const name = safeName(input.name ?? basename(repo));
-	const path = join(runtime.paths.dir, "worktrees", sessionId, name);
-	if (existsSync(join(path, ".git"))) {
-		return { session: sessionId, repo, path, branch: await git(path, ["rev-parse", "--abbrev-ref", "HEAD"]), created: false };
-	}
-
-	let branch: string;
-	try {
-		branch = input.branch ?? await generatedBranch(repo, [sessionId, name]);
-	} catch (error) {
-		throw ApiError.badRequest("invalid_repo", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
-	}
-	mkdirSync(join(runtime.paths.dir, "worktrees", sessionId), { recursive: true });
-	const exists = input.branch === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
-	// Only explicit names may reuse a branch. A generated-name race must fail, not join another writer's branch.
-	await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
-	return { session: sessionId, repo, path, branch, created: true };
+	const adapter = runtime.config?.worktreeAdapters?.find((a) => realPath(a.repo) === common);
+	const treeName = `pana-${safeName(sessionId)}-${name}`;
+	const path = adapter
+		? join(realPath(adapter.root), treeName, adapter.subdir ?? "")
+		: join(realPath(runtime.paths.dir), "worktrees", sessionId, name);
+	const previous = pending.get(path) ?? Promise.resolve();
+	const work = previous.catch(() => {}).then(async () => {
+		if (realPath(path) !== resolve(path)) throw ApiError.badRequest("invalid_worktree", "worktree destination contains a symlink");
+		const owner = owners(runtime.paths.dir).find((o) => o.path === path);
+		if (owner && (owner.session !== sessionId || owner.common !== common)) {
+			throw ApiError.badRequest("worktree_collision", "destination belongs to another session or repository");
+		}
+		if (existsSync(path) && !owner && adapter) throw ApiError.badRequest("worktree_collision", `unowned destination already exists: ${path}`);
+		let created = false;
+		let branch = input.branch;
+		if (!existsSync(path)) {
+			try {
+				branch ??= await generatedBranch(repo, [sessionId, name]);
+			} catch (error) {
+				throw ApiError.badRequest("invalid_repo", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
+			}
+			if (adapter) {
+				const substitutions: Record<string, string> = { name: treeName, branch, path, repo };
+				const argv = adapter.create.map((arg) => arg.replace(/\{(name|branch|path|repo)\}/g, (_, key: string) => substitutions[key]!));
+				try {
+					await run(argv[0]!, argv.slice(1), { cwd: repo, timeout: 600_000 });
+				} catch (error) {
+					throw ApiError.badRequest("worktree_adapter_failed", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
+				}
+			} else {
+				mkdirSync(join(runtime.paths.dir, "worktrees", sessionId), { recursive: true });
+				// A generated-name race must fail rather than join another writer's branch.
+				const exists = input.branch === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
+				await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
+			}
+			created = true;
+		}
+		// A successful external command is not proof that it created the requested checkout.
+		if (realPath(path) !== resolve(path) || !existsSync(join(path, ".git")) ||
+			await repoRoot(path) !== path || checkoutCommon(path) !== common ||
+			realPath(await git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])) !== common) {
+			throw ApiError.badRequest("invalid_worktree", "created checkout does not match the requested repository and path");
+		}
+		const actualBranch = await git(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
+		if (created && actualBranch !== branch) throw ApiError.badRequest("invalid_worktree", "adapter checked out the wrong branch");
+		saveOwner(runtime.paths.dir, createHash("sha256").update(path).digest("hex"), { session: sessionId, path, common });
+		return { session: sessionId, repo, path, branch: actualBranch, created };
+	});
+	pending.set(path, work);
+	try { return await work; } finally { if (pending.get(path) === work) pending.delete(path); }
 }
