@@ -350,3 +350,49 @@ The table itself saves 53 KB and the key index saves 774 KB, but every secondary
 Nothing here saves 5% of a file without losing a plan: the four indexes and the key cost what their statements need, and the cheapest structural change (dropping the rowid duplicate) costs 16% more elsewhere. The lever on this table is the number of rows, not the shape of them: one row per recipient per message is the 53%, and retention — what to do with deliveries whose mail is read and whose thread is archived — is a product decision, not an index.
 
 Source: `EXPLAIN QUERY PLAN` over the 20 delivery statements on a seeded database, and `dbstat` over the same rows rebuilt `WITHOUT ROWID`, 2026-11-02.
+
+## Objectives reads in the bench (`--objectives`)
+
+The objectives routes were measured by an ad-hoc harness until now; the default bench never drove them. This adds an opt-in phase so they are measured by the same driver, against the same request log, whenever someone is working on them:
+
+```sh
+pana/scripts/bench --objectives 3 --objective-events 2000 --json
+```
+
+`--objectives K` seeds K active objectives, each with `--objective-events N` rows in `objective_events` (default 2,000) and three sessions on the roster, **by direct SQL** — seeding is not timed and not routed, because the point is the read plan at realistic size, not the writers. It then issues `--objective-samples S` (default 50) requests to `GET /objectives`, `GET /objectives/:id` and `GET /objectives/:id/brief`, and their p50/p99 land in the usual `routes` table. Off by default: a default run does exactly the work it did before, so its `bench-throughput` and `bench-sql-ms` readings stay comparable.
+
+### The default run is unchanged
+
+Branch head, `--list-threads 10000`, two runs, against the pair from the previous day:
+
+| | Previous day, run 1 / 2 | Branch, run 1 / 2 |
+|---|---|---|
+| threads: 10,000 messages | 227.7 / 224.8 msg/s | 222.2 / 222.6 msg/s |
+| sessions: 200 created at once | 29.4 / 28.5 per s | 28.7 / 28.2 per s |
+| broadcast: 1,000 wakes | 133.7 / 132.3 per s | 130.0 / 128.7 per s |
+| fan-out: 150 sessions | 18.6 / 17.5 per s | 17.9 / 17.8 per s |
+| Total SQLite ms | 26,033 / 26,346 | 25,960 / 25,950 |
+
+Every phase is 1–3% lower and SQLite time is 0.3% lower; the phase is off, so that is the host, not the change — the 5-minute load was 0.90–1.29 for these runs against 0.09–0.75 for the previous day's.
+
+### The objectives routes
+
+`--objectives 3 --objective-events 2000`, two runs:
+
+| Route | Run 1 p50 / p99 | Run 2 p50 / p99 |
+|---|---|---|
+| `objectives.list` | 21.53 / 26.02 ms | 21.57 / 24.90 ms |
+| `objectives.show` | 7.80 / 9.05 ms | 7.81 / 9.13 ms |
+| `objectives.brief` | 8.33 / 11.35 ms | 8.36 / 13.07 ms |
+
+With six thousand `objective_events` behind three objectives, the event reads are cheap — that is migration 13's index doing its work. **One statement is the objective read's cost**: `objectiveUserMessagesToday` (OBJ-24),
+
+```sql
+SELECT COUNT(DISTINCT m.id) AS n FROM messages m
+  JOIN sessions s ON s.id = m.sender_id
+  JOIN deliveries d ON d.message_id = m.id
+  JOIN participants p ON p.id = d.recipient_id AND p.kind = 'user'
+ WHERE s.objective_id = ? AND m.created_at >= ? AND m.created_at < ?
+```
+
+is **1,526 / 1,539 ms over 250 calls — 6.10 / 6.16 ms a call**, and it is most of the 2.4 s the three routes spent over 50 samples each. `objectives.list` issues it once per listed objective, which is why listing three costs 21.5 ms while showing one costs 7.8 ms. That count is the next package's target, not this one's: it walks the objective's sessions' deliveries and joins `messages` per row, so it grows with the objective's message history, and a covering index or a counter in the shape of migration 14 is the choice to make against it.
