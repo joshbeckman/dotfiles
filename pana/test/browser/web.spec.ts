@@ -914,6 +914,78 @@ describeBrowser("pana in a browser", () => {
 		expect((await t!.client.get<{ deliveries: unknown[] }>("/inbox?archived=1")).body.deliveries).toEqual([]);
 	});
 
+	it("WEB-11 a resumed app reopens its stream and re-reads the inbox it was away from", async () => {
+		await start([{ text: "Paris." }]);
+		const seeded = await seedSession("What is the capital of France?");
+		// A stopped session queues mail without waking, so an append below is only a delivery.
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		await open();
+		// Read what the session said, then sit in the inbox with nothing unread.
+		await evaluatePage(`
+			await until(() => !document.getElementById("nav-inbox-count").hidden);
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			await until(() => document.getElementById("nav-inbox-count").hidden);
+			location.hash = "#/inbox";
+			await until(() => document.querySelector("#inbox-list [data-testid=inbox-snippet]")?.textContent.includes("Paris"));
+			return true;
+		`);
+
+		// The app goes out of sight, the way a phone puts a Home Screen app away.
+		const away = await evaluatePage<number>(`
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+			document.dispatchEvent(new Event("visibilitychange"));
+			return document.querySelectorAll("#inbox-list .item").length;
+		`);
+		expect(away).toBe(1);
+
+		const head = (await messages(seeded.thread.id)).at(-1)!.id;
+		const sent = await t!.client.post<{ message: { id: string } }>(
+			`/threads/${seeded.thread.id}/messages`,
+			{ after: head, body: "a message while away" },
+			{ caller: seeded.session.id },
+		);
+		expect(sent.status).toBe(200);
+
+		// A stream left open would never deliver again, so the inbox below it stays as it was.
+		const stale = await evaluatePage<{ snippet: string; nav: string }>(`
+			await sleep(500);
+			return {
+				snippet: document.querySelector("#inbox-list [data-testid=inbox-snippet]").textContent,
+				nav: document.getElementById("nav-inbox-count").getAttribute("aria-label"),
+			};
+		`);
+		expect(stale.snippet).not.toContain("a message while away");
+		expect(stale.nav).toBe("No unread messages");
+
+		// Launched from the Home Screen again: no navigation, and the inbox is what is on screen.
+		const resumed = await evaluatePage<{ hash: string; snippet: string; nav: string; unread: boolean }>(`
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+			document.dispatchEvent(new Event("visibilitychange"));
+			await until(() => document.querySelector("#inbox-list [data-testid=inbox-snippet]").textContent.includes("a message while away"));
+			return {
+				hash: location.hash,
+				snippet: document.querySelector("#inbox-list [data-testid=inbox-snippet]").textContent,
+				nav: document.getElementById("nav-inbox-count").getAttribute("aria-label"),
+				unread: document.querySelector("#inbox-list .item").classList.contains("unread"),
+			};
+		`);
+		expect(resumed.hash).toBe("#/inbox");
+		expect(resumed.nav).toBe("1 unread message");
+		expect(resumed.unread).toBe(true);
+
+		// And the reopened stream carries the next delivery on its own, without another resume. The
+		// append names the last message this test posted: reading the thread would mark it read.
+		const next = await t!.client.post(`/threads/${seeded.thread.id}/messages`, { after: sent.body.message.id, body: "and one after" }, { caller: seeded.session.id });
+		expect(next.status).toBe(200);
+		const live = await evaluatePage<{ nav: string }>(`
+			await until(() => document.querySelector("#inbox-list [data-testid=inbox-snippet]").textContent.includes("and one after"));
+			await until(() => document.getElementById("nav-inbox-count").getAttribute("aria-label") === "2 unread messages");
+			return { nav: document.getElementById("nav-inbox-count").getAttribute("aria-label") };
+		`);
+		expect(live.nav).toBe("2 unread messages");
+	});
+
 	it("UX-16 the thread header regenerates the subject and keeps the old ones", async () => {
 		// With a subject model set, the button asks it; a notice starts at its first line, no job.
 		await start([{ text: "Lantern maintenance plan" }], undefined, { subjectModel: "faux/faux-1" });
