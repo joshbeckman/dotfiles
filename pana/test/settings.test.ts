@@ -103,7 +103,7 @@ function listening(process: ChildProcess): Promise<void> {
 	});
 }
 
-it("SET-03 restart acknowledges before graceful close and re-execs with new configuration and source", async () => {
+it("SET-03 restart acknowledges before graceful close and re-execs with new configuration", async () => {
 	if (typeof process.execve !== "function" || !["darwin", "linux"].includes(process.platform)) return;
 	const dir = makeStateDir({ http: { port: 0 } }); dirs.push(dir);
 	child = spawn(process.execPath, [join(import.meta.dirname, "fixtures/faux-panad.ts")], {
