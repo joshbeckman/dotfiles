@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: dtw <dt-args...>
+
+Run dt with agent attribution on explicit pull-request prose writes.
+Supports --body/-b and --body-file/-F (including stdin as '-'); body files
+are converted to dt's --body argument. Human prose is not attributed; read-only calls pass through.
+Agent submit is refused because dt generates descriptions without an explicit
+body: push normally, then use dtw pr create/edit with an explicit body instead.
+USAGE
+}
+[[ $# -gt 0 ]] || { usage >&2; exit 2; }
+case "$1" in -h|--help|help) usage; exit 0 ;; esac
+command -v dt >/dev/null 2>&1 || { echo 'dtw: dt not found; install through the repository-supported tooling' >&2; exit 127; }
+args=("$@")
+is_agent=0
+if command -v agent-trailer >/dev/null 2>&1 && [[ "$(agent-trailer --raw)" != unknown/unknown/unknown ]]; then
+  is_agent=1
+fi
+help=0
+for arg in "$@"; do case "$arg" in -h|--help) help=1 ;; esac; done
+if [[ $help -eq 1 ]]; then exec dt "${args[@]}"; fi
+
+skip_global_options() {
+  while [[ $option_index -lt ${#args[@]} ]]; do
+    case "${args[option_index]}" in
+      --host|--repo|-R|--remote)
+        [[ $((option_index+1)) -lt ${#args[@]} ]] || { echo 'dtw: missing global option value' >&2; exit 2; }
+        option_index=$((option_index+2)) ;;
+      --host=*|--repo=*|--remote=*|--json|-R?*) option_index=$((option_index+1)) ;;
+      *) break ;;
+    esac
+  done
+}
+option_index=0
+skip_global_options
+command_index=$option_index
+cmd="${args[command_index]:-}"
+option_index=$((command_index+1))
+skip_global_options
+subcommand_index=$option_index
+subcmd="${args[subcommand_index]:-}"
+if [[ "$cmd" == submit && $is_agent -eq 1 ]]; then
+  for arg in "$@"; do [[ "$arg" != --dry-run ]] || exec dt "${args[@]}"; done
+  echo 'dtw: agent submit can generate unattributed descriptions; push then use dtw pr create/edit with an explicit body' >&2
+  exit 2
+fi
+case "$cmd $subcmd" in
+  'pr create'|'pr edit'|'pr comment'|'pr review') ;;
+  api\ *)
+    [[ $is_agent -eq 1 ]] || exec dt "${args[@]}"
+    # Low-level mutations can carry prose outside the PR commands we inspect.
+    for arg in "$@"; do
+      case "$arg" in -X|--method|-X*|--method=*|--input|--input=*|-f*|-F*|--field|--raw-field|--field=*|--raw-field=*)
+        echo 'dtw: use attributed pr commands for agent writes, not dt api mutations' >&2; exit 2 ;;
+      esac
+    done
+    exec dt "${args[@]}" ;;
+  *) exec dt "${args[@]}" ;;
+esac
+trailer=""
+[[ $is_agent -eq 0 ]] || trailer=$(agent-trailer)
+attribute() {
+  local text="$1"
+  if [[ $is_agent -eq 0 ]]; then printf '%s' "$text"; return; fi
+  if printf '%s\n' "$text" | grep -Fqx -- "$trailer"; then printf '%s' "$text"; return; fi
+  case "$subcmd" in
+    comment|review)
+      printf '%s\n\n' "$trailer"
+      printf '%s\n' "$text" | sed 's/^/> /; s/^> $/>/' ;;
+    *) printf '%s\n\n%s' "$text" "$trailer" ;;
+  esac
+}
+body_count=0
+for ((i=subcommand_index+1; i<${#args[@]}; i++)); do
+  kind='' value=''
+  case "${args[i]}" in
+    --body|-b|--body-file|-F)
+      [[ $((i+1)) -lt ${#args[@]} ]] || { echo 'dtw: missing body value' >&2; exit 2; }
+      kind="${args[i]}"; value="${args[i+1]}"; joined=0 ;;
+    --body=*|--body-file=*) kind="${args[i]%%=*}"; value="${args[i]#*=}"; joined=1 ;;
+    --file-comment)
+      [[ $((i+1)) -lt ${#args[@]} ]] || { echo 'dtw: missing file comment' >&2; exit 2; }
+      value="${args[i+1]}"; [[ "$value" == *=* ]] || { echo 'dtw: file comment must be PATH=BODY' >&2; exit 2; }
+      args[i+1]="${value%%=*}=$(attribute "${value#*=}")"; ((i+=1)); continue ;;
+    --file-comment=*)
+      value="${args[i]#*=}"; [[ "$value" == *=* ]] || { echo 'dtw: file comment must be PATH=BODY' >&2; exit 2; }
+      args[i]="--file-comment=${value%%=*}=$(attribute "${value#*=}")"; continue ;;
+    *) continue ;;
+  esac
+  case "$kind" in --body-file|-F) if [[ "$value" == '-' ]]; then value=$(cat); else value=$(cat -- "$value"); fi ;; esac
+  value=$(attribute "$value")
+  if [[ $joined -eq 1 ]]; then args[i]="--body=$value"; else args[i]='--body'; args[i+1]="$value"; ((i+=1)); fi
+  body_count=$((body_count+1))
+done
+if [[ $is_agent -eq 1 ]] && [[ "$cmd $subcmd" == 'pr create' || "$cmd $subcmd" == 'pr comment' ]]; then
+  [[ $body_count -gt 0 ]] || { echo 'dtw: agent prose creation requires an explicit --body or --body-file' >&2; exit 2; }
+fi
+exec dt "${args[@]}"

@@ -30,6 +30,19 @@ class PanaSkills(unittest.TestCase):
         for required in ('pana schedule delete', 'pana thread respond', '--after', '15 minutes', '1 hour'):
             self.assertIn(required, own)
 
+    def test_delta_routing_and_attribution_are_explicit(self):
+        for name in ('own-pr', 'get-pr-merged', 'pr-lookup'):
+            text = (SKILLS / name / 'SKILL.md').read_text()
+            with self.subTest(skill=name):
+                self.assertIn('Delta', text)
+                self.assertIn('dtw', text)
+                self.assertIn('live Delta skill', text)
+        workflow = (ROOT / '.agents/GITHUB_WORKFLOW.md').read_text()
+        self.assertIn('`dtw`', workflow)
+        self.assertIn('not a mirror', workflow)
+        self.assertIn('refuses implicit agent `submit`', workflow)
+        self.assertNotIn('use `gsw`, not bare `gs` or `gw`', workflow)
+
     def test_avatar_retirement_leaves_no_active_links(self):
         self.assertFalse((SKILLS / 'avatars/SKILL.md').exists())
         self.assertFalse((ROOT / 'test/avatar-render-check').exists())

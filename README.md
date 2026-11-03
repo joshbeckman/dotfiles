@@ -85,6 +85,8 @@ Many small utilities. [Agent coordination](.agents/skills/agent-teams/SKILL.md) 
 
 Run any script with `--help` or read the source — they're short.
 
+PR helpers support GitHub, Delta, and legacy Gitstream. Load the `pr-lookup` skill for routing and the owning repository's live workflow before writes. `gw`, `dtw`, and `gsw` provide attributed prose writes for their respective providers; `dtw` requires the repository-supported `dt` installation. Never infer a provider solely from `/pull/` or `/pulls/`, or treat a mirror as authoritative.
+
 ## Conventions
 
 - **Symlinks, not copies.** `dfm install` symlinks files into `$HOME`. Editing a dotfile here edits the live config.

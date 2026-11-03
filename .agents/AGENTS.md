@@ -8,7 +8,7 @@ Resolve these links under `$HOME/.agents/`; harnesses symlink this file into oth
 |------|------|
 | Need user details (username, email, editor) | [USER.md](USER.md) |
 | Writing, reviewing, refactoring, debugging, committing, or reviewing a PR | [CODING_STANDARDS.md](CODING_STANDARDS.md) |
-| GitHub commands, PRs, issues, attribution | [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) |
+| Provider-aware Git/PR commands, issues, attribution | [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) |
 
 ## Autonomy
 
@@ -40,7 +40,7 @@ Use the identity and scratch directory assigned by the running harness. Do not i
 
 **Shared instructions are an exception.** Never append a concrete author identity or attribution trailer to shared instructions, including `AGENTS.md`, `CLAUDE.md`, coding standards, prompts, agent definitions, and skills. Keep contributor attribution in Git commits instead. Attribution examples should use placeholders.
 
-**Elsewhere, attribute yourself by hand.** Anything you write that an external person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory. Conversation messages are the exception when the harness identifies their sender. Do not strip trailers from quoted history or an embedded artifact that needs one on its destination surface. See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for automatic attribution on GitHub surfaces.
+**Elsewhere, attribute yourself by hand.** Anything you write that an external person will read as Josh's should carry the trailer, generated with `bin/agent-trailer` and never written from memory. Conversation messages are the exception when the harness identifies their sender. Do not strip trailers from quoted history or an embedded artifact that needs one on its destination surface. See [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) for provider routing and automatic attribution on GitHub, Delta, and legacy Gitstream PR surfaces.
 
 ## Communication
 

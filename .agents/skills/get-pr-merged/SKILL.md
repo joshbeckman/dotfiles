@@ -17,9 +17,9 @@ Recent merged PRs showed Merge Garden accepting `/merge`, adding `mergeit` and `
 
 ## Start
 
-1. Identify the PR URL from arguments, `gw pr status`, or the current branch.
+1. Identify the PR URL from arguments or `git pr-url`. Load the repository workflow; for Delta, fetch its live Delta skill from the verified origin. Do not route by URL path shape alone.
 2. Read the full PR and discussion with `git pr-view PR_URL`.
-3. Check state and local changes:
+3. Check state with the owning provider and local changes. Use `dt pr view PR_URL --json` for Delta and the following GitHub command only for GitHub:
 
 ```sh
 gw pr view PR_URL --json state,mergedAt,mergeCommit,url,reviewDecision,mergeStateStatus,statusCheckRollup
@@ -44,12 +44,18 @@ If any precondition is missing, switch into the `get-pr-green` workflow first. R
 Post `/merge` through the repository's required write surface:
 
 ```sh
-# Meteorite/Gitstream-managed repository
+# Delta-backed repository: only if the repository's live workflow authorizes /merge.
+# Never substitute a direct dt pr merge when the repository requires a queue.
+dtw pr comment PR_URL --body '/merge'
+
+# Legacy Meteorite/Gitstream-managed repository, only while explicitly supported
 gsw pr comment PR_URL --body '/merge'
 
 # Other GitHub repository
 gw issue comment PR_URL --body '/merge'
 ```
+
+Repository-specific queue entrypoints and authorization override these generic examples. Never run CI or a hosted review merely because this generic skill lists it.
 
 Then re-read the timeline. Look for `merge-garden`, `merge-garden[bot]`, `github-actions[bot]`, or `test-oversight-service[bot]`.
 
@@ -57,7 +63,7 @@ Then re-read the timeline. Look for `merge-garden`, `merge-garden[bot]`, `github
 
 On each run or scheduled wake, check once. Continue across scheduled wakes until merged:
 
-1. Re-read PR state:
+1. Re-read PR state through `dt pr view PR_URL --comments --json` for Delta; use this command only for GitHub:
 
 ```sh
 gw pr view PR_URL --json state,mergedAt,mergeCommit,headRefName,labels,statusCheckRollup,reviewDecision,mergeStateStatus
@@ -65,7 +71,7 @@ gw pr view PR_URL --json state,mergedAt,mergeCommit,headRefName,labels,statusChe
 
 2. Re-read the timeline with `git pr-view PR_URL`. Bot comments are the source of truth for queue transitions.
 3. Classify the latest queue state and act:
-   - **Merged:** stop when `mergedAt` is non-null or the timeline says Merge Garden merged it.
+   - **Merged:** stop when the provider reports a non-null merge timestamp (`merged_at` for Delta, `mergedAt` for GitHub) or the timeline says Merge Garden merged it.
    - **Queued or CI running:** schedule the next check. Do not post `/merge` again.
    - **Missing approval, failed CI, unresolved review, or stale branch:** use `get-pr-green`, fix the blocker, push, then re-enqueue.
    - **Merge-queue draft PR CI failure:** open the draft PR or CI link from the bot comment, fix the original branch, rerun CI, then re-enqueue.

@@ -1,11 +1,13 @@
 ---
 name: pr-lookup
-description: Find and inspect pull requests across GitHub and Gitstream from commits, branches, numbers, or URLs. Use when asked which PR contains a commit, for the current branch's PR URL, whether a PR merged, or which checks are failing.
+description: Find and inspect pull requests across GitHub, Delta, and legacy Gitstream from commits, branches, numbers, or URLs. Use when asked which PR contains a commit, for the current branch's PR URL, whether a PR merged, or which checks are failing.
 ---
 
 # Pull Request Lookups
 
-Use the same read-only commands in GitHub and Gitstream repositories. They infer the provider from the PR URL or repository-local configuration.
+Use the same read-only commands in GitHub, Delta, and legacy Gitstream repositories. Route by verified host and repository configuration, never by `/pull/` versus `/pulls/` alone. A GitHub mirror is not the PR authority for a Delta-backed origin.
+
+For Delta, load the repository's current instructions and live Delta skill from its verified origin before work. `dt` is the native read surface; `dtw` is the attributed PR prose-write surface. Read `dt <command> --help` for current flags. If local provider settings still identify a retired service, report them and reconcile through repository-supported machine setup; never edit Git configuration when the repository forbids it. Historical links must remain usable without redirecting writes to a retired service.
 
 | Need | Command |
 |---|---|
@@ -22,11 +24,14 @@ With no selector, URL, checks, and merge commands use the current branch. They e
 
 Use `git pr-view` to read full PR content and discussion before acting. Continue using `gw view-md` for GitHub issues.
 
-Repository-specific provider configuration belongs in local Git config, not this public skill:
+Repository-specific hosts and provider settings belong in machine-local setup, not this public skill. Where repository policy permits configuration, the generic settings include:
 
 ```sh
-git config prLookup.provider <provider>
+# provider is github, delta, or gitstream
+git config prLookup.provider delta
 git config prLookup.urlTemplate 'https://example.test/pulls/{number}'
 ```
+
+Do not treat a missing or ambiguous commit association as permission to guess a PR or fall back to a mirror. Legacy merge-trailer mappings are not proof of a new provider association.
 
 A configured merge-trailer workflow for `git pr-for-commit` additionally uses `prLookup.trailer` and `prLookup.baseRef`.

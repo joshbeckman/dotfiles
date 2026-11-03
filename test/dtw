@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec python3 - "$root" <<'PY'
+from pathlib import Path
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(sys.argv.pop())
+TRAILER = 'Co-authored-by: AI pana://test.example/sessions/fixture'
+
+class Dtw(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name)
+        bindir = self.home / 'bin'
+        bindir.mkdir()
+        dt = bindir / 'dt'
+        dt.write_text('#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n')
+        dt.chmod(0o755)
+        trailer = bindir / 'agent-trailer'
+        trailer.write_text('#!/bin/sh\nif [ "$1" = --raw ]; then printf "%s\\n" "$TEST_RUNTIME"; else printf "%s\\n" "$TEST_TRAILER"; fi\n')
+        trailer.chmod(0o755)
+        self.env = dict(os.environ, HOME=str(self.home), PATH=f'{bindir}:' + os.environ['PATH'],
+                        TEST_RUNTIME='pana/session/fixture', TEST_TRAILER=TRAILER)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def run_dtw(self, *args, input=None, human=False, success=True):
+        env = self.env.copy()
+        if human:
+            env['TEST_RUNTIME'] = 'unknown/unknown/unknown'
+        proc = subprocess.run(['/bin/bash', str(ROOT / 'bin/dtw'), *args], env=env,
+                              input=input, text=True, capture_output=True)
+        if not success:
+            self.assertNotEqual(0, proc.returncode, proc.stdout)
+            self.assertEqual('', proc.stdout)
+            return proc.stderr
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_pr_reads_and_help_pass_through(self):
+        for args in [('pr', 'view', '123', '--comments'), ('pr', 'review', '--help'),
+                     ('pr', 'checks', '123'), ('submit', '--dry-run'), ('api', 'pulls/123')]:
+            self.assertEqual(list(args), self.run_dtw(*args))
+
+    def test_each_prose_verb_is_attributed(self):
+        for verb in ('create', 'edit', 'review', 'comment'):
+            for flag in ('--body', '-b'):
+                args = self.run_dtw('pr', verb, '123', flag, 'hello')
+                expected = f'{TRAILER}\n\n> hello' if verb in ('review', 'comment') else f'hello\n\n{TRAILER}'
+                self.assertEqual(['pr', verb, '123', '--body', expected], args)
+            args = self.run_dtw('pr', verb, '--body=hello')
+            expected = f'{TRAILER}\n\n> hello' if verb in ('review', 'comment') else f'hello\n\n{TRAILER}'
+            self.assertEqual('--body=' + expected, args[-1])
+
+    def test_files_stdin_quotes_and_unicode_are_preserved(self):
+        body = 'Hello "quoted" ☃\nsecond line'
+        path = self.home / 'body with spaces.md'
+        path.write_text(body)
+        for flag in ('--body-file', '-F'):
+            args = self.run_dtw('pr', 'review', '--approve', flag, str(path))
+            self.assertEqual(TRAILER + '\n\n> ' + body.replace('\n', '\n> '), args[-1])
+        args = self.run_dtw('pr', 'comment', '--body-file=-', input=body)
+        self.assertEqual('--body=' + TRAILER + '\n\n> ' + body.replace('\n', '\n> '), args[-1])
+
+    def test_exact_current_trailer_is_not_duplicated(self):
+        body = 'other attribution\nCo-authored-by: AI someone-else\n' + TRAILER
+        args = self.run_dtw('pr', 'review', '--body', body)
+        self.assertEqual(body, args[-1])
+        args = self.run_dtw('pr', 'review', '--body', 'Co-authored-by: AI someone-else')
+        self.assertIn('someone-else', args[-1])
+        self.assertEqual(1, args[-1].count(TRAILER))
+
+    def test_file_comments_are_attributed_individually(self):
+        args = self.run_dtw('pr', 'review', '--comment', '--file-comment', 'a.rb=one=two', '--file-comment=b.rb=three')
+        self.assertEqual('a.rb=' + TRAILER + '\n\n> one=two', args[4])
+        self.assertEqual('--file-comment=b.rb=' + TRAILER + '\n\n> three', args[5])
+
+    def test_human_body_is_not_attributed(self):
+        args = self.run_dtw('pr', 'comment', '--body', 'human', human=True)
+        self.assertEqual(['pr', 'comment', '--body', 'human'], args)
+        args = self.run_dtw('pr', 'comment', '--body-file', '-', input='human', human=True)
+        self.assertEqual(['pr', 'comment', '--body', 'human'], args)
+        self.assertEqual(['submit'], self.run_dtw('submit', human=True))
+
+    def test_bodyless_approval_and_label_edit_do_not_invent_prose(self):
+        for args in [('pr', 'review', '123', '--approve'), ('pr', 'edit', '123', '--add-label', 'ready')]:
+            self.assertEqual(list(args), self.run_dtw(*args))
+
+    def test_implicit_and_low_level_prose_writes_fail_before_dt(self):
+        for args in [('submit',), ('submit', '--stack'), ('pr', 'create'), ('pr', 'comment', '123'),
+                     ('api', 'pulls/123', '-X', 'POST'), ('api', 'issues/123/comments', '--input', 'body.json'),
+                     ('api', 'issues/123/comments', '--input=body.json'),
+                     ('api', 'issues/123/comments', '-fbody=hello')]:
+            self.run_dtw(*args, success=False)
+
+    def test_global_options_cannot_bypass_attribution(self):
+        args = self.run_dtw('--host', 'delta.example.invalid', '-R', 'acme/widgets', '--json',
+                            'pr', 'review', '--approve', '--body', 'hello')
+        self.assertEqual(TRAILER + '\n\n> hello', args[-1])
+        args = self.run_dtw('-Racme/widgets', 'pr', '--host', 'delta.example.invalid', 'comment', '--body', 'hello')
+        self.assertEqual(TRAILER + '\n\n> hello', args[-1])
+        self.run_dtw('--host=delta.example.invalid', 'submit', success=False)
+        self.run_dtw('--repo=acme/widgets', 'api', 'issues/1/comments', '-X', 'POST', success=False)
+
+    def test_invalid_or_unreadable_body_fails_before_dt(self):
+        for args in [('pr', 'review', '--body'), ('pr', 'review', '--file-comment'),
+                     ('pr', 'review', '--file-comment', 'no-equals'),
+                     ('pr', 'review', '--body-file', str(self.home / 'missing'))]:
+            self.run_dtw(*args, success=False)
+
+unittest.main()
+PY

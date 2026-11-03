@@ -44,14 +44,18 @@ Before ending a run with an incomplete PR, schedule the next check with `pana sc
 
 `own-pr` owns lifecycle state and transitions. Use `pr-description-discipline` for the body, `binks-pr-review` for applicable local preflight, `get-pr-green` for CI/review repair, `get-pr-merged` only after explicit merge authority, and `run-project` for project metadata. None releases lifecycle ownership.
 
-Use the PR surface required by the repository. For GitHub writes, use `gw`; for Meteorite/Gitstream writes, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Load `pr-lookup` for cross-provider PR content, URL, commit, checks, and merge-status reads; continue using `gw view-md` for GitHub issues. Poll the PR itself; do not rely on Josh to relay notifications.
+Use the PR surface required by the repository. For GitHub writes, use `gw`; for Delta-backed repositories use `dt` for Git/PR discovery and `dtw` for attributed PR prose writes; for legacy Meteorite/Gitstream repositories still explicitly supported by their owner, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Load `pr-lookup` for cross-provider PR content, URL, commit, checks, and merge-status reads; continue using `gw view-md` for GitHub issues. For a Delta-backed repository, load its current repository guidance and fetch its live Delta skill from the verified origin before Git or PR work; do not infer GitHub from a `/pull/` path or follow a mirror. The repository's live workflow takes precedence over generic CI, review, enqueue, and deployment examples here. Do not copy changing repository policies into this skill.
+
+`dtw` accepts explicit `--body` or `--body-file` and attributes PR create/edit/comment/review prose, including file comments. Agent `submit` is refused because descriptions can be generated implicitly: use ordinary Git push and `dtw pr create/edit` with an explicit body instead. Leave new PRs draft. Use `dt <command> --help` for current flags; never send Delta writes through `gsw` or `gw`. `dtw` is an optional wrapper around the externally provided `dt`, not a replacement installation of it.
+
+Poll the PR itself; do not rely on Josh to relay notifications.
 
 ## 1. Draft and validate
 
 1. Open the PR as a draft and assign Josh using the repository's required wrapper.
-2. After the PR has a stable URL, comment on every issue it claims to solve. The comment must say that work has opened and link the PR by its full title and URL, so issue readers can find current and historical implementation work. Write the comment to a scratchpad file and post it with `gw issue comment ISSUE_URL --body-file FILE`. Do not duplicate an existing link, comment on issues listed only as related context, or expose a private PR from a more-public issue. If visibility is unclear, ask Josh first.
-3. When inheriting a PR, read each source issue with `gw view-md`; backfill a missing PR comment before continuing.
-4. Trigger required CI and repository-required automated reviews.
+2. After the PR has a stable URL, comment on every issue it claims to solve. The comment must say that work has opened and link the PR by its full title and URL, so issue readers can find current and historical implementation work. Write the comment to a scratchpad file and post it through the issue system's owning tool (`gw issue comment ISSUE_URL --body-file FILE` for GitHub issues). Do not duplicate an existing link, comment on issues listed only as related context, or expose a private PR from a more-public issue. If visibility is unclear, ask Josh first.
+3. When inheriting a PR, read each source issue with its owning tool (`gw view-md` for GitHub); backfill a missing PR comment before continuing.
+4. Follow repository policy for CI and automated reviews; do not trigger on-demand work without the authorization that repository requires.
 5. Check CI, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Schedule the next check with `pana schedule wake` when waiting on external progress.
 6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean and green. Update the checklist after handling each change.
 7. Rebase when the branch conflicts with or is too stale against its base (use scheduled wakes to monitor conflicts/staleness with base). Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.
