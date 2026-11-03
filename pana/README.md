@@ -190,6 +190,10 @@ Pana runs beside the current pi setup and shares nothing with it.
   and proof). Unsafe, blocked, or still-needed trees are retained with a path and reason
   in the task thread. This is not a daemon TTL sweep or bulk-cleanup permission; see
   [failure and cleanup](docs/worktree-adapters.md#failure-and-cleanup).
+- Read-only `sed -n` inspection is admitted for literal print-only scripts such as
+  `'15,65p'`. Other sed modes remain conservative: absence of `-i` alone does not prove
+  a script cannot write files or execute commands. Compound-command boundaries do not
+  grant permission to an adjacent write.
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
 ### System prompt

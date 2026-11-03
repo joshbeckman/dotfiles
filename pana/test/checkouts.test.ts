@@ -192,6 +192,55 @@ describe("GUARD-06 the admission check costs no process", () => {
 		expect(refusal("npm test")).toBeUndefined();
 	});
 
+	it("GUARD-06 admits only simple sed print inspections, including compound reads", async () => {
+		const t = setup();
+		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
+		const file = join(t.repo, "tracked.txt");
+		for (const script of ["p", "1p", "15,65p", "155,180p", "1,$p"]) {
+			for (const path of [file, `"${file}"`, "~/dotfiles/tracked.txt"]) {
+				expect(checkoutCommandRefusal(`sed -n '${script}' ${path}`, options)).toBeUndefined();
+			}
+		}
+		const reads = [`sed -n '15,65p' ${file}`, `sed -n '155,180p' ${file}`, "node --version", `git -C ${t.repo} status --short`];
+		for (const separator of ["; ", " && ", "\n"]) {
+			expect(checkoutCommandRefusal(reads.join(separator), options)).toBeUndefined();
+		}
+		expect(execFileSync("sed", ["-n", "1p", file]).toString()).toBe("primary\n");
+		const e = env({ home: t.home, cwd: t.scratch });
+		const read = await e.exec(reads.join("; "), undefined, ctx);
+		expect(read.ok).toBe(true);
+		if (!read.ok) throw new Error(read.error.message);
+		expect(read.value.exitCode).toBe(0);
+		const write = await e.exec(`sed -i s/a/b/ ${file}`, undefined, ctx);
+		expect(write.ok).toBe(false);
+		expect(t.git(t.repo, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("GUARD-06 keeps sed edits, script execution, output, and adjacent writes refused", () => {
+		const t = setup();
+		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
+		const file = join(t.repo, "tracked.txt");
+		const read = `sed -n '1p' ${file}`;
+		for (const command of [
+			`sed -i s/a/b/ ${file}`, `sed -i '' -n '1p' ${file}`, `sed -n -i.bak '1p' ${file}`,
+			`sed -n '1p' -i ${file}`, `sed -n '1p;w ${file}' ${file}`,
+			`sed -n 'w ${file}' ${file}`, `sed -n 'e touch ${file}' ${file}`,
+			`sed -n '1p;w ${file}' /tmp/input`, `sed -n 's/a/b/w ${file}' /tmp/input`,
+			`sed -n 's/a/b/w ${file}' ${file}`, `sed -n -f /tmp/script ${file}`,
+			`sed -n '1p' -e 'w ${file}' ${file}`, `sed --future-mode -n '1p' ${file}`,
+			`sed -n "$SCRIPT" ${file}`, `sed -n '1p' ${file} > ${file}`,
+			`${read}; rm ${file}`, `${read} && rm ${file}`, `${read}\nrm ${file}`,
+			`${read}\nsed -i s/a/b/ ${file}`, `${read}; cd ${t.repo}`,
+			`sed -i s/a/b/ \\
+${file}`, `${read}\nrm \\
+${file}`,
+		]) expect(checkoutCommandRefusal(command, options), command).toBeDefined();
+		const spaced = join(t.home, "protected repo");
+		mkdirSync(spaced);
+		const protectedOptions = { ...options, checkouts: [realPath(spaced)] };
+		expect(checkoutCommandRefusal(`sed -i s/a/b/ "${spaced}/file"`, protectedOptions)).toBeDefined();
+	});
+
 	it("GUARD-06 admits graph/object queries and only explicit mixed-mode reads", () => {
 		const t = setup();
 		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
