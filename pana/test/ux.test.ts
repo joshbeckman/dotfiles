@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { distance, simulatedLabs, linear, lab } from "../scripts/lib/color-space.js";
 // WP13: PWA usability. The browser checks live in test/browser/ux.spec.ts; this file covers the
 // server's thread inbox (UX-03), the working indicators (UX-09), and the PWA modules whose logic
 // is pure (UX-01, UX-02, UX-06, UX-08).
@@ -14,7 +16,7 @@ import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection, sequenceLabel } from "../web/keys.js";
 import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits, rankBy } from "../web/palette.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
-import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, scheduledOf, SESSION_COLORS, threadRow, untilLabel, workingOf } from "../web/views.js";
+import { inboxThreadRow, isWorking, PALETTE, participantColor, participantPattern, SESSION_PATTERNS, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE, threadRow, untilLabel, workingOf } from "../web/views.js";
 
 it("enables inherited font disambiguation throughout the UI", () => {
 	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
@@ -429,28 +431,76 @@ describe("UX-02 Cmd+Enter submits the focused form", () => {
 });
 
 describe("UX-06 participant colors", () => {
-	it("UX-06 the user is always blue, the domain black, and a session keeps one palette color", () => {
-		expect(PALETTE).toEqual({
-			blue: "#002FA7",
-			orange: "#FF7900",
-			purple: "#903465",
-			green: "#237F52",
-			red: "#BD2024",
-			yellow: "#FFCC00",
-			black: "#0D0D0D",
-		});
-		expect(participantColor({ url: "pana://a.example/users/josh", kind: "user" })).toBe("blue");
-		expect(participantColor("pana://a.example/users/someone")).toBe("blue");
-		expect(participantColor({ url: "pana://a.example", kind: "domain" })).toBe("black");
+	it("UX-06 session colors belong to a thread, not a session, and use every color before repeating", () => {
+		expect(participantColor("pana://a.example/users/josh")).toBe("blue");
 		expect(participantColor("pana://a.example")).toBe("black");
-
-		const urls = Array.from({ length: 40 }, (_, i) => `pana://a.example/sessions/01KE6P4YM0M457PFE07QVF${String(i).padStart(4, "0")}`);
-		const colors = urls.map((url) => participantColor({ url, kind: "session" }));
+		const urls = Array.from({ length: 49 }, (_, i) => `pana://a.example/sessions/session${i}`);
+		expect(participantColor(urls[0]!)).toBeUndefined();
+		const colors = urls.map((url) => participantColor(url, urls));
+		expect(SESSION_COLORS).toHaveLength(12);
+		expect(new Set(colors.slice(0, SESSION_COLORS.length)).size).toBe(SESSION_COLORS.length);
+		expect(colors[SESSION_COLORS.length]).toBe(colors[0]);
+		const identities = urls.map((url) => `${participantColor(url, urls)}:${participantPattern(url, urls)}`);
+		expect(new Set(identities.slice(0, 48)).size).toBe(48);
+		expect(identities[48]).toBe(identities[0]);
+		expect(participantPattern(urls[12]!, urls)).toBe("dashed");
+		expect(SESSION_PATTERNS).toEqual(["solid", "dashed", "dotted", "double"]);
 		for (const color of colors) expect(SESSION_COLORS).toContain(color);
-		// Stable: the same URL always maps to the same color, with or without its kind.
-		expect(urls.map((url) => participantColor(url))).toEqual(colors);
-		// Spread: forty sessions use every session color.
-		expect(new Set(colors).size).toBe(SESSION_COLORS.length);
+		// Appending a participant, duplicate membership, or a user/domain cannot recolor a prefix.
+		const original = urls.slice(0, 3);
+		expect(original.map((url) => participantColor(url, original))).toEqual(colors.slice(0, 3));
+		const people = ["pana://a.example/users/josh", ...urls, urls[0]!, "pana://a.example"];
+		expect(urls.map((url) => participantColor({ url, kind: "session" }, people))).toEqual(colors);
+		// Reloads are deterministic, but another thread can give the same session another color.
+		expect(urls.map((url) => participantColor(url, JSON.parse(JSON.stringify(urls))))).toEqual(colors);
+		expect(participantColor(urls[0]!, [urls[1]!, urls[0]!])).not.toBe(colors[0]);
+	});
+
+	it("UX-06 identity swatches contrast against both themes and start with separated colors", () => {
+		const luminance = (hex: string) => {
+			const c = hex.match(/[0-9a-f]{2}/gi)!.map((v) => parseInt(v, 16)/255).map((v) => v <= 0.04045 ? v/12.92 : ((v+0.055)/1.055)**2.4);
+			return c[0]!*0.2126 + c[1]!*0.7152 + c[2]!*0.0722;
+		};
+		for (const hex of Object.values(SESSION_PALETTE)) expect(1.05/(luminance(hex)+0.05)).toBeGreaterThanOrEqual(3);
+		for (const hex of Object.values(SESSION_TEXT_PALETTE)) expect(1.05/(luminance(hex)+0.05)).toBeGreaterThan(4.5);
+		for (const hex of Object.values(SESSION_DARK_PALETTE)) expect((luminance(hex)+0.05)/(luminance("#0d0d0d")+0.05)).toBeGreaterThan(4.5);
+		const participants = ["pana://a.example/sessions/a", "pana://a.example/sessions/b"];
+		expect(participants.map((url) => participantColor(url, participants))).toEqual(["session-1", "session-2"]);
+	});
+
+	it("UX-06 all twelve colors pass pairwise normal and color-vision audits in both themes", () => {
+		for (const palette of [SESSION_PALETTE, SESSION_DARK_PALETTE]) {
+			const labs = Object.values(palette).map(simulatedLabs);
+			for (let i = 0; i < labs.length; i++) {
+				for (let j = i + 1; j < labs.length; j++) {
+					// Normal-vision floor preserves visible separation; simulation floor detects
+					// regressions, not universal distinguishability. Direct labels remain essential.
+					expect(distance(labs[i]![0]!, labs[j]![0]!)).toBeGreaterThanOrEqual(palette === SESSION_PALETTE ? 0.11 : 0.08);
+					for (let vision = 0; vision < 4; vision++) expect(distance(labs[i]![vision]!, labs[j]![vision]!)).toBeGreaterThan(0.025);
+				}
+				for (const reserved of ["#002FA7", "#0D0D0D", "#FFFFFF"].map(simulatedLabs)) {
+					for (let vision = 0; vision < 4; vision++) expect(distance(labs[i]![vision]!, reserved[vision]!)).toBeGreaterThanOrEqual(0.10);
+				}
+			}
+		}
+	});
+
+	it("UX-06 light accents are vivid while the approved dark palette stays unchanged", () => {
+		const colors = Object.values(SESSION_PALETTE).map((hex) => lab(linear(hex)));
+		expect(colors.reduce((sum, [, a, b]) => sum + Math.hypot(a!, b!), 0)/12).toBeGreaterThan(0.15);
+		const approved = ["#FB906A", "#77D2F5", "#9A7CBD", "#C17273", "#C299B4", "#F0C2AE", "#B0B598", "#FFA3CF", "#C2CD6F", "#DE669A", "#B28E5C", "#D0BAE2"];
+		expect(Object.values(SESSION_DARK_PALETTE)).toEqual(approved);
+		const hue = (hex: string) => { const [, a, b] = lab(linear(hex)); return (Math.atan2(b!, a!)*180/Math.PI + 360)%360; };
+		for (const name of Object.keys(SESSION_PALETTE)) {
+			const delta = Math.abs(hue(SESSION_PALETTE[name]!) - hue(SESSION_DARK_PALETTE[name]!));
+			expect(Math.min(delta, 360 - delta)).toBeLessThan(31);
+			const textDelta = Math.abs(hue(SESSION_PALETTE[name]!) - hue(SESSION_TEXT_PALETTE[name]!));
+			expect(Math.min(textDelta, 360 - textDelta)).toBeLessThan(2);
+		}
+	});
+
+	it("UX-06 palette generation is reproducible and checked-in CSS agrees", () => {
+		execFileSync(process.execPath, ["scripts/session-palette.js", "--check"], { cwd: new URL("..", import.meta.url) });
 	});
 
 	it("UX-06 the stylesheet defines every palette color and a rule per participant color", () => {
@@ -458,6 +508,12 @@ describe("UX-06 participant colors", () => {
 		for (const [name, hex] of Object.entries(PALETTE)) {
 			expect(css).toContain(`--p-${name}: ${hex.toLowerCase()};`);
 			expect(css).toContain(`[data-color="${name}"]`);
+		}
+		for (const palette of [SESSION_PALETTE, SESSION_DARK_PALETTE]) {
+			for (const [name, hex] of Object.entries(palette)) {
+				const foreground = palette === SESSION_PALETTE ? SESSION_TEXT_PALETTE : SESSION_DARK_PALETTE;
+				expect(css).toContain(`[data-color="${name}"] { --who: ${hex.toLowerCase()}; --who-text: ${foreground[name]!.toLowerCase()}; }`);
+			}
 		}
 	});
 

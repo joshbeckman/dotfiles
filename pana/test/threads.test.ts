@@ -161,6 +161,24 @@ describe("threads", () => {
 		expect(created.thread.subject).toBe("hello");
 	});
 
+	it("UX-06 participant join order stays stable for same-timestamp joins of older sessions and agrees with inbox", async () => {
+		const t = await start();
+		const older = await seedSession(t);
+		const middle = await seedSession(t);
+		const newer = await seedSession(t);
+		const created = await createThread(t, [newer]);
+		const id = created.thread.id;
+		const initial = created.thread.participants.map((p) => p.id);
+		const first = await t.client.post<ThreadBody>(`/threads/${id}/messages`, { after: created.message.id, body: "join middle", cc: [middle] });
+		expect(first.status, JSON.stringify(first.body)).toBe(200);
+		const second = await t.client.post<ThreadBody>(`/threads/${id}/messages`, { after: first.body.message.id, body: "join older", cc: [older] });
+		expect(second.status, JSON.stringify(second.body)).toBe(200);
+		const read = await t.client.get<ReadBody>(`/threads/${id}`);
+		expect(read.body.thread.participants.map((p) => p.id)).toEqual([...initial, middle, older]);
+		const inbox = await t.client.get<{ threads: Array<{ threadId: string; participants: Person[] }> }>("/inbox?view=threads");
+		expect(inbox.body.threads.find((row) => row.threadId === id)!.participants.map((p) => p.id)).toEqual([...initial, middle, older]);
+	});
+
 	it("THR-02 every message gets one delivery per participant except its sender", async () => {
 		const t = await start();
 		const a = await seedSession(t, "idle", true);

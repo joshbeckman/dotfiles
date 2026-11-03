@@ -7,6 +7,7 @@ import { sessionRuntime } from "../../src/sessions/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { FAKE_EPOCH, startTestPanad, TEST_DOMAIN, type Script, type TestPanad } from "../harness/index.ts";
+import { participantColor } from "../../web/views.js";
 import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage } from "./cli.ts";
 
 // The browser suite needs the Chrome on this machine and the chrome-devtools CLI. It is kept
@@ -570,6 +571,38 @@ describeBrowser("pana in a browser", () => {
 		`);
 		expect(reloaded).toContain("live update");
 		expect(reloaded).toContain("compacted summary");
+	});
+
+	it("UX-06 a newly joined session keeps its allocated color in stale-reply warnings", async () => {
+		await start([{ text: "Ready." }, { text: "Also ready." }]);
+		const first = await seedSession("first");
+		const second = await seedSession("second");
+		await t!.client.post(`/sessions/${first.session.id}/stop`);
+		await t!.client.post(`/sessions/${second.session.id}/stop`);
+		const head = (await messages(first.thread.id)).at(-1)!.id;
+		await open();
+		await evaluatePage(`
+			location.hash = "#/threads/${first.thread.id}";
+			await until(() => document.getElementById("draft-head").textContent === ${JSON.stringify(head)});
+			const body = document.getElementById("reply-body");
+			body.value = "kept draft";
+			body.dispatchEvent(new Event("input"));
+			return true;
+		`);
+		const joined = await t!.client.post<{ message: { id: string } }>(`/threads/${first.thread.id}/messages`, { after: head, body: "Joining another session", cc: [second.session.id] });
+		expect(joined.status).toBe(200);
+		const reply = await t!.client.post(`/threads/${first.thread.id}/messages`, { after: joined.body.message.id, body: "New session reply" }, { caller: second.session.id });
+		expect(reply.status).toBe(200);
+		const thread = await t!.client.get<{ thread: { participants: Array<{ url: string; kind: string }> } }>(`/threads/${first.thread.id}`);
+		const expected = participantColor(second.session.url, thread.body.thread.participants);
+		const stale = await evaluatePage<{ color: string; draft: string }>(`
+			document.getElementById("reply-form").requestSubmit();
+			await until(() => !document.getElementById("stale").hidden);
+			return { color: document.querySelector('#stale-new [data-sender="${second.session.url}"]').dataset.color,
+				draft: document.getElementById("reply-body").value };
+		`);
+		expect(stale.color).toBe(expected);
+		expect(stale.draft).toBe("kept draft");
 	});
 
 	it("WEB-07 a 409 shows the new messages and keeps the draft", async () => {

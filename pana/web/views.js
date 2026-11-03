@@ -101,40 +101,39 @@ function person(value) {
 	return { url: String(value?.url ?? ""), kind: String(value?.kind ?? "") };
 }
 
-/**
- * The style guide palette (UX-06). The user is always blue and the domain's notices are black;
- * every session gets one of the other colors from a hash of its URL, so it keeps that color in
- * every thread and every window.
- */
+/** Semantic style-guide colors stay separate from thread-local identity colors (UX-06). */
 export const PALETTE = {
-	blue: "#002FA7",
-	orange: "#FF7900",
-	purple: "#903465",
-	green: "#237F52",
-	red: "#BD2024",
-	yellow: "#FFCC00",
-	black: "#0D0D0D",
+	blue: "#002FA7", orange: "#FF7900", purple: "#903465", green: "#237F52",
+	red: "#BD2024", yellow: "#FFCC00", black: "#0D0D0D",
 };
 
-export const SESSION_COLORS = ["orange", "purple", "green", "red", "yellow"];
+export { SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE } from "./session-palette.js";
+import { SESSION_PALETTE } from "./session-palette.js";
+export const SESSION_COLORS = Object.keys(SESSION_PALETTE);
+export const SESSION_PATTERNS = ["solid", "dashed", "dotted", "double"];
 
-/** FNV-1a: small, stable across browsers and Node, and spreads similar ULIDs apart. */
-function hash(text) {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < text.length; i++) {
-		h ^= text.charCodeAt(i);
-		h = Math.imul(h, 0x01000193) >>> 0;
-	}
-	return h;
+function sessionIndex(url, participants) {
+	const sessions = [...new Set(participants.filter((person) =>
+		(typeof person === "string" ? kindOf(person) : person?.kind || kindOf(person?.url ?? "")) === "session"
+	).map((person) => typeof person === "string" ? person : person.url))];
+	return sessions.indexOf(url);
 }
 
-/** The palette name for a participant: `{url, kind}` from a handler, or a bare URL. */
-export function participantColor(participant) {
+/** Secondary identity cue: change line/mark pattern before reusing the first color. */
+export function participantPattern(participant, participants = []) {
+	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
+	const index = sessionIndex(url, participants);
+	return index < 0 ? "solid" : SESSION_PATTERNS[Math.floor(index / SESSION_COLORS.length) % SESSION_PATTERNS.length];
+}
+
+/** Color within a thread's append-ordered participants. Sessions outside threads have no swatch. */
+export function participantColor(participant, participants = []) {
 	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
 	const kind = typeof participant === "string" ? kindOf(url) : String(participant?.kind || kindOf(url));
 	if (kind === "user") return "blue";
 	if (kind === "domain") return "black";
-	return SESSION_COLORS[hash(url) % SESSION_COLORS.length];
+	const index = sessionIndex(url, participants);
+	return index < 0 ? undefined : SESSION_COLORS[index % SESSION_COLORS.length];
 }
 
 function kindOf(url) {
