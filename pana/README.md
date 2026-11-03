@@ -62,7 +62,7 @@ Set pana up as a service in six steps. Each step is safe to repeat.
 
    To reuse the API keys pi already has, pipe each `api_key` entry of `~/.pi/agent/auth.json` into `s set NAME --stdin`. An OAuth entry there has no key panad can use.
 
-3. **Write `~/.local/state/pana/config.json`.** Only `domain` and `user` are required; [SPEC.md](SPEC.md) CFG-03 lists the rest.
+3. **Write `~/.local/state/pana/config.json`.** Only `domain` and `user` are required; the [configuration reference](docs/configuration.md) lists every supported key, default, and validation rule.
 
    ```json
    {
@@ -124,7 +124,7 @@ Run `panad` in the foreground with a key in its environment: `s FIREWORKS_API_KE
 
 ### Settings and daemon version
 
-Open **Settings** in the UI to edit `config.json` as JSON. Optional keys use the defaults in [SPEC.md](SPEC.md#config-and-state); unknown keys are preserved. Saves are validated and reject an intervening file edit. `domain` and `user` are existing data identities, so change neither through this editor. Operational configuration changes require a restart; saving does not change active sessions halfway through a run. The **Your message color** selector sets `ui.userColor` from the style guide palette (blue by default). Saving a color applies immediately to open windows and persists across restarts.
+Open **Settings** in the UI to edit `config.json` as JSON. See the [configuration reference](docs/configuration.md) for all supported keys, defaults, validation, and restart behavior; unknown keys are preserved. Saves are validated and reject an intervening file edit. `domain` and `user` are existing data identities, so change neither through this editor. Operational configuration changes require a restart; saving does not change active sessions halfway through a run. The **Your message color** control sets `ui.userColor` to your own hex color (`#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA`); legacy named palette colors remain supported, with blue as the default. Saving a color applies immediately to open windows and persists across restarts.
 
 The page compares source on disk (commit SHA, message and local edits) with the revision captured when panad started, and shows the daemon's PID, start time and age. Missing Git metadata is shown as unknown. One panad serves each state directory; sessions are managed inside it, not separate pana daemon processes.
 
@@ -521,7 +521,7 @@ A reply draft records the thread head when it opens. If the thread moves before 
 
 Both composers attach files: an Attach button, a file dropped anywhere on the composer, or a screenshot pasted into the message box. The bytes upload to `panad` before the message is sent, and the body gets the same Markdown reference `--attach` writes, so the message reads the same either way.
 
-Each participant has one color, from the style guide palette, in every thread: the user is blue, the domain's notices are black, and each session keeps the color its URL hashes to. Opening a thread shows its newest message; a message link shows that message.
+Each participant keeps one color in every thread: the user chooses a hex color in Settings (blue by default), the domain's notices are black, and each session keeps the style guide palette color its URL hashes to. Opening a thread shows its newest message; a message link shows that message.
 
 While a session works, it shows just above the reply box in its own color with a pulsing dot and what it is doing, such as "running bash · 3m", and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
 

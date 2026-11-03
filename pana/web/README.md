@@ -230,8 +230,10 @@ daemon's full commit ID, message, process ID, start time, and ticking age. Commi
 fingerprint differences mark the daemon out of sync; unavailable build metadata stays explicit.
 
 The JSON editor preserves every configuration key, including unknown keys. Saving writes the
-configuration file. The **Your message color** selector edits `ui.userColor` in that same JSON
-draft and previews a named palette color (blue by default). Saving applies that preference
+configuration file. The [configuration reference](../docs/configuration.md) documents every
+supported key and default. The **Your message color** control edits `ui.userColor` in that same JSON
+draft and previews your hex color (`#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA`). Blue remains the
+default, and legacy named palette values remain supported. Saving applies that preference
 immediately to user messages and participant marks, including in other connected windows;
 session colors and black domain notices are unchanged. Other configuration requires a daemon
 restart. Domain and user cannot change here.
