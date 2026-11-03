@@ -49,7 +49,7 @@
 	}
 }
 
-/* UX-06: one color per participant, from the palette. */
+/* Semantic user/domain colors and legacy style-guide accents. */
 [data-color="blue"] {
 	--who: var(--p-blue);
 }
@@ -70,6 +70,22 @@
 }
 [data-color="black"] {
 	--who: var(--p-black);
+}
+
+/* Thread-local identity colors; semantic state colors above are unchanged. */
+[data-color="session-teal"] { --who: #007f86; }
+[data-color="session-orange"] { --who: #b95000; }
+[data-color="session-violet"] { --who: #8046b5; }
+[data-color="session-gold"] { --who: #8a7000; }
+[data-color="session-rose"] { --who: #b32d69; }
+[data-color="session-lime"] { --who: #507b16; }
+@media (prefers-color-scheme: dark) {
+	[data-color="session-teal"] { --who: #55c6ce; }
+	[data-color="session-orange"] { --who: #ffa45c; }
+	[data-color="session-violet"] { --who: #bc96ed; }
+	[data-color="session-gold"] { --who: #e1c35a; }
+	[data-color="session-rose"] { --who: #f286b2; }
+	[data-color="session-lime"] { --who: #a4c966; }
 }
 
 * {

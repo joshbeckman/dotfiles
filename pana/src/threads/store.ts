@@ -270,6 +270,8 @@ async function participantFor(tx: SqliteExecutor, runtime: Runtime, now: number,
 	return { id: ref.id, kind: "session", url, created_at: now };
 }
 
+// Join-message sequence is append-only, even when joins share a timestamp or an older
+// session joins later. Initial members have no join message and sort first by ID.
 async function threadParticipants(tx: SqliteExecutor, threadId: string): Promise<ParticipantView[]> {
 	const rows = await tx.all<{
 		id: string;
@@ -283,7 +285,7 @@ async function threadParticipants(tx: SqliteExecutor, threadId: string): Promise
 		   FROM thread_participants tp
 		   JOIN participants p ON p.id = tp.participant_id
 		  WHERE tp.thread_id = ?
-		  ORDER BY tp.joined_at, p.id`,
+		  ORDER BY COALESCE((SELECT seq FROM messages WHERE id = tp.joined_message_id), 0), p.id`,
 		threadId,
 	);
 	return rows.map((row) => ({
@@ -1064,7 +1066,7 @@ export async function inboxThreads(
 						`SELECT tp.thread_id AS thread_id, p.id AS id, p.kind AS kind, p.url AS url
 						   FROM thread_participants tp JOIN participants p ON p.id = tp.participant_id
 						  WHERE tp.thread_id IN (${inList(threadIds)})
-						  ORDER BY tp.thread_id, tp.joined_at, p.id`,
+						  ORDER BY tp.thread_id, COALESCE((SELECT seq FROM messages WHERE id = tp.joined_message_id), 0), p.id`,
 						...threadIds,
 					);
 		const participantsOf = new Map<string, PersonView[]>();

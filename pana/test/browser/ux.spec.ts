@@ -6,7 +6,7 @@ import { sessionRuntime } from "../../src/sessions/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { INPUT_KEYMAP, KEYMAP } from "../../web/keys.js";
-import { PALETTE, participantColor, refLabel } from "../../web/views.js";
+import { PALETTE, SESSION_PALETTE, participantColor, refLabel } from "../../web/views.js";
 import type { TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
@@ -451,7 +451,7 @@ describeBrowser("pana usability in a browser", () => {
 		expect(linked.bottom).toBeLessThanOrEqual(linked.height + 1);
 	});
 
-	it("UX-06 each participant's messages carry that participant's palette color in every thread", async () => {
+	it("UX-06 thread-local colors agree across messages, participants and inbox without session-list swatches", async () => {
 		const { t } = await start();
 		const colors = async (threadId: string, count: number) =>
 			evaluatePage<Array<{ sender: string; color: string; name: string }>>(`
@@ -465,20 +465,21 @@ describeBrowser("pana usability in a browser", () => {
 			`);
 		const group = await colors(seeded!.group.threadId, seeded!.group.messageIds.length);
 		const capital = await colors(seeded!.capital.threadId, seeded!.capital.messageIds.length);
-		const palette = new Set(Object.values(PALETTE).map(rgb));
-		const bySender = new Map<string, string>();
-		for (const message of [...group, ...capital]) {
-			expect(palette.has(message.color), `${message.sender} ${message.color}`).toBe(true);
-			const seen = bySender.get(message.sender);
-			if (seen) expect(message.color, message.sender).toBe(seen);
-			bySender.set(message.sender, message.color);
+		const palette = new Set(Object.values({ ...PALETTE, ...SESSION_PALETTE }).map(rgb));
+		for (const messages of [group, capital]) {
+			const bySender = new Map<string, string>();
+			for (const message of messages) {
+				expect(palette.has(message.color), `${message.sender} ${message.color}`).toBe(true);
+				const seen = bySender.get(message.sender);
+				if (seen) expect(message.color).toBe(seen);
+				bySender.set(message.sender, message.color);
+			}
+			expect(bySender.get(t.runtime.userUrl)).toBe(rgb(PALETTE.blue));
 		}
-		expect(bySender.get(t.runtime.userUrl)).toBe(rgb(PALETTE.blue));
 		const [sessionA, sessionB] = seeded!.group.sessionUrls;
-		expect(bySender.get(sessionA!)).toBeDefined();
-		expect(bySender.get(sessionB!)).toBeDefined();
-		expect(bySender.get(sessionA!)).not.toBe(rgb(PALETTE.blue));
-		// The participant list and the inbox use the same colors.
+		const colorA = group.find((message) => message.sender === sessionA)!.color;
+		expect(colorA).not.toBe(group.find((message) => message.sender === sessionB)!.color);
+		expect(await colors(seeded!.group.threadId, seeded!.group.messageIds.length)).toEqual(group);
 		const marks = await evaluatePage<Record<string, string>>(`
 			const out = {};
 			for (const person of document.querySelectorAll("#thread-participants .person")) {
@@ -486,8 +487,19 @@ describeBrowser("pana usability in a browser", () => {
 			}
 			return out;
 		`);
-		expect(marks[t.runtime.userUrl]).toBe(rgb(PALETTE.blue));
-		expect(marks[sessionA!]).toBe(bySender.get(sessionA!));
+		expect(marks[sessionA!]).toBe(colorA);
+		const inbox = await evaluatePage<string>(`
+			location.hash = "#/inbox";
+			await until(() => document.querySelector('[data-thread="${seeded!.group.threadId}"] .people'));
+			const link = [...document.querySelectorAll('[data-thread="${seeded!.group.threadId}"] .people a')].find((a) => a.title === "${sessionA}");
+			return getComputedStyle(link.parentElement, "::before").backgroundColor;
+		`);
+		expect(inbox).toBe(colorA);
+		expect(await evaluatePage<number>(`
+			location.hash = "#/sessions";
+			await until(() => document.querySelectorAll("#sessions-list .item").length >= 3);
+			return document.querySelectorAll("#sessions-list .person, #sessions-list [data-color]").length;
+		`)).toBe(0);
 	});
 
 	it("UX-07 labels and controls align, spacing follows one scale, and controls sit inside their section", async () => {
@@ -883,7 +895,8 @@ describeBrowser("pana usability in a browser", () => {
 		const threadId = seeded!.capital.threadId;
 		const sessionId = seeded!.capital.sessionId;
 		const sessionUrl = seeded!.capital.sessionUrl;
-		const color = participantColor({ url: sessionUrl, kind: "session" });
+		const thread = (await t.client.get(`/threads/${threadId}`)).body as { thread: { participants: Array<{ url: string; kind: string }> } };
+		const color = participantColor({ url: sessionUrl, kind: "session" }, thread.thread.participants);
 
 		// The session is idle, so the inbox row carries no mark.
 		await evaluatePage(`await until(() => document.querySelectorAll("#inbox-list [data-thread]").length >= 3); return true;`);
@@ -941,7 +954,7 @@ describeBrowser("pana usability in a browser", () => {
 		expect(chip.color).toBe(color);
 		expect(chip.text).toContain(refLabel(sessionUrl));
 		expect(chip.animated).toBe("pana-working");
-		expect(chip.background).toBe(rgb(PALETTE[color as keyof typeof PALETTE]));
+		expect(chip.background).toBe(rgb(SESSION_PALETTE[color!]!));
 		expect(chip.above).toBe(true);
 
 		// The reply lands: the indicator disappears without a reload.
@@ -966,7 +979,8 @@ describeBrowser("pana usability in a browser", () => {
 		const threadId = seeded!.capital.threadId;
 		const sessionId = seeded!.capital.sessionId;
 		const sessionUrl = seeded!.capital.sessionUrl;
-		const color = participantColor({ url: sessionUrl, kind: "session" });
+		const thread = (await t.client.get(`/threads/${threadId}`)).body as { thread: { participants: Array<{ url: string; kind: string }> } };
+		const color = participantColor({ url: sessionUrl, kind: "session" }, thread.thread.participants);
 
 		// The session is idle and has nothing scheduled, so nothing sits above the reply box.
 		await evaluatePage(`

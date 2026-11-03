@@ -617,11 +617,11 @@ function copyingLink(link, url) {
 }
 
 /** A participant as a short, colored name that links to its view (REF-08, UX-06). */
-function personLink(person) {
+function personLink(person, participants = state.thread?.participants ?? []) {
 	const url = typeof person === "string" ? person : person.url;
 	const link = refLink(url, "user", refLabel(url), url);
 	const wrap = span("", "person");
-	wrap.dataset.color = participantColor(person);
+	wrap.dataset.color = participantColor(person, participants);
 	wrap.append(link);
 	return wrap;
 }
@@ -715,7 +715,8 @@ function syncWorkingMark(row, threadId = row.dataset.thread) {
 	const working = [...workingMap(threadId).values()];
 	mark.hidden = working.length === 0;
 	if (working.length === 0) return;
-	mark.dataset.color = participantColor({ url: working[0].url, kind: "session" });
+	// Thread-list summaries lack participants: their mark is a generic activity signal.
+	mark.dataset.color = participantColor({ url: working[0].url, kind: "session" }, row.__participants ?? []) ?? "blue";
 	mark.title = `${working.map((session) => refLabel(session.url)).join(", ")} working`;
 }
 
@@ -786,7 +787,7 @@ function scheduledChip(wake) {
 	const chip = span("", "working-chip scheduled-chip");
 	chip.dataset.testid = "scheduled-session";
 	chip.dataset.session = wake.sessionId;
-	chip.dataset.color = participantColor({ url: wake.url, kind: "session" });
+	chip.dataset.color = participantColor({ url: wake.url, kind: "session" }, state.thread?.participants ?? []);
 	const repeating = wake.cron ? ` (${wake.cron})` : "";
 	const subject = wake.subject ? `: ${wake.subject}` : "";
 	chip.append(span("", "working-dot scheduled-mark"));
@@ -814,7 +815,7 @@ function workingChip(session) {
 	const chip = span("", "working-chip");
 	chip.dataset.testid = "working-session";
 	chip.dataset.session = session.sessionId;
-	chip.dataset.color = participantColor({ url: session.url, kind: "session" });
+	chip.dataset.color = participantColor({ url: session.url, kind: "session" }, state.thread?.participants ?? []);
 	chip.title = `${refLabel(session.url)} is ${session.state}`;
 	chip.append(span("", "working-dot"));
 	chip.append(refLink(session.url, "session", refLabel(session.url)));
@@ -998,13 +999,13 @@ function inboxItem(row, showArchived) {
 	// The reader is in every thread of their own inbox, so the row names the others.
 	const others = row.participants.filter((person) => person.kind !== "user");
 	const people = span("", "people");
-	for (const person of others) people.append(personLink(person));
+	for (const person of others) people.append(personLink(person, row.participants));
 	const snippet = document.createElement("span");
 	snippet.className = "snippet";
 	snippet.dataset.testid = "inbox-snippet";
 	const who = span(`${row.sender.kind === "user" ? "You" : refLabel(row.sender.url)}: `, "snippet-sender");
 	if (row.sender.kind !== "user") who.replaceChildren(referenceText(`${refLabel(row.sender.url)}: `));
-	who.dataset.color = participantColor(row.sender);
+	who.dataset.color = participantColor(row.sender, row.participants);
 	snippet.append(who, document.createTextNode(row.snippet));
 	const aside = document.createElement("div");
 	aside.className = "item-aside";
@@ -1030,6 +1031,7 @@ function inboxItem(row, showArchived) {
 		},
 	);
 	// UX-09: a row marks the thread while one of its sessions works.
+	node.__participants = row.participants;
 	rememberWorking(row.threadId, row.working);
 	node.querySelector(".title")?.append(workingMark());
 	syncWorkingMark(node);
@@ -1254,8 +1256,8 @@ async function messageElement(message, { focus }) {
 	article.dataset.testid = "message";
 	article.dataset.id = view.id ?? "";
 	article.dataset.sender = view.sender;
-	// UX-06: the left border is the sender's own color in every thread.
-	article.dataset.color = participantColor({ url: view.sender, kind: view.senderKind });
+	// UX-06: the sender's identity color belongs to this thread, not the session.
+	article.dataset.color = participantColor({ url: view.sender, kind: view.senderKind }, state.thread?.participants ?? []);
 
 	const header = document.createElement("header");
 	const sender = view.sender ? refLink(view.sender, "user", refLabel(view.sender), view.sender) : document.createTextNode("unknown sender");
@@ -1550,12 +1552,13 @@ async function showStale(error, draft) {
 	const newerIds = new Set((Array.isArray(error?.body?.error?.newer) ? error.body.error.newer : []).map(String));
 	const headIndex = messages.findIndex((message) => message.id === draft.after);
 	const newer = headIndex === -1 ? messages.filter((message) => newerIds.has(message.id)) : messages.slice(headIndex + 1);
+	// New participants must be known before rendering their stale-warning messages.
+	state.thread = thread;
 	const container = $("stale-new");
 	container.replaceChildren();
 	for (const message of newer) container.append(await messageElement(message, {}));
 	$("stale").hidden = false;
 	$("reply-body").value = $("reply-body").value || draft.body;
-	state.thread = thread;
 	const newest = messages[messages.length - 1]?.id;
 	if (newest) {
 		draft.after = newest;
@@ -1621,8 +1624,7 @@ async function loadSessionList(query = "", cursor, filter = $("sessions-state").
 	for (const session of sessions) {
 		learnDomain(session.url);
 		const title = document.createDocumentFragment();
-		const swatch = span("", "person");
-		swatch.dataset.color = participantColor({ url: session.url ?? "", kind: "session" });
+		const swatch = span("", "session-link");
 		swatch.append(refLink(session.url ?? session.id, "session", session.id, session.url));
 		title.append(badge(session.state ?? "unknown", "state-badge"), swatch);
 		const aside = document.createElement("div");
@@ -3105,8 +3107,7 @@ function renderObjectiveMembers() {
 		// UX-09: the same state badge a session row draws, so its color is here from the first paint
 		// and a state event only rewrites it.
 		title.append(badge(state, "state-badge"));
-		const person = span("", "person");
-		person.dataset.color = participantColor({ url: member.url, kind: "session" });
+		const person = span("", "session-link");
 		person.append(refLink(member.url || member.id, "session", member.id, member.url));
 		title.append(" ", person);
 		if (member.lead) title.append(" ", span("lead", "badge"));
