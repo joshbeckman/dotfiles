@@ -107,7 +107,7 @@ export const PALETTE = {
 	red: "#BD2024", yellow: "#FFCC00", black: "#0D0D0D",
 };
 
-export { SESSION_PALETTE, SESSION_DARK_PALETTE } from "./session-palette.js";
+export { SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE } from "./session-palette.js";
 import { SESSION_PALETTE } from "./session-palette.js";
 export const SESSION_COLORS = Object.keys(SESSION_PALETTE);
 export const SESSION_PATTERNS = ["solid", "dashed", "dotted", "double"];

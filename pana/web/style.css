@@ -73,31 +73,31 @@
 }
 
 /* BEGIN generated session palette */
-[data-color="session-1"] { --who: #9c3a11; }
-[data-color="session-2"] { --who: #0b7a9a; }
-[data-color="session-3"] { --who: #4a2d66; }
-[data-color="session-4"] { --who: #682226; }
-[data-color="session-5"] { --who: #6c4860; }
-[data-color="session-6"] { --who: #966c5a; }
-[data-color="session-7"] { --who: #5d6147; }
-[data-color="session-8"] { --who: #a14e78; }
-[data-color="session-9"] { --who: #6d7607; }
-[data-color="session-10"] { --who: #7f0049; }
-[data-color="session-11"] { --who: #5e3e04; }
-[data-color="session-12"] { --who: #796589; }
+[data-color="session-1"] { --who: #f21764; --who-text: #e3115d; }
+[data-color="session-2"] { --who: #139ec6; --who-text: #397f98; }
+[data-color="session-3"] { --who: #9d18f3; --who-text: #9d18f3; }
+[data-color="session-4"] { --who: #885538; --who-text: #885538; }
+[data-color="session-5"] { --who: #f52ddc; --who-text: #d313bd; }
+[data-color="session-6"] { --who: #e1781c; --who-text: #b75f0c; }
+[data-color="session-7"] { --who: #2ea103; --who-text: #2c8812; }
+[data-color="session-8"] { --who: #a66db3; --who-text: #9961a6; }
+[data-color="session-9"] { --who: #3e730a; --who-text: #3e730a; }
+[data-color="session-10"] { --who: #a82571; --who-text: #a82571; }
+[data-color="session-11"] { --who: #947b04; --who-text: #897310; }
+[data-color="session-12"] { --who: #c167fb; --who-text: #a34dd8; }
 @media (prefers-color-scheme: dark) {
-	[data-color="session-1"] { --who: #fb906a; }
-	[data-color="session-2"] { --who: #77d2f5; }
-	[data-color="session-3"] { --who: #9a7cbd; }
-	[data-color="session-4"] { --who: #c17273; }
-	[data-color="session-5"] { --who: #c299b4; }
-	[data-color="session-6"] { --who: #f0c2ae; }
-	[data-color="session-7"] { --who: #b0b598; }
-	[data-color="session-8"] { --who: #ffa3cf; }
-	[data-color="session-9"] { --who: #c2cd6f; }
-	[data-color="session-10"] { --who: #de669a; }
-	[data-color="session-11"] { --who: #b28e5c; }
-	[data-color="session-12"] { --who: #d0bae2; }
+	[data-color="session-1"] { --who: #fb906a; --who-text: #fb906a; }
+	[data-color="session-2"] { --who: #77d2f5; --who-text: #77d2f5; }
+	[data-color="session-3"] { --who: #9a7cbd; --who-text: #9a7cbd; }
+	[data-color="session-4"] { --who: #c17273; --who-text: #c17273; }
+	[data-color="session-5"] { --who: #c299b4; --who-text: #c299b4; }
+	[data-color="session-6"] { --who: #f0c2ae; --who-text: #f0c2ae; }
+	[data-color="session-7"] { --who: #b0b598; --who-text: #b0b598; }
+	[data-color="session-8"] { --who: #ffa3cf; --who-text: #ffa3cf; }
+	[data-color="session-9"] { --who: #c2cd6f; --who-text: #c2cd6f; }
+	[data-color="session-10"] { --who: #de669a; --who-text: #de669a; }
+	[data-color="session-11"] { --who: #b28e5c; --who-text: #b28e5c; }
+	[data-color="session-12"] { --who: #d0bae2; --who-text: #d0bae2; }
 }
 /* END generated session palette */
 
@@ -1012,7 +1012,7 @@ button.quiet:hover,
 	gap: 0.35rem;
 }
 .working-chip a {
-	color: var(--who, var(--c-text));
+	color: var(--who-text, var(--who, var(--c-text)));
 }
 /* UX-09: a session with a wake pending is work to come, not work now: a hollow mark and a
    quieter time, so the footer never reads as two things happening at once. */

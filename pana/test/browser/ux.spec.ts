@@ -8,7 +8,7 @@ import { sessionRuntime } from "../../src/sessions/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { INPUT_KEYMAP, KEYMAP } from "../../web/keys.js";
-import { PALETTE, SESSION_PALETTE, participantColor, participantPattern, refLabel } from "../../web/views.js";
+import { PALETTE, SESSION_PALETTE, SESSION_TEXT_PALETTE, participantColor, participantPattern, refLabel } from "../../web/views.js";
 import type { TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, emulateColorScheme, screenshot, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
@@ -1020,7 +1020,7 @@ describeBrowser("pana usability in a browser", () => {
 				),
 			"the thread working indicator",
 		);
-		const chip = await evaluatePage<{ sessions: string[]; color: string; text: string; animated: string; background: string; above: boolean }>(`
+		const chip = await evaluatePage<{ sessions: string[]; color: string; text: string; animated: string; background: string; foreground: string; above: boolean }>(`
 			const node = document.getElementById("thread-working");
 			const chip = node.querySelector("[data-testid=working-session]");
 			const dot = chip.querySelector(".working-dot");
@@ -1030,6 +1030,7 @@ describeBrowser("pana usability in a browser", () => {
 				text: chip.textContent,
 				animated: getComputedStyle(dot).animationName,
 				background: getComputedStyle(dot).backgroundColor,
+				foreground: getComputedStyle(chip.querySelector("a")).color,
 				above: node.getBoundingClientRect().bottom <= document.getElementById("reply-form").getBoundingClientRect().top + 1,
 			};
 		`);
@@ -1038,6 +1039,7 @@ describeBrowser("pana usability in a browser", () => {
 		expect(chip.text).toContain(refLabel(sessionUrl));
 		expect(chip.animated).toBe("pana-working");
 		expect(chip.background).toBe(rgb(SESSION_PALETTE[color!]!));
+		expect(chip.foreground).toBe(rgb(SESSION_TEXT_PALETTE[color!]!));
 		expect(chip.above).toBe(true);
 
 		// The reply lands: the indicator disappears without a reload.
