@@ -54,7 +54,7 @@ module PRLookup
     # A non-GitHub origin must be positively identified, never routed to its mirror.
     template = config('prLookup.urlTemplate')
     template = config('prForCommit.urlTemplate') if template.empty?
-    legacy_host = provider == 'gitstream' && !template.empty? && !host.empty? && URI.parse(template.gsub('{number}', '1')).host == URI.parse(host).host
+    legacy_host = provider == 'gitstream' && ((!explicit_host.empty? && !explicit_repo.empty?) || (!template.empty? && !host.empty? && URI.parse(template.gsub('{number}', '1')).host == URI.parse(host).host))
     discover = hosted_remote && URI.parse(host).host != 'github.com' && provider != 'github' && !legacy_host
     selected_host = host
     if provider == 'delta' || discover
@@ -77,7 +77,9 @@ module PRLookup
       elsif provider == 'gitstream'
         template = config('prLookup.urlTemplate')
         template = config('prForCommit.urlTemplate') if template.empty?
-        valid = uri.path.match?(%r{/pulls/[0-9]+/?\z}) && (template.empty? || template_matches?(selector))
+        trusted = !explicit_host.empty? && !explicit_repo.empty? && uri.host == URI.parse(host).host && uri.port == URI.parse(host).port
+        direct = trusted && uri.path.match?(%r{\A/(?:repos/)?#{Regexp.escape(repo)}/pulls/[0-9]+/?\z})
+        valid = direct || template_matches?(selector)
         raise 'PR URL does not match the configured Gitstream host' unless valid
       else
         raise 'unknown PR URL host; configure prLookup.provider and repository routing'

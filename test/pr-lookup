@@ -75,8 +75,27 @@ grep -Fq '| Required CI | failure | Required |' "$tmp/out"
 expect_line '| Check | Status | Result |' pr-checks https://github.com/example/project/pull/7 --required
 
 git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
-gitstream_url='https://reviews.example.test/pulls/41'
+# An explicit provider is not trust in arbitrary URL hosts or repositories.
+for url in 'https://unrelated.example.invalid/other/project/pulls/42' 'https://reviews.example.test/pulls/41'; do
+  if run pr-view "$url" >"$tmp/out" 2>"$tmp/err"; then
+    echo 'expected untrusted legacy selector to fail without a template' >&2; exit 1
+  fi
+  grep -Fq 'does not match the configured Gitstream host' "$tmp/err"
+done
+git -C "$tmp/repo" remote add origin https://github.com/example/project.git
+if run pr-view https://unrelated.example.invalid/other/project/pulls/42 >"$tmp/out" 2>"$tmp/err"; then
+  echo 'a GitHub mirror does not authenticate a legacy selector' >&2; exit 1
+fi
+git -C "$tmp/repo" config prLookup.host reviews.example.test
+git -C "$tmp/repo" config prLookup.repo example/project
+gitstream_url='https://reviews.example.test/repos/example/project/pulls/41'
 [[ "$(run pr-url "$gitstream_url")" == "$gitstream_url" ]]
 [[ "$(run pr-merged "$gitstream_url")" == '2026-02-03T04:05:06Z' ]]
+for url in 'https://unrelated.example.invalid/repos/example/project/pulls/42' 'https://reviews.example.test/repos/other/project/pulls/42'; do
+  if run pr-view "$url" >"$tmp/out" 2>"$tmp/err"; then
+    echo 'expected mismatched legacy host/repository to fail' >&2; exit 1
+  fi
+  grep -Fq 'does not match the configured Gitstream host' "$tmp/err"
+done
 
 printf 'pr-lookup tests passed\n'

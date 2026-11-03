@@ -34,4 +34,8 @@ git config prLookup.urlTemplate 'https://example.test/pulls/{number}'
 
 Do not treat a missing or ambiguous commit association as permission to guess a PR or fall back to a mirror. Legacy merge-trailer mappings are not proof of a new provider association.
 
+The helpers read repository-local `prLookup.remote` (default `origin`), with optional `prLookup.host` and `prLookup.repo` overrides. A positively identified Delta origin supersedes stale legacy routing without rewriting configuration; a failed discovery is not permission to fall back to a mirror. Legacy URL selectors need an exact configured template or matching explicitly configured host and repository.
+
+Delta commit association uses local branch, subject/link, trailer, or configured-base merge hints to find candidates, then verifies exact head/merge SHA or paginated commit membership. Detached old commits without surviving candidate hints fail explicitly; the helper does not scan every remote PR. The routing helper requires Ruby with its JSON/URI standard libraries. A runtime LoadError must be reported, not treated as an empty PR result.
+
 A configured merge-trailer workflow for `git pr-for-commit` additionally uses `prLookup.trailer` and `prLookup.baseRef`.
