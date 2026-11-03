@@ -1597,7 +1597,6 @@ kbd {
 	#nav::-webkit-scrollbar {
 		display: none;
 	}
-	/* Session controls keep the compact shared height, including on narrow screens. */
 	/* The message menu keeps its size on screen but takes a thumb's 44 px target around itself. */
 	.message-menu > summary {
 		position: relative;
