@@ -130,25 +130,61 @@ describeBrowser("MOB the PWA at phone width", () => {
 		expect(layout.actionsBelow).toBe(true);
 	});
 
-	it("MOB-04 the nav fits a phone's width instead of clipping its last section", async () => {
+	it("MOB-04 the nav fits one phone row, and Settings is reachable outside it", async () => {
 		seeded = await seedDomain();
 		page = await newPage(`${loopbackOrigin(seeded.t.panad.tcpPort!)}/#${seeded.t.panad.webToken}`);
 		await emulateViewport(PHONE);
-		const nav = await evaluatePage<{ items: number; fits: boolean; overflow: number }>(`
+		const nav = await evaluatePage<{
+			items: number;
+			rows: number;
+			fits: boolean;
+			overflow: number;
+			bar: number;
+			sticky: number;
+			settings: boolean;
+		}>(`
 			await until(() => document.querySelectorAll("#nav a").length >= 5);
+			await document.fonts.ready;
 			const nav = document.getElementById("nav");
-			const last = nav.querySelector("a:last-of-type");
+			const links = [...nav.querySelectorAll("a")];
+			const last = links.at(-1);
+			const settings = document.querySelector("[data-testid=nav-settings]");
+			const bar = document.querySelector(".topbar").getBoundingClientRect();
+			const probe = document.createElement("div");
+			probe.style.cssText = "position:absolute;visibility:hidden;height:var(--topbar-h)";
+			document.body.append(probe);
+			const sticky = Math.round(probe.getBoundingClientRect().height);
+			probe.remove();
 			return {
-				items: nav.querySelectorAll("a").length,
+				items: links.length,
+				rows: new Set(links.map((a) => Math.round(a.getBoundingClientRect().top))).size,
 				// SCHEDULES was 28 px past the edge, so the last item was cut off mid-word.
 				fits: last.getBoundingClientRect().right <= nav.getBoundingClientRect().right + 1,
 				overflow: nav.scrollWidth - nav.clientWidth,
+				bar: Math.round(bar.height),
+				// Every sticky header below the bar is offset by this variable.
+				sticky,
+				settings: Boolean(settings && settings.getBoundingClientRect().width > 0),
 			};
 		`);
-		// Settings is the seventh section; wrapping keeps every link visible without scrolling.
-		expect(nav.items).toBe(7);
+		// Six sections, one row: Settings is configuration, so it sits with the tools beside the
+		// palette rather than wrapping the menu to a second line that holds one word.
+		expect(nav.items).toBe(6);
+		expect(nav.rows).toBe(1);
 		expect(nav.fits).toBe(true);
 		expect(nav.overflow).toBe(0);
+		expect(nav.settings).toBe(true);
+		// The bar used to be 50 px taller than the variable the sticky headers trust.
+		expect(Math.abs(nav.bar - nav.sticky)).toBeLessThanOrEqual(2);
+		const onSettings = await evaluatePage<{ current: string | null; navCurrent: boolean }>(`
+			location.hash = "#/settings";
+			await until(() => document.querySelector("[data-testid=nav-settings][aria-current=page]"));
+			return {
+				current: document.querySelector("[data-testid=nav-settings]")?.getAttribute("aria-current"),
+				navCurrent: Boolean(document.querySelector("#nav a[aria-current=page]")),
+			};
+		`);
+		expect(onSettings).toEqual({ current: "page", navCurrent: false });
 	});
 
 	it("MOB-05 the session header stacks its details on a phone instead of running them together", async () => {

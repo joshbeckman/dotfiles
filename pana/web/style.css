@@ -228,6 +228,11 @@ pre {
 	--selection-color: var(--p-orange);
 	background: var(--c-selected);
 }
+/* The tools' Settings control is a section too, so it marks its page the way the menu does. */
+#nav-settings[aria-current="page"] {
+	--selection-color: var(--p-orange);
+	color: var(--c-text);
+}
 /* REF-06: an unread signal; its tooltip and accessible label retain the total. */
 #nav-inbox-count {
 	flex: none;
@@ -240,8 +245,18 @@ pre {
 }
 .topbar-tools {
 	display: flex;
+	align-items: center;
 	gap: var(--s2);
 	flex: none;
+}
+/* Settings is the app's own configuration, not a section of the mail, so it lives with the tools
+   as a gear instead of taking a seventh word in the section menu. */
+.icon-button {
+	padding: 0 var(--s2);
+	color: var(--c-text-alt);
+}
+.icon-button svg {
+	display: block;
 }
 
 #status {
@@ -509,6 +524,7 @@ button.danger:hover {
 	color: var(--p-white);
 }
 button.quiet,
+a.button.quiet,
 .row-action {
 	min-height: 1.75rem;
 	padding: 0 var(--s2);
@@ -517,6 +533,7 @@ button.quiet,
 	font-size: 0.78rem;
 }
 button.quiet:hover,
+a.button.quiet:hover,
 .row-action:hover {
 	border-color: var(--c-link);
 	color: var(--c-link);
@@ -683,6 +700,7 @@ button.quiet:hover,
 /* One selection language for sections, j/k targets, and command-palette results.
    The overlay is inset, never changes layout, and cannot intercept row actions. */
 #nav a[aria-current="page"],
+#nav-settings[aria-current="page"],
 .item.selected,
 .message.selected,
 .palette .item.focus {
@@ -690,6 +708,7 @@ button.quiet:hover,
 	background: var(--c-selected);
 }
 #nav a[aria-current="page"]::after,
+#nav-settings[aria-current="page"]::after,
 .item.selected::after,
 .message.selected::after,
 .palette .item.focus::after {
@@ -1544,8 +1563,10 @@ kbd {
 /* ---- Small screens ----------------------------------------------------------------------- */
 @media (max-width: 40rem) {
 	:root {
-		--topbar-min-h: 5.5rem;
-		--topbar-h: 5.5rem;
+		/* Two rows: the brand and the tools, then one row of sections. The value tracks the pair,
+		   so a sticky header anywhere else clears the whole bar. */
+		--topbar-min-h: 6.125rem;
+		--topbar-h: 6.125rem;
 	}
 	.topbar {
 		flex-wrap: wrap;
@@ -1558,22 +1579,18 @@ kbd {
 	#nav {
 		order: 3;
 		flex-basis: 100%;
-		gap: var(--s1);
+		/* Six labels and their padding, not the gaps, are what a 360 px phone is short of. */
+		gap: 0.125rem;
 	}
 	#nav a {
-		font-size: 0.75rem;
+		font-size: 0.72rem;
 		letter-spacing: 0.01em;
+		padding-inline: 0.15rem;
 	}
-	/* Settings is the seventh section. Wrap rather than hide a section beyond the phone edge. */
-	#nav {
-		flex-wrap: wrap;
-		overflow-x: visible;
-	}
+	/* MOB-04: six sections, one row. A narrower phone scrolls the menu rather than clipping a
+	   section or wrapping it to a second line. */
 	#nav::-webkit-scrollbar {
 		display: none;
-	}
-	#nav a {
-		padding-inline: 0.2rem;
 	}
 	/* Thumbs: a session's controls take the full 44 px target instead of 36 px. */
 	.view-header .header-actions button,
