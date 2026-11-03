@@ -3,6 +3,7 @@ import { mkdirSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
+import { participantColor } from "../../web/views.js";
 import { startTestPanad, type TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, screenshot } from "./cli.ts";
 
@@ -157,7 +158,7 @@ describeBrowser("settings", () => {
 			window.colorDomain = document.querySelector('#thread-messages .message[data-user-color="false"]');
 			window.colorSession = document.querySelector('#thread-messages .message[data-sender="${sessionUrl}"]');
 			window.colorSessionIdentity = {color:window.colorSession.dataset.color,pattern:window.colorSession.dataset.pattern,border:getComputedStyle(window.colorSession).borderLeftColor};
-			if(window.colorSessionIdentity.color !== "session-1") throw new Error("Thread-local session color missing");
+			if(window.colorSessionIdentity.color !== ${JSON.stringify(participantColor({ url: sessionUrl, kind: "session" }, { participants: sent.body.thread.participants, threadId: notice.thread.id }))}) throw new Error("Thread-local session color missing");
 			window.colorHead = window.__pana.state.draft.after;
 			document.getElementById("reply-body").value = "Keep my draft";
 			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};

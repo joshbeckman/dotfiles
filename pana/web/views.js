@@ -107,8 +107,8 @@ export const PALETTE = {
 	red: "#BD2024", yellow: "#FFCC00", black: "#0D0D0D",
 };
 
-export { SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE } from "./session-palette.js";
-import { SESSION_PALETTE } from "./session-palette.js";
+export { SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE, SESSION_COLOR_ORDERS } from "./session-palette.js";
+import { SESSION_PALETTE, SESSION_COLOR_ORDERS } from "./session-palette.js";
 export const SESSION_COLORS = Object.keys(SESSION_PALETTE);
 export const SESSION_PATTERNS = ["solid", "dashed", "dotted", "double"];
 
@@ -126,14 +126,26 @@ export function participantPattern(participant, participants = []) {
 	return index < 0 ? "solid" : SESSION_PATTERNS[Math.floor(index / SESSION_COLORS.length) % SESSION_PATTERNS.length];
 }
 
+/** Stable UI seed, not randomness on each render. Avalanche keeps neighboring ULIDs apart. */
+function threadSeed(id) {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 0x01000193);
+	hash ^= hash >>> 16;
+	hash = Math.imul(hash, 0x7feb352d);
+	hash ^= hash >>> 15;
+	hash = Math.imul(hash, 0x846ca68b);
+	return (hash ^ (hash >>> 16)) >>> 0;
+}
+
 /** Color within a thread's append-ordered participants. Sessions outside threads have no swatch. */
-export function participantColor(participant, { participants = [], userColor = "blue" } = {}) {
+export function participantColor(participant, { participants = [], userColor = "blue", threadId = "" } = {}) {
 	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
 	const kind = typeof participant === "string" ? kindOf(url) : String(participant?.kind || kindOf(url));
 	if (kind === "user") return validUserColor(userColor) ? userColor : "blue";
 	if (kind === "domain") return "black";
 	const index = sessionIndex(url, participants);
-	return index < 0 ? undefined : SESSION_COLORS[index % SESSION_COLORS.length];
+	const colors = threadId ? SESSION_COLOR_ORDERS[SESSION_COLORS[threadSeed(String(threadId)) % SESSION_COLORS.length]] : SESSION_COLORS;
+	return index < 0 ? undefined : colors[index % colors.length];
 }
 
 function kindOf(url) {
