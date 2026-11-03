@@ -362,6 +362,20 @@ describe("PWA shell and static assets", () => {
 		expect(referenceFor({ name: "blob", url: "u" })).toBe("[blob](u)");
 	});
 
+	it("SET-04 hello and live settings events send saved user colors to every authorized window", async () => {
+		t = await startTestPanad({ config: { ui: { userColor: "purple" } } });
+		const streams = [openSse(t.panad.tcpPort!, t.panad.webToken), openSse(t.panad.tcpPort!, t.panad.webToken)];
+		try {
+			for (const stream of streams) expect(await stream.waitFor("event: hello")).toContain('"userColor":"purple"');
+			const read = await t.client.get<any>("/settings");
+			expect((await t.client.post("/settings", { config: { ...read.body.config, ui: { userColor: "red" } }, configRevision: read.body.configRevision })).status).toBe(200);
+			for (const stream of streams) {
+				const frame = await stream.waitFor("event: settings.ui");
+				expect(frame).toContain('"userColor":"red"');
+			}
+		} finally { for (const stream of streams) stream.close(); }
+	});
+
 	it("WEB-06 /events streams live transcript events to an authorized window", async () => {
 		t = await startTestPanad();
 		const sessionId = "01JB00000000000000000000S1";

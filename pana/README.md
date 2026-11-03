@@ -124,7 +124,7 @@ Run `panad` in the foreground with a key in its environment: `s FIREWORKS_API_KE
 
 ### Settings and daemon version
 
-Open **Settings** in the UI to edit `config.json` as JSON. Optional keys use the defaults in [SPEC.md](SPEC.md#config-and-state); unknown keys are preserved. Saves are validated and reject an intervening file edit. `domain` and `user` are existing data identities, so change neither through this editor. Configuration changes require a restart; saving does not change active sessions halfway through a run.
+Open **Settings** in the UI to edit `config.json` as JSON. Optional keys use the defaults in [SPEC.md](SPEC.md#config-and-state); unknown keys are preserved. Saves are validated and reject an intervening file edit. `domain` and `user` are existing data identities, so change neither through this editor. Operational configuration changes require a restart; saving does not change active sessions halfway through a run. The **Your message color** selector sets `ui.userColor` from the style guide palette (blue by default). Saving a color applies immediately to open windows and persists across restarts.
 
 The page compares source on disk (commit SHA, message and local edits) with the revision captured when panad started, and shows the daemon's PID, start time and age. Missing Git metadata is shown as unknown. One panad serves each state directory; sessions are managed inside it, not separate pana daemon processes.
 

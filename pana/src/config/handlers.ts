@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ApiError } from "../api/errors.ts";
 import type { Handlers, RequestContext } from "../api/types.ts";
 import { ConfigError, parseConfig } from "./index.ts";
+import { publish } from "../web/events.ts";
 import { readSourceRevision } from "./source.ts";
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -65,6 +66,11 @@ export const handlers: Handlers = {
 		} finally {
 			try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 		}
+		// Presentation is the only live setting: don't alter operational limits during a run.
+		const previousColor = ctx.runtime.config.ui?.userColor ?? "blue";
+		ctx.runtime.config.ui = parsed.ui;
+		const userColor = parsed.ui?.userColor ?? "blue";
+		if (userColor !== previousColor) void publish(ctx.runtime, { kind: "settings.ui", userColor });
 		return { status: 200, headers: { "cache-control": "no-store" }, body: snapshot(ctx) };
 	},
 	"settings.restart": (ctx) => {

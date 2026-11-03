@@ -91,6 +91,31 @@ it("SET-02 source revision reports HEAD, commit message, local edits and unknown
 	expect(readSourceRevision(join(dir, "missing"))).toBe(null);
 });
 
+it("SET-04 saves the user's palette color immediately, persists it, and keeps operational changes restart-only", async () => {
+	t = await startTestPanad();
+	let read = await t.client.get<any>("/settings");
+	expect(t.runtime.config.ui?.userColor).toBe("blue");
+	const config = { ...read.body.config, ui: { userColor: "purple", future: true } };
+	let saved = await t.client.post<any>("/settings", { config, configRevision: read.body.configRevision });
+	expect(saved.status).toBe(200);
+	expect(saved.body.configRequiresRestart).toBe(false);
+	expect(saved.body.config.ui.future).toBe(true);
+	expect(t.runtime.config.ui?.userColor).toBe("purple");
+	for (const userColor of ["#ff0000", "invalid", 42, null]) {
+		expect((await t.client.post("/settings", { config: { ...config, ui: { userColor } }, configRevision: saved.body.configRevision })).status).toBe(400);
+		expect(t.runtime.config.ui?.userColor).toBe("purple");
+	}
+	const dir = t.dir;
+	await t.stop();
+	t = await startTestPanad({ stateDir: dir });
+	expect(t.runtime.config.ui?.userColor).toBe("purple");
+	read = await t.client.get<any>("/settings");
+	saved = await t.client.post<any>("/settings", { config: { ...config, spawnDepth: 7, ui: { userColor: "green" } }, configRevision: read.body.configRevision });
+	expect(saved.body.configRequiresRestart).toBe(true);
+	expect(t.runtime.config.ui?.userColor).toBe("green");
+	expect(t.runtime.config.spawnDepth).toBe(3);
+});
+
 /** Wait on the child's readiness event, never probe a live daemon. */
 function listening(process: ChildProcess): Promise<void> {
 	return new Promise((resolve, reject) => {

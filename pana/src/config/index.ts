@@ -76,7 +76,12 @@ export interface WorktreeAdapter {
 	create: string[];
 }
 
+export const USER_COLORS = ["blue", "orange", "purple", "green", "red", "yellow", "black"] as const;
+export type UserColor = (typeof USER_COLORS)[number];
+
 export interface Config {
+	/** Presentation preferences apply immediately after a settings save. */
+	ui?: { userColor: UserColor };
 	domain: string;
 	user: string;
 	timezone: string;
@@ -149,7 +154,7 @@ export function parseConfig(raw: unknown): Config {
 		throw new ConfigError("config.json is missing required key: user", 2);
 	}
 
-	for (const key of ["budget", "files", "http", "tools", "scratch", "objectives"]) {
+	for (const key of ["budget", "files", "http", "tools", "scratch", "objectives", "ui"]) {
 		if (obj[key] !== undefined && (!obj[key] || typeof obj[key] !== "object" || Array.isArray(obj[key]))) {
 			throw new ConfigError(`config.json ${key} must be an object`, 2);
 		}
@@ -163,6 +168,10 @@ export function parseConfig(raw: unknown): Config {
 		try { new Intl.DateTimeFormat("en", { timeZone: obj.timezone as string }); }
 		catch { throw new ConfigError("config.json timezone must be a valid time zone", 2); }
 	}
+	const ui = (obj.ui ?? {}) as Record<string, unknown>;
+	if (ui.userColor !== undefined && !(USER_COLORS as readonly unknown[]).includes(ui.userColor)) {
+		throw new ConfigError(`config.json ui.userColor must be one of ${USER_COLORS.join(", ")}`, 2);
+	}
 	const budget = (obj.budget ?? {}) as Record<string, unknown>;
 	const files = (obj.files ?? {}) as Record<string, unknown>;
 	const http = (obj.http ?? {}) as Record<string, unknown>;
@@ -172,6 +181,7 @@ export function parseConfig(raw: unknown): Config {
 	const maxTotalMB = positive(scratch.maxTotalMB, "scratch.maxTotalMB", "megabytes");
 
 	return {
+		ui: { userColor: (ui.userColor ?? "blue") as UserColor },
 		worktreeAdapters: worktreeAdapters(obj.worktreeAdapters),
 		domain: obj.domain,
 		user: obj.user,

@@ -60,7 +60,7 @@ export function subscribeEvents(runtime: Runtime, res: ServerResponse): () => vo
 	};
 	hub(runtime).add(subscriber);
 	res.write("retry: 3000\n\n");
-	subscriber.send({ kind: "hello", at: runtime.clock.now(), domain: runtime.config.domain, user: runtime.config.user });
+	subscriber.send({ kind: "hello", at: runtime.clock.now(), domain: runtime.config.domain, user: runtime.config.user, userColor: runtime.config.ui?.userColor ?? "blue" });
 	const heartbeat = runtime.clock.setTimer(() => {
 		try {
 			res.write(": ping\n\n");
