@@ -906,3 +906,27 @@ export function limitsBody(values, current) {
 	}
 	return { body, invalid };
 }
+
+/** A dirty checkout is not proof that the loaded bytes match, even at the same commit. */
+export function buildSyncLabel(source, running) {
+	if (!source?.sha || !running?.sha) return "Version comparison unavailable";
+	if (source.sha !== running.sha) return "Out of sync — restart to load source";
+	if (source.fingerprint && running.fingerprint) {
+		return source.fingerprint === running.fingerprint ? "In sync" : "Out of sync — restart to load source";
+	}
+	if (source.dirty || running.dirty) return "Uncommitted changes — builds may differ";
+	return "In sync";
+}
+
+export function buildLabel(build) {
+	if (!build?.sha) return "Build information unavailable";
+	return `${build.sha}${build.dirty ? " (uncommitted changes)" : ""}\n${build.message || "Commit message unavailable"}`;
+}
+
+export function configFromText(text) {
+	let config;
+	try { config = JSON.parse(text); }
+	catch (error) { throw new Error(`Invalid JSON: ${error.message}`); }
+	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Configuration must be a JSON object.");
+	return config;
+}

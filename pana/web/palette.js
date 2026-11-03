@@ -43,6 +43,7 @@ export const COMMANDS = [
 	{ id: "back", label: "Go back", hint: "u", keywords: "return up" },
 	{ id: "help", label: "Show keyboard shortcuts", hint: "?", keywords: "keys help" },
 	// OBJ-39: the objectives list, appended so no existing command moves.
+	{ id: "go:settings", label: "Go to Settings", keywords: "config configuration daemon restart version" },
 	{ id: "go:objectives", label: "Go to Objectives", hint: "g o", keywords: "goals charter lead spend budget members" },
 ];
 

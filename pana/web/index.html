@@ -23,6 +23,7 @@
 				<a data-section="memory" href="#/memory">Memory</a>
 				<a data-section="schedules" href="#/schedules">Schedules</a>
 				<a data-section="objectives" href="#/objectives">Objectives</a>
+				<a data-section="settings" href="#/settings">Settings</a>
 			</nav>
 			<div class="topbar-tools">
 				<button id="enable-push" data-testid="enable-push" class="quiet" type="button">Notifications</button>
@@ -471,6 +472,35 @@
 						<button type="button" id="schedule-cancel" data-testid="schedule-cancel" hidden>Cancel</button>
 						<button type="submit" class="primary" id="schedule-create" data-testid="schedule-create">Create</button>
 					</div>
+				</form>
+			</section>
+			<section class="view" id="view-settings" data-testid="settings" hidden>
+				<header class="view-header"><h2>Settings</h2><div class="header-actions">
+					<button type="button" id="settings-refresh">Refresh status</button>
+				</div></header>
+				<p id="settings-status" role="status" aria-live="polite"></p>
+				<section class="panel settings-runtime" aria-labelledby="settings-runtime-title">
+					<h3 id="settings-runtime-title">Daemon &amp; source</h3>
+					<h4>Source checkout</h4><p id="settings-source" class="settings-build"></p>
+					<div id="settings-processes"></div>
+					<p class="hint">Status compares the running build with the source checkout. Dirty builds may differ even at the same commit.</p>
+					<p id="settings-restart-reason" class="hint"></p>
+					<button type="button" id="settings-restart" class="danger" disabled>Restart daemon</button>
+					<div id="settings-restart-confirm" class="confirm" hidden>
+						<p>Restart the daemon? This interrupts active runs and briefly disconnects this app. Saved configuration takes effect after restart. Unsaved edits are not applied.</p>
+						<div class="form-actions"><button type="button" id="settings-restart-no">Cancel</button>
+						<button type="button" id="settings-restart-yes" class="danger">Yes, restart daemon</button></div>
+					</div>
+				</section>
+				<form id="settings-form" class="panel">
+					<h3>Configuration</h3><p id="settings-config-path" class="hint"></p>
+					<p class="hint">Domain and user identify existing records and cannot be changed here. Unknown configuration keys are preserved.</p>
+					<p class="notice" id="settings-config-warning">Configuration changes require a daemon restart. Saving writes the file but does not change the running daemon.</p>
+					<div class="field"><label for="settings-config">Configuration (JSON)</label>
+						<textarea id="settings-config" data-testid="settings-config" rows="20" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="settings-config-warning" disabled></textarea>
+					</div>
+					<p id="settings-config-error" role="alert" class="error" hidden></p>
+					<div class="form-actions"><p id="settings-draft" class="hint"></p><button type="button" id="settings-reload-config">Reload configuration</button><button type="submit" id="settings-save" class="primary" disabled>Save configuration</button></div>
 				</form>
 			</section>
 		</main>

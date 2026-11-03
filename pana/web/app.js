@@ -25,6 +25,9 @@ import { nextCursor, pagePath, showMore } from "./pages.js";
 import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
+	buildLabel,
+	buildSyncLabel,
+	configFromText,
 	charterBody,
 	charterView,
 	commitView,
@@ -129,6 +132,130 @@ function fail(error) {
 	const message = error?.body?.error?.message ?? error?.message ?? String(error);
 	status(message, true);
 	if (error?.status === 403) showAuthorize();
+}
+
+// ---- Settings -------------------------------------------------------------------------------
+
+let settingsData;
+let settingsSavedText;
+let settingsConfigRevision;
+let settingsBusy = false;
+let settingsRestarting = false;
+
+function settingsNotice(text, error = false) {
+	$("settings-status").textContent = text;
+	$("settings-status").classList.toggle("error", error);
+}
+
+function updateSettingsControls() {
+	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
+	$("settings-save").disabled = !settingsData || settingsBusy || settingsRestarting || !changed;
+	$("settings-config").disabled = !settingsData || settingsBusy || settingsRestarting;
+	$("settings-refresh").disabled = settingsBusy;
+	$("settings-reload-config").disabled = settingsBusy || settingsRestarting;
+	$("settings-restart").disabled = !settingsData?.restartAvailable || settingsBusy || settingsRestarting;
+	$("settings-restart-yes").disabled = settingsBusy || settingsRestarting;
+	$("settings-restart-no").disabled = settingsBusy;
+	$("settings-draft").textContent = changed ? "Unsaved changes" : "";
+}
+
+function renderSettings(data) {
+	settingsData = data;
+	$("settings-source").textContent = buildLabel(data.source);
+	$("settings-config-path").textContent = data.configPath;
+	$("settings-restart-reason").textContent = data.restartAvailable
+		? "Restart loads the current source and saved configuration. Active runs will be interrupted."
+		: data.restartReason || "Restart is not available for this daemon.";
+	const processes = $("settings-processes");
+	processes.replaceChildren();
+	for (const process of data.processes || []) {
+		const heading = document.createElement("h4");
+		heading.textContent = `${process.role} · PID ${process.pid}`;
+		const build = document.createElement("p");
+		build.className = "settings-build";
+		build.textContent = buildLabel(process.running);
+		const sync = document.createElement("p");
+		sync.className = "notice";
+		sync.textContent = buildSyncLabel(data.source, process.running);
+		const started = document.createElement("p");
+		started.className = "hint";
+		if (Number.isFinite(process.startedAt)) {
+			tickingLabel(started, { skew: state.clockSkew }, (now) =>
+				`Started ${new Date(process.startedAt).toLocaleString()} · running for ${elapsedLabel(Math.max(0, now - process.startedAt))}`);
+		} else started.textContent = "Start time unavailable";
+		processes.append(heading, build, sync, started);
+	}
+	if (!processes.childElementCount) processes.textContent = "No process information available.";
+	$("settings-config-warning").textContent = data.configRequiresRestart
+		? "Saved configuration differs from the running daemon. Restart required to apply it."
+		: "Configuration changes require a daemon restart. Saving writes the file but does not change the running daemon.";
+	updateSettingsControls();
+}
+
+async function loadSettings(reloadConfig = false) {
+	if (settingsBusy) return;
+	settingsBusy = true;
+	updateSettingsControls();
+	try {
+		const data = await api("GET", "/settings");
+		// A refresh or return to this page never silently discards the user's draft.
+		const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
+		if (!changed || reloadConfig) {
+			settingsConfigRevision = data.configRevision;
+			settingsSavedText = JSON.stringify(data.config, null, 2) + "\n";
+			$("settings-config").value = settingsSavedText;
+		}
+		settingsRestarting = false;
+		$("settings-restart-confirm").hidden = true;
+		renderSettings(data);
+		settingsNotice(changed && !reloadConfig ? "Status refreshed. Your unsaved configuration is kept." : "");
+	} catch (error) { settingsNotice(error.message, true); fail(error); }
+	finally { settingsBusy = false; updateSettingsControls(); }
+}
+
+async function saveSettings(event) {
+	event.preventDefault();
+	if ($("settings-save").disabled) return;
+	const errorNode = $("settings-config-error");
+	errorNode.hidden = true;
+	let config;
+	try { config = configFromText($("settings-config").value); }
+	catch (error) {
+		errorNode.textContent = error.message;
+		errorNode.hidden = false;
+		$("settings-config").focus();
+		return;
+	}
+	settingsBusy = true;
+	$("settings-restart-confirm").hidden = true;
+	updateSettingsControls();
+	try {
+		const data = await api("POST", "/settings", { config, configRevision: settingsConfigRevision });
+		settingsConfigRevision = data.configRevision;
+		settingsSavedText = JSON.stringify(data.config, null, 2) + "\n";
+		$("settings-config").value = settingsSavedText;
+		renderSettings(data);
+		settingsNotice("Configuration saved. Restart the daemon to apply changes.");
+	} catch (error) {
+		errorNode.textContent = error.status === 409
+			? `${error.message} Your draft is kept. Copy it before using Reload configuration to read the current file.`
+			: error.message;
+		errorNode.hidden = false;
+		fail(error);
+	} finally { settingsBusy = false; updateSettingsControls(); }
+}
+
+async function restartSettings() {
+	if (settingsBusy || settingsRestarting || !settingsData?.restartAvailable) return;
+	settingsBusy = true;
+	updateSettingsControls();
+	try {
+		await api("POST", "/settings/restart", {});
+		settingsRestarting = true;
+		$("settings-restart-confirm").hidden = true;
+		settingsNotice("Restart requested. This app may briefly disconnect. Refresh status once the daemon is back.");
+	} catch (error) { settingsNotice(error.message, true); fail(error); }
+	finally { settingsBusy = false; updateSettingsControls(); }
 }
 
 // ---- HTTP -----------------------------------------------------------------------------------
@@ -4018,6 +4145,9 @@ async function route() {
 				$("schedules-kind").value = ["session", "thread", "wake"].includes(query.get("kind")) ? query.get("kind") : "";
 				await loadSchedules(query.get("focus") ?? undefined);
 				break;
+			case "settings":
+				await loadSettings();
+				break;
 			case "objectives":
 				$("objectives-browse").hidden = false;
 				$("objectives-list").hidden = false;
@@ -4070,6 +4200,27 @@ for (const input of [$("palette-input"), $("palette-search-input")]) {
 	input.addEventListener("keydown", onPaletteKeydown);
 }
 
+$("settings-form").addEventListener("submit", (event) => void saveSettings(event));
+$("settings-config").addEventListener("input", () => {
+	$("settings-config-error").hidden = true;
+	updateSettingsControls();
+});
+$("settings-refresh").addEventListener("click", () => void loadSettings());
+$("settings-reload-config").addEventListener("click", () => {
+	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
+	if (changed && !window.confirm("Discard unsaved configuration edits and reload the current file?")) return;
+	$("settings-config-error").hidden = true;
+	void loadSettings(true);
+});
+$("settings-restart").addEventListener("click", () => {
+	$("settings-restart-confirm").hidden = false;
+	$("settings-restart-no").focus();
+});
+$("settings-restart-no").addEventListener("click", () => {
+	$("settings-restart-confirm").hidden = true;
+	$("settings-restart").focus();
+});
+$("settings-restart-yes").addEventListener("click", () => void restartSettings());
 $("authorize-form").addEventListener("submit", (event) => {
 	event.preventDefault();
 	void authorize($("authorize-input").value);

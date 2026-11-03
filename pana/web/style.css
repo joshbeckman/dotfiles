@@ -2027,3 +2027,11 @@ kbd {
 	background-size: 4px 4px;
 }
 .working-dot.scheduled-mark { border-style: var(--identity-line, solid); border-width: var(--identity-border-width, 1px); }
+
+/* Settings keeps full commit IDs and JSON usable on a phone as well as a desktop. */
+.settings-runtime { margin-bottom: var(--s4); }
+.settings-runtime h4 { margin-bottom: var(--s1); }
+.settings-build, #settings-config-path { overflow-wrap: anywhere; white-space: pre-wrap; }
+.settings-build, #settings-config { font-family: var(--font-mono); font-size: 0.875rem; }
+#settings-config { tab-size: 2; }
+#settings-status:empty { display: none; }

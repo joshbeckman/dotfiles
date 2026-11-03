@@ -336,3 +336,8 @@ export function limitsBody(
 	values: Record<string, string | number | null | undefined>,
 	current?: Record<string, number | null> | null,
 ): { body: Record<string, number | null>; invalid: string[] };
+
+export interface BuildInfo { sha: string; message: string; dirty: boolean; fingerprint?: string }
+export function buildSyncLabel(source: BuildInfo | null, running: BuildInfo | null): string;
+export function buildLabel(build: BuildInfo | null): string;
+export function configFromText(text: string): Record<string, unknown>;

@@ -222,3 +222,25 @@ To retake the PR's screenshots, `node test/browser/session-window-shots.ts DIR` 
 `session-window-after-opened.png` and `session-window-after-loaded.png`; run it against the old
 `web/app.js` with `PANA_SESSION_WINDOW_LABEL=before` for the comparison.
 
+
+### Settings
+
+Settings opens from the navigation or command palette. It shows the source checkout and running
+daemon's full commit ID, message, process ID, start time, and ticking age. Commit and source
+fingerprint differences mark the daemon out of sync; unavailable build metadata stays explicit.
+
+The JSON editor preserves every configuration key, including unknown keys. Saving writes the
+configuration file; a daemon restart is required to apply it. Domain and user cannot change here.
+A save carries the revision the editor read, so an external edit is a conflict rather than a lost
+update. Refresh status keeps an unsaved draft and its original revision. Reload configuration
+reads the file again and asks before discarding edits. Copy a conflicted draft before reloading.
+Restart is separate from save, requires confirmation, and interrupts active runs. An unavailable
+restart button explains why; after requesting a restart, refresh status once the daemon is back.
+
+```sh
+npm run test:web -- test/browser/settings.spec.ts
+PANA_SETTINGS_SHOTS=/tmp/pana-settings-shots npm run test:web -- test/browser/settings.spec.ts
+```
+
+The browser regression uses a real test-domain shell with deterministic settings responses and
+never restarts the user's daemon. Optional screenshots are desktop and phone/dark, kept out of Git.
