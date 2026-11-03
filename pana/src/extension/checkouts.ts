@@ -196,6 +196,9 @@ export function checkoutCommandRefusal(
 ): string | undefined {
 	if (options.checkouts.length === 0) return undefined;
 	const checkouts = options.checkouts;
+	const literals = shellLiteralMask(command);
+	const active = (match: RegExpMatchArray, marker: string): boolean =>
+		!literals[(match.index ?? 0) + match[0].indexOf(marker)];
 	const inside = (token: string): string | undefined => {
 		const path = tokenTarget(token, options.cwd, options.home);
 		if (path === undefined) return undefined;
@@ -203,13 +206,15 @@ export function checkoutCommandRefusal(
 	};
 
 	for (const match of command.matchAll(ENTER)) {
-		const root = inside(match[1]!);
+		if (!active(match, match[1]!)) continue;
+		const root = inside(match[2]!);
 		if (root !== undefined) return refusedEntry(root);
 	}
 
 	// `-C` names the checkout for a read or for the fast-forward; `--git-dir` names no work tree, so
 	// it stays read-only.
 	for (const match of command.matchAll(GIT_C)) {
+		if (!active(match, "-C")) continue;
 		const root = inside(match[1]!);
 		if (root === undefined) continue;
 		const refusal = gitRefusal(root, gitWords(command, match), !options.noFastForward?.includes(root));
@@ -217,6 +222,7 @@ export function checkoutCommandRefusal(
 	}
 
 	for (const match of command.matchAll(GIT_DIR)) {
+		if (!active(match, "--git-dir")) continue;
 		const root = inside(match[1]!);
 		if (root === undefined) continue;
 		const words = gitWords(command, match);
@@ -224,11 +230,13 @@ export function checkoutCommandRefusal(
 	}
 
 	for (const match of command.matchAll(REDIRECT)) {
+		if (!active(match, ">")) continue;
 		const root = inside(match[1]!);
 		if (root !== undefined) return refusedEntry(root);
 	}
 
 	for (const match of command.matchAll(MUTATOR)) {
+		if (!active(match, match[1]!)) continue;
 		const after = command.slice((match.index ?? 0) + match[0].length);
 		const words = shellWords(after);
 		if (match[1] === "sed" && readOnlySed(words)) continue;
@@ -244,8 +252,39 @@ export function checkoutCommandRefusal(
 	return undefined;
 }
 
+/** Ignore literal shell arguments, not interpreted scripts or command substitutions.
+ * Ambiguous/unterminated quotes stay visible to the conservative heuristic.
+ */
+function shellLiteralMask(command: string): Uint8Array {
+	const literal = new Uint8Array(command.length);
+	for (let i = 0; i < command.length; i++) {
+		if (command[i] === "\\") { i++; continue; }
+		const quote = command[i];
+		if (quote !== "'" && quote !== '"') continue;
+		const start = i;
+		let end = i + 1;
+		for (; end < command.length; end++) {
+			if (quote === '"' && command[end] === "\\") { end++; continue; }
+			if (command[end] === quote) break;
+		}
+		if (end >= command.length) break;
+		const prefix = command.slice(0, start);
+		const body = command.slice(start + 1, end);
+		// Interpreter -c/--command, env -S, eval and here-strings may execute the argument.
+		const shellScript = /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*|--command|--split-string|-S)\s+\$?$/.test(prefix) ||
+			/(?:^|[\s;&|(`])eval(?:\s+[^;&|\n]*)?\s+\$?$/.test(prefix) || /<<<\s+\$?$/.test(prefix);
+		const substitution = quote === '"' && /\$\(|`/.test(body);
+		// Nested substitutions and concatenated script fragments need a real shell parser.
+		// Do not hide any later source once we encounter either executable form.
+		if (shellScript || substitution) return literal;
+		literal.fill(1, start, end + 1);
+		i = end;
+	}
+	return literal;
+}
+
 /** `cd` into a checkout, or `pushd`: the whole shell is then inside it. */
-const ENTER = /(?:^|[\s;&|(`])(?:cd|pushd)\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
+const ENTER = /(?:^|[\s;&|(`"'])(cd|pushd)\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 /** `git -C PATH`: how a session names the checkout for a read or a fast-forward. */
 const GIT_C = /(?:^|[\s;&|(`])-C\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 /** `git --git-dir PATH|--git-dir=PATH`, which reads only. */
@@ -254,7 +293,7 @@ const GIT_DIR = /(?:^|[\s;&|(`])--git-dir[=\s]("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 const REDIRECT = /(?:^|[^0-9<>])>>?\s*("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 /** Candidate mutators; their arguments need quote-aware command boundaries. */
 const MUTATOR =
-	/(?:^|[\s;&|(`])(rm|mv|cp|ln|touch|mkdir|rmdir|tee|truncate|chmod|chown|dd|install|rsync|sed|perl|patch)\s+/g;
+	/(?:^|[\s;&|(`"'])(rm|mv|cp|ln|touch|mkdir|rmdir|tee|truncate|chmod|chown|dd|install|rsync|sed|perl|patch)\s+/g;
 /** Only literal print scripts are admitted: absence of -i is not proof that sed cannot write. */
 function readOnlySed(words: readonly string[]): boolean {
 	const [option, script, ...files] = words;
@@ -300,6 +339,17 @@ function readOnlyGit(words: readonly string[]): boolean {
 	if (args.some((arg) => /^--output(?:=|$)/.test(arg))) return false;
 	if (READ_ONLY_GIT.has(command ?? "")) return true;
 	switch (command) {
+		case "symbolic-ref": {
+			let refs = 0;
+			let operands = false;
+			for (const arg of args) {
+				if (!operands && arg === "--") { operands = true; continue; }
+				if (!operands && ["-q", "--quiet", "--short", "--recurse", "--no-recurse"].includes(arg)) continue;
+				if (!operands && arg.startsWith("-")) return false;
+				refs++;
+			}
+			return refs === 1;
+		}
 		case "branch":
 		case "tag": {
 			const branch = command === "branch";
@@ -412,7 +462,7 @@ function shellWords(after: string): string[] {
 		} else if (char === '"' || char === "'") {
 			quote = char;
 			started = true;
-		} else if (/[;&|\n()]/.test(char)) {
+		} else if (/[;&|<>\n()]/.test(char)) {
 			break;
 		} else if (/\s/.test(char)) {
 			if (started) words.push(word);

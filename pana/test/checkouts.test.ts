@@ -241,10 +241,50 @@ ${file}`,
 		expect(checkoutCommandRefusal(`sed -i s/a/b/ "${spaced}/file"`, protectedOptions)).toBeDefined();
 	});
 
+	it("GUARD-06 ignores quoted prose but still scans executable shell text", async () => {
+		const t = setup();
+		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
+		const file = join(t.repo, "tracked.txt");
+		for (const prose of [
+			`printf '%s\\n' 'git -C ${t.repo} symbolic-ref --short HEAD'`,
+			`printf '%s\\n' 'git --git-dir=${t.repo}/.git branch -D feature'`,
+			`echo "cd ${t.repo}; rm ${file}; x > ${file}"`,
+			`echo '$(rm ${file})'`,
+			`python3 - <<'PY'\nmessage = 'git -C ${t.repo} symbolic-ref --short HEAD'\nPY`,
+		]) expect(checkoutCommandRefusal(prose, options), prose).toBeUndefined();
+		for (const code of [
+			`echo "$(rm ${file})"`, `echo "$(git -C ${t.repo} branch -D feature)"`,
+			`echo "$(printf "x"; rm ${file})"`,
+			`bash -c 'rm ${file}'`, `sh -c 'git -C ${t.repo} branch -D feature'`,
+			`bash -lc $'rm ${file}'`, `eval 'rm ${file}'`, `builtin eval 'rm ${file}'`,
+			`env -S 'rm ${file}'`, `fish --command 'rm ${file}'`, `bash <<< ' rm ${file}'`,
+			`echo $(bash -c 'rm ${file}')`, `echo $(eval 'rm ${file}')`,
+			`printf '%s' 'rm ${file}'; rm ${file}`,
+			`echo 'literal' > ${file}`, `cd "${t.repo}"`, `rm "${file}"`,
+		]) expect(checkoutCommandRefusal(code, options), code).toBeDefined();
+		const e = env({ home: t.home, cwd: t.scratch });
+		for (const safe of [
+			`printf '%s\\n' 'git -C ${t.repo} symbolic-ref --short HEAD'`,
+			`git -C ${t.repo} symbolic-ref --short HEAD > "${t.scratch}/branch"`,
+		]) {
+			const result = await e.exec(safe, undefined, ctx);
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error(result.error.message);
+			expect(result.value.exitCode).toBe(0);
+		}
+		const before = t.git(t.repo, ["symbolic-ref", "HEAD"]);
+		const write = await e.exec(`git -C ${t.repo} symbolic-ref HEAD refs/heads/changed`, undefined, ctx);
+		expect(write.ok).toBe(false);
+		expect(t.git(t.repo, ["symbolic-ref", "HEAD"])).toBe(before);
+		expect(t.git(t.repo, ["status", "--porcelain"])).toBe("");
+	});
+
 	it("GUARD-06 admits graph/object queries and only explicit mixed-mode reads", () => {
 		const t = setup();
 		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
 		const queries = [
+			"symbolic-ref HEAD", "symbolic-ref --short HEAD", "symbolic-ref -q --short HEAD",
+			"symbolic-ref --no-recurse HEAD", "symbolic-ref -- HEAD",
 			"merge-base HEAD HEAD", "merge-base --is-ancestor HEAD HEAD", "merge-base --fork-point HEAD",
 			"cherry HEAD", "name-rev HEAD", "show-ref --head", "count-objects -v",
 			"diff-tree HEAD", "diff-index HEAD", "diff-files",
@@ -267,6 +307,8 @@ ${file}`,
 				expect(checkoutCommandRefusal(`${prefix} ${query}`, { ...options, noFastForward: options.checkouts }), query).toBeUndefined();
 			}
 		}
+		expect(checkoutCommandRefusal(`git -C ${t.repo} symbolic-ref --short HEAD > "${t.scratch}/branch"`, options)).toBeUndefined();
+		expect(checkoutCommandRefusal(`git -C ${t.repo} symbolic-ref --short HEAD > "${t.repo}/branch"`, options)).toBeDefined();
 		// Execute the original failing query only in a disposable repository.
 		expect(t.git(t.repo, ["merge-base", "HEAD", "HEAD"]).trim()).toBe(t.git(t.repo, ["rev-parse", "HEAD"]).trim());
 	});
@@ -275,6 +317,9 @@ ${file}`,
 		const t = setup();
 		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
 		const writes = [
+			"symbolic-ref HEAD refs/heads/changed", "symbolic-ref --short HEAD refs/heads/changed",
+			"symbolic-ref --delete HEAD", "symbolic-ref -d HEAD", "symbolic-ref -m reason HEAD refs/heads/changed",
+			"symbolic-ref --future-mode HEAD",
 			'branch --format "" created', "branch --format '' created",
 			'tag --format "" created-tag', "tag --format '' created-tag",
 			'branch --sort "" created-sort', "branch --sort '' created-sort",

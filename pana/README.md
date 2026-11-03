@@ -194,6 +194,13 @@ Pana runs beside the current pi setup and shares nothing with it.
   `'15,65p'`. Other sed modes remain conservative: absence of `-i` alone does not prove
   a script cannot write files or execute commands. Compound-command boundaries do not
   grant permission to an adjacent write.
+- `symbolic-ref` is admitted only as a one-ref query with known read flags; setting,
+  deleting, or unknown modes remain refused. Quoted command examples are treated as
+  literal arguments rather than shell invocations. Interpreter command strings,
+  command substitutions, `eval`, and here-strings stay conservatively visible to the
+  heuristic; this is not a full shell parser. Shell redirects are checked separately
+  from Git query arguments, so writing query output to scratch does not make the Git
+  invocation a checkout write.
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
 ### System prompt
