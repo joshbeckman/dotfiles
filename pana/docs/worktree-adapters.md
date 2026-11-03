@@ -38,9 +38,11 @@ are retained across restart and archive. No external existing tree is auto-adopt
 and another session's linked tree is not writable merely because `.git` is a file.
 Known peer ownership overrides even an explicit cwd, and implicit-cwd shell execution
 in an unowned checkout is refused. These are accidental-write guards, not a security
-boundary against arbitrary code;
-`guard` mode cannot infer every shell expression. `sandbox` adds read-only mounts on
-hosts supporting user mount namespaces; macOS has only the admission/file guards.
+boundary against arbitrary code. `guard` mode checks file-tool write paths and the
+actual execution cwd, never Bash command text. Commands launched from scratch may
+name or enter unowned checkouts; the session instructions still require owned trees
+for changes. `sandbox` adds read-only mounts on hosts supporting user mount namespaces;
+macOS falls back to file-tool/cwd checks without Bash write enforcement.
 
 ## Failure and cleanup
 
@@ -63,7 +65,9 @@ or user checkouts; ownership receipts remain retained and must not be hand-edite
 Retained receipts grant no access after the git pointer changes to a different repository.
 
 For rollout, the owner should first test the configured tool on a fresh session tree,
-verify both allowed owner writes and refused peer writes, and check that ordinary
+verify allowed owner file-tool writes and refused peer file-tool writes, plus actual
+cwd ownership checks. Test filesystem enforcement separately on a namespace-capable
+host; do not infer Bash write prevention from guard mode. Check that ordinary
 repositories still work. Stop if the destination, branch or repository differs from
 the returned result; leave user trees unchanged and correct the configuration. Unit
 tests use fake materializers and temporary repositories on macOS and Linux, never

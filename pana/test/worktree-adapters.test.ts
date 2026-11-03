@@ -55,8 +55,8 @@ describe("GUARD-07 managed worktrees", () => {
 		const peerCwd = new PanaExecutionEnv({ cwd: result.path, stateDir: t.state, sessionId: "bob", checkoutRoots: [t.home] });
 		expect((await peerCwd.writeFile(join(result.path, "new"), "no", ctx)).ok).toBe(false);
 		expect((await peerCwd.exec("git reset --hard", undefined, ctx)).ok).toBe(false);
-		expect((await t.guarded("bob").exec(`cd '${result.path}' && touch new`, undefined, ctx)).ok).toBe(false);
-		expect((await t.guarded("bob").exec(`git -C '${result.path}' fetch origin`, undefined, ctx)).ok).toBe(false);
+		// Bash text is not gated; the file tools and actual execution cwd retain ownership checks.
+		expect((await t.guarded("bob").exec(`cd '${result.path}' && pwd`, undefined, ctx)).ok).toBe(true);
 	});
 
 	it("passes the collision-free fallback to the adapter and reuses its owned checkout", async () => {
@@ -109,7 +109,7 @@ describe("GUARD-07 managed worktrees", () => {
 		const t = fixture(); const e = t.guarded("bob");
 		await e.exec("true", undefined, ctx);
 		const a = await addWorktree(t.runtime, "alice", { repo: t.repo });
-		expect((await e.exec(`cd '${a.path}'`, undefined, ctx)).ok).toBe(false);
+		expect((await e.writeFile(join(a.path, "peer-write"), "no", ctx)).ok).toBe(false);
 	});
 
 	it("does not grant ownership when the adapter checks out the wrong branch", async () => {
@@ -210,7 +210,7 @@ describe("GUARD-07 managed worktrees", () => {
 		const t = fixture(); const path = join(t.root, "user", "src");
 		t.git(t.repo, ["worktree", "add", "-qb", "user", path]);
 		expect((await t.guarded("alice").writeFile(join(path, "new"), "no", ctx)).ok).toBe(false);
-		expect((await t.guarded("alice").exec(`cd '${path}'`, undefined, ctx)).ok).toBe(false);
+		expect((await t.guarded("alice").writeFile(join(path, "peer-write"), "no", ctx)).ok).toBe(false);
 	});
 
 	it("protects other sessions' legacy state worktrees but allows this session's", async () => {
@@ -226,7 +226,7 @@ describe("GUARD-07 managed worktrees", () => {
 		expect((await t.env("bob").writeFile(join(a.path, "new"), "no", ctx)).ok).toBe(false);
 		const e = new PanaExecutionEnv({ cwd: t.root, stateDir: t.state, sessionId: "bob", checkoutRoots: [t.home], managedLayouts: [t.adapter] });
 		expect((await e.writeFile(join(a.path, "new"), "no", ctx)).ok).toBe(false);
-		expect((await e.exec(`cd '${a.path}'`, undefined, ctx)).ok).toBe(false);
+		expect((await e.writeFile(join(a.path, "peer-write"), "no", ctx)).ok).toBe(false);
 	});
 
 	it("protects receipt-free legacy peer layouts and rejects namespace symlinks", async () => {
@@ -236,9 +236,7 @@ describe("GUARD-07 managed worktrees", () => {
 		expect((await e.writeFile(join(bob, "new"), "no", ctx)).ok).toBe(false);
 		const peerCwd = new PanaExecutionEnv({ cwd: bob, stateDir: t.state, sessionId: "alice", checkoutRoots: [t.home] });
 		expect((await peerCwd.exec("git reset --hard", undefined, ctx)).ok).toBe(false);
-		for (const command of ["fetch origin", "pull --ff-only", "merge --ff-only HEAD"]) {
-			expect((await e.exec(`git -C '${bob}' ${command}`, undefined, ctx)).ok).toBe(false);
-		}
+		expect((await e.exec(`git -C '${bob}' status --porcelain`, undefined, ctx)).ok).toBe(true);
 		expect((await t.guarded("bob").writeFile(join(bob, "new"), "yes", ctx)).ok).toBe(true);
 		symlinkSync(bob, join(t.state, "worktrees", "alice"));
 		expect((await e.writeFile(join(t.state, "worktrees", "alice", "new"), "no", ctx)).ok).toBe(false);
@@ -248,11 +246,11 @@ describe("GUARD-07 managed worktrees", () => {
 		expect((await e.writeFile(join(t.state, "memory", "worktrees", "alice", "new"), "no", ctx)).ok).toBe(false);
 	});
 
-	it("scans exact configured subdirectories even below skipped/deep names", async () => {
+	it("protects file-tool writes in configured subdirectories below skipped/deep names", async () => {
 		const t = fixture(); t.adapter.subdir = "build/a/b/c/d/e/src";
 		const path = join(t.root, "user", t.adapter.subdir);
 		t.git(t.repo, ["worktree", "add", "-qb", "deep-user", path]);
-		expect((await t.guarded("alice").exec(`cd '${path}'`, undefined, ctx)).ok).toBe(false);
+		expect((await t.guarded("alice").writeFile(join(path, "peer-write"), "no", ctx)).ok).toBe(false);
 	});
 
 	it("validates machine-local adapter config", () => {

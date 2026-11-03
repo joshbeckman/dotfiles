@@ -741,6 +741,20 @@ describe("system prompt", () => {
 		expect(text).not.toContain("memory-guidance.md");
 	});
 
+	it("GUARD-06 the prompt requires worktrees without claiming shell-text enforcement", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"Sessions normally start in scratch, not in a repository",
+			"Before making repository changes, identify the repository and create or reuse your own worktree",
+			"Bash command text is not inspected for checkout access",
+			"without a supported filesystem sandbox, Bash isolation relies on this worktree workflow",
+			"File tools refuse writes there",
+		]) expect(text).toContain(rule);
+		expect(text).not.toContain("`bash` refuses to `cd` into it");
+	});
+
 	it("PRM-08 completion cleanup is required, scoped, loss-aware, and observable", async () => {
 		const seeded = await start();
 		await runTurn();

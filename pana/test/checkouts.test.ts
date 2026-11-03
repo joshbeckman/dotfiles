@@ -12,7 +12,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PanaExecutionEnv } from "../src/extension/env.ts";
 import {
 	blockedCheckout,
-	checkoutCommandRefusal,
 	primaryCheckoutOf,
 	primaryCheckouts,
 	realPath,
@@ -117,12 +116,12 @@ describe("GUARD-01 the file tools refuse the user's checkout", () => {
 });
 
 describe("GUARD-02 sandbox mode cannot write to the checkout", () => {
-	it.skipIf(!canNamespace())("a write the admission check cannot see still fails, and a worktree write succeeds", async () => {
+	it.skipIf(!canNamespace())("a Bash write fails on a read-only checkout mount, and a worktree write succeeds", async () => {
 		const t = setup();
 		const wt = join(t.scratch, "worktree");
 		t.git(t.repo, ["worktree", "add", "-q", "-b", "pana/bash", wt, "HEAD"]);
 		const e = env({ home: t.home, cwd: wt, protect: "sandbox" });
-		// `$TARGET` is unreadable to the string check, so only the read-only mount can refuse it.
+		// Shell syntax is not classified; filesystem mounts enforce the write boundary.
 		const script = ["sh", "-c", `printf nope > "$TARGET"`];
 
 		const refused = await e.exec(script, { env: { TARGET: join(t.repo, "from-bash.txt") } }, ctx);
@@ -139,284 +138,44 @@ describe("GUARD-02 sandbox mode cannot write to the checkout", () => {
 	});
 });
 
-describe("GUARD-06 the admission check costs no process", () => {
-	it("refuses a command that enters the checkout, and allows one that names a file", async () => {
+describe("GUARD-06 checkout protection uses paths, not shell-command classification", () => {
+	it("runs compound reads, quoted examples and Git queries without a command allowlist", async () => {
 		const t = setup();
 		const e = env({ home: t.home, cwd: t.scratch });
-		writeFileSync(join(t.repo, "readable.txt"), "hello\n");
-
-		const entered = await e.exec("cd ~/pana && npm run test:web", undefined, ctx);
-		expect(entered.ok).toBe(false);
-		if (entered.ok) throw new Error("expected a refusal");
-		expect(entered.error.message).toContain(t.repo);
-		expect(entered.error.message).toContain("pana worktree add");
-
-		// Reading stays allowed, and so does a read-only git command.
-		const read = await e.exec(`grep -n hello ${join(t.home, "pana", "readable.txt")}`, undefined, ctx);
-		expect(read.ok).toBe(true);
-		if (!read.ok) throw new Error(read.error.message);
-		expect(read.value.exitCode).toBe(0);
-		const git = await e.exec(["git", "-C", t.repo, "log", "--oneline"], undefined, ctx);
-		expect(git.ok).toBe(true);
-	});
-
-	it("answers a command in microseconds, so guard mode costs nothing per call", async () => {
-		const t = setup();
-		const e = env({ home: t.home, cwd: t.scratch });
-		// Warm the scan, then time the pure-string check on a typical command.
-		primaryCheckouts({ roots: [t.home] });
-		const checkouts = [realPath(t.repo)];
-		const started = performance.now();
-		const rounds = 1000;
-		for (let i = 0; i < rounds; i++) {
-			expect(
-				checkoutCommandRefusal("npm test && git status --porcelain | head -3", { cwd: t.scratch, home: t.home, checkouts }),
-			).toBeUndefined();
+		for (const command of [
+			`sed -n '1,10p' ${join(t.repo, "tracked.txt")}; git -C ${t.repo} symbolic-ref --short HEAD`,
+			`printf '%s\\n' 'git -C ${t.repo} symbolic-ref --short HEAD'`,
+			`python3 - <<'PY'\nmessage = 'git -C ${t.repo} symbolic-ref --short HEAD'\nprint(message)\nPY`,
+			`cd ${t.repo} && git status --porcelain`,
+		]) {
+			const result = await e.exec(command, undefined, ctx);
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error(result.error.message);
+			expect(result.value.exitCode).toBe(0);
 		}
-		const perCall = (performance.now() - started) / rounds;
-		expect(perCall).toBeLessThan(1);
-	});
-
-	it("refuses the ways into a checkout: pushd, git -C with a write, a redirect, a mutator", () => {
-		const t = setup();
-		const checkouts = [realPath(t.repo)];
-		const refusal = (command: string) => checkoutCommandRefusal(command, { cwd: t.scratch, home: t.home, checkouts });
-		expect(refusal("pushd ~/pana")).toBeDefined();
-		expect(refusal(`git -C ${t.repo} commit -am wip`)).toBeDefined();
-		expect(refusal(`git --git-dir=${join(t.repo, ".git")} commit -m wip`)).toBeDefined();
-		expect(refusal(`printf x > ${join(t.repo, "a.txt")}`)).toBeDefined();
-		expect(refusal(`sed -i s/a/b/ ${join(t.repo, "tracked.txt")}`)).toBeDefined();
-		expect(refusal(`rm -rf ${join(t.repo, "pana")}`)).toBeDefined();
-		expect(refusal(`git -C ${t.repo} status --porcelain`)).toBeUndefined();
-		expect(refusal(`cat ${join(t.repo, "tracked.txt")}`)).toBeUndefined();
-		expect(refusal("npm test")).toBeUndefined();
-	});
-
-	it("GUARD-06 admits only simple sed print inspections, including compound reads", async () => {
-		const t = setup();
-		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
-		const file = join(t.repo, "tracked.txt");
-		for (const script of ["p", "1p", "15,65p", "155,180p", "1,$p"]) {
-			for (const path of [file, `"${file}"`, "~/dotfiles/tracked.txt"]) {
-				expect(checkoutCommandRefusal(`sed -n '${script}' ${path}`, options)).toBeUndefined();
-			}
-		}
-		const reads = [`sed -n '15,65p' ${file}`, `sed -n '155,180p' ${file}`, "node --version", `git -C ${t.repo} status --short`];
-		for (const separator of ["; ", " && ", "\n"]) {
-			expect(checkoutCommandRefusal(reads.join(separator), options)).toBeUndefined();
-		}
-		expect(execFileSync("sed", ["-n", "1p", file]).toString()).toBe("primary\n");
-		const e = env({ home: t.home, cwd: t.scratch });
-		const read = await e.exec(reads.join("; "), undefined, ctx);
-		expect(read.ok).toBe(true);
-		if (!read.ok) throw new Error(read.error.message);
-		expect(read.value.exitCode).toBe(0);
-		const write = await e.exec(`sed -i s/a/b/ ${file}`, undefined, ctx);
-		expect(write.ok).toBe(false);
 		expect(t.git(t.repo, ["status", "--porcelain"])).toBe("");
 	});
 
-	it("GUARD-06 keeps sed edits, script execution, output, and adjacent writes refused", () => {
-		const t = setup();
-		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
-		const file = join(t.repo, "tracked.txt");
-		const read = `sed -n '1p' ${file}`;
-		for (const command of [
-			`sed -i s/a/b/ ${file}`, `sed -i '' -n '1p' ${file}`, `sed -n -i.bak '1p' ${file}`,
-			`sed -n '1p' -i ${file}`, `sed -n '1p;w ${file}' ${file}`,
-			`sed -n 'w ${file}' ${file}`, `sed -n 'e touch ${file}' ${file}`,
-			`sed -n '1p;w ${file}' /tmp/input`, `sed -n 's/a/b/w ${file}' /tmp/input`,
-			`sed -n 's/a/b/w ${file}' ${file}`, `sed -n -f /tmp/script ${file}`,
-			`sed -n '1p' -e 'w ${file}' ${file}`, `sed --future-mode -n '1p' ${file}`,
-			`sed -n "$SCRIPT" ${file}`, `sed -n '1p' ${file} > ${file}`,
-			`${read}; rm ${file}`, `${read} && rm ${file}`, `${read}\nrm ${file}`,
-			`${read}\nsed -i s/a/b/ ${file}`, `${read}; cd ${t.repo}`,
-			`sed -i s/a/b/ \\
-${file}`, `${read}\nrm \\
-${file}`,
-		]) expect(checkoutCommandRefusal(command, options), command).toBeDefined();
-		const spaced = join(t.home, "protected repo");
-		mkdirSync(spaced);
-		const protectedOptions = { ...options, checkouts: [realPath(spaced)] };
-		expect(checkoutCommandRefusal(`sed -i s/a/b/ "${spaced}/file"`, protectedOptions)).toBeDefined();
-	});
-
-	it("GUARD-06 admits graph/object queries and only explicit mixed-mode reads", () => {
-		const t = setup();
-		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
-		const queries = [
-			"merge-base HEAD HEAD", "merge-base --is-ancestor HEAD HEAD", "merge-base --fork-point HEAD",
-			"cherry HEAD", "name-rev HEAD", "show-ref --head", "count-objects -v",
-			"diff-tree HEAD", "diff-index HEAD", "diff-files",
-			"branch -avv", "branch --color", "branch --column", "branch --list -- 'm*'",
-			"branch", "branch -vv", "branch --show-current", "branch --list 'feature*'",
-			'branch --list --format="%(refname)"', 'tag --list --format="%(refname)"',
-			"branch --contains HEAD", 'branch --list --sort=-committerdate --format="%(refname)"',
-			"tag --list -- 'v*'", "tag", "tag --list 'v*'", "tag -n1", "tag --contains HEAD",
-			"remote -v show -n origin", "remote", "remote -v", "remote get-url --all origin", "remote show -n origin",
-			"worktree list", "worktree list --porcelain -z",
-			"config --file .git/config --get user.name", "config --get --type bool core.bare",
-			"config get --all user.name", "config --get user.name", "config --global --get-all user.name",
-			"config --get-regexp 'user.*'", "config --get-urlmatch http https://example.test",
-			"config --list --show-origin", "config get user.name", "config list --show-scope",
-		];
-		for (const query of queries) {
-			for (const prefix of [`git -C ${t.repo}`, `git --git-dir=${join(t.repo, ".git")}`]) {
-				expect(checkoutCommandRefusal(`${prefix} ${query}`, options), query).toBeUndefined();
-				// Peer checkouts get the same read permission, never the fast-forward exception.
-				expect(checkoutCommandRefusal(`${prefix} ${query}`, { ...options, noFastForward: options.checkouts }), query).toBeUndefined();
-			}
-		}
-		// Execute the original failing query only in a disposable repository.
-		expect(t.git(t.repo, ["merge-base", "HEAD", "HEAD"]).trim()).toBe(t.git(t.repo, ["rev-parse", "HEAD"]).trim());
-	});
-
-	it("GUARD-06 refuses mixed-mode mutations, combined write flags, and output files", () => {
-		const t = setup();
-		const options = { cwd: t.scratch, home: t.home, checkouts: [realPath(t.repo)] };
-		const writes = [
-			'branch --format "" created', "branch --format '' created",
-			'tag --format "" created-tag', "tag --format '' created-tag",
-			'branch --sort "" created-sort', "branch --sort '' created-sort",
-			'branch --format ""', "branch --format ''",
-			"branch --format @(a|b)", "branch --format *", "branch --sort ?", "tag --format [ab]", "branch --format {a,b}",
-			"branch feature", "branch -v feature", "branch -d feature", "branch -D feature",
-			"branch -m renamed", "branch -c copied", "branch --set-upstream-to=origin/main",
-			'branch --format="%(refname)" -D feature', 'tag --format="%(refname)" --delete v1',
-			'branch --list --format="%(refname)" --delete feature',
-			"branch --list -D feature", "branch --list --delete feature", "branch --list --future-mode",
-			"tag v1", "tag -a v1 -m release", "tag -d v1", "tag --list --delete v1",
-			"remote add origin https://example.test/repo", "remote remove origin", "remote rename origin upstream",
-			"remote set-url origin https://example.test/repo", "remote update", "remote prune origin",
-			"remote show --future-mode origin", "worktree add ../other", "worktree remove ../other",
-			"worktree move ../old ../new", "worktree lock ../other", "worktree unlock ../other",
-			"worktree prune", "worktree repair", "worktree list --future-mode",
-			"config user.name changed", "config --add user.name changed", "config --unset user.name",
-			"config --replace-all user.name changed", "config --edit", "config set user.name changed",
-			"config unset user.name", "config --get --unset user.name", "config --list --edit", "config --file .git/config --unset user.name",
-			"config --rename-section old new", "config --remove-section old", "config --get --future-mode user.name",
-			"diff --out\\\nput=tracked.txt",
-			"diff --output=tracked.txt", "log --output tracked.txt", "show --output=tracked.txt",
-		];
-		for (const write of writes) {
-			for (const prefix of [`git -C ${t.repo}`, `git --git-dir=${join(t.repo, ".git")}`]) {
-				expect(checkoutCommandRefusal(`${prefix} ${write}`, options), write).toBeDefined();
-			}
-		}
-		expect(checkoutCommandRefusal(`git -C ${t.repo} merge-base HEAD HEAD && git -C ${t.repo} branch -D feature`, options)).toBeDefined();
-	});
-
-	it("admits the fast-forward PRM-05 permits: fetch, and pull or merge pinned to --ff-only", () => {
-		const t = setup();
-		const checkouts = [realPath(t.repo)];
-		const refusal = (command: string) => checkoutCommandRefusal(command, { cwd: t.scratch, home: t.home, checkouts });
-
-		expect(refusal(`git -C ${t.repo} fetch`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} fetch origin`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} fetch --all --prune`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} fetch --tags origin`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} fetch -v --no-tags origin`)).toBeUndefined();
-		// A remote URL carries a colon and is still not a refspec.
-		expect(refusal(`git -C ${t.repo} fetch https://github.com/joshbeckman/dotfiles.git main`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} fetch git@github.com:joshbeckman/dotfiles.git`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} pull --ff-only`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} pull --ff-only --no-autostash origin abc1234`)).toBeUndefined();
-		// The flag need not come first, and the pinned commit need not come last.
-		expect(refusal(`git -C ${t.repo} pull origin abc1234 --ff-only`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} pull --no-autostash --ff-only origin abc1234`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} merge --ff-only origin/master`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} merge --no-autostash --ff-only abc1234`)).toBeUndefined();
-		// In a chain or a pipeline, up to a separator: the words after it are another command.
-		expect(refusal(`npm test && git -C ${t.repo} pull --ff-only`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} fetch origin && git -C ${t.repo} pull --ff-only`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} pull --ff-only origin abc1234 | tail -3`)).toBeUndefined();
-		expect(refusal(`git -C ${t.repo} merge --ff-only abc1234; git -C ${t.repo} log --oneline -1`)).toBeUndefined();
-		// `~` and `$HOME` resolve to the session's HOME, as they do for a read.
-		expect(refusal("git -C ~/pana fetch")).toBeUndefined();
-		expect(refusal("git -C ~/pana pull --ff-only")).toBeUndefined();
-		expect(refusal(`git -C "$HOME/pana" pull --ff-only`)).toBeUndefined();
-		expect(refusal("git -C $HOME/pana merge --ff-only origin/master")).toBeUndefined();
-	});
-
-	it("refuses every pull or merge that is not the fast-forward, and every other write", () => {
-		const t = setup();
-		const checkouts = [realPath(t.repo)];
-		const refusal = (command: string) => checkoutCommandRefusal(command, { cwd: t.scratch, home: t.home, checkouts });
-
-		for (const command of [
-			`git -C ${t.repo} pull`,
-			`git -C ${t.repo} pull origin master`,
-			`git -C ${t.repo} pull --no-ff`,
-			`git -C ${t.repo} pull --ff`,
-			`git -C ${t.repo} pull --ff-only --ff`,
-			`git -C ${t.repo} pull --rebase`,
-			`git -C ${t.repo} pull --rebase=merges`,
-			`git -C ${t.repo} pull --ff-only --rebase`,
-			`git -C ${t.repo} pull --autostash`,
-			`git -C ${t.repo} pull --ff-only --autostash`,
-			`git -C ${t.repo} pull --ff-only --squash`,
-			`git -C ${t.repo} pull --ff-only --no-commit`,
-			`git -C ${t.repo} merge`,
-			`git -C ${t.repo} merge origin/master`,
-			`git -C ${t.repo} merge --no-ff origin/master`,
-			`git -C ${t.repo} merge --ff-only --no-ff`,
-			`git -C ${t.repo} merge --ff-only --squash`,
-			// `--git-dir` names no work tree, so the fast-forward is not admitted through it.
-			`git --git-dir=${join(t.repo, ".git")} pull --ff-only`,
-			`git --git-dir=${join(t.repo, ".git")} fetch`,
-			// `fetch` writes no working tree, but a refspec into a local ref moves the user's branch.
-			`git -C ${t.repo} fetch origin main:main`,
-			`git -C ${t.repo} fetch --force origin foo:refs/heads/main`,
-			`git -C ${t.repo} fetch --force --update-head-ok origin main:main`,
-			`git -C ${t.repo} fetch -f origin`,
-			`git -C ${t.repo} fetch -fv origin`,
-			`git -C ${t.repo} fetch --update-head-ok origin`,
-			`git -C ${t.repo} fetch --mirror origin`,
-			`git -C ${t.repo} fetch --prune-tags origin`,
-			`git -C ${t.repo} fetch origin +main:refs/heads/main`,
-			// The mutator list and the read-only list are unchanged.
-			`git -C ${t.repo} reset --hard`,
-			`git -C ${t.repo} checkout main`,
-			`git -C ${t.repo} switch -c x`,
-			`git -C ${t.repo} stash`,
-			`git -C ${t.repo} commit -m x`,
-			`git -C ${t.repo} clean -fd`,
-			`git -C ${t.repo} rebase main`,
-			// A fast-forward in a chain does not carry the chain: the write after it is refused.
-			`git -C ${t.repo} pull --ff-only && git -C ${t.repo} reset --hard`,
-			// Inside a chain and a pipeline the same flag rule applies.
-			`npm test && git -C ${t.repo} pull`,
-			`git -C ${t.repo} pull | tee /dev/null`,
-		]) {
-			expect(refusal(command), command).toBeDefined();
-		}
-	});
-
-	it("teaches the allowed fast-forward instead of only naming a worktree", () => {
-		const t = setup();
-		const checkouts = [realPath(t.repo)];
-		const message = checkoutCommandRefusal(`git -C ${t.repo} pull`, {
-			cwd: t.scratch,
-			home: t.home,
-			checkouts,
-		});
-		expect(message).toContain(t.repo);
-		expect(message).toContain("pull --ff-only");
-		expect(message).toContain("--no-autostash");
-		expect(message).toContain("pana worktree add");
-	});
-
-	it("lets a fast-forward reach git in the checkout, and stops a bare pull before it runs", async () => {
+	it("retains file-tool refusal but does not promise Bash write prevention in guard mode", async () => {
 		const t = setup();
 		const e = env({ home: t.home, cwd: t.scratch });
-		// The checkout has no upstream, so git itself fails: the point is that the guard let it run.
-		const ran = await e.exec(["git", "-C", t.repo, "pull", "--ff-only"], undefined, ctx);
-		if (!ran.ok) throw new Error(ran.error.message);
-		expect(ran.value.exitCode).not.toBe(0);
-		const refused = await e.exec(["git", "-C", t.repo, "pull"], undefined, ctx);
-		expect(refused.ok).toBe(false);
-		if (refused.ok) throw new Error("expected a refusal");
-		expect(refused.error.message).toContain("pull --ff-only");
+		const file = join(t.repo, "from-bash.txt");
+		expect((await e.writeFile(file, "blocked", ctx)).ok).toBe(false);
+		// Only a disposable fixture is written: guard mode is not a filesystem sandbox.
+		const result = await e.exec(`printf allowed > "${file}"`, undefined, ctx);
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error.message);
+		expect(result.value.exitCode).toBe(0);
+		expect(existsSync(file)).toBe(true);
+	});
+
+	it("runs argv commands as argv rather than classifying their joined text", async () => {
+		const t = setup();
+		const e = env({ home: t.home, cwd: t.scratch });
+		const result = await e.exec(["git", "-C", t.repo, "symbolic-ref", "--short", "HEAD"], undefined, ctx);
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error.message);
+		expect(result.value.exitCode).toBe(0);
 	});
 });
 

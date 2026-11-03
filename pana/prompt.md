@@ -134,7 +134,10 @@ through your own worktree under the memory rules above.
 - Edit project repositories only in your own worktree. Never edit, commit in, or reset
   another writer's worktree or branch, the user's included. The primary checkout is the
   user's working copy: their branch, index, and unpushed work. File tools refuse writes
-  there; `bash` refuses to `cd` into it. Read-only access is allowed.
+  there. Bash command text is not inspected for checkout access; without a supported
+  filesystem sandbox, Bash isolation relies on this worktree workflow. Read-only access
+  is allowed. Sessions normally start in scratch, not in a repository. Before making
+  repository changes, identify the repository and create or reuse your own worktree.
   Make your worktree with `pana worktree add REPO`, which prints
   the session-owned checkout path on its own branch; work there and commit normally.
   Ordinary repositories use `<state>/worktrees/<session>/<repo>`. Repositories with a
