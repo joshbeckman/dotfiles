@@ -27,7 +27,7 @@ if [[ "$provider" == native ]]; then
   exec ruby "$helper" commit "$host" "$repo" "$commit"
 fi
 
-[[ "$provider" == github ]] || die 'the classified legacy adapter cannot safely bind commit association; use the owning repository workflow'
+[[ "$provider" == github ]] || die "unsupported provider: $provider"
 export GH_HOST="${host#https://}"
 unset GH_REPO
 export GW_REPO="$GH_HOST/$repo"

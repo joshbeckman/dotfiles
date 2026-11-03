@@ -1,4 +1,4 @@
-// WP9: service units, install, and gw/gsw attribution (SVC-01..04, GW-01).
+// WP9: service units, install, and gw attribution (SVC-01..04, GW-01).
 //
 // These tests read real tracked files and run the real shell scripts in
 // subprocesses. The one thing they never do is start a daemon or reach the
@@ -172,13 +172,12 @@ describe("WP9 service units", () => {
 });
 
 describe("WP9 attribution", () => {
-	it("GW-01 gw and gsw attribute posts when PANA_SESSION is set, using the session URL in the trailer", async () => {
+	it("GW-01 gw attributes posts when PANA_SESSION is set, using the session URL in the trailer", async () => {
 		const home = tempHome();
 		const capture = join(home, "captured");
 		mkdirSync(join(home, ".local", "state", "pana"), { recursive: true });
 		writeFileSync(join(home, ".local", "state", "pana", "config.json"), JSON.stringify({ domain: "test.example", user: "tester" }));
 		writeExecutable(join(home, "bin", "gh"), FAKE_GITHUB);
-		writeExecutable(join(home, "bin", "gs"), FAKE_GITHUB);
 
 		const session = "01JB8ZQ4V0K3W9X2Y7Z5A6B8C9";
 		const trailer = `Co-authored-by: AI pana://test.example/sessions/${session}`;
@@ -194,7 +193,7 @@ describe("WP9 attribution", () => {
 		await exec("/bin/bash", [join(repo, "bin", "gw"), "issue", "comment", "1", "--body", "Pana finding."], { env });
 		expect(readFileSync(capture, "utf8")).toBe(`${trailer}\n\n> Pana finding.\n`);
 
-		await exec("/bin/bash", [join(repo, "bin", "gsw"), "pr", "edit", "1", "--body", "Pana description."], { env });
+		await exec("/bin/bash", [join(repo, "bin", "gw"), "pr", "edit", "1", "--body", "Pana description."], { env });
 		expect(readFileSync(capture, "utf8")).toBe(`Pana description.\n\n${trailer}\n`);
 
 		// The generic attribution helper still supports an explicit email form for other

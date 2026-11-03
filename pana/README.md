@@ -233,7 +233,7 @@ Session provenance belongs on PR descriptions, comments, reviews, and other pros
 Co-authored-by: AI pana://<domain>/sessions/<ulid>
 ```
 
-The `gw` and `gsw` wrappers add this attribution from the session environment for supported
+The `gw` wrapper adds this attribution from the session environment for supported
 writes with an explicit body. Direct clients, web edits, and bodyless/editor-generated writes
 are not universally covered; use the required wrappers with `--body` or `--body-file`.
 
@@ -553,6 +553,6 @@ Sessions show things to the user only through message Markdown (images, Mermaid)
 Pana starts empty and runs beside the old stack, so nothing has to change for it to work. Once pana has replaced daily use, remove:
 
 - Session naming: name allocation, realms, the identity registry, `agent-identity-backfill`, `agent-slug`, surname inheritance, and RFC 0001.
-- `agent-trailer`, once `gw` and `gsw` derive session attribution from `PANA_SESSION` themselves. Project commits need no Pana trailer.
+- `agent-trailer`, once `gw` derives session attribution from `PANA_SESSION` itself. Project commits need no Pana trailer.
 - `agent-team`, scratchpads, and `agent-find`, unless pana keeps an equivalent.
 - The AGENTS.md sections on names, scratchpads, teams, notifications, and attribution. Replace them with one section on pana.

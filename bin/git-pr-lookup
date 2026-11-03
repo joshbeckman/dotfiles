@@ -63,4 +63,4 @@ if [[ "$provider" == github ]]; then
   esac
 fi
 
-die 'the classified legacy adapter cannot safely bind PR reads; use the owning repository workflow'
+die "unsupported provider: $provider"

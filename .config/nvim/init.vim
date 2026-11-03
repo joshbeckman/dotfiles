@@ -133,9 +133,6 @@ if filereadable('/usr/share/doc/fzf/examples/fzf.vim')
   source /usr/share/doc/fzf/examples/fzf.vim
 endif
 
-" Make fugitive's :GBrowse map gitstream remotes back to GitHub.
-let g:github_enterprise_urls = {'gitstream.shopify.io': 'https://github.com'}
-
 " configure ripgrep for faster grepping
 set grepprg=rg\ --vimgrep
 set grepformat^=%f:%l:%c:%m

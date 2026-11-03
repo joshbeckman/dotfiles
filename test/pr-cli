@@ -9,7 +9,7 @@ git -C "$tmp/repo" init -q -b feature
 for tool in git ruby bash sh env dirname tr; do
   ln -s "$(command -v "$tool")" "$tmp/tools/$tool"
 done
-for name in gh gw gs gsw; do
+for name in gh gw; do
   printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/$name"
   chmod +x "$tmp/bin/$name"
 done
@@ -50,14 +50,13 @@ mv "$tmp/bin/review-cli" "$tmp/review.saved"
 fail
 mv "$tmp/review.saved" "$tmp/bin/review-cli"
 
-git -C "$tmp/repo" config prLookup.provider legacy
-git -C "$tmp/repo" config prLookup.host old-reviews.example.invalid
-git -C "$tmp/repo" config prLookup.repo team/project
-[[ "$(run)" == gsw ]]
-mv "$tmp/bin/gsw" "$tmp/gsw.saved"
-[[ "$(run)" == gs ]]
-mv "$tmp/bin/gs" "$tmp/gs.saved"
-fail
+# Removed providers fail closed, even when a historical template remains.
+for removed in legacy gitstream; do
+  git -C "$tmp/repo" config prLookup.provider "$removed"
+  git -C "$tmp/repo" config prLookup.urlTemplate 'https://old-reviews.example.invalid/pulls/{number}'
+  fail 42
+  grep -Fq "unsupported provider: $removed" "$tmp/err"
+done
 "$root/bin/git-pr-cli" --help >"$tmp/out"
 grep -Fq 'selected installed client' "$tmp/out"
 printf 'pr-cli tests passed\n'
