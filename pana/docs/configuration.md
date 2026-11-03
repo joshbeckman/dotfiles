@@ -96,11 +96,11 @@ message mark difficult to see.
 | --- | --- | --- |
 | `http.port` | `8766` | Integer from `0` through `65535`. TCP listener port; `0` requests an available ephemeral port. This key does not disable TCP. Embedded startup options can override the port or disable TCP; they are not `config.json` keys. |
 | `tools.bashTimeoutSec` | `600` | Positive number of seconds. Time limit for a `bash` call that supplies no timeout of its own. Timed-out commands are killed with their process group. |
-| `tools.protectCheckouts` | `"guard"` | `"guard"`, `"sandbox"`, or `"off"`; legacy boolean `true` means `"guard"`, `false` means `"off"`. `guard` refuses checkout writes and commands that enter protected checkouts. `sandbox` adds per-call read-only checkout mounts where supported. `off` disables these protections. |
+| `tools.protectCheckouts` | `"guard"` | `"guard"`, `"sandbox"`, or `"off"`; legacy boolean `true` means `"guard"`, `false` means `"off"`. `guard` refuses file-tool writes to unowned checkout paths and execution whose actual cwd is an unowned checkout; it does not inspect Bash command text. `sandbox` additionally mounts unowned checkouts read-only where supported. `off` disables these protections. |
 
-Prefer leaving checkout protection enabled and using a session-owned worktree. The
-`sandbox` mode depends on the host's mount/sandbox facilities; it does not make every
-platform support the same isolation mechanism. See [checkout protection](../README.md#isolation-from-pi)
+Prefer leaving checkout protection enabled and using a session-owned worktree. Bash writes in `guard` mode rely on the instructed owned-worktree workflow, not a shell-command allowlist. The
+`sandbox` mode depends on working Linux user namespaces; where unavailable (including
+macOS), it falls back to file-tool/cwd protection rather than equivalent Bash write enforcement. See [checkout protection](../README.md#isolation-from-pi)
 for the workflow.
 
 ### Scratch cleanup
