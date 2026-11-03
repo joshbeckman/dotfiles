@@ -62,7 +62,7 @@ Set pana up as a service in six steps. Each step is safe to repeat.
 
    To reuse the API keys pi already has, pipe each `api_key` entry of `~/.pi/agent/auth.json` into `s set NAME --stdin`. An OAuth entry there has no key panad can use.
 
-3. **Write `~/.local/state/pana/config.json`.** Only `domain` and `user` are required; [SPEC.md](SPEC.md) CFG-03 lists the rest.
+3. **Write `~/.local/state/pana/config.json`.** Only `domain` and `user` are required; the [configuration reference](docs/configuration.md) lists every supported key, default, and validation rule.
 
    ```json
    {
@@ -121,6 +121,14 @@ tailscale serve --bg 8766
 ### Other ways to run it
 
 Run `panad` in the foreground with a key in its environment: `s FIREWORKS_API_KEY -- pana/bin/panad`. `PANA_STATE` selects another state directory, for both `panad` and the CLI.
+
+### Settings and daemon version
+
+Open **Settings** in the UI to edit `config.json` as JSON. See the [configuration reference](docs/configuration.md) for all supported keys, defaults, validation, and restart behavior; unknown keys are preserved. Saves are validated and reject an intervening file edit. `domain` and `user` are existing data identities, so change neither through this editor. Operational configuration changes require a restart; saving does not change active sessions halfway through a run. The **Your message color** control sets `ui.userColor` to your own hex color (`#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA`); legacy named palette colors remain supported, with blue as the default. Saving a color applies immediately to open windows and persists across restarts.
+
+The page compares source on disk (commit SHA, message and local edits) with the revision captured when panad started, and shows the daemon's PID, start time and age. Missing Git metadata is shown as unknown. One panad serves each state directory; sessions are managed inside it, not separate pana daemon processes.
+
+**Restart pana** confirms the interruption, closes the daemon gracefully, then replaces it with a fresh Node process using the same arguments and environment. This reloads source and configuration without depending on launchd/systemd. It requires macOS/Linux and Node's `execve`; embedded/test servers cannot restart themselves. Restart may interrupt active runs; durable sessions recover at startup. If you change `http.port`, reconnect at the new port (and update your Tailscale Serve forwarding if applicable).
 
 To try pana from this checkout without installing the service, run `pana/scripts/try`. It writes a scratch `config.json` in `~/tmp/pana-try` (`PANA_STATE` overrides) on first run, reads the anthropic, openai, and fireworks keys from pi's `~/.pi/agent/auth.json` into `panad` only, and starts `panad` in the foreground. `--fresh` wipes the scratch state first.
 
@@ -520,7 +528,7 @@ A reply draft records the thread head when it opens. If the thread moves before 
 
 Both composers attach files: an Attach button, a file dropped anywhere on the composer, or a screenshot pasted into the message box. The bytes upload to `panad` before the message is sent, and the body gets the same Markdown reference `--attach` writes, so the message reads the same either way.
 
-Each participant has one color, from the style guide palette, in every thread: the user is blue, the domain's notices are black, and each session keeps the color its URL hashes to. Opening a thread shows its newest message; a message link shows that message.
+The user keeps their chosen hex color across threads (blue by default), and domain notices remain black. Session identities are allocated within each thread from its append-ordered participant roster, using twelve generated colors and four overflow patterns; they do not change when the user changes their color. Opening a thread shows its newest message; a message link shows that message.
 
 While a session works, it shows just above the reply box in its own color with a pulsing dot and what it is doing, such as "running bash · 3m", and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
 

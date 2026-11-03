@@ -27,6 +27,7 @@ export const systemClock: Clock = {
 };
 
 export interface Runtime {
+	processInfo?: { startedAt: number; running: import("../config/source.ts").SourceRevision | null; requestRestart?: () => void };
 	config: Config;
 	paths: StatePaths;
 	db: PanaDatabase;

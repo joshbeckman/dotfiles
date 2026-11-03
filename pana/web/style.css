@@ -27,6 +27,7 @@
 	--s4: 1rem;
 	--s6: 1.5rem;
 	--radius: 3px;
+	--topbar-min-h: 3.25rem;
 	--topbar-h: 3.25rem;
 	--font-sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
 	--font-condensed: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
@@ -194,7 +195,7 @@ pre {
 	display: flex;
 	align-items: center;
 	gap: var(--s4);
-	min-height: var(--topbar-h);
+	min-height: var(--topbar-min-h);
 	padding: var(--s2) var(--s4);
 	background: var(--c-bg);
 	border-bottom: 2px solid var(--c-text);
@@ -1543,6 +1544,7 @@ kbd {
 /* ---- Small screens ----------------------------------------------------------------------- */
 @media (max-width: 40rem) {
 	:root {
+		--topbar-min-h: 5.5rem;
 		--topbar-h: 5.5rem;
 	}
 	.topbar {
@@ -1562,14 +1564,10 @@ kbd {
 		font-size: 0.75rem;
 		letter-spacing: 0.01em;
 	}
-	/* MOB-04: five items at 0.85rem overflowed a 390 px phone by 28 px, clipping SCHEDULES; the
-	   sixth (OBJ-39's Objectives) put six at that size 75 px past the edge. A tighter item — 0.75rem
-	   and a hair of tracking — fits all six in a 390 px row; a narrower phone scrolls the nav
-	   rather than cutting a section off, which MOB-01 allows for a block that holds its own
-	   overflow. */
+	/* Settings is the seventh section. Wrap rather than hide a section beyond the phone edge. */
 	#nav {
-		overflow-x: auto;
-		scrollbar-width: none;
+		flex-wrap: wrap;
+		overflow-x: visible;
 	}
 	#nav::-webkit-scrollbar {
 		display: none;
@@ -2027,3 +2025,17 @@ kbd {
 	background-size: 4px 4px;
 }
 .working-dot.scheduled-mark { border-style: var(--identity-line, solid); border-width: var(--identity-border-width, 1px); }
+
+/* Settings keeps full commit IDs and JSON usable on a phone as well as a desktop. */
+.settings-runtime { margin-bottom: var(--s4); }
+.settings-runtime h4 { margin-bottom: var(--s1); }
+.settings-build, #settings-config-path { overflow-wrap: anywhere; white-space: pre-wrap; }
+.settings-build, #settings-config { font-family: var(--font-mono); font-size: 0.875rem; }
+#settings-config { tab-size: 2; }
+#settings-status:empty { display: none; }
+
+.settings-color-preview { border-left: 4px solid var(--who, var(--c-border)); padding: .75rem; }
+
+.settings-color-controls { display: flex; gap: var(--s2); align-items: center; }
+#settings-user-color-picker { flex: none; width: 3rem; min-height: 2.75rem; padding: var(--s1); }
+#settings-user-color { flex: 1; min-width: 0; font-family: var(--font-mono); }

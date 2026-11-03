@@ -25,6 +25,14 @@ import { nextCursor, pagePath, showMore } from "./pages.js";
 import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
+	buildLabel,
+	buildSyncLabel,
+	configFromText,
+	configUserColor,
+	configWithUserColor,
+	validUserColor,
+	userColorPickerValue,
+	userColorFromPicker,
 	charterBody,
 	charterView,
 	commitView,
@@ -75,6 +83,7 @@ const APPLE = isApplePlatform(navigator.userAgentData?.platform || navigator.pla
 
 const state = {
 	domain: "",
+	userColor: "blue",
 	domainResolved: undefined,
 	section: "inbox",
 	thread: null,
@@ -129,6 +138,180 @@ function fail(error) {
 	const message = error?.body?.error?.message ?? error?.message ?? String(error);
 	status(message, true);
 	if (error?.status === 403) showAuthorize();
+}
+
+// ---- Settings -------------------------------------------------------------------------------
+
+let settingsData;
+let settingsSavedText;
+let settingsConfigRevision;
+let settingsBusy = false;
+let settingsRestarting = false;
+
+/** Mark user-colored nodes explicitly: palette colors may also belong to sessions. */
+function participantIdentity(node, participant, participants = state.thread?.participants ?? []) {
+	const url = typeof participant === "string" ? participant : participant?.url ?? "";
+	const kind = typeof participant === "string" ? "" : participant?.kind;
+	node.dataset.userColor = String(kind === "user" || (!kind && /^pana:\/\/[^/]+\/users\//.test(url)));
+	setVisualColor(node, participantColor(participant, { participants, userColor: state.userColor }));
+	node.dataset.pattern = participantPattern(participant, participants);
+}
+
+function setVisualColor(node, color) {
+	if (color) node.dataset.color = color;
+	else delete node.dataset.color;
+	if (validUserColor(color) && color.startsWith("#")) node.style.setProperty("--who", color);
+	else node.style.removeProperty("--who");
+}
+
+function applyUserColor(color) {
+	state.userColor = validUserColor(color) ? color : "blue";
+	for (const node of document.querySelectorAll('[data-user-color="true"]')) setVisualColor(node, state.userColor);
+}
+
+function syncSettingsColor() {
+	const select = $("settings-user-color");
+	const picker = $("settings-user-color-picker");
+	const preview = $("settings-color-preview");
+	try {
+		const color = configUserColor(configFromText($("settings-config").value));
+		select.value = color;
+		select.setCustomValidity("");
+		select.disabled = !settingsData || settingsBusy || settingsRestarting;
+		picker.disabled = select.disabled;
+		picker.value = userColorPickerValue(color);
+		setVisualColor(preview, color);
+		preview.textContent = `Your message · ${color}`;
+		$("settings-color-hint").textContent = "Use the color picker or enter any hex color. The picker preserves alpha from the hex field. Preview only until saved; color applies immediately on save.";
+	} catch {
+		select.value = "";
+		select.disabled = true;
+		picker.disabled = true;
+		preview.removeAttribute("data-color");
+		preview.style.removeProperty("--who");
+		preview.textContent = "Preview unavailable";
+		$("settings-color-hint").textContent = "Fix the JSON and ui.userColor in the editor to use the color field. Your draft is unchanged.";
+	}
+}
+
+function settingsNotice(text, error = false) {
+	$("settings-status").textContent = text;
+	$("settings-status").classList.toggle("error", error);
+}
+
+function updateSettingsControls() {
+	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
+	$("settings-save").disabled = !settingsData || settingsBusy || settingsRestarting || !changed;
+	$("settings-config").disabled = !settingsData || settingsBusy || settingsRestarting;
+	$("settings-refresh").disabled = settingsBusy;
+	$("settings-reload-config").disabled = settingsBusy || settingsRestarting;
+	$("settings-restart").disabled = !settingsData?.restartAvailable || settingsBusy || settingsRestarting;
+	$("settings-restart-yes").disabled = settingsBusy || settingsRestarting;
+	$("settings-restart-no").disabled = settingsBusy;
+	$("settings-draft").textContent = changed ? "Unsaved changes" : "";
+	syncSettingsColor();
+}
+
+function renderSettings(data) {
+	settingsData = data;
+	$("settings-source").textContent = buildLabel(data.source);
+	$("settings-config-path").textContent = data.configPath;
+	$("settings-restart-reason").textContent = data.restartAvailable
+		? "Restart loads the current source and saved configuration. Active runs will be interrupted."
+		: data.restartReason || "Restart is not available for this daemon.";
+	const processes = $("settings-processes");
+	processes.replaceChildren();
+	for (const process of data.processes || []) {
+		const heading = document.createElement("h4");
+		heading.textContent = `${process.role} · PID ${process.pid}`;
+		const build = document.createElement("p");
+		build.className = "settings-build";
+		build.textContent = buildLabel(process.running);
+		const sync = document.createElement("p");
+		sync.className = "notice";
+		sync.textContent = buildSyncLabel(data.source, process.running);
+		const started = document.createElement("p");
+		started.className = "hint";
+		if (Number.isFinite(process.startedAt)) {
+			tickingLabel(started, { skew: state.clockSkew }, (now) =>
+				`Started ${new Date(process.startedAt).toLocaleString()} · running for ${elapsedLabel(Math.max(0, now - process.startedAt))}`);
+		} else started.textContent = "Start time unavailable";
+		processes.append(heading, build, sync, started);
+	}
+	if (!processes.childElementCount) processes.textContent = "No process information available.";
+	$("settings-config-warning").textContent = data.configValidationError
+		? `Configuration on disk is invalid: ${data.configValidationError}. Fix and save it before restarting.`
+		: data.configRequiresRestart
+		? "Saved configuration differs from the running daemon. Restart required to apply it."
+		: "Your message color applies immediately on save. Other configuration changes require a daemon restart.";
+	updateSettingsControls();
+}
+
+async function loadSettings(reloadConfig = false) {
+	if (settingsBusy) return;
+	settingsBusy = true;
+	updateSettingsControls();
+	try {
+		const data = await api("GET", "/settings");
+		// A refresh or return to this page never silently discards the user's draft.
+		const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
+		if (!changed || reloadConfig) {
+			settingsConfigRevision = data.configRevision;
+			settingsSavedText = data.configText ?? (JSON.stringify(data.config, null, 2) + "\n");
+			$("settings-config").value = settingsSavedText;
+		}
+		settingsRestarting = false;
+		$("settings-restart-confirm").hidden = true;
+		renderSettings(data);
+		settingsNotice(changed && !reloadConfig ? "Status refreshed. Your unsaved configuration is kept." : "");
+	} catch (error) { settingsNotice(error.message, true); fail(error); }
+	finally { settingsBusy = false; updateSettingsControls(); }
+}
+
+async function saveSettings(event) {
+	event.preventDefault();
+	if ($("settings-save").disabled) return;
+	const errorNode = $("settings-config-error");
+	errorNode.hidden = true;
+	let config;
+	try { config = configFromText($("settings-config").value); }
+	catch (error) {
+		errorNode.textContent = error.message;
+		errorNode.hidden = false;
+		$("settings-config").focus();
+		return;
+	}
+	settingsBusy = true;
+	$("settings-restart-confirm").hidden = true;
+	updateSettingsControls();
+	try {
+		const data = await api("POST", "/settings", { config, configRevision: settingsConfigRevision });
+		settingsConfigRevision = data.configRevision;
+		settingsSavedText = data.configText ?? (JSON.stringify(data.config, null, 2) + "\n");
+		$("settings-config").value = settingsSavedText;
+		renderSettings(data);
+		applyUserColor(configUserColor(data.config));
+		settingsNotice("Configuration saved. Your message color is applied. Restart the daemon to apply other changes.");
+	} catch (error) {
+		errorNode.textContent = error.status === 409
+			? `${error.message} Your draft is kept. Copy it before using Reload configuration to read the current file.`
+			: error.message;
+		errorNode.hidden = false;
+		fail(error);
+	} finally { settingsBusy = false; updateSettingsControls(); }
+}
+
+async function restartSettings() {
+	if (settingsBusy || settingsRestarting || !settingsData?.restartAvailable) return;
+	settingsBusy = true;
+	updateSettingsControls();
+	try {
+		await api("POST", "/settings/restart", {});
+		settingsRestarting = true;
+		$("settings-restart-confirm").hidden = true;
+		settingsNotice("Restart requested. This app may briefly disconnect. Refresh status once the daemon is back.");
+	} catch (error) { settingsNotice(error.message, true); fail(error); }
+	finally { settingsBusy = false; updateSettingsControls(); }
 }
 
 // ---- HTTP -----------------------------------------------------------------------------------
@@ -344,7 +527,12 @@ function handleEvent(event) {
 		applyThreadSubject(event.threadId, event.subject);
 		return;
 	}
+	if (event.kind === "settings.ui") {
+		applyUserColor(event.userColor);
+		return;
+	}
 	if (event.kind === "hello") {
+		applyUserColor(event.userColor);
 		if (typeof event.domain === "string") state.domain = event.domain;
 		state.domainResolved?.();
 		return;
@@ -615,14 +803,6 @@ function copyingLink(link, url) {
 		}
 	});
 	return link;
-}
-
-/** Apply thread-local identity to every border/swatch from the same participant ordering. */
-function participantIdentity(node, person, participants = state.thread?.participants ?? []) {
-	const color = participantColor(person, participants);
-	if (color) node.dataset.color = color;
-	else delete node.dataset.color;
-	node.dataset.pattern = participantPattern(person, participants);
 }
 
 /** A participant as a short, colored name that links to its view (REF-08, UX-06). */
@@ -4018,6 +4198,9 @@ async function route() {
 				$("schedules-kind").value = ["session", "thread", "wake"].includes(query.get("kind")) ? query.get("kind") : "";
 				await loadSchedules(query.get("focus") ?? undefined);
 				break;
+			case "settings":
+				await loadSettings();
+				break;
 			case "objectives":
 				$("objectives-browse").hidden = false;
 				$("objectives-list").hidden = false;
@@ -4070,6 +4253,48 @@ for (const input of [$("palette-input"), $("palette-search-input")]) {
 	input.addEventListener("keydown", onPaletteKeydown);
 }
 
+function changeSettingsColor() {
+	const input = $("settings-user-color");
+	try {
+		const config = configWithUserColor(configFromText($("settings-config").value), input.value.trim());
+		input.setCustomValidity("");
+		$("settings-config").value = JSON.stringify(config, null, 2) + "\n";
+		$("settings-config-error").hidden = true;
+		updateSettingsControls();
+	} catch (error) {
+		input.setCustomValidity(error.message);
+		$("settings-save").disabled = true;
+		settingsNotice(error.message, true);
+	}
+}
+$("settings-user-color-picker").addEventListener("input", () => {
+	const hex = $("settings-user-color");
+	hex.value = userColorFromPicker($("settings-user-color-picker").value, configUserColor(configFromText($("settings-config").value)));
+	changeSettingsColor();
+});
+$("settings-user-color").addEventListener("input", changeSettingsColor);
+$("settings-user-color").addEventListener("change", changeSettingsColor);
+$("settings-form").addEventListener("submit", (event) => void saveSettings(event));
+$("settings-config").addEventListener("input", () => {
+	$("settings-config-error").hidden = true;
+	updateSettingsControls();
+});
+$("settings-refresh").addEventListener("click", () => void loadSettings());
+$("settings-reload-config").addEventListener("click", () => {
+	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
+	if (changed && !window.confirm("Discard unsaved configuration edits and reload the current file?")) return;
+	$("settings-config-error").hidden = true;
+	void loadSettings(true);
+});
+$("settings-restart").addEventListener("click", () => {
+	$("settings-restart-confirm").hidden = false;
+	$("settings-restart-no").focus();
+});
+$("settings-restart-no").addEventListener("click", () => {
+	$("settings-restart-confirm").hidden = true;
+	$("settings-restart").focus();
+});
+$("settings-restart-yes").addEventListener("click", () => void restartSettings());
 $("authorize-form").addEventListener("submit", (event) => {
 	event.preventDefault();
 	void authorize($("authorize-input").value);
@@ -4195,6 +4420,12 @@ document.addEventListener("visibilitychange", () => {
 	if (document.visibilityState === "hidden") pauseEvents();
 	else void resumeApp().catch(() => {});
 });
+
+// Keep sticky content below the actual header when mobile navigation wraps or fonts load.
+const topbar = document.querySelector(".topbar");
+const measureTopbar = () => document.documentElement.style.setProperty("--topbar-h", `${topbar.getBoundingClientRect().height}px`);
+measureTopbar();
+new ResizeObserver(measureTopbar).observe(topbar);
 
 // The thread from a notification click arrives as `?thread=<id>` (PSH-03).
 const bootParams = new URLSearchParams(location.search);

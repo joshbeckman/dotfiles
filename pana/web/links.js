@@ -11,6 +11,7 @@ export const SECTIONS = [
 	{ id: "schedules", title: "Schedules", route: "#/schedules" },
 	// OBJ-39: an objective's list and view.
 	{ id: "objectives", title: "Objectives", route: "#/objectives" },
+	{ id: "settings", title: "Settings", route: "#/settings" },
 ];
 
 export const TOKEN_KEY = "pana-token";

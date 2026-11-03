@@ -127,10 +127,10 @@ export function participantPattern(participant, participants = []) {
 }
 
 /** Color within a thread's append-ordered participants. Sessions outside threads have no swatch. */
-export function participantColor(participant, participants = []) {
+export function participantColor(participant, { participants = [], userColor = "blue" } = {}) {
 	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
 	const kind = typeof participant === "string" ? kindOf(url) : String(participant?.kind || kindOf(url));
-	if (kind === "user") return "blue";
+	if (kind === "user") return validUserColor(userColor) ? userColor : "blue";
 	if (kind === "domain") return "black";
 	const index = sessionIndex(url, participants);
 	return index < 0 ? undefined : SESSION_COLORS[index % SESSION_COLORS.length];
@@ -905,4 +905,63 @@ export function limitsBody(values, current) {
 		body[field] = parsed;
 	}
 	return { body, invalid };
+}
+
+/** A dirty checkout is not proof that the loaded bytes match, even at the same commit. */
+export function buildSyncLabel(source, running) {
+	if (!source?.sha || !running?.sha) return "Version comparison unavailable";
+	if (source.sha !== running.sha) return "Out of sync — restart to load source";
+	if (source.fingerprint && running.fingerprint) {
+		return source.fingerprint === running.fingerprint ? "In sync" : "Out of sync — restart to load source";
+	}
+	if (source.dirty || running.dirty) return "Uncommitted changes — builds may differ";
+	return "In sync";
+}
+
+export function buildLabel(build) {
+	if (!build?.sha) return "Build information unavailable";
+	return `${build.sha}${build.dirty ? " (uncommitted changes)" : ""}\n${build.message || "Commit message unavailable"}`;
+}
+
+export function configFromText(text) {
+	let config;
+	try { config = JSON.parse(text); }
+	catch (error) { throw new Error(`Invalid JSON: ${error.message}`); }
+	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Configuration must be a JSON object.");
+	return config;
+}
+
+/** Hex values are validated before being assigned to a CSS custom property. */
+export function validUserColor(color) {
+	return typeof color === "string" && (Object.hasOwn(PALETTE, color) || /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color));
+}
+
+/** Read the draft's color without silently replacing malformed UI configuration. */
+export function configUserColor(config) {
+	if (config.ui === undefined) return "blue";
+	if (!config.ui || typeof config.ui !== "object" || Array.isArray(config.ui)) throw new Error("Configuration ui must be a JSON object.");
+	const color = config.ui.userColor === undefined ? "blue" : config.ui.userColor;
+	if (!validUserColor(color)) throw new Error("Enter a hex color (#RGB, #RGBA, #RRGGBB or #RRGGBBAA) for ui.userColor.");
+	return color;
+}
+
+/** Changing the convenience selector preserves all other draft keys. */
+export function configWithUserColor(config, userColor) {
+	configUserColor(config);
+	if (!validUserColor(userColor)) throw new Error("Enter a hex color (#RGB, #RGBA, #RRGGBB or #RRGGBBAA) for ui.userColor.");
+	return { ...config, ui: { ...config.ui, userColor } };
+}
+
+/** Native color inputs use six RGB digits; keep alpha in the paired hex field. */
+export function userColorPickerValue(color) {
+	if (!validUserColor(color)) throw new Error("Invalid user color");
+	const hex = color.startsWith("#") ? color.slice(1) : PALETTE[color].slice(1);
+	return `#${hex.length <= 4 ? [...hex.slice(0, 3)].map((digit) => digit + digit).join("") : hex.slice(0, 6)}`.toLowerCase();
+}
+
+export function userColorFromPicker(rgb, previous) {
+	if (!/^#[0-9a-f]{6}$/i.test(rgb) || !validUserColor(previous)) throw new Error("Invalid picker color");
+	const alpha = previous.startsWith("#") && previous.length === 5 ? previous[4].repeat(2)
+		: previous.startsWith("#") && previous.length === 9 ? previous.slice(7) : "";
+	return rgb + alpha;
 }

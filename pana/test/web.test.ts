@@ -203,7 +203,7 @@ describe("PWA shell and static assets", () => {
 
 	it("WEB-03 the shell has every section and the app routes each one", async () => {
 		const ids = SECTIONS.map((section) => section.id);
-		expect(ids).toEqual(["inbox", "compose", "threads", "sessions", "memory", "schedules", "objectives"]);
+		expect(ids).toEqual(["inbox", "compose", "threads", "sessions", "memory", "schedules", "objectives", "settings"]);
 
 		t = await startTestPanad();
 		const html = String((await t.tcp.get("/")).raw);
@@ -360,6 +360,20 @@ describe("PWA shell and static assets", () => {
 		expect(withReferences("look", [image, doc])).toBe(`look\n\n${referenceFor(image)}\n\n${referenceFor(doc)}`);
 		// No media type from the server means a link, never an image that cannot load.
 		expect(referenceFor({ name: "blob", url: "u" })).toBe("[blob](u)");
+	});
+
+	it("SET-04 hello and live settings events send saved user colors to every authorized window", async () => {
+		t = await startTestPanad({ config: { ui: { userColor: "purple" } } });
+		const streams = [openSse(t.panad.tcpPort!, t.panad.webToken), openSse(t.panad.tcpPort!, t.panad.webToken)];
+		try {
+			for (const stream of streams) expect(await stream.waitFor("event: hello")).toContain('"userColor":"purple"');
+			const read = await t.client.get<any>("/settings");
+			expect((await t.client.post("/settings", { config: { ...read.body.config, ui: { userColor: "red" } }, configRevision: read.body.configRevision })).status).toBe(200);
+			for (const stream of streams) {
+				const frame = await stream.waitFor("event: settings.ui");
+				expect(frame).toContain('"userColor":"red"');
+			}
+		} finally { for (const stream of streams) stream.close(); }
 	});
 
 	it("WEB-06 /events streams live transcript events to an authorized window", async () => {
