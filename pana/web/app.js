@@ -31,6 +31,8 @@ import {
 	configUserColor,
 	configWithUserColor,
 	validUserColor,
+	userColorPickerValue,
+	userColorFromPicker,
 	charterBody,
 	charterView,
 	commitView,
@@ -167,18 +169,22 @@ function applyUserColor(color) {
 
 function syncSettingsColor() {
 	const select = $("settings-user-color");
+	const picker = $("settings-user-color-picker");
 	const preview = $("settings-color-preview");
 	try {
 		const color = configUserColor(configFromText($("settings-config").value));
 		select.value = color;
 		select.setCustomValidity("");
 		select.disabled = !settingsData || settingsBusy || settingsRestarting;
+		picker.disabled = select.disabled;
+		picker.value = userColorPickerValue(color);
 		setVisualColor(preview, color);
 		preview.textContent = `Your message · ${color}`;
-		$("settings-color-hint").textContent = "Any hex color: #RGB, #RGBA, #RRGGBB or #RRGGBBAA. Preview only until saved; color applies immediately on save.";
+		$("settings-color-hint").textContent = "Use the color picker or enter any hex color. The picker preserves alpha from the hex field. Preview only until saved; color applies immediately on save.";
 	} catch {
 		select.value = "";
 		select.disabled = true;
+		picker.disabled = true;
 		preview.removeAttribute("data-color");
 		preview.style.removeProperty("--who");
 		preview.textContent = "Preview unavailable";
@@ -4267,6 +4273,11 @@ function changeSettingsColor() {
 		settingsNotice(error.message, true);
 	}
 }
+$("settings-user-color-picker").addEventListener("input", () => {
+	const hex = $("settings-user-color");
+	hex.value = userColorFromPicker($("settings-user-color-picker").value, configUserColor(configFromText($("settings-config").value)));
+	changeSettingsColor();
+});
 $("settings-user-color").addEventListener("input", changeSettingsColor);
 $("settings-user-color").addEventListener("change", changeSettingsColor);
 $("settings-form").addEventListener("submit", (event) => void saveSettings(event));

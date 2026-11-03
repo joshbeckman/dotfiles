@@ -2035,3 +2035,7 @@ kbd {
 #settings-status:empty { display: none; }
 
 .settings-color-preview { border-left: 4px solid var(--who, var(--c-border)); padding: .75rem; }
+
+.settings-color-controls { display: flex; gap: var(--s2); align-items: center; }
+#settings-user-color-picker { flex: none; width: 3rem; min-height: 2.75rem; padding: var(--s1); }
+#settings-user-color { flex: 1; min-width: 0; font-family: var(--font-mono); }

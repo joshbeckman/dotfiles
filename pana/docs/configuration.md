@@ -73,6 +73,10 @@ validation permits fractional numbers.
 | --- | --- | --- |
 | `ui.userColor` | `"blue"` (`#002FA7`) | A hex color string in `#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA` form. Hex digits are case-insensitive; alpha, when present, is the final component. Legacy named palette values remain accepted: `blue`, `orange`, `purple`, `green`, `red`, `yellow`, `black`. Other CSS names/functions are not accepted. Applies live on a Settings save, unlike operational keys. |
 
+The Settings color control pairs a native color picker with a free-form hex field. The
+picker changes RGB while retaining any alpha component entered in the hex field. Neither
+preview changes messages until you save.
+
 For example, `"ui": { "userColor": "#7c3aed" }` chooses an opaque purple, and
 `"ui": { "userColor": "#7c3aedcc" }` includes alpha. Choose a color with sufficient
 contrast against both light and dark themes. A very transparent color can make the

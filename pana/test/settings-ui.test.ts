@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, validUserColor, participantColor, PALETTE } from "../web/views.js";
+import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, validUserColor, userColorPickerValue, userColorFromPicker, participantColor, PALETTE } from "../web/views.js";
 import { routeFromHash } from "../web/links.js";
 import { matchCommands, paletteCommands } from "../web/palette.js";
 
@@ -42,6 +42,16 @@ describe("user message color", () => {
 			expect(participantColor("pana://test.example", color)).toBe("black");
 		}
 		expect(participantColor(user, "toString")).toBe("blue");
+	});
+	it("pairs native RGB picking with arbitrary hex entry without losing alpha", () => {
+		expect(userColorPickerValue("blue")).toBe("#002fa7");
+		expect(userColorPickerValue("#AbC")).toBe("#aabbcc");
+		expect(userColorPickerValue("#AbCd")).toBe("#aabbcc");
+		expect(userColorPickerValue("#12345678")).toBe("#123456");
+		expect(userColorFromPicker("#abcdef", "#1234")).toBe("#abcdef44");
+		expect(userColorFromPicker("#abcdef", "#12345678")).toBe("#abcdef78");
+		expect(userColorFromPicker("#abcdef", "blue")).toBe("#abcdef");
+		expect(() => userColorFromPicker("red", "blue")).toThrow();
 	});
 	it("preserves nested UI and other draft keys without mutating the input", () => {
 		const config = { ui: { userColor: "blue", future: { enabled: true } }, zero: 0, unknown: [1, 2] };

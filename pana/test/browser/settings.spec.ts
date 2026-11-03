@@ -76,15 +76,19 @@ describeBrowser("settings", () => {
 			editor.dispatchEvent(new Event("input"));
 			const select = document.getElementById("settings-user-color");
 			if(select.value !== "blue") throw new Error("JSON did not update selector");
-			select.value = "#1a2B3c"; select.dispatchEvent(new Event("input"));
-			if(document.getElementById("settings-color-preview").dataset.color !== "#1a2B3c") throw new Error("Missing preview");
+			select.value = "#1a2B3c80"; select.dispatchEvent(new Event("input"));
+			const picker = document.getElementById("settings-user-color-picker");
+			if(picker.type !== "color" || picker.value !== "#1a2b3c") throw new Error("Native color picker not synced");
+			picker.value = "#abcdef"; picker.dispatchEvent(new Event("input"));
+			if(select.value !== "#abcdef80") throw new Error("Picker lost hex alpha");
+			if(document.getElementById("settings-color-preview").dataset.color !== "#abcdef80") throw new Error("Missing preview");
 			document.getElementById("settings-form").requestSubmit();
 			await until(()=>document.getElementById("settings-status").textContent.includes("saved"));
 			return {body:window.settingsCalls.find(c=>c.method==="POST").body,
 				notice:document.getElementById("settings-status").textContent,
 				warning:document.getElementById("settings-config-warning").textContent};
 		`);
-		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, ui: { userColor: "#1a2B3c", future: { keep: true } }, maxDailyUsd: 25 }, configRevision: "revision-1" });
+		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, ui: { userColor: "#abcdef80", future: { keep: true } }, maxDailyUsd: 25 }, configRevision: "revision-1" });
 		expect(saved.notice).toContain("Restart");
 		expect(saved.warning).toContain("Restart required");
 		const conflict = await evaluatePage<{ draft: string; revision: string; error: string; color: string }>(`

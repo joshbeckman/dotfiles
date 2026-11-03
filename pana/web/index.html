@@ -497,7 +497,10 @@
 					<p class="hint">Domain and user identify existing records and cannot be changed here. Unknown configuration keys are preserved.</p>
 					<p class="notice" id="settings-config-warning">Your message color applies immediately on save. Other configuration changes require a daemon restart.</p>
 					<div class="field"><label for="settings-user-color">Your message color</label>
-						<input id="settings-user-color" type="text" placeholder="#002fa7" maxlength="9" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="settings-color-hint" disabled />
+						<div class="settings-color-controls">
+							<input id="settings-user-color-picker" type="color" value="#002fa7" aria-label="Pick your message color" aria-describedby="settings-color-hint" disabled />
+							<input id="settings-user-color" type="text" placeholder="#002fa7" maxlength="9" spellcheck="false" autocomplete="off" autocapitalize="off" aria-describedby="settings-color-hint" disabled />
+						</div>
 						<p id="settings-color-preview" class="settings-color-preview" aria-live="polite">Your message · blue</p>
 						<p id="settings-color-hint" class="hint">Any hex color: #RGB, #RGBA, #RRGGBB or #RRGGBBAA. Applies immediately on save.</p>
 					</div>

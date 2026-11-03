@@ -951,3 +951,17 @@ export function configWithUserColor(config, userColor) {
 	if (!validUserColor(userColor)) throw new Error("Enter a hex color (#RGB, #RGBA, #RRGGBB or #RRGGBBAA) for ui.userColor.");
 	return { ...config, ui: { ...config.ui, userColor } };
 }
+
+/** Native color inputs use six RGB digits; keep alpha in the paired hex field. */
+export function userColorPickerValue(color) {
+	if (!validUserColor(color)) throw new Error("Invalid user color");
+	const hex = color.startsWith("#") ? color.slice(1) : PALETTE[color].slice(1);
+	return `#${hex.length <= 4 ? [...hex.slice(0, 3)].map((digit) => digit + digit).join("") : hex.slice(0, 6)}`.toLowerCase();
+}
+
+export function userColorFromPicker(rgb, previous) {
+	if (!/^#[0-9a-f]{6}$/i.test(rgb) || !validUserColor(previous)) throw new Error("Invalid picker color");
+	const alpha = previous.startsWith("#") && previous.length === 5 ? previous[4].repeat(2)
+		: previous.startsWith("#") && previous.length === 9 ? previous.slice(7) : "";
+	return rgb + alpha;
+}
