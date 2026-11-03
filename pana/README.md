@@ -185,6 +185,11 @@ Pana runs beside the current pi setup and shares nothing with it.
   Managed layouts and ownership receipts extend discovery beyond HOME's scan; receipts
   persist across archive/restart and are not scratch. Profile-created worktrees use the
   same implementation and ordinary `<state>/worktrees/<session>/<repo>` layout.
+  Sessions must clean up their own task-created trees at completion after preserving
+  useful work and checking that no assigned/open work needs them (including PR deployment
+  and proof). Unsafe, blocked, or still-needed trees are retained with a path and reason
+  in the task thread. This is not a daemon TTL sweep or bulk-cleanup permission; see
+  [failure and cleanup](docs/worktree-adapters.md#failure-and-cleanup).
 - Pana keeps its state under `~/.local/state/pana/` and reads no other agent state.
 
 ### System prompt

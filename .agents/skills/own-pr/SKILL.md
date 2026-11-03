@@ -112,7 +112,15 @@ After merge:
 4. Once deployed, run the rollout checks recorded before review and inspect the production evidence appropriate to the change: metrics, logs, behavior, rollout state, or another direct check. If a guardrail fires, follow the agreed response within your authority and alert Josh immediately; ask before actions outside that authority.
 5. Message Josh with the deployment state and concise proof. Report regressions immediately and own the follow-up.
 
-Only then is the PR lifecycle complete. Mark the checklist complete and cancel any pending wake for this PR with `pana schedule delete SCHEDULE`. The clean worktree is then eligible for cleanup, provided no other assigned or open work remains.
+Only then is the PR lifecycle complete. Mark the checklist complete and cancel any pending wake for this PR with `pana schedule delete SCHEDULE`.
+
+### Completion-time worktree cleanup
+
+Remove worktrees you created for the task once useful work is preserved and no other assigned or open work still needs them. This workflow authorizes completion-time cleanup of your own task-created trees, not the user's checkout, another writer's tree, or a checkout merely supplied as cwd; stricter harness permissions still apply.
+
+Verify ownership, clean tracked/untracked status, preservation of useful ignored files, and that no local-only commits or useful artifacts would be lost. Preserve useful work in its canonical home, not only disposable scratch.
+
+Use `git worktree remove` for ordinary trees and the repository's supported removal tool for managed trees. Do not force removal, unlock trees, delete branches, hand-edit ownership receipts, or bypass tool refusals. If cleanup is unsafe, blocked, or another task still needs the tree, retain it and report its path and reason in the task thread. This is a required completion step, not automatic TTL deletion or bulk-cleanup authority.
 
 ## Scheduled checks
 
