@@ -41,3 +41,17 @@ export const SESSION_TEXT_PALETTE = {
 	"session-11": "#897310",
 	"session-12": "#A34DD8"
 };
+export const SESSION_COLOR_ORDERS = {
+	"session-1": ["session-1","session-3","session-2","session-6","session-4","session-10","session-11","session-5","session-12","session-8","session-9","session-7"],
+	"session-2": ["session-2","session-4","session-3","session-6","session-1","session-10","session-11","session-5","session-12","session-8","session-9","session-7"],
+	"session-3": ["session-3","session-6","session-4","session-2","session-1","session-10","session-11","session-5","session-12","session-8","session-9","session-7"],
+	"session-4": ["session-4","session-2","session-3","session-6","session-1","session-10","session-11","session-5","session-12","session-8","session-9","session-7"],
+	"session-5": ["session-5","session-9","session-6","session-3","session-8","session-1","session-10","session-11","session-2","session-12","session-4","session-7"],
+	"session-6": ["session-6","session-3","session-4","session-2","session-1","session-10","session-11","session-5","session-12","session-8","session-9","session-7"],
+	"session-7": ["session-7","session-3","session-4","session-8","session-5","session-1","session-10","session-6","session-12","session-2","session-9","session-11"],
+	"session-8": ["session-8","session-4","session-3","session-7","session-5","session-1","session-10","session-6","session-12","session-2","session-9","session-11"],
+	"session-9": ["session-9","session-3","session-2","session-6","session-1","session-10","session-11","session-5","session-8","session-12","session-4","session-7"],
+	"session-10": ["session-10","session-6","session-2","session-1","session-9","session-3","session-11","session-5","session-8","session-12","session-4","session-7"],
+	"session-11": ["session-11","session-2","session-10","session-9","session-3","session-1","session-6","session-5","session-8","session-12","session-4","session-7"],
+	"session-12": ["session-12","session-4","session-3","session-6","session-1","session-5","session-10","session-11","session-2","session-8","session-9","session-7"]
+};

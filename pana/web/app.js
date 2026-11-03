@@ -149,11 +149,11 @@ let settingsBusy = false;
 let settingsRestarting = false;
 
 /** Mark user-colored nodes explicitly: palette colors may also belong to sessions. */
-function participantIdentity(node, participant, participants = state.thread?.participants ?? []) {
+function participantIdentity(node, participant, participants = state.thread?.participants ?? [], threadId = state.thread?.id ?? "") {
 	const url = typeof participant === "string" ? participant : participant?.url ?? "";
 	const kind = typeof participant === "string" ? "" : participant?.kind;
 	node.dataset.userColor = String(kind === "user" || (!kind && /^pana:\/\/[^/]+\/users\//.test(url)));
-	setVisualColor(node, participantColor(participant, { participants, userColor: state.userColor }));
+	setVisualColor(node, participantColor(participant, { participants, userColor: state.userColor, threadId }));
 	node.dataset.pattern = participantPattern(participant, participants);
 }
 
@@ -806,11 +806,11 @@ function copyingLink(link, url) {
 }
 
 /** A participant as a short, colored name that links to its view (REF-08, UX-06). */
-function personLink(person, participants = state.thread?.participants ?? []) {
+function personLink(person, participants = state.thread?.participants ?? [], threadId = state.thread?.id ?? "") {
 	const url = typeof person === "string" ? person : person.url;
 	const link = refLink(url, "user", refLabel(url), url);
 	const wrap = span("", "person");
-	participantIdentity(wrap, person, participants);
+	participantIdentity(wrap, person, participants, threadId);
 	wrap.append(link);
 	return wrap;
 }
@@ -905,7 +905,7 @@ function syncWorkingMark(row, threadId = row.dataset.thread) {
 	mark.hidden = working.length === 0;
 	if (working.length === 0) return;
 	// Thread-list summaries lack participants: their mark is a generic activity signal.
-	participantIdentity(mark, { url: working[0].url, kind: "session" }, row.__participants ?? []);
+	participantIdentity(mark, { url: working[0].url, kind: "session" }, row.__participants ?? [], threadId);
 	if (!mark.dataset.color) mark.dataset.color = "blue";
 	mark.title = `${working.map((session) => refLabel(session.url)).join(", ")} working`;
 }
@@ -1189,13 +1189,13 @@ function inboxItem(row, showArchived) {
 	// The reader is in every thread of their own inbox, so the row names the others.
 	const others = row.participants.filter((person) => person.kind !== "user");
 	const people = span("", "people");
-	for (const person of others) people.append(personLink(person, row.participants));
+	for (const person of others) people.append(personLink(person, row.participants, row.threadId));
 	const snippet = document.createElement("span");
 	snippet.className = "snippet";
 	snippet.dataset.testid = "inbox-snippet";
 	const who = span(`${row.sender.kind === "user" ? "You" : refLabel(row.sender.url)}: `, "snippet-sender");
 	if (row.sender.kind !== "user") who.replaceChildren(referenceText(`${refLabel(row.sender.url)}: `));
-	participantIdentity(who, row.sender, row.participants);
+	participantIdentity(who, row.sender, row.participants, row.threadId);
 	snippet.append(who, document.createTextNode(row.snippet));
 	const aside = document.createElement("div");
 	aside.className = "item-aside";

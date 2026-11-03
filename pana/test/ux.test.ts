@@ -16,7 +16,7 @@ import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection, sequenceLabel } from "../web/keys.js";
 import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits, rankBy } from "../web/palette.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
-import { inboxThreadRow, isWorking, PALETTE, participantColor, participantPattern, SESSION_PATTERNS, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE, threadRow, untilLabel, workingOf } from "../web/views.js";
+import { inboxThreadRow, isWorking, PALETTE, participantColor, participantPattern, SESSION_PATTERNS, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE, SESSION_COLOR_ORDERS, threadRow, untilLabel, workingOf } from "../web/views.js";
 
 it("enables inherited font disambiguation throughout the UI", () => {
 	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
@@ -454,6 +454,39 @@ describe("UX-06 participant colors", () => {
 		// Reloads are deterministic, but another thread can give the same session another color.
 		expect(urls.map((url) => participantColor(url, { participants: JSON.parse(JSON.stringify(urls)) }))).toEqual(colors);
 		expect(participantColor(urls[0]!, { participants: [urls[1]!, urls[0]!] })).not.toBe(colors[0]);
+	});
+
+	it("UX-06 thread IDs vary starting colors without changing a thread on reload, joins or user preferences", () => {
+		const people = Array.from({ length: 49 }, (_, i) => `pana://a.example/sessions/session${i}`);
+		const ids = Array.from({ length: 240 }, (_, i) => `01KE6P4YM0M457PFE07QVF${String(i).padStart(4, "0")}`);
+		const starts = ids.map((threadId) => participantColor(people[0]!, { participants: people, threadId }));
+		expect(new Set(starts).size).toBe(12);
+		for (const threadId of ids.slice(0, 12)) {
+			const colors = people.map((person) => participantColor(person, { participants: people, threadId }));
+			expect(new Set(colors.slice(0, 12)).size).toBe(12);
+			expect(colors[12]).toBe(colors[0]);
+			expect(people.slice(0, 3).map((person) => participantColor(person, { participants: people.slice(0, 3), threadId }))).toEqual(colors.slice(0, 3));
+			for (const userColor of ["blue", "green", "#aabbcc", "#1234"]) {
+				expect(people.map((person) => participantColor(person, { participants: [...people], threadId, userColor }))).toEqual(colors);
+			}
+			const identities = people.map((person) => `${participantColor(person, { participants: people, threadId })}:${participantPattern(person, people)}`);
+			expect(new Set(identities.slice(0, 48)).size).toBe(48);
+			expect(identities[48]).toBe(identities[0]);
+		}
+	});
+
+	it("UX-06 every seeded starting point uses a full, farthest-first palette order", () => {
+		const graphics = Object.fromEntries(SESSION_COLORS.map((name) => [name, [SESSION_PALETTE[name]!, SESSION_DARK_PALETTE[name]!].map(simulatedLabs)]));
+		const separation = (a: string, b: string) => Math.min(...graphics[a]!.flatMap((theme, t) => theme.map((value, v) => distance(value, graphics[b]![t]![v]!))));
+		for (const start of SESSION_COLORS) {
+			const order = SESSION_COLOR_ORDERS[start]!;
+			expect(order[0]).toBe(start);
+			expect([...order].sort()).toEqual([...SESSION_COLORS].sort());
+			for (let i = 1; i < order.length; i++) {
+				const score = (name: string) => Math.min(...order.slice(0, i).map((used) => separation(name, used)));
+				for (const candidate of order.slice(i)) expect(score(order[i]!)).toBeGreaterThanOrEqual(score(candidate) - 1e-12);
+			}
+		}
 	});
 
 	it("UX-06 identity swatches contrast against both themes and start with separated colors", () => {
