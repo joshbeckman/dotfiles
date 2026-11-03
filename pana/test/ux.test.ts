@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { distance, simulatedLabs } from "../scripts/lib/color-space.js";
 // WP13: PWA usability. The browser checks live in test/browser/ux.spec.ts; this file covers the
 // server's thread inbox (UX-03), the working indicators (UX-09), and the PWA modules whose logic
 // is pure (UX-01, UX-02, UX-06, UX-08).
@@ -14,7 +16,7 @@ import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection, sequenceLabel } from "../web/keys.js";
 import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits, rankBy } from "../web/palette.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
-import { inboxThreadRow, isWorking, PALETTE, participantColor, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, threadRow, untilLabel, workingOf } from "../web/views.js";
+import { inboxThreadRow, isWorking, PALETTE, participantColor, participantPattern, SESSION_PATTERNS, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, threadRow, untilLabel, workingOf } from "../web/views.js";
 
 it("enables inherited font disambiguation throughout the UI", () => {
 	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
@@ -432,11 +434,17 @@ describe("UX-06 participant colors", () => {
 	it("UX-06 session colors belong to a thread, not a session, and use every color before repeating", () => {
 		expect(participantColor("pana://a.example/users/josh")).toBe("blue");
 		expect(participantColor("pana://a.example")).toBe("black");
-		const urls = Array.from({ length: 20 }, (_, i) => `pana://a.example/sessions/session${i}`);
+		const urls = Array.from({ length: 49 }, (_, i) => `pana://a.example/sessions/session${i}`);
 		expect(participantColor(urls[0]!)).toBeUndefined();
 		const colors = urls.map((url) => participantColor(url, urls));
+		expect(SESSION_COLORS).toHaveLength(12);
 		expect(new Set(colors.slice(0, SESSION_COLORS.length)).size).toBe(SESSION_COLORS.length);
 		expect(colors[SESSION_COLORS.length]).toBe(colors[0]);
+		const identities = urls.map((url) => `${participantColor(url, urls)}:${participantPattern(url, urls)}`);
+		expect(new Set(identities.slice(0, 48)).size).toBe(48);
+		expect(identities[48]).toBe(identities[0]);
+		expect(participantPattern(urls[12]!, urls)).toBe("dashed");
+		expect(SESSION_PATTERNS).toEqual(["solid", "dashed", "dotted", "double"]);
 		for (const color of colors) expect(SESSION_COLORS).toContain(color);
 		// Appending a participant, duplicate membership, or a user/domain cannot recolor a prefix.
 		const original = urls.slice(0, 3);
@@ -456,26 +464,28 @@ describe("UX-06 participant colors", () => {
 		for (const hex of Object.values(SESSION_PALETTE)) expect(1.05/(luminance(hex)+0.05)).toBeGreaterThan(4.5);
 		for (const hex of Object.values(SESSION_DARK_PALETTE)) expect((luminance(hex)+0.05)/(luminance("#0d0d0d")+0.05)).toBeGreaterThan(4.5);
 		const participants = ["pana://a.example/sessions/a", "pana://a.example/sessions/b"];
-		expect(participants.map((url) => participantColor(url, participants))).toEqual(["session-teal", "session-rose"]);
+		expect(participants.map((url) => participantColor(url, participants))).toEqual(["session-1", "session-2"]);
 	});
 
-	it("UX-06 the first two session colors remain separated under red/green and blue/yellow deficiency simulations", () => {
-		// Machado et al. (2009), severity 100 matrices, applied to linear RGB. This is a
-		// regression check for the common two-session case, not a claim of universal accessibility.
-		const matrices = [
-			[[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]],
-			[[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]],
-			[[1.255528, -0.076749, -0.178779], [-0.078411, 0.930809, 0.147602], [0.004733, 0.691367, 0.303900]],
-		];
-		const linear = (hex: string) => hex.match(/[0-9a-f]{2}/gi)!.map((v) => parseInt(v, 16)/255).map((v) => v <= 0.04045 ? v/12.92 : ((v+0.055)/1.055)**2.4);
+	it("UX-06 all twelve colors pass pairwise normal and color-vision audits in both themes", () => {
 		for (const palette of [SESSION_PALETTE, SESSION_DARK_PALETTE]) {
-			const a = linear(palette["session-teal"]!);
-			const b = linear(palette["session-rose"]!);
-			for (const matrix of matrices) {
-				const difference = matrix.map((row) => row.reduce((sum, c, i) => sum + c*(a[i]! - b[i]!), 0));
-				expect(Math.hypot(...difference)).toBeGreaterThan(0.1);
+			const labs = Object.values(palette).map(simulatedLabs);
+			for (let i = 0; i < labs.length; i++) {
+				for (let j = i + 1; j < labs.length; j++) {
+					// Normal-vision floor preserves visible separation; simulation floor detects
+					// regressions, not universal distinguishability. Direct labels remain essential.
+					expect(distance(labs[i]![0]!, labs[j]![0]!)).toBeGreaterThanOrEqual(0.08);
+					for (let vision = 0; vision < 4; vision++) expect(distance(labs[i]![vision]!, labs[j]![vision]!)).toBeGreaterThan(0.025);
+				}
+				for (const reserved of ["#002FA7", "#0D0D0D", "#FFFFFF"].map(simulatedLabs)) {
+					for (let vision = 0; vision < 4; vision++) expect(distance(labs[i]![vision]!, reserved[vision]!)).toBeGreaterThanOrEqual(0.10);
+				}
 			}
 		}
+	});
+
+	it("UX-06 palette generation is reproducible and checked-in CSS agrees", () => {
+		execFileSync(process.execPath, ["scripts/session-palette.js", "--check"], { cwd: new URL("..", import.meta.url) });
 	});
 
 	it("UX-06 the stylesheet defines every palette color and a rule per participant color", () => {

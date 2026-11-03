@@ -46,6 +46,7 @@ import {
 	objectiveView,
 	objectiveWakes,
 	participantColor,
+	participantPattern,
 	refLabel,
 	scheduleBody,
 	scheduleCheckView,
@@ -616,12 +617,20 @@ function copyingLink(link, url) {
 	return link;
 }
 
+/** Apply thread-local identity to every border/swatch from the same participant ordering. */
+function participantIdentity(node, person, participants = state.thread?.participants ?? []) {
+	const color = participantColor(person, participants);
+	if (color) node.dataset.color = color;
+	else delete node.dataset.color;
+	node.dataset.pattern = participantPattern(person, participants);
+}
+
 /** A participant as a short, colored name that links to its view (REF-08, UX-06). */
 function personLink(person, participants = state.thread?.participants ?? []) {
 	const url = typeof person === "string" ? person : person.url;
 	const link = refLink(url, "user", refLabel(url), url);
 	const wrap = span("", "person");
-	wrap.dataset.color = participantColor(person, participants);
+	participantIdentity(wrap, person, participants);
 	wrap.append(link);
 	return wrap;
 }
@@ -716,7 +725,8 @@ function syncWorkingMark(row, threadId = row.dataset.thread) {
 	mark.hidden = working.length === 0;
 	if (working.length === 0) return;
 	// Thread-list summaries lack participants: their mark is a generic activity signal.
-	mark.dataset.color = participantColor({ url: working[0].url, kind: "session" }, row.__participants ?? []) ?? "blue";
+	participantIdentity(mark, { url: working[0].url, kind: "session" }, row.__participants ?? []);
+	if (!mark.dataset.color) mark.dataset.color = "blue";
 	mark.title = `${working.map((session) => refLabel(session.url)).join(", ")} working`;
 }
 
@@ -787,7 +797,7 @@ function scheduledChip(wake) {
 	const chip = span("", "working-chip scheduled-chip");
 	chip.dataset.testid = "scheduled-session";
 	chip.dataset.session = wake.sessionId;
-	chip.dataset.color = participantColor({ url: wake.url, kind: "session" }, state.thread?.participants ?? []);
+	participantIdentity(chip, { url: wake.url, kind: "session" });
 	const repeating = wake.cron ? ` (${wake.cron})` : "";
 	const subject = wake.subject ? `: ${wake.subject}` : "";
 	chip.append(span("", "working-dot scheduled-mark"));
@@ -815,7 +825,7 @@ function workingChip(session) {
 	const chip = span("", "working-chip");
 	chip.dataset.testid = "working-session";
 	chip.dataset.session = session.sessionId;
-	chip.dataset.color = participantColor({ url: session.url, kind: "session" }, state.thread?.participants ?? []);
+	participantIdentity(chip, { url: session.url, kind: "session" });
 	chip.title = `${refLabel(session.url)} is ${session.state}`;
 	chip.append(span("", "working-dot"));
 	chip.append(refLink(session.url, "session", refLabel(session.url)));
@@ -1005,7 +1015,7 @@ function inboxItem(row, showArchived) {
 	snippet.dataset.testid = "inbox-snippet";
 	const who = span(`${row.sender.kind === "user" ? "You" : refLabel(row.sender.url)}: `, "snippet-sender");
 	if (row.sender.kind !== "user") who.replaceChildren(referenceText(`${refLabel(row.sender.url)}: `));
-	who.dataset.color = participantColor(row.sender, row.participants);
+	participantIdentity(who, row.sender, row.participants);
 	snippet.append(who, document.createTextNode(row.snippet));
 	const aside = document.createElement("div");
 	aside.className = "item-aside";
@@ -1257,7 +1267,7 @@ async function messageElement(message, { focus }) {
 	article.dataset.id = view.id ?? "";
 	article.dataset.sender = view.sender;
 	// UX-06: the sender's identity color belongs to this thread, not the session.
-	article.dataset.color = participantColor({ url: view.sender, kind: view.senderKind }, state.thread?.participants ?? []);
+	participantIdentity(article, { url: view.sender, kind: view.senderKind });
 
 	const header = document.createElement("header");
 	const sender = view.sender ? refLink(view.sender, "user", refLabel(view.sender), view.sender) : document.createTextNode("unknown sender");

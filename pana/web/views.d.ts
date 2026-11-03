@@ -77,9 +77,11 @@ export function inboxThreadRow(thread: any): {
 };
 export const PALETTE: Record<"blue" | "orange" | "purple" | "green" | "red" | "yellow" | "black", string>;
 export const SESSION_COLORS: string[];
+export const SESSION_PATTERNS: string[];
 export const SESSION_PALETTE: Record<string, string>;
 export const SESSION_DARK_PALETTE: Record<string, string>;
 export function participantColor(participant: string | { url?: string; kind?: string }, participants?: Array<string | { url?: string; kind?: string }>): string | undefined;
+export function participantPattern(participant: string | { url?: string; kind?: string }, participants?: Array<string | { url?: string; kind?: string }>): string;
 export function refLabel(url: string): string;
 export function shortTime(at: number, now?: number, locale?: string): string;
 export function threadRow(thread: any): {

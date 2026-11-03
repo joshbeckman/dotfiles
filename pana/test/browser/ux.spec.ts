@@ -1,14 +1,16 @@
 // WP13 in a real browser (UX-01..08) against a seeded test panad. Keys are dispatched as
 // KeyboardEvents on the focused element, which is the path the app's one keydown listener reads.
 
+import { copyFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sessionRuntime } from "../../src/sessions/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { INPUT_KEYMAP, KEYMAP } from "../../web/keys.js";
-import { PALETTE, SESSION_PALETTE, participantColor, refLabel } from "../../web/views.js";
+import { PALETTE, SESSION_PALETTE, participantColor, participantPattern, refLabel } from "../../web/views.js";
 import type { TestPanad } from "../harness/index.ts";
-import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
+import { chromeDevtoolsAvailable, closePage, emulateColorScheme, screenshot, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
 
 const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
@@ -500,6 +502,87 @@ describeBrowser("pana usability in a browser", () => {
 			await until(() => document.querySelectorAll("#sessions-list .item").length >= 3);
 			return document.querySelectorAll("#sessions-list .person, #sessions-list [data-color]").length;
 		`)).toBe(0);
+	});
+
+	it.each([13, 25, 37])("UX-06 %i sessions use twelve colors and secondary patterns consistently across thread and inbox", async (count) => {
+		const { t } = await start();
+		const sessions = Array.from({ length: count }, () => ({ id: t.runtime.newId(), url: "", kind: "session" }));
+		await t.runtime.db.write(async (tx) => {
+			for (const session of sessions) {
+				session.url = t.runtime.url({ kind: "session", id: session.id });
+				await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", session.id, session.url, t.clock.now());
+				await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'stopped', 0, ?, ?)", session.id, t.clock.now(), t.clock.now());
+			}
+		});
+		const created = await t.client.post<{ thread: { id: string; participants: Array<{ url: string; kind: string }> }; message: { id: string } }>("/threads", {
+			to: sessions.map((session) => session.id), body: `${count} session identities: twelve colors, then secondary patterns.`,
+		});
+		expect(created.status).toBe(201);
+		let head = created.body.message.id;
+		for (const [i, session] of sessions.entries()) {
+			const reply = await t.client.post<{ message: { id: string } }>(`/threads/${created.body.thread.id}/messages`, {
+				after: head, body: `Participant ${i + 1}${i === 12 ? ": same color as 1, different border and mark" : ""}`,
+			}, { caller: session.id });
+			expect(reply.status).toBe(200);
+			head = reply.body.message.id;
+		}
+		const wake = await t.client.post("/schedules", { kind: "wake", session: sessions[count - 1]!.id, in: "2h", note: "Palette fixture", subject: "Pattern check" });
+		expect(wake.status).toBe(201);
+		const identities = await evaluatePage<Array<{ sender: string; color: string; pattern: string; line: string }>>(`
+			location.hash = "#/threads/${created.body.thread.id}";
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length === ${Math.min(30, count + 1)});
+			if (${count} > 29) {
+				await until(() => document.querySelector("#thread-messages [data-history=earlier]"));
+				document.querySelector("#thread-messages [data-history=earlier]").click();
+				await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length === ${count + 1});
+			}
+			return [...document.querySelectorAll('#thread-messages [data-testid=message]')].filter((el) => el.dataset.sender.includes('/sessions/')).map((el) => ({
+				sender: el.dataset.sender, color: el.dataset.color, pattern: el.dataset.pattern, line: getComputedStyle(el).borderLeftStyle,
+			}));
+		`);
+		expect(new Set(identities.slice(0, 12).map((identity) => identity.color)).size).toBe(12);
+		for (const identity of identities) {
+			expect(identity.color).toBe(participantColor(identity.sender, created.body.thread.participants));
+			expect(identity.pattern).toBe(participantPattern(identity.sender, created.body.thread.participants));
+			expect(identity.line).toBe(identity.pattern);
+		}
+		expect(identities[12]!.pattern).toBe("dashed");
+		expect(identities[12]!.color).toBe(identities[0]!.color);
+		const pattern = await evaluatePage<{ pattern: string; fill: string }>(`
+			const person = [...document.querySelectorAll('#thread-participants .person')].find((el) => el.querySelector('a').title === '${sessions[12]!.url}');
+			return { pattern: person.dataset.pattern, fill: getComputedStyle(person, '::before').backgroundImage };
+		`);
+		expect(pattern.pattern).toBe("dashed");
+		expect(pattern.fill).toContain("repeating-linear-gradient");
+		const scheduled = await evaluatePage<{ pattern: string; line: string; background: string; animated: string; width: number }>(`
+			const chip = document.querySelector('#thread-working [data-testid=scheduled-session]');
+			const style = getComputedStyle(chip.querySelector('.scheduled-mark'));
+			return { pattern: chip.dataset.pattern, line: style.borderLeftStyle, background: style.backgroundColor, animated: style.animationName, width: parseFloat(style.borderLeftWidth) };
+		`);
+		const expectedPattern = count === 13 ? "dashed" : count === 25 ? "dotted" : "double";
+		expect(scheduled).toMatchObject({ pattern: expectedPattern, line: expectedPattern, background: "rgba(0, 0, 0, 0)", animated: "none" });
+		if (expectedPattern === "double") expect(scheduled.width).toBeGreaterThanOrEqual(3);
+
+		const shots = process.env.PANA_COLOR_SHOTS_DIR;
+		if (shots && count === 13) {
+			mkdirSync(shots, { recursive: true });
+			for (const theme of ["light", "dark"] as const) {
+				await emulateColorScheme(theme);
+				for (const [width, height] of [[1050, 850], [390, 844]]) {
+					await resizePage(width!, height!);
+					await evaluatePage("scrollTo(0, 0); return true;");
+					copyFileSync(await screenshot(true), join(shots, `twelve-${theme}-${width}.png`));
+				}
+			}
+			await emulateColorScheme("auto");
+			await resizePage(1280, 900);
+		}
+		const inbox = await evaluatePage<Array<{ color: string; pattern: string }>>(`
+			location.hash = "#/inbox";
+			await until(() => document.querySelector('[data-thread="${created.body.thread.id}"] .people .person'));
+			return [...document.querySelectorAll('[data-thread="${created.body.thread.id}"] .people .person')].map((el) => ({ color: el.dataset.color, pattern: el.dataset.pattern }));
+		`);
+		expect(inbox).toEqual(identities.map(({ color, pattern }) => ({ color, pattern })));
 	});
 
 	it("UX-07 labels and controls align, spacing follows one scale, and controls sit inside their section", async () => {

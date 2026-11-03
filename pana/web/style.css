@@ -72,21 +72,35 @@
 	--who: var(--p-black);
 }
 
-/* Thread-local identity colors; semantic state colors above are unchanged. */
-[data-color="session-teal"] { --who: #007f86; }
-[data-color="session-orange"] { --who: #b95000; }
-[data-color="session-violet"] { --who: #8046b5; }
-[data-color="session-gold"] { --who: #8a7000; }
-[data-color="session-rose"] { --who: #b32d69; }
-[data-color="session-lime"] { --who: #507b16; }
+/* BEGIN generated session palette */
+[data-color="session-1"] { --who: #9c3a11; }
+[data-color="session-2"] { --who: #0b7a9a; }
+[data-color="session-3"] { --who: #4a2d66; }
+[data-color="session-4"] { --who: #682226; }
+[data-color="session-5"] { --who: #6c4860; }
+[data-color="session-6"] { --who: #966c5a; }
+[data-color="session-7"] { --who: #5d6147; }
+[data-color="session-8"] { --who: #a14e78; }
+[data-color="session-9"] { --who: #6d7607; }
+[data-color="session-10"] { --who: #7f0049; }
+[data-color="session-11"] { --who: #5e3e04; }
+[data-color="session-12"] { --who: #796589; }
 @media (prefers-color-scheme: dark) {
-	[data-color="session-teal"] { --who: #55c6ce; }
-	[data-color="session-orange"] { --who: #ffa45c; }
-	[data-color="session-violet"] { --who: #bc96ed; }
-	[data-color="session-gold"] { --who: #e1c35a; }
-	[data-color="session-rose"] { --who: #f286b2; }
-	[data-color="session-lime"] { --who: #a4c966; }
+	[data-color="session-1"] { --who: #fb906a; }
+	[data-color="session-2"] { --who: #77d2f5; }
+	[data-color="session-3"] { --who: #9a7cbd; }
+	[data-color="session-4"] { --who: #c17273; }
+	[data-color="session-5"] { --who: #c299b4; }
+	[data-color="session-6"] { --who: #f0c2ae; }
+	[data-color="session-7"] { --who: #b0b598; }
+	[data-color="session-8"] { --who: #ffa3cf; }
+	[data-color="session-9"] { --who: #c2cd6f; }
+	[data-color="session-10"] { --who: #de669a; }
+	[data-color="session-11"] { --who: #b28e5c; }
+	[data-color="session-12"] { --who: #d0bae2; }
 }
+/* END generated session palette */
+
 
 * {
 	box-sizing: border-box;
@@ -776,7 +790,7 @@ button.quiet:hover,
 }
 .message {
 	border: 1px solid var(--c-border);
-	border-left: 4px solid var(--who, var(--c-text));
+	border-left: 4px var(--identity-line, solid) var(--who, var(--c-text));
 	border-radius: var(--radius);
 	padding: var(--s3) var(--s4);
 	background: var(--c-bg);
@@ -1992,3 +2006,24 @@ kbd {
 #objective-actions-note {
 	margin: 0;
 }
+
+/* A second cue before colors repeat. Patterns are identity, never running/stopped state. */
+[data-pattern="solid"] { --identity-line: solid; --identity-fill: none; }
+[data-pattern="dashed"] {
+	--identity-line: dashed;
+	--identity-fill: repeating-linear-gradient(135deg, transparent 0 2px, var(--c-bg) 2px 4px);
+}
+[data-pattern="dotted"] {
+	--identity-line: dotted;
+	--identity-fill: radial-gradient(var(--c-bg) 1px, transparent 1px);
+}
+[data-pattern="double"] {
+	--identity-line: double;
+	--identity-border-width: 3px;
+	--identity-fill: linear-gradient(90deg, transparent 35%, var(--c-bg) 35% 65%, transparent 65%);
+}
+.person::before, .working-dot:not(.scheduled-mark), .working-mark {
+	background-image: var(--identity-fill, none);
+	background-size: 4px 4px;
+}
+.working-dot.scheduled-mark { border-style: var(--identity-line, solid); border-width: var(--identity-border-width, 1px); }

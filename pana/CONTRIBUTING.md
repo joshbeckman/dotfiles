@@ -34,6 +34,24 @@ Do not link a relative path to a file that stays out of the commit: GitHub resol
 
 `pana/docs/` holds only the shots `pana/README.md` shows. Evidence for a single PR does not go there.
 
+### Thread identity palette
+
+`node scripts/session-palette.js` regenerates `web/session-palette.js` and its marked CSS block;
+`--check` verifies reproducibility. The offline, dependency-free sampler is Glasbey-style greedy
+max-min selection, not an official or universally colorblind-safe palette. It samples paired
+OKLCH colors with the same hue/chroma and a fixed lightness offset between themes, excludes
+user-blue hues, enforces background contrast ≥4.5 and distance from user/domain colors, then
+optimizes the worst OKLab pair distance across both themes and normal/protanopia/deuteranopia/
+tritanopia simulations. A normal-vision distance floor avoids collapsing the palette into subtle
+near-neighbors to improve only the simulations. Tests audit all 66 pairs per theme/vision;
+the numerical floors are regression guards, not accessibility certifications.
+
+The checked-in order allocates twelve colors in append-only participant order, without runtime
+color search or saved session metadata. Solid/dashed/dotted/double borders and swatches change
+before each color reuse; all 48 combinations eventually repeat, so direct labels stay essential.
+`PANA_COLOR_SHOTS_DIR=DIR npm run test:web -- test/browser/ux.spec.ts -t '13 sessions'` captures
+the large-thread boundary in light/dark themes at desktop/phone widths.
+
 ## Layout
 
 One directory per work package, so parallel agents rarely edit the same file.

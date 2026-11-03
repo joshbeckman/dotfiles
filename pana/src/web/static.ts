@@ -23,6 +23,7 @@ const ASSETS: Record<string, StaticAsset> = {
 	"/links.js": { file: "links.js", contentType: "text/javascript; charset=utf-8" },
 	"/render.js": { file: "render.js", contentType: "text/javascript; charset=utf-8" },
 	"/push.js": { file: "push.js", contentType: "text/javascript; charset=utf-8" },
+	"/session-palette.js": { file: "session-palette.js", contentType: "text/javascript; charset=utf-8" },
 	"/views.js": { file: "views.js", contentType: "text/javascript; charset=utf-8" },
 	"/pages.js": { file: "pages.js", contentType: "text/javascript; charset=utf-8" },
 	"/keys.js": { file: "keys.js", contentType: "text/javascript; charset=utf-8" },

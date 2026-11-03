@@ -122,7 +122,7 @@ describe("PWA shell and static assets", () => {
 		// blank page. Parsing each module is cheap and catches exactly that.
 		const dir = fileURLToPath(new URL("../web/", import.meta.url));
 		const files = readdirSync(dir).filter((file) => file.endsWith(".js"));
-		expect(files).toEqual(expect.arrayContaining(["app.js", "keys.js", "palette.js", "views.js"]));
+		expect(files).toEqual(expect.arrayContaining(["app.js", "keys.js", "palette.js", "views.js", "session-palette.js"]));
 		for (const file of files) {
 			const parsed = spawnSync(process.execPath, ["--check", join(dir, file)], { encoding: "utf8" });
 			expect(parsed.status, `${file}: ${parsed.stderr}`).toBe(0);
@@ -142,7 +142,7 @@ describe("PWA shell and static assets", () => {
 		expect(page.headers["content-security-policy"]).not.toContain("unsafe-eval");
 
 		// The shell does not need the token, but unknown paths still do (API-04).
-		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js", "/palette.js"]) {
+		for (const path of ["/app.js", "/links.js", "/push.js", "/sw.js", "/palette.js", "/session-palette.js"]) {
 			expect((await request({ host: "127.0.0.1", port }, "GET", path)).status, path).toBe(200);
 		}
 		expect((await request({ host: "127.0.0.1", port }, "GET", "/nope")).status).toBe(403);

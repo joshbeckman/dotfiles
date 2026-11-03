@@ -107,42 +107,23 @@ export const PALETTE = {
 	red: "#BD2024", yellow: "#FFCC00", black: "#0D0D0D",
 };
 
-// Categorical identity palette: darker on white, lighter on black. Not session metadata.
-export const SESSION_PALETTE = {
-	"session-teal": "#007F86", "session-orange": "#B95000", "session-violet": "#8046B5",
-	"session-gold": "#8A7000", "session-rose": "#B32D69", "session-lime": "#507B16",
-};
-export const SESSION_DARK_PALETTE = {
-	"session-teal": "#55C6CE", "session-orange": "#FFA45C", "session-violet": "#BC96ED",
-	"session-gold": "#E1C35A", "session-rose": "#F286B2", "session-lime": "#A4C966",
-};
+export { SESSION_PALETTE, SESSION_DARK_PALETTE } from "./session-palette.js";
+import { SESSION_PALETTE } from "./session-palette.js";
 export const SESSION_COLORS = Object.keys(SESSION_PALETTE);
+export const SESSION_PATTERNS = ["solid", "dashed", "dotted", "double"];
 
-/** OKLab distance approximates perceived separation, rather than RGB/hue spacing. */
-function oklab(hex) {
-	const [r, g, b] = hex.match(/[0-9a-f]{2}/gi).map((value) => {
-		const c = parseInt(value, 16) / 255;
-		return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-	});
-	const l = Math.cbrt(0.4122214708*r + 0.5363325363*g + 0.0514459929*b);
-	const m = Math.cbrt(0.2119034982*r + 0.6806995451*g + 0.1073969566*b);
-	const s = Math.cbrt(0.0883024619*r + 0.2817188376*g + 0.6299787005*b);
-	return [0.2104542553*l + 0.793617785*m - 0.0040720468*s,
-		1.9779984951*l - 2.428592205*m + 0.4505937099*s,
-		0.0259040371*l + 0.7827717662*m - 0.808675766*s];
+function sessionIndex(url, participants) {
+	const sessions = [...new Set(participants.filter((person) =>
+		(typeof person === "string" ? kindOf(person) : person?.kind || kindOf(person?.url ?? "")) === "session"
+	).map((person) => typeof person === "string" ? person : person.url))];
+	return sessions.indexOf(url);
 }
-const labs = [SESSION_PALETTE, SESSION_DARK_PALETTE].map((palette) =>
-	Object.fromEntries(Object.entries(palette).map(([name, hex]) => [name, oklab(hex)])));
-const distance = (a, b) => a.reduce((sum, value, i) => sum + (value - b[i]) ** 2, 0);
 
-// Greedy farthest-first order, maximizing the worst separation in either theme. Once built,
-// every prefix stays unchanged. No dependence on state, working status, messages or theme.
-const colorOrder = [SESSION_COLORS[0]];
-while (colorOrder.length < SESSION_COLORS.length) {
-	const score = (name) => Math.min(...labs.flatMap((lab) => colorOrder.map((used) => distance(lab[name], lab[used]))));
-	const remaining = SESSION_COLORS.filter((name) => !colorOrder.includes(name));
-	remaining.sort((a, b) => score(b) - score(a));
-	colorOrder.push(remaining[0]);
+/** Secondary identity cue: change line/mark pattern before reusing the first color. */
+export function participantPattern(participant, participants = []) {
+	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
+	const index = sessionIndex(url, participants);
+	return index < 0 ? "solid" : SESSION_PATTERNS[Math.floor(index / SESSION_COLORS.length) % SESSION_PATTERNS.length];
 }
 
 /** Color within a thread's append-ordered participants. Sessions outside threads have no swatch. */
@@ -151,11 +132,8 @@ export function participantColor(participant, participants = []) {
 	const kind = typeof participant === "string" ? kindOf(url) : String(participant?.kind || kindOf(url));
 	if (kind === "user") return "blue";
 	if (kind === "domain") return "black";
-	const sessions = [...new Set(participants.filter((person) =>
-		(typeof person === "string" ? kindOf(person) : person?.kind || kindOf(person?.url ?? "")) === "session"
-	).map((person) => typeof person === "string" ? person : person.url))];
-	const index = sessions.indexOf(url);
-	return index < 0 ? undefined : colorOrder[index % colorOrder.length];
+	const index = sessionIndex(url, participants);
+	return index < 0 ? undefined : SESSION_COLORS[index % SESSION_COLORS.length];
 }
 
 function kindOf(url) {
