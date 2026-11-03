@@ -22,7 +22,7 @@ export function readSourceRevision(directory = sourceDirectory): SourceRevision 
 		});
 		const sha = git("rev-parse", "HEAD").trim();
 		const message = git("log", "-1", "--format=%B").trim();
-		const diff = git("diff", "HEAD", "--", ".");
+		const diff = git("diff", "--binary", "HEAD", "--", ".");
 		const untracked = git("ls-files", "--others", "--exclude-standard", "-z", "--", ".").split("\0").filter(Boolean).sort();
 		const hash = createHash("sha256").update(diff);
 		// ls-files paths are relative to this directory unless --full-name is requested.

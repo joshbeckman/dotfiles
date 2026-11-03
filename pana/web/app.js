@@ -186,7 +186,9 @@ function renderSettings(data) {
 		processes.append(heading, build, sync, started);
 	}
 	if (!processes.childElementCount) processes.textContent = "No process information available.";
-	$("settings-config-warning").textContent = data.configRequiresRestart
+	$("settings-config-warning").textContent = data.configValidationError
+		? `Configuration on disk is invalid: ${data.configValidationError}. Fix and save it before restarting.`
+		: data.configRequiresRestart
 		? "Saved configuration differs from the running daemon. Restart required to apply it."
 		: "Configuration changes require a daemon restart. Saving writes the file but does not change the running daemon.";
 	updateSettingsControls();
@@ -202,7 +204,7 @@ async function loadSettings(reloadConfig = false) {
 		const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
 		if (!changed || reloadConfig) {
 			settingsConfigRevision = data.configRevision;
-			settingsSavedText = JSON.stringify(data.config, null, 2) + "\n";
+			settingsSavedText = data.configText ?? (JSON.stringify(data.config, null, 2) + "\n");
 			$("settings-config").value = settingsSavedText;
 		}
 		settingsRestarting = false;
@@ -232,7 +234,7 @@ async function saveSettings(event) {
 	try {
 		const data = await api("POST", "/settings", { config, configRevision: settingsConfigRevision });
 		settingsConfigRevision = data.configRevision;
-		settingsSavedText = JSON.stringify(data.config, null, 2) + "\n";
+		settingsSavedText = data.configText ?? (JSON.stringify(data.config, null, 2) + "\n");
 		$("settings-config").value = settingsSavedText;
 		renderSettings(data);
 		settingsNotice("Configuration saved. Restart the daemon to apply changes.");

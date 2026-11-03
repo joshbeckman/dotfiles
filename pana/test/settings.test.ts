@@ -51,6 +51,19 @@ it("SET-01 stale saves and invalid config preserve the original file and identit
 	expect((await t.client.post("/settings", { config: body.config, configRevision: body.configRevision })).status).toBe(409);
 });
 
+it("SET-01 invalid external configuration stays editable but cannot restart the healthy daemon", async () => {
+	t = await startTestPanad();
+	const config = { domain: t.runtime.config.domain, user: t.runtime.config.user };
+	writeFileSync(join(t.dir, "config.json"), "{broken");
+	const read = await t.client.get<any>("/settings");
+	expect(read.status).toBe(200);
+	expect(read.body.configText).toBe("{broken");
+	expect(read.body.configValidationError).toBeTruthy();
+	t.runtime.processInfo!.requestRestart = () => { throw new Error("must not restart"); };
+	expect((await t.client.post("/settings/restart")).status).toBe(400);
+	expect((await t.client.post<any>("/settings", { config, configRevision: read.body.configRevision })).body.configValidationError).toBeUndefined();
+});
+
 it("SET-01 sessions cannot read, save, or restart user settings", async () => {
 	t = await startTestPanad({ script: [{ text: "done" }] });
 	const created = await t.client.post<any>("/sessions", { prompt: "hello", model: "faux/faux-1" });

@@ -15,10 +15,16 @@ function userOnly(ctx: RequestContext) {
 function snapshot(ctx: RequestContext) {
 	const configPath = join(ctx.runtime.paths.dir, "config.json");
 	const text = readFileSync(configPath, "utf8");
-	const config = JSON.parse(text);
+	let config: unknown = null;
+	let configValidationError: string | undefined;
+	let configRequiresRestart = true;
+	try {
+		config = JSON.parse(text);
+		configRequiresRestart = !isDeepStrictEqual(parseConfig(config), ctx.runtime.config);
+	} catch (error) { configValidationError = (error as Error).message; }
 	return {
-		config, configPath, configRevision: digest(text),
-		configRequiresRestart: !isDeepStrictEqual(parseConfig(config), ctx.runtime.config),
+		config, configText: text, configValidationError, configPath, configRevision: digest(text),
+		configRequiresRestart,
 		source: readSourceRevision(),
 		processes: [{ role: "panad", pid: process.pid, startedAt: ctx.runtime.processInfo?.startedAt ?? null,
 			running: ctx.runtime.processInfo?.running ?? null }],
@@ -30,7 +36,7 @@ function snapshot(ctx: RequestContext) {
 export const handlers: Handlers = {
 	"settings.read": (ctx) => {
 		userOnly(ctx);
-		return { status: 200, body: snapshot(ctx) };
+		return { status: 200, headers: { "cache-control": "no-store" }, body: snapshot(ctx) };
 	},
 	"settings.update": (ctx) => {
 		userOnly(ctx);
@@ -59,7 +65,7 @@ export const handlers: Handlers = {
 		} finally {
 			try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 		}
-		return { status: 200, body: snapshot(ctx) };
+		return { status: 200, headers: { "cache-control": "no-store" }, body: snapshot(ctx) };
 	},
 	"settings.restart": (ctx) => {
 		userOnly(ctx);
