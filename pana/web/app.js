@@ -4128,15 +4128,33 @@ function onKeydown(event) {
 function showSection(section) {
 	threadRenderVersion++;
 	state.section = section;
-	// Compose has no nav item of its own: it is the Threads page's New button.
+	// Compose has no nav item of its own: it is the Threads page's New button. Settings sits in the
+	// top bar's tools rather than in the section menu, so this marks both places.
 	const navSection = section === "compose" ? "threads" : section;
-	for (const link of document.querySelectorAll("#nav a")) {
-		if (link.dataset.section === navSection) link.setAttribute("aria-current", "page");
-		else link.removeAttribute("aria-current");
+	let current;
+	for (const link of document.querySelectorAll(".topbar a[data-section]")) {
+		if (link.dataset.section === navSection) {
+			link.setAttribute("aria-current", "page");
+			current = link;
+		} else link.removeAttribute("aria-current");
 	}
+	scrollSectionIntoView(current);
 	for (const view of document.querySelectorAll(".view")) {
 		view.hidden = view.id !== `view-${section}`;
 	}
+}
+
+/**
+ * MOB-04: a phone narrower than the section labels scrolls the menu rather than wrapping it, so the
+ * section it is on has to be the one in sight. Settings sits outside the menu and needs nothing.
+ */
+function scrollSectionIntoView(link) {
+	const nav = document.getElementById("nav");
+	if (!nav || !link || link.parentElement !== nav || nav.scrollWidth <= nav.clientWidth) return;
+	const item = link.getBoundingClientRect();
+	const bar = nav.getBoundingClientRect();
+	if (item.left < bar.left) nav.scrollLeft -= bar.left - item.left;
+	else if (item.right > bar.right) nav.scrollLeft += item.right - bar.right;
 }
 
 /**
