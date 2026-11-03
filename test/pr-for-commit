@@ -24,6 +24,7 @@ merge="$(git -C "$tmp/repo" rev-parse HEAD)"
 git -C "$tmp/repo" config prLookup.urlTemplate 'https://reviews.example.test/pulls/{number}'
 git -C "$tmp/repo" config prLookup.trailer Review-Number
 git -C "$tmp/repo" config prLookup.baseRef main
+git -C "$tmp/repo" remote add origin "$tmp/local-origin"
 
 [[ "$(cd "$tmp/repo" && "$command" "$feature")" == 'https://reviews.example.test/pulls/42' ]]
 [[ "$(cd "$tmp/repo" && PATH="$root/bin:$PATH" git pr-for-commit "$feature")" == 'https://reviews.example.test/pulls/42' ]]
@@ -42,7 +43,7 @@ chmod +x "$tmp/bin/gw"
 git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
 git -C "$tmp/repo" config --unset-all prLookup.trailer
 git -C "$tmp/repo" config --unset-all prLookup.baseRef
-git -C "$tmp/repo" remote add origin https://github.com/example/project.git
+git -C "$tmp/repo" remote set-url origin https://github.com/example/project.git
 
 url='https://github.com/example/project/pull/7'
 [[ "$(cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS="$url" "$command" "$feature")" == "$url" ]]

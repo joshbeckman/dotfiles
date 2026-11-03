@@ -20,6 +20,13 @@ esac
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 commit="$(git rev-parse --verify "$1^{commit}" 2>/dev/null)" || die "not a commit: $1"
 
+helper="$(cd "$(dirname "$0")" && pwd)/lib/pr_lookup.rb"
+routing="$(ruby "$helper" route '')" || exit 1
+IFS=$'\t' read -r provider host repo <<<"$routing"
+if [[ "$provider" == delta ]]; then
+  exec ruby "$helper" commit "$host" "$repo" "$commit"
+fi
+
 template="$(git config --get prLookup.urlTemplate || git config --get prForCommit.urlTemplate || true)"
 trailer="$(git config --get prLookup.trailer || git config --get prForCommit.trailer || true)"
 if [[ -n "$template" || -n "$trailer" ]]; then

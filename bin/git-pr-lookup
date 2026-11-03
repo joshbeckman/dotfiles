@@ -36,13 +36,12 @@ for arg in "$@"; do
 done
 [[ "$mode" == checks || "$required" == false ]] || die '--required is only valid for pr-checks'
 
-provider="$(git config --get prLookup.provider || true)"
-case "$selector" in
-  *'/pull/'*) provider=github ;;
-  *'/pulls/'*) provider=gitstream ;;
-esac
-[[ -n "$provider" ]] || provider=github
-[[ "$provider" == github || "$provider" == gitstream ]] || die "unsupported provider: $provider"
+helper="$(cd "$(dirname "$0")" && pwd)/lib/pr_lookup.rb"
+routing="$(ruby "$helper" route "$selector")" || exit 1
+IFS=$'\t' read -r provider host repo <<<"$routing"
+if [[ "$provider" == delta ]]; then
+  exec ruby "$helper" lookup "$host" "$repo" "$mode" "$selector" "$required"
+fi
 
 if [[ "$provider" == github ]]; then
   case "$mode" in
