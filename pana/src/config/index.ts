@@ -77,7 +77,11 @@ export interface WorktreeAdapter {
 }
 
 export const USER_COLORS = ["blue", "orange", "purple", "green", "red", "yellow", "black"] as const;
-export type UserColor = (typeof USER_COLORS)[number];
+export type UserColor = (typeof USER_COLORS)[number] | `#${string}`;
+
+export function isUserColor(value: unknown): value is UserColor {
+	return typeof value === "string" && ((USER_COLORS as readonly string[]).includes(value) || /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value));
+}
 
 export interface Config {
 	/** Presentation preferences apply immediately after a settings save. */
@@ -169,8 +173,8 @@ export function parseConfig(raw: unknown): Config {
 		catch { throw new ConfigError("config.json timezone must be a valid time zone", 2); }
 	}
 	const ui = (obj.ui ?? {}) as Record<string, unknown>;
-	if (ui.userColor !== undefined && !(USER_COLORS as readonly unknown[]).includes(ui.userColor)) {
-		throw new ConfigError(`config.json ui.userColor must be one of ${USER_COLORS.join(", ")}`, 2);
+	if (ui.userColor !== undefined && !isUserColor(ui.userColor)) {
+		throw new ConfigError("config.json ui.userColor must be a hex color (#RGB, #RGBA, #RRGGBB or #RRGGBBAA) or a legacy palette name", 2);
 	}
 	const budget = (obj.budget ?? {}) as Record<string, unknown>;
 	const files = (obj.files ?? {}) as Record<string, unknown>;

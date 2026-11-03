@@ -344,3 +344,5 @@ export function configFromText(text: string): Record<string, unknown>;
 
 export function configUserColor(config: Record<string, any>): string;
 export function configWithUserColor(config: Record<string, any>, userColor: string): Record<string, any>;
+
+export function validUserColor(color: unknown): color is string;

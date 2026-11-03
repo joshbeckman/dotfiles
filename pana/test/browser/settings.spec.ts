@@ -48,6 +48,7 @@ describeBrowser("settings", () => {
 			};
 			location.hash = "#/settings";
 			await until(() => document.getElementById("settings-config").value.includes("future"));
+			if(!document.getElementById("settings-config-docs").href.endsWith("/pana/docs/configuration.md")) throw new Error("Missing config reference");
 			return {text:document.getElementById("settings-processes").textContent,
 				disabled:document.getElementById("settings-save").disabled,
 				age:document.querySelector("#settings-processes [data-ticking]").textContent};
@@ -75,15 +76,15 @@ describeBrowser("settings", () => {
 			editor.dispatchEvent(new Event("input"));
 			const select = document.getElementById("settings-user-color");
 			if(select.value !== "blue") throw new Error("JSON did not update selector");
-			select.value = "green"; select.dispatchEvent(new Event("change"));
-			if(document.getElementById("settings-color-preview").dataset.color !== "green") throw new Error("Missing preview");
+			select.value = "#1a2B3c"; select.dispatchEvent(new Event("input"));
+			if(document.getElementById("settings-color-preview").dataset.color !== "#1a2B3c") throw new Error("Missing preview");
 			document.getElementById("settings-form").requestSubmit();
 			await until(()=>document.getElementById("settings-status").textContent.includes("saved"));
 			return {body:window.settingsCalls.find(c=>c.method==="POST").body,
 				notice:document.getElementById("settings-status").textContent,
 				warning:document.getElementById("settings-config-warning").textContent};
 		`);
-		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, ui: { userColor: "green", future: { keep: true } }, maxDailyUsd: 25 }, configRevision: "revision-1" });
+		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, ui: { userColor: "#1a2B3c", future: { keep: true } }, maxDailyUsd: 25 }, configRevision: "revision-1" });
 		expect(saved.notice).toContain("Restart");
 		expect(saved.warning).toContain("Restart required");
 		const conflict = await evaluatePage<{ draft: string; revision: string; error: string; color: string }>(`
@@ -152,33 +153,34 @@ describeBrowser("settings", () => {
 		}
 		const settings = await t.client.get<any>("/settings");
 		const saved = await t.client.post("/settings", {
-			config: { ...settings.body.config, ui: { ...settings.body.config.ui, userColor: "purple" } },
+			config: { ...settings.body.config, ui: { ...settings.body.config.ui, userColor: "#AbC123" } },
 			configRevision: settings.body.configRevision,
 		});
 		expect(saved.status).toBe(200);
 		expect(await evaluatePage(`
-			await until(() => window.colorUser.dataset.color === "purple");
+			await until(() => window.colorUser.dataset.color === "#AbC123");
+			if(window.colorUser.style.getPropertyValue("--who") !== "#AbC123") throw new Error("Custom CSS color not applied");
 			return {same:window.colorUser === document.querySelector('#thread-messages .message[data-user-color="true"]'),
 				domain:window.colorDomain.dataset.color,draft:document.getElementById("reply-body").value,
 				head:window.colorHead === window.__pana.state.draft.after,
-				all:[...document.querySelectorAll('[data-user-color="true"]')].every(n=>n.dataset.color === "purple")};
+				all:[...document.querySelectorAll('[data-user-color="true"]')].every(n=>n.dataset.color === "#AbC123")};
 		`)).toEqual({ same: true, domain: "black", draft: "Keep my draft", head: true, all: true });
 		if (process.env.PANA_SETTINGS_SHOTS) copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "thread-color-after.png"));
 		expect(await evaluatePage(`
 			location.hash = "#/settings";
 			await until(() => !document.getElementById("settings-config").disabled);
 			const color = document.getElementById("settings-user-color");
-			color.value = "green"; color.dispatchEvent(new Event("change"));
-			if(window.colorUser.dataset.color !== "purple") throw new Error("Unsaved preview changed messages");
+			color.value = "#12345678"; color.dispatchEvent(new Event("input"));
+			if(window.colorUser.dataset.color !== "#AbC123") throw new Error("Unsaved preview changed messages");
 			document.getElementById("settings-form").requestSubmit();
 			await until(() => document.getElementById("settings-status").textContent.includes("saved"));
 			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};
-		`)).toEqual({ user: "green", domain: "black" });
+		`)).toEqual({ user: "#12345678", domain: "black" });
 		// Mobile emulation can reload the page; capture last, after all fixture/draft assertions.
 		if (process.env.PANA_SETTINGS_SHOTS) {
 			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-desktop.png"));
 			await emulateViewport("390x844x1,mobile,touch", "dark");
-			await evaluatePage(`await until(() => document.getElementById("settings-user-color").value === "green" && !document.getElementById("settings-config").disabled); return true;`);
+			await evaluatePage(`await until(() => document.getElementById("settings-user-color").value === "#12345678" && !document.getElementById("settings-config").disabled); return true;`);
 			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-phone-dark.png"));
 		}
 	});

@@ -48,7 +48,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 - [x] **SET-02** Report the current source commit SHA/message and local edits separately from the revision captured at daemon startup. Missing Git metadata is unknown, never a false match.
 - [x] **SET-03** The panad entrypoint reports its start time and supports user-requested graceful re-exec on macOS/Linux. Acknowledge before closing; preserve argv/environment and reload configuration and source. Embedded runtimes report restart unavailable.
 
-- [x] **SET-04** The user chooses a message color from the style guide palette in settings (`ui.userColor`, blue by default). Save applies it immediately to open windows and new connections, persists across restarts, and leaves session/domain colors unchanged.
+- [x] **SET-04** The user sets any CSS hex message color in settings (`ui.userColor`, blue by default; legacy palette names also accepted). Save applies it immediately to open windows and new connections, persists across restarts, and leaves session/domain colors unchanged.
 
 ### IDs and URLs
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
-import { loadConfig } from "../src/config/index.ts";
+import { isUserColor, loadConfig } from "../src/config/index.ts";
 import { readSourceRevision } from "../src/config/source.ts";
 import { makeStateDir, startTestPanad, type TestPanad } from "./harness/index.ts";
 
@@ -91,24 +91,29 @@ it("SET-02 source revision reports HEAD, commit message, local edits and unknown
 	expect(readSourceRevision(join(dir, "missing"))).toBe(null);
 });
 
-it("SET-04 saves the user's palette color immediately, persists it, and keeps operational changes restart-only", async () => {
+it("SET-04 validates every CSS hex form and preserves legacy named colors", () => {
+	for (const color of ["blue", "purple", "#AbC", "#AbCd", "#0123Af", "#0123aF45"]) expect(isUserColor(color)).toBe(true);
+	for (const color of [null, 42, "cyan", "#12", "#12345", "#1234567", "#123456789", "#ggg", "#fff; color:red", "url(x)"]) expect(isUserColor(color)).toBe(false);
+});
+
+it("SET-04 saves the user's arbitrary hex color immediately, persists it, and keeps operational changes restart-only", async () => {
 	t = await startTestPanad();
 	let read = await t.client.get<any>("/settings");
 	expect(t.runtime.config.ui?.userColor).toBe("blue");
-	const config = { ...read.body.config, ui: { userColor: "purple", future: true } };
+	const config = { ...read.body.config, ui: { userColor: "#A1b2C3", future: true } };
 	let saved = await t.client.post<any>("/settings", { config, configRevision: read.body.configRevision });
 	expect(saved.status).toBe(200);
 	expect(saved.body.configRequiresRestart).toBe(false);
 	expect(saved.body.config.ui.future).toBe(true);
-	expect(t.runtime.config.ui?.userColor).toBe("purple");
-	for (const userColor of ["#ff0000", "invalid", 42, null]) {
+	expect(t.runtime.config.ui?.userColor).toBe("#A1b2C3");
+	for (const userColor of ["#12", "#12345", "#1234567", "#123456789", "#ggg", "#fff; color:red", "invalid", 42, null]) {
 		expect((await t.client.post("/settings", { config: { ...config, ui: { userColor } }, configRevision: saved.body.configRevision })).status).toBe(400);
-		expect(t.runtime.config.ui?.userColor).toBe("purple");
+		expect(t.runtime.config.ui?.userColor).toBe("#A1b2C3");
 	}
 	const dir = t.dir;
 	await t.stop();
 	t = await startTestPanad({ stateDir: dir });
-	expect(t.runtime.config.ui?.userColor).toBe("purple");
+	expect(t.runtime.config.ui?.userColor).toBe("#A1b2C3");
 	read = await t.client.get<any>("/settings");
 	saved = await t.client.post<any>("/settings", { config: { ...config, spawnDepth: 7, ui: { userColor: "green" } }, configRevision: read.body.configRevision });
 	expect(saved.body.configRequiresRestart).toBe(true);

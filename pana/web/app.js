@@ -30,7 +30,7 @@ import {
 	configFromText,
 	configUserColor,
 	configWithUserColor,
-	PALETTE,
+	validUserColor,
 	charterBody,
 	charterView,
 	commitView,
@@ -151,12 +151,18 @@ function colorParticipant(node, participant) {
 	const url = typeof participant === "string" ? participant : participant?.url ?? "";
 	const kind = typeof participant === "string" ? "" : participant?.kind;
 	node.dataset.userColor = String(kind === "user" || (!kind && /^pana:\/\/[^/]+\/users\//.test(url)));
-	node.dataset.color = participantColor(participant, state.userColor);
+	setVisualColor(node, participantColor(participant, state.userColor));
+}
+
+function setVisualColor(node, color) {
+	node.dataset.color = color;
+	if (validUserColor(color) && color.startsWith("#")) node.style.setProperty("--who", color);
+	else node.style.removeProperty("--who");
 }
 
 function applyUserColor(color) {
-	state.userColor = Object.hasOwn(PALETTE, color) ? color : "blue";
-	for (const node of document.querySelectorAll('[data-user-color="true"]')) node.dataset.color = state.userColor;
+	state.userColor = validUserColor(color) ? color : "blue";
+	for (const node of document.querySelectorAll('[data-user-color="true"]')) setVisualColor(node, state.userColor);
 }
 
 function syncSettingsColor() {
@@ -165,16 +171,18 @@ function syncSettingsColor() {
 	try {
 		const color = configUserColor(configFromText($("settings-config").value));
 		select.value = color;
+		select.setCustomValidity("");
 		select.disabled = !settingsData || settingsBusy || settingsRestarting;
-		preview.dataset.color = color;
+		setVisualColor(preview, color);
 		preview.textContent = `Your message · ${color}`;
-		$("settings-color-hint").textContent = "Preview only until saved. Your message color applies immediately on save; other configuration changes require a restart.";
+		$("settings-color-hint").textContent = "Any hex color: #RGB, #RGBA, #RRGGBB or #RRGGBBAA. Preview only until saved; color applies immediately on save.";
 	} catch {
 		select.value = "";
 		select.disabled = true;
 		preview.removeAttribute("data-color");
+		preview.style.removeProperty("--who");
 		preview.textContent = "Preview unavailable";
-		$("settings-color-hint").textContent = "Fix the JSON and ui.userColor in the editor to use the color selector. Your draft is unchanged.";
+		$("settings-color-hint").textContent = "Fix the JSON and ui.userColor in the editor to use the color field. Your draft is unchanged.";
 	}
 }
 
@@ -4245,20 +4253,22 @@ for (const input of [$("palette-input"), $("palette-search-input")]) {
 	input.addEventListener("keydown", onPaletteKeydown);
 }
 
-for (const color of Object.keys(PALETTE)) {
-	const option = document.createElement("option");
-	option.value = color;
-	option.textContent = color[0].toUpperCase() + color.slice(1);
-	$("settings-user-color").append(option);
-}
-$("settings-user-color").addEventListener("change", () => {
+function changeSettingsColor() {
+	const input = $("settings-user-color");
 	try {
-		const config = configWithUserColor(configFromText($("settings-config").value), $("settings-user-color").value);
+		const config = configWithUserColor(configFromText($("settings-config").value), input.value.trim());
+		input.setCustomValidity("");
 		$("settings-config").value = JSON.stringify(config, null, 2) + "\n";
 		$("settings-config-error").hidden = true;
 		updateSettingsControls();
-	} catch (error) { settingsNotice(error.message, true); syncSettingsColor(); }
-});
+	} catch (error) {
+		input.setCustomValidity(error.message);
+		$("settings-save").disabled = true;
+		settingsNotice(error.message, true);
+	}
+}
+$("settings-user-color").addEventListener("input", changeSettingsColor);
+$("settings-user-color").addEventListener("change", changeSettingsColor);
 $("settings-form").addEventListener("submit", (event) => void saveSettings(event));
 $("settings-config").addEventListener("input", () => {
 	$("settings-config-error").hidden = true;

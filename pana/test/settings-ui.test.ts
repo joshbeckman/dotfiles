@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, participantColor, PALETTE } from "../web/views.js";
+import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, validUserColor, participantColor, PALETTE } from "../web/views.js";
 import { routeFromHash } from "../web/links.js";
 import { matchCommands, paletteCommands } from "../web/palette.js";
 
@@ -49,11 +49,18 @@ describe("user message color", () => {
 		expect(config.ui.userColor).toBe("blue");
 		expect(configWithUserColor({ unknown: true }, "red")).toEqual({ unknown: true, ui: { userColor: "red" } });
 	});
-	it("does not overwrite malformed UI drafts or accept arbitrary CSS colors", () => {
-		for (const ui of [null, [], "blue", { userColor: "#123456" }, { userColor: "toString" }, { userColor: null }]) {
+	it("accepts all CSS hex lengths without allowing CSS injection or overwriting malformed UI drafts", () => {
+		for (const ui of [null, [], "blue", { userColor: "#12345" }, { userColor: "toString" }, { userColor: null }]) {
 			expect(() => configUserColor({ ui })).toThrow();
 			expect(() => configWithUserColor({ ui }, "green")).toThrow();
 		}
 		expect(() => configWithUserColor({}, "cyan")).toThrow();
+		for (const color of ["#AbC", "#abcd", "#12AbEF", "#12345678"]) {
+			expect(validUserColor(color)).toBe(true);
+			expect(configUserColor({ ui: { userColor: color } })).toBe(color);
+			expect(configWithUserColor({}, color).ui.userColor).toBe(color);
+			expect(participantColor({ kind: "user" }, color)).toBe(color);
+		}
+		for (const color of ["#12", "#12345", "#1234567", "#123456789", "#ggg", "#fff; color:red", "url(x)", null]) expect(validUserColor(color)).toBe(false);
 	});
 });
