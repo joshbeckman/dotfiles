@@ -111,6 +111,14 @@ class Dtw(unittest.TestCase):
         args = self.run_dtw('pr', 'review', '--file-comment', 'a.rb=' + body, human=True)
         self.assertEqual('a.rb=' + body, args[-1])
 
+    def test_generated_review_has_one_session_url_and_no_session_field(self):
+        args = self.run_dtw('pr', 'review', '123', '--approve', '--body', 'Verified locally.')
+        body = args[-1]
+        self.assertEqual(1, body.count(TRAILER[len('Co-authored-by: AI '):]))
+        self.assertNotIn('Session:', body)
+        body = self.run_dtw('pr', 'review', '123', '--approve', '--body', body)[-1]
+        self.assertEqual(1, body.count(TRAILER[len('Co-authored-by: AI '):]))
+
     def test_exact_current_trailer_is_not_duplicated(self):
         body = 'other attribution\nCo-authored-by: AI someone-else\n' + TRAILER
         args = self.run_dtw('pr', 'review', '--body', body)
