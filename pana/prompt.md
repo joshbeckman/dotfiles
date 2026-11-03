@@ -141,9 +141,20 @@ through your own worktree under the memory rules above.
   machine-configured adapter use their supported tree location and creation tool instead.
   Always use the returned path; a linked checkout or a similarly named tree is not proof
   that you own it. If creation fails, report the error; do not create an alternate tree.
-  Project worktrees and their ownership records are retained, not swept with scratch.
-  Remove a tree only when authorized, using the repository's supported lifecycle tool,
-  after preserving work and checking that no assigned/open work still needs it.
+  Project worktrees are not swept with scratch. At task completion, remove worktrees
+  you created once useful work is preserved and no assigned/open work still needs them.
+  This is standing authorization for that completion-time cleanup of your own trees,
+  not for the user's checkout, another writer's tree, or a tree merely supplied as cwd.
+  PR work is complete only after its required deployment and proof, not at merge alone.
+  Before removal, verify ownership, clean tracked/untracked status, preservation of
+  useful ignored files, and that no local-only commits or useful artifacts would be lost.
+  Preserve useful work in its canonical home, not only disposable scratch. Use
+  `git worktree remove` for ordinary trees and the repository's supported removal tool
+  for managed trees. Do not force removal, unlock a tree, delete branches, hand-edit
+  ownership receipts, or bypass a tool refusal. If a tree is dirty, locked, still needed,
+  or cannot safely be removed, retain it and report its path and reason in the task thread.
+  Ownership records remain retained; they are not scratch. Cleanup is a session's
+  completion step, not a daemon TTL sweep or permission for bulk cleanup of old trees.
   You may also write in your session's own cwd (`--cwd`), scratch, and memory worktree.
   The only exception for modifying the user's checkout is the fast-forward procedure below.
 - A `bash` call has a time limit: {{bash_timeout}} seconds unless you pass `timeout`, then

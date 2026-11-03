@@ -741,6 +741,28 @@ describe("system prompt", () => {
 		expect(text).not.toContain("memory-guidance.md");
 	});
 
+	it("PRM-08 completion cleanup is required, scoped, loss-aware, and observable", async () => {
+		const seeded = await start();
+		await runTurn();
+		const text = promptSections(await contextOf(t!, seeded.sessions[0]!.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		for (const rule of [
+			"At task completion, remove worktrees you created",
+			"no assigned/open work still needs them",
+			"standing authorization for that completion-time cleanup of your own trees",
+			"not for the user's checkout, another writer's tree, or a tree merely supplied as cwd",
+			"required deployment and proof, not at merge alone",
+			"verify ownership, clean tracked/untracked status",
+			"preservation of useful ignored files",
+			"no local-only commits or useful artifacts would be lost",
+			"canonical home, not only disposable scratch",
+			"`git worktree remove` for ordinary trees",
+			"supported removal tool for managed trees",
+			"Do not force removal, unlock a tree, delete branches, hand-edit ownership receipts, or bypass a tool refusal",
+			"retain it and report its path and reason in the task thread",
+			"not a daemon TTL sweep or permission for bulk cleanup of old trees",
+		]) expect(text).toContain(rule);
+	});
+
 	it("PRM-02 project section reads AGENTS.md from the git root down to cwd, root first", async () => {
 		const repo = makeRepo();
 		writeFileSync(join(repo, "AGENTS.md"), "ROOT_AGENTS_PRM02\n");

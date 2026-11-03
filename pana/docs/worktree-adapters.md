@@ -50,10 +50,17 @@ inspect/reconcile or remove the partial tree using its supported lifecycle. Pana
 not undo materializer side effects or delete a tree automatically. A branch may also
 remain after a failed Git creation; ordinary Git creation can reuse that branch.
 
-Project trees are not scratch and have no automatic TTL cleanup. Before an authorized
-removal, preserve all work and check outstanding assignments/PRs; use the repository's
-own removal tool for managed trees. Retained receipts grant no access after the git
-pointer changes to a different repository. Do not hand-edit a receipt to claim a tree.
+Project trees are not scratch and have no automatic TTL cleanup. The session prompt
+requires completion-time cleanup of the session's own task-created trees after useful
+work is preserved and no assigned/open work still needs them. For PR tasks, completion
+includes required deployment and proof. Check clean tracked/untracked status, preserve
+useful ignored files, and verify that no local-only commits or useful artifacts would
+be lost. Use `git worktree remove` for ordinary trees and the repository's own removal
+tool for managed trees; never force removal, unlock trees, or delete branches as part
+of this cleanup. Retain unsafe, blocked, or still-needed trees and report each path and
+reason in the task thread. This grants no bulk-cleanup authority over old/peer trees
+or user checkouts; ownership receipts remain retained and must not be hand-edited.
+Retained receipts grant no access after the git pointer changes to a different repository.
 
 For rollout, the owner should first test the configured tool on a fresh session tree,
 verify both allowed owner writes and refused peer writes, and check that ordinary
