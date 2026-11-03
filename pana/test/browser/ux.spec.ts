@@ -67,6 +67,31 @@ function rgb(hex: string): string {
 }
 
 describeBrowser("pana usability in a browser", () => {
+	it("UX-07 buttons and navigation stay compact at desktop and phone widths", async () => {
+		await start();
+		for (const width of [1280, 476, 390]) {
+			await emulateViewport(`${width}x900x1${width < 640 ? ",mobile,touch" : ""}`);
+			expect(await evaluatePage<number>(`return innerWidth;`)).toBe(width);
+			const controls = await evaluatePage<Array<{ label: string; height: number; expected: number; lineHeight: number }>>(`
+				location.hash = "#/sessions/${seeded!.capital.sessionId}";
+				await until(() => document.querySelector("#session .header-actions button").getBoundingClientRect().height > 0 && document.querySelectorAll("#transcript [data-testid=entry]").length >= 2);
+				await document.fonts.ready;
+				document.getElementById("session-confirm").hidden = false;
+				return [...document.querySelectorAll("#nav a, #nav-settings, #session .header-actions button, #session-confirm-yes")].map(el => ({
+					label: el.textContent.trim(),
+					height: el.getBoundingClientRect().height,
+					expected: el.classList.contains("quiet") ? 28 : 32,
+					lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+				}));
+			`);
+			expect(controls.length).toBe(12);
+			for (const control of controls) {
+				expect(control.height, `${width}px: ${control.label}`).toBe(control.expected);
+				expect(control.lineHeight, control.label).toBeLessThan(control.height);
+			}
+		}
+	});
+
 	it("UX-01 the click asks inside the user gesture, Allow subscribes, and each refusal names its cause", async () => {
 		const { t, origin } = await start();
 		// The real browser: a secure context with a service worker and Web Push.
