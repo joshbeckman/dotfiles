@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec python3 - "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv.pop())
+implementation = (root / 'bin/lib/pr_lookup.rb').read_text()
+match = re.search(r"cli\.empty\? \? '([^']+)' : cli", implementation)
+if not match:
+    raise SystemExit('cannot establish the implementation-only client identifier')
+identifier = match.group(1)
+paths = [root / 'README.md', root / '.agents/AGENTS.md', root / '.agents/GITHUB_WORKFLOW.md']
+paths += [root / '.agents/skills' / name / 'SKILL.md' for name in ('own-pr', 'get-pr-merged', 'pr-lookup')]
+pattern = re.compile(r'\b' + re.escape(identifier) + r'\b', re.I)
+for path in paths:
+    if pattern.search(path.read_text()):
+        raise SystemExit(f'implementation-only client identifier found in public instructions: {path.relative_to(root)}')
+    for required in ('git pr-host',):
+        if path.name == 'SKILL.md' and required not in path.read_text():
+            raise SystemExit(f'missing generic discovery interface: {path.relative_to(root)}')
+print('pr-public-surface: public hosting instructions use generic interfaces')
+PY

@@ -1,10 +1,14 @@
-# GitHub Workflow
+# Repository Hosting Workflow
 
-## Commands
+## Discover before routing
 
-Use `gw`, not `gh`, for GitHub commands. In `shop/world`, use `gsw`, not bare `gs` or `gw`, for PR create, submit, edit, comment, review, and stack workflows. Use the same `gsw` rule in other repositories managed through `gs`. Use the `pr-lookup` skill for pull request reads across providers, `gw view-md` for GitHub issue reads, and `gw` for issue operations. `gw` uses the current repository and branch unless `GW_REPO` overrides it.
+Run `git pr-host` in the intended checkout before PR commands. It reports the owning host, repository, selected client, and supported capabilities. Use the same classifier for URL selectors; neither `/pull/` nor `/pulls/` alone identifies a service. A mirror is not the PR authority.
 
-Assign new `shop/world` PRs with `gsw pr edit <PR> --add-assignee "$(git config user.email)"`; elsewhere use `gw pr edit <PR> --add-assignee @me`.
+Use `git pr-view`, `git pr-url`, `git pr-checks`, `git pr-merged`, and `git pr-for-commit` for provider-neutral reads. Use `git pr-write <verb> ...` for attributed PR create/edit/comment/review writes. Use `git-pr-host --help` and `git-pr-write --help` for interface usage (Git reserves `git <command> --help` for manual pages); load the owning repository's current workflow before CI, review, merge, or deployment actions. Repository instructions override generic examples here.
+
+Repository-specific hosts, adapter selection, and live documentation links belong in supported machine-local setup, never shared public instructions. Do not change Git configuration when the repository forbids it. A failed discovery, unsupported capability, or missing tool is a blocker, not permission to fall back to a mirror or another identity.
+
+Issue operations use the issue system's owning tool. GitHub issue reads and writes still use `gw`. Keep new PRs draft and assign the repository's verified review owner; provider-specific assignee syntax comes from the selected client's help.
 
 ## References
 
@@ -14,16 +18,12 @@ Reference every issue or pull request with its title and full URL:
 [<issue_or_pr_title>](<issue_or_pr_url>)
 ```
 
-## Comments
-
-Write GitHub comments to a temporary file, then pass it with `gw issue comment ISSUE_OR_PR_URL --body-file TMP_FILE`.
-
-When a comment mixes Josh's words with an agent response, write Josh's words normally, put the agent response in a blockquote, and place `agent-trailer` immediately before or after that quote.
-
 ## Attribution
 
-**Attribution is automatic on the paths that matter, and you must not duplicate it.** For conversational prose, `gw` and `gsw` put the trailer first and blockquote the agent's response. This covers PR and issue comments, reviews, and close or reopen comments. For maintained artifacts such as PR descriptions and issue bodies, the wrappers append the trailer without blockquoting. Commits get the same line with an email. The wrappers suppress an exact duplicate of the current trailer; when another agent already has a trailer, they preserve it and add the current editor's attribution. Post through `gw`/`gsw`, not bare `gh`/`gs`.
+The write interface uses the selected adapter's attribution wrapper. Conversational prose carries the generated trailer and a blockquote; maintained artifacts append the trailer. Preserve other authors' attribution and suppress only the current exact duplicate. Use only the generated trailer; never add a separate `Session:` field or repeat the session URL.
+
+Supply an explicit `--body` or `--body-file` for prose and agent attachment writes. If an adapter generates descriptions implicitly or cannot attribute a low-level mutation, stop and use its supported explicit-body workflow. Human body bytes remain unchanged. Do not post an approval again to edit its prose; first establish a supported edit path.
 
 ## Pull Request Ownership
 
-If you create or inherit a pull request, you own it until the change is deployed and its production result is checked, unless Josh explicitly releases or transfers ownership. Ownership does not grant permission to mark ready, enqueue, merge, or re-enqueue without Josh's instruction. The `own-pr` skill carries the lifecycle; read it before touching a PR.
+Creating or inheriting a PR starts lifecycle ownership through deployment and proof, unless Josh explicitly releases or transfers it. Ownership grants no merge authority. Follow `own-pr` and the owning repository's workflow.

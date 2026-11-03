@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+exec python3 - "$root" <<'PY'
+from pathlib import Path
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(sys.argv.pop())
+
+class WriteRouting(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.bin = Path(self.temp.name)
+        shutil.copyfile(ROOT / 'bin/git-pr-write', self.bin / 'git-pr-write')
+        for name in ('git-pr-host', 'pr-native-write', 'gw', 'gsw'):
+            path = self.bin / name
+            if name == 'git-pr-host':
+                path.write_text('#!/usr/bin/env python3\nimport os,sys\nprint(os.environ["HOST_RECORD"])\nsys.exit(int(os.environ.get("HOST_EXIT", "0")))\n')
+            else:
+                path.write_text('#!/usr/bin/env python3\nimport os,json,sys\nprint(json.dumps({"client":os.path.basename(sys.argv[0]),"args":sys.argv[1:],"native_cli":os.environ.get("PR_NATIVE_CLI"),"gh_host":os.environ.get("GH_HOST"),"gw_repo":os.environ.get("GW_REPO"),"gh_repo":os.environ.get("GH_REPO")}))\n')
+            path.chmod(0o755)
+        self.record = dict(provider='native', host='https://review.example.invalid', repo='team/project', read_cli='review-cli', write_cli='pr-native-write', capabilities=dict(write=True))
+        self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'])
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def run_write(self, *arguments, success=True):
+        env = dict(self.env, HOST_RECORD=json.dumps(self.record))
+        result = subprocess.run([sys.executable, str(self.bin / 'git-pr-write'), *arguments], env=env, text=True, capture_output=True)
+        if not success:
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual('', result.stdout)
+            return result.stderr
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_native_writes_bind_classified_host_repository_and_client(self):
+        result = self.run_write('review', '42', '--approve', '--body', 'quoted "body"\nsecond line')
+        self.assertEqual('pr-native-write', result['client'])
+        self.assertEqual('review-cli', result['native_cli'])
+        self.assertEqual(['pr', 'review', '42', '--approve', '--body', 'quoted "body"\nsecond line', '--host', self.record['host'], '-R', 'team/project'], result['args'])
+
+    def test_github_writes_use_its_attribution_wrapper(self):
+        self.record['provider'] = 'github'
+        self.record['host'] = 'https://github.com'
+        self.env.update(GH_HOST='wrong.example.invalid', GW_REPO='other/wrong', GH_REPO='other/wrong')
+        self.record['read_cli'] = 'public-cli'
+        result = self.run_write('comment', 'https://github.com/team/project/pull/42', '--body-file', 'body.md')
+        self.assertEqual('gw', result['client'])
+        self.assertEqual(['pr', 'comment', 'https://github.com/team/project/pull/42', '--body-file', 'body.md', '--repo', 'github.com/team/project'], result['args'])
+        self.assertEqual('github.com', result['gh_host'])
+        self.assertIsNone(result['gw_repo'])
+        self.assertIsNone(result['gh_repo'])
+
+    def test_unsupported_legacy_writes_never_fall_back(self):
+        self.record['provider'] = 'legacy'
+        self.record['capabilities']['write'] = False
+        self.assertIn('cannot safely bind', self.run_write('review', '42', '--approve', success=False))
+
+    def test_discovery_failure_prevents_execution(self):
+        self.env['HOST_EXIT'] = '4'
+        self.run_write('review', '42', success=False)
+
+    def test_missing_identity_or_capability_prevents_execution(self):
+        for key in ('repo', 'host', 'read_cli'):
+            old = self.record[key]
+            self.record[key] = None
+            self.run_write('comment', '42', '--body', 'text', success=False)
+            self.record[key] = old
+        self.record['capabilities']['write'] = False
+        self.run_write('comment', '42', success=False)
+
+    def test_unknown_adapter_is_not_executed_from_record(self):
+        self.record['provider'] = 'unknown'
+        self.record['write_cli'] = 'gsw'
+        self.assertIn('no fallback', self.run_write('review', '42', success=False))
+
+    def test_scope_overrides_are_rejected(self):
+        for args in [('--host', 'other.example.invalid'), ('--repo=other/project',), ('-Rother/project',), ('--remote', 'mirror')]:
+            self.assertIn('scope overrides', self.run_write('review', '42', *args, success=False))
+
+    def test_late_and_additional_selectors_are_rejected(self):
+        for args in [('review', '--approve', 'https://other.example.invalid/other/repo/pull/42', '--body', 'hello'),
+                     ('review', '42', '--approve', 'https://other.example.invalid/other/repo/pull/43'),
+                     ('comment', '--body', 'hello', 'other-branch')]:
+            self.assertIn('selectors must immediately follow', self.run_write(*args, success=False))
+
+    def test_body_url_is_not_a_selector(self):
+        url = 'https://documentation.example.invalid/guide'
+        result = self.run_write('comment', '42', '--body', url)
+        self.assertIn(url, result['args'])
+        result = self.run_write('comment', '42', '--body', '--repo')
+        self.assertIn('--repo', result['args'])
+
+    def test_unrecognized_verbs_do_not_execute(self):
+        self.assertIn('unsupported write verb', self.run_write('submit', success=False))
+
+unittest.main()
+PY

@@ -1,32 +1,30 @@
 ---
 name: pr-lookup
-description: Find and inspect pull requests across GitHub and Gitstream from commits, branches, numbers, or URLs. Use when asked which PR contains a commit, for the current branch's PR URL, whether a PR merged, or which checks are failing.
+description: Discover a repository's hosting adapter and inspect pull requests from commits, branches, numbers, or URLs without assuming a provider from URL path shape.
 ---
 
 # Pull Request Lookups
 
-Use the same read-only commands in GitHub and Gitstream repositories. They infer the provider from the PR URL or repository-local configuration.
+Run `git pr-host [PR_URL|PR_NUMBER|BRANCH]` in the intended checkout first. Its JSON record identifies the verified owning host, repository, selected client, and capabilities. Runtime discovery may expose machine-local adapter information; do not copy it into public documentation or PR descriptions.
 
 | Need | Command |
 |---|---|
+| Hosting/capability discovery | `git pr-host [PR_URL\|PR_NUMBER\|BRANCH]` |
 | PR containing a commit | `git pr-for-commit <SHA>` |
 | Canonical PR URL | `git pr-url [PR_URL\|PR_NUMBER\|BRANCH]` |
-| Full PR content and discussion | `git pr-view [PR_URL\|PR_NUMBER\|BRANCH]` |
-| Checks ordered for action | `git pr-checks [PR_URL\|PR_NUMBER\|BRANCH] [--required]` |
+| Full PR and discussion | `git pr-view [PR_URL\|PR_NUMBER\|BRANCH]` |
+| Check state | `git pr-checks [PR_URL\|PR_NUMBER\|BRANCH] [--required]` |
 | Merge timestamp | `git pr-merged [PR_URL\|PR_NUMBER\|BRANCH]` |
-| Full GitHub issue content | `gw view-md <ISSUE_URL>` |
+| Attributed PR prose | `git pr-write <verb> ...` |
 
-With no selector, URL, checks, and merge commands use the current branch. They exit nonzero when the PR cannot be established, checks fail, the PR is unmerged, or a result is ambiguous. Do not turn those failures into guesses.
+An adapter that cannot bind its client to the verified target reports unsupported capabilities and does not run that client. Historical routing information alone does not grant a read or write capability.
 
-`git pr-checks --required` limits output to required checks when the provider exposes that distinction. Use the full form when review and optional-check context matters.
+Read full content before acting. Load the repository's current workflow before writes, CI, reviews, queues, or deployment. The classifier does not grant permission for any action. Discover client flags with its `--help`; don't copy changing provider policy into this skill.
 
-Use `git pr-view` to read full PR content and discussion before acting. Continue using `gw view-md` for GitHub issues.
+A URL path is not proof of its provider. Match the verified host and repository or an exact configured historical template. A mirror is not authoritative. Discovery, missing tooling, and page failures must remain visible; never interpret them as an empty list or silently fall back to another service.
 
-Repository-specific provider configuration belongs in local Git config, not this public skill:
+With no selector, read commands use the current branch where supported. Ambiguous PRs, unmerged state, and failing/pending checks return nonzero statuses. `--required` filters checks only when the adapter exposes that distinction.
 
-```sh
-git config prLookup.provider <provider>
-git config prLookup.urlTemplate 'https://example.test/pulls/{number}'
-```
+Commit messages and local branches supply candidates, not proof. Verify exact head/merge IDs or paginated commit membership before returning an association. Detached historical commits without surviving hints fail explicitly; don't scan every remote PR or guess from a number.
 
-A configured merge-trailer workflow for `git pr-for-commit` additionally uses `prLookup.trailer` and `prLookup.baseRef`.
+Hosts, client overrides, historical URL templates, and live documentation links belong in supported machine-local setup. The generic routing settings are repository-local `prLookup.provider`, `prLookup.remote` (default `origin`), `prLookup.host`, `prLookup.repo`, and an adapter client override. Use the repository's setup procedure; do not edit Git configuration when it forbids it. Runtime ABI/load errors are blockers, not empty results.

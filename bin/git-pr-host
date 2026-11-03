@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+# Identify the owning review host using the same fail-closed routing as PR reads.
+require_relative 'lib/pr_lookup'
+
+if ARGV == ['--help'] || ARGV == ['-h']
+  puts 'Usage: git pr-host [PR_URL|PR_NUMBER|BRANCH]'
+  puts 'Print JSON with provider, host, repo, read_cli, write_cli, and read capabilities.'
+  exit 0
+end
+if ARGV.length > 1 || ARGV.any? { |arg| arg.start_with?('-') }
+  warn 'Usage: git pr-host [PR_URL|PR_NUMBER|BRANCH]'
+  exit 2
+end
+begin
+  puts JSON.generate(PRLookup.classification(ARGV.fetch(0, '')))
+rescue StandardError => e
+  warn "git pr-host: #{e.message}"
+  exit 1
+end

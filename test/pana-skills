@@ -43,6 +43,17 @@ class PanaSkills(unittest.TestCase):
             self.assertIn(required, own)
         self.assertNotIn('eligible for cleanup', own)
 
+    def test_host_discovery_and_generic_writes_are_explicit(self):
+        for name in ('own-pr', 'get-pr-merged', 'pr-lookup'):
+            text = (SKILLS / name / 'SKILL.md').read_text()
+            with self.subTest(skill=name):
+                self.assertIn('git pr-host', text)
+                self.assertIn('git pr-write', text)
+        workflow = (ROOT / '.agents/GITHUB_WORKFLOW.md').read_text()
+        self.assertIn('git pr-host', workflow)
+        self.assertIn('git pr-write', workflow)
+        self.assertIn('mirror is not', workflow)
+
     def test_avatar_retirement_leaves_no_active_links(self):
         self.assertFalse((SKILLS / 'avatars/SKILL.md').exists())
         self.assertFalse((ROOT / 'test/avatar-render-check').exists())
