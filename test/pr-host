@@ -6,14 +6,14 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/repo" "$tmp/bin"
 git -C "$tmp/repo" init -q -b feature
-for client in gh gw gs gsw; do
+for client in gh gw; do
   printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/$client"
   chmod +x "$tmp/bin/$client"
 done
 run() { (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git pr-host "$@"); }
 check() {
   run "$@" >"$tmp/out"
-  ruby -rjson -e 'j=JSON.parse(File.read(ARGV[0])); abort j.inspect unless j["provider"] == ARGV[1] && j["host"] == ARGV[2] && j["repo"] == (ARGV[3] == "null" ? nil : ARGV[3]); abort j.inspect unless j["cli"] == ARGV[4]; abort j.inspect unless j.fetch("helper_capabilities").fetch("view") == (j["provider"] != "legacy"); abort j.inspect if j.key?("write_cli")' "$tmp/out" "$provider" "$host" "$repo" "$cli"
+  ruby -rjson -e 'j=JSON.parse(File.read(ARGV[0])); abort j.inspect unless j["provider"] == ARGV[1] && j["host"] == ARGV[2] && j["repo"] == (ARGV[3] == "null" ? nil : ARGV[3]); abort j.inspect unless j["cli"] == ARGV[4]; abort j.inspect unless j.fetch("helper_capabilities").fetch("view") == true; abort j.inspect if j.key?("write_cli")' "$tmp/out" "$provider" "$host" "$repo" "$cli"
 }
 fail() {
   if run "$@" >"$tmp/out" 2>"$tmp/err"; then echo 'expected classifier failure' >&2; exit 1; fi
@@ -65,25 +65,13 @@ git -C "$tmp/repo" config prLookup.remote missing
 fail 42
 git -C "$tmp/repo" config --unset-all prLookup.remote
 git -C "$tmp/repo" remote remove origin
-git -C "$tmp/repo" config prLookup.provider legacy
-git -C "$tmp/repo" config prLookup.urlTemplate 'https://old-reviews.example.invalid/repos/team/project/pulls/{number}'
-provider=legacy host=https://old-reviews.example.invalid repo=null cli=gsw
-# Template-only binding reports no invented repository and no target-bound helper capability.
-check 42
-check https://old-reviews.example.invalid/repos/team/project/pulls/42
-fail https://old-reviews.example.invalid/repos/other/project/pulls/42
-fail https://unrelated.example.invalid/repos/team/project/pulls/42
-git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
-fail 42
-git -C "$tmp/repo" config prLookup.host old-reviews.example.invalid
-git -C "$tmp/repo" config prLookup.repo team/project
-repo=team/project check https://old-reviews.example.invalid/repos/team/project/pulls/42
-fail https://old-reviews.example.invalid/repos/other/project/pulls/42
-git -C "$tmp/repo" config prLookup.host 'https://old-reviews.example.invalid/untrusted-path'
-fail 42
-git -C "$tmp/repo" config prLookup.host old-reviews.example.invalid
-git -C "$tmp/repo" config prLookup.repo 'team/other/project'
-fail 42
+# Removed providers fail closed, even when a historical template remains.
+for removed in legacy gitstream; do
+  git -C "$tmp/repo" config prLookup.provider "$removed"
+  git -C "$tmp/repo" config prLookup.urlTemplate 'https://old-reviews.example.invalid/pulls/{number}'
+  fail 42
+  grep -Fq "unsupported provider: $removed" "$tmp/err"
+done
 "$root/bin/git-pr-host" --help >"$tmp/out"
 grep -Fq 'Usage: git pr-host' "$tmp/out"
 fail --unknown

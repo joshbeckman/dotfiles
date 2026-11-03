@@ -7,9 +7,6 @@ export GH_HOST=wrong.example.invalid GH_REPO=other/project GW_REPO=other/project
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/repo" "$tmp/bin"
 git -C "$tmp/repo" init -q -b feature
-git -C "$tmp/repo" config prLookup.provider legacy
-git -C "$tmp/repo" config prLookup.urlTemplate 'https://reviews.example.test/pulls/{number}'
-
 cat >"$tmp/bin/gw" <<'EOF'
 #!/bin/sh
 [ "$GW_REPO" = github.com/example/project ] || exit 90
@@ -23,14 +20,7 @@ case "$1" in
   *) exit 2 ;;
 esac
 EOF
-cat >"$tmp/bin/gs" <<'EOF'
-#!/bin/sh
-printf 'called\n' >>"$LEGACY_CALLS"
-printf '{"message":"authentication failed"}\n'
-exit 1
-EOF
-export LEGACY_CALLS="$tmp/legacy-calls"
-chmod +x "$tmp/bin/gw" "$tmp/bin/gs"
+chmod +x "$tmp/bin/gw"
 
 run() {
   (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git "$@")
@@ -48,46 +38,26 @@ expect_line() {
   grep -Fq -- "$want" "$out"
 }
 
+# Unknown providers cannot fall through to GitHub, even with a mirror.
+git -C "$tmp/repo" config prLookup.provider unsupported
+git -C "$tmp/repo" remote add github https://github.com/mirror/project.git
 for operation in pr-url pr-view pr-merged pr-checks; do
   if run "$operation" 42 >"$tmp/out" 2>"$tmp/err"; then
-    echo 'expected unscoped legacy read to fail' >&2; exit 1
+    echo 'expected unsupported provider to fail' >&2; exit 1
   fi
-  grep -Fq 'cannot safely bind PR reads' "$tmp/err"
+  grep -Fq 'unsupported provider: unsupported' "$tmp/err"
 done
-if run pr-checks 42 --required >"$tmp/out" 2>"$tmp/err"; then
-  echo 'legacy authentication output must never become a passing empty checks table' >&2; exit 1
-fi
-[[ ! -e "$LEGACY_CALLS" ]]
 [[ "$(run pr-url https://github.com/example/project/pull/7)" == 'https://github.com/example/project/pull/7' ]]
 [[ "$(run pr-view https://github.com/example/project/pull/7)" == '# Full GitHub PR' ]]
 [[ "$(run pr-merged https://github.com/example/project/pull/7)" == '2026-01-02T03:04:05Z' ]]
 expect_line '| Check | Status | Result |' pr-checks https://github.com/example/project/pull/7 --required
 
-git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
-# An explicit provider is not trust in arbitrary URL hosts or repositories.
+git -C "$tmp/repo" config --unset-all prLookup.provider
+git -C "$tmp/repo" remote add origin https://github.com/example/project.git
 for url in 'https://unrelated.example.invalid/other/project/pulls/42' 'https://reviews.example.test/pulls/41'; do
   if run pr-view "$url" >"$tmp/out" 2>"$tmp/err"; then
-    echo 'expected untrusted legacy selector to fail without a template' >&2; exit 1
+    echo 'expected untrusted selector to fail' >&2; exit 1
   fi
-  grep -Fq 'does not match the configured legacy host' "$tmp/err"
-done
-git -C "$tmp/repo" remote add origin https://github.com/example/project.git
-if run pr-view https://unrelated.example.invalid/other/project/pulls/42 >"$tmp/out" 2>"$tmp/err"; then
-  echo 'a GitHub mirror does not authenticate a legacy selector' >&2; exit 1
-fi
-git -C "$tmp/repo" config prLookup.host reviews.example.test
-git -C "$tmp/repo" config prLookup.repo example/project
-legacy_url='https://reviews.example.test/repos/example/project/pulls/41'
-if run pr-view "$legacy_url" >"$tmp/out" 2>"$tmp/err"; then
-  echo 'explicit classifier identity cannot scope an unsupported legacy client' >&2; exit 1
-fi
-grep -Fq 'cannot safely bind PR reads' "$tmp/err"
-[[ ! -e "$LEGACY_CALLS" ]]
-for url in 'https://unrelated.example.invalid/repos/example/project/pulls/42' 'https://reviews.example.test/repos/other/project/pulls/42'; do
-  if run pr-view "$url" >"$tmp/out" 2>"$tmp/err"; then
-    echo 'expected mismatched legacy host/repository to fail' >&2; exit 1
-  fi
-  grep -Fq 'does not match the configured legacy host' "$tmp/err"
 done
 
 printf 'pr-lookup tests passed\n'

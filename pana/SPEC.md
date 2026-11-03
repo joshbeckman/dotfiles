@@ -25,7 +25,7 @@ The README says what pana is. This file says how to check that it works. If they
 | WP6 | Scheduling | WP2, WP3 |
 | WP7 | Subjects and search | WP2 |
 | WP8 | PWA and Web Push | WP1 |
-| WP9 | Service units, install, `gw`/`gsw` attribution | WP1 |
+| WP9 | Service units, install, `gw` attribution | WP1 |
 | WP10 | Integration: providers, push, the PWA on real handlers, end-to-end and smoke tests | WP0–WP9 |
 
 WP0 goes first, built by one agent. It fixes every shared contract: schema, API routes, error shapes, and test helpers. After WP0 merges, WP1, WP2, WP4, WP5, and WP7 can run in parallel. Each builds against the WP0 contracts and fakes what it needs from the others.
@@ -364,7 +364,7 @@ provenance is carried on PR descriptions/comments/reviews and discovered through
 - [x] **SVC-02** `.config/systemd/user/panad.service` does the same on Linux, and `setup` enables it.
 - [x] **SVC-03** The service injects provider credentials with `s KEY... -- panad`. Pana never writes them to disk.
 - [x] **SVC-04** `Brewfile` lists any new formula pana needs.
-- [x] **GW-01** `gw` and `gsw` attribute posts when `PANA_SESSION` is set, using the session URL in the trailer.
+- [x] **GW-01** `gw` attributes posts when `PANA_SESSION` is set, using the session URL in the trailer.
 
 ---
 

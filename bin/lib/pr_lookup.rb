@@ -38,11 +38,6 @@ module PRLookup
     cli.empty? ? 'dt' : cli
   end
 
-  def template
-    value = config('prLookup.urlTemplate')
-    value.empty? ? config('prForCommit.urlTemplate') : value
-  end
-
   def validate_host(host)
     uri = URI.parse(host)
     raise 'PR host must be an HTTP(S) origin' unless %w[http https].include?(uri.scheme) && uri.host && !uri.userinfo && ['', '/'].include?(uri.path) && !uri.query && !uri.fragment
@@ -58,8 +53,7 @@ module PRLookup
       end
     end
     provider = config('prLookup.provider')
-    provider = 'legacy' if provider == 'gitstream'
-    raise "unsupported provider: #{provider}" unless ['', 'github', 'legacy', 'native'].include?(provider)
+    raise "unsupported provider: #{provider}" unless ['', 'github', 'native'].include?(provider)
     remote = config('prLookup.remote')
     configured_remote = !remote.empty?
     remote = 'origin' if remote.empty?
@@ -74,8 +68,7 @@ module PRLookup
     validate_host(host) unless host.empty?
     raise 'prLookup.repo must be OWNER/REPO' unless repo.empty? || repo.match?(%r{\A[^/\s]+/[^/\s]+\z})
     # A non-GitHub origin must be positively identified, never routed to its mirror.
-    legacy_host = provider == 'legacy' && ((!explicit_host.empty? && !explicit_repo.empty?) || (!template.empty? && !host.empty? && URI.parse(template.gsub('{number}', '1')).host == URI.parse(host).host))
-    discover = hosted_remote && URI.parse(host).host != 'github.com' && provider != 'github' && !legacy_host
+    discover = hosted_remote && URI.parse(host).host != 'github.com' && provider != 'github'
     selected_host = host
     if provider == 'native' || discover
       raise 'configure prLookup.host and prLookup.repo or a repository remote' if host.empty? || repo.empty?
@@ -87,17 +80,7 @@ module PRLookup
       host = canonical_host
       provider = 'native'
     end
-    provider = 'legacy' if provider.empty? && !template.empty? && !hosted_remote
     provider = 'github' if provider.empty? && host == 'https://github.com'
-    if provider == 'legacy' && explicit_host.empty? && !template.empty?
-      uri = URI.parse(template.gsub('{number}', '1'))
-      raise 'URL template must be an HTTP(S) PR URL' unless %w[http https].include?(uri.scheme) && uri.host && !uri.userinfo && template.include?('{number}')
-      host = "#{uri.scheme}://#{uri.host}#{uri.port == uri.default_port ? '' : ":#{uri.port}"}"
-      repo = '' if explicit_repo.empty? && !legacy_host
-    end
-    if provider == 'legacy' && !(template.include?('{number}') || (!explicit_host.empty? && !explicit_repo.empty?))
-      raise 'PR URL does not match the configured legacy host/repository; configure a URL template or host and repo'
-    end
     raise 'cannot identify PR host; configure repository routing' if provider.empty? || host.empty?
     validate_host(host)
     if provider == 'github'
@@ -110,10 +93,6 @@ module PRLookup
         allowed_hosts = [host, selected_host].map { |h| URI.parse(h) }
         direct = allowed_hosts.any? { |h| uri.scheme == h.scheme && uri.host == h.host && uri.port == h.port } && uri.path.match?(%r{\A/#{Regexp.escape(repo)}/pull/[0-9]+/?\z})
         raise 'PR URL does not match the selected native host/repository' unless direct || template_matches?(selector)
-      elsif provider == 'legacy'
-        trusted = !explicit_host.empty? && !explicit_repo.empty? && uri.scheme == URI.parse(host).scheme && uri.host == URI.parse(host).host && uri.port == URI.parse(host).port
-        direct = trusted && uri.path.match?(%r{\A/(?:repos/)?#{Regexp.escape(repo)}/pulls/[0-9]+/?\z})
-        raise 'PR URL does not match the configured legacy host/repository' unless direct || template_matches?(selector)
       else
         raise 'unknown PR URL host; configure prLookup.provider and repository routing'
       end
@@ -130,18 +109,16 @@ module PRLookup
     candidates = case provider
     when 'github' then executable?('gh') ? %w[gw gh] : []
     when 'native' then [native_cli]
-    when 'legacy' then executable?('gs') ? %w[gsw gs] : []
     end
     candidates.find { |command| executable?(command) }
   end
 
   def classification(selector)
     provider, host, repo = route(selector)
-    scoped = provider != 'legacy'
     {
       provider: provider, host: host, repo: repo == '-' ? nil : repo,
       cli: selected_cli(provider),
-      helper_capabilities: {view: scoped, url: scoped, checks: scoped, merged: scoped, for_commit: scoped}
+      helper_capabilities: {view: true, url: true, checks: true, merged: true, for_commit: true}
     }
   end
 

@@ -14,27 +14,12 @@ git -C "$tmp/repo" config user.name Test
 printf 'base\n' >"$tmp/repo/file"
 git -C "$tmp/repo" add file
 git -C "$tmp/repo" commit -qm 'direct commit'
-direct="$(git -C "$tmp/repo" rev-parse HEAD)"
 git -C "$tmp/repo" checkout -qb feature
 printf 'feature\n' >>"$tmp/repo/file"
 git -C "$tmp/repo" commit -qam 'feature commit'
 feature="$(git -C "$tmp/repo" rev-parse HEAD)"
 git -C "$tmp/repo" checkout -q main
 git -C "$tmp/repo" merge -q --no-ff feature -m $'Merge feature\n\nReview-Number: 42'
-merge="$(git -C "$tmp/repo" rev-parse HEAD)"
-git -C "$tmp/repo" config prLookup.provider legacy
-git -C "$tmp/repo" config prLookup.urlTemplate 'https://reviews.example.test/pulls/{number}'
-git -C "$tmp/repo" config prLookup.trailer Review-Number
-git -C "$tmp/repo" config prLookup.baseRef main
-git -C "$tmp/repo" remote add origin "$tmp/local-origin"
-
-for candidate in "$feature" "$merge" "$direct"; do
-  if (cd "$tmp/repo" && "$command" "$candidate" >"$tmp/out" 2>"$tmp/err"); then
-    echo 'expected unsupported legacy commit association to fail' >&2; exit 1
-  fi
-  grep -Fq 'cannot safely bind commit association' "$tmp/err"
-done
-
 cat >"$tmp/bin/gw" <<'EOF'
 #!/bin/sh
 [ "$GW_REPO" = github.com/example/project ] || exit 90
@@ -44,17 +29,7 @@ case "$*" in *repos/example/project/commits/*/pulls*) ;; *) exit 91 ;; esac
 printf '%s\n' "${FAKE_GW_URLS:-}"
 EOF
 chmod +x "$tmp/bin/gw"
-# The legacy resolver must not fall through to an unrelated GitHub mirror.
-git -C "$tmp/repo" remote add github https://github.com/mirror/project.git
-if (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS='https://github.com/mirror/project/pull/7' "$command" "$direct" >"$tmp/out" 2>"$tmp/err"); then
-  printf 'expected legacy lookup not to use the GitHub mirror\n' >&2; exit 1
-fi
-grep -Fq 'cannot safely bind commit association' "$tmp/err"
-git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
-git -C "$tmp/repo" config --unset-all prLookup.trailer
-git -C "$tmp/repo" config --unset-all prLookup.baseRef
-git -C "$tmp/repo" remote set-url origin https://github.com/example/project.git
-git -C "$tmp/repo" config --unset-all prLookup.provider
+git -C "$tmp/repo" remote add origin https://github.com/example/project.git
 
 url='https://github.com/example/project/pull/7'
 [[ "$(cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS="$url" "$command" "$feature")" == "$url" ]]
@@ -70,7 +45,7 @@ if (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS='https://github.com/oth
   printf 'expected foreign GitHub repository to fail\n' >&2; exit 1
 fi
 grep -Fq 'no pull request found' "$tmp/err"
-# A stale legacy trailer/template cannot outrank a selected GitHub origin.
+# A stale trailer/template cannot outrank a selected GitHub origin.
 git -C "$tmp/repo" config prLookup.urlTemplate 'https://old-reviews.example.invalid/pulls/{number}'
 git -C "$tmp/repo" config prLookup.trailer Review-Number
 [[ "$(cd "$tmp/repo" && PATH="$tmp/bin:$PATH" FAKE_GW_URLS="$url" "$command" "$feature")" == "$url" ]]
