@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Shared macOS/Linux suite: local repositories, no network or machine config.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/repo" "$tmp/bin"
+git -C "$tmp/repo" init -q -b feature
+for client in gh gw gs gsw; do
+  printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/$client"
+  chmod +x "$tmp/bin/$client"
+done
+run() { (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git pr-host "$@"); }
+check() {
+  run "$@" >"$tmp/out"
+  ruby -rjson -e 'j=JSON.parse(File.read(ARGV[0])); abort j.inspect unless j["provider"] == ARGV[1] && j["host"] == ARGV[2] && j["repo"] == (ARGV[3] == "null" ? nil : ARGV[3]); abort j.inspect unless j["cli"] == ARGV[4]; abort j.inspect unless j.fetch("helper_capabilities").fetch("view") == (j["provider"] != "legacy"); abort j.inspect if j.key?("write_cli")' "$tmp/out" "$provider" "$host" "$repo" "$cli"
+}
+fail() {
+  if run "$@" >"$tmp/out" 2>"$tmp/err"; then echo 'expected classifier failure' >&2; exit 1; fi
+  [[ ! -s "$tmp/out" ]]
+}
+provider=github host=https://github.com repo=example/project cli=gw
+check https://github.com/example/project/pull/42
+fail https://github.com/example/project/issues/42
+fail https://github.com:8443/example/project/pull/42
+fail https://user@github.com/example/project/pull/42
+fail 42
+# Only the owning remote participates; a GitHub mirror is not a fallback.
+git -C "$tmp/repo" remote add origin https://github.com/example/project.git
+check
+check 42
+check feature
+# Explicit GitHub URLs identify a different repository without guessing a mirror.
+repo=other/project check https://github.com/other/project/pull/42
+git -C "$tmp/repo" remote add github https://github.com/mirror/project.git
+git -C "$tmp/repo" remote set-url origin https://reviews.example.invalid/team/project.git
+git -C "$tmp/repo" config prLookup.cli review-cli
+cat >"$tmp/bin/review-cli" <<'RUBY'
+#!/usr/bin/env ruby
+require 'json'
+abort 'discovery refused' if ENV['DISCOVERY_FAIL']
+abort 'wrong discovery route' unless ARGV == ['--host', 'https://reviews.example.invalid', '-R', 'team/project', 'repo', 'view', '--json']
+puts JSON.generate(full_name: ENV.fetch('REPO_NAME', 'team/project'), html_url: "#{ENV.fetch('CANONICAL_HOST', 'https://reviews.example.invalid')}/team/project")
+RUBY
+chmod +x "$tmp/bin/review-cli"
+provider=native host=https://reviews.example.invalid repo=team/project cli=review-cli
+check
+check feature
+check 42
+check https://reviews.example.invalid/team/project/pull/42
+CANONICAL_HOST=https://canonical.example.invalid host=https://canonical.example.invalid check 42
+DISCOVERY_FAIL=1 fail 42
+REPO_NAME=other/project fail 42
+fail https://unrelated.example.invalid/team/project/pull/42
+fail https://reviews.example.invalid/other/project/pull/42
+fail http://reviews.example.invalid/team/project/pull/42
+# Explicit provider configuration never authenticates an arbitrary host.
+git -C "$tmp/repo" config prLookup.provider github
+fail 42
+git -C "$tmp/repo" config prLookup.provider unrecognized
+fail 42
+git -C "$tmp/repo" config prLookup.provider native
+check 42
+git -C "$tmp/repo" config prLookup.remote missing
+fail 42
+git -C "$tmp/repo" config --unset-all prLookup.remote
+git -C "$tmp/repo" remote remove origin
+git -C "$tmp/repo" config prLookup.provider legacy
+git -C "$tmp/repo" config prLookup.urlTemplate 'https://old-reviews.example.invalid/repos/team/project/pulls/{number}'
+provider=legacy host=https://old-reviews.example.invalid repo=null cli=gsw
+# Template-only binding reports no invented repository and no target-bound helper capability.
+check 42
+check https://old-reviews.example.invalid/repos/team/project/pulls/42
+fail https://old-reviews.example.invalid/repos/other/project/pulls/42
+fail https://unrelated.example.invalid/repos/team/project/pulls/42
+git -C "$tmp/repo" config --unset-all prLookup.urlTemplate
+fail 42
+git -C "$tmp/repo" config prLookup.host old-reviews.example.invalid
+git -C "$tmp/repo" config prLookup.repo team/project
+repo=team/project check https://old-reviews.example.invalid/repos/team/project/pulls/42
+fail https://old-reviews.example.invalid/repos/other/project/pulls/42
+git -C "$tmp/repo" config prLookup.host 'https://old-reviews.example.invalid/untrusted-path'
+fail 42
+git -C "$tmp/repo" config prLookup.host old-reviews.example.invalid
+git -C "$tmp/repo" config prLookup.repo 'team/other/project'
+fail 42
+"$root/bin/git-pr-host" --help >"$tmp/out"
+grep -Fq 'Usage: git pr-host' "$tmp/out"
+fail --unknown
+fail 42 43
+printf 'pr-host tests passed\n'

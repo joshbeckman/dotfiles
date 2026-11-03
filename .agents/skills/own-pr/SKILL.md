@@ -44,14 +44,20 @@ Before ending a run with an incomplete PR, schedule the next check with `pana sc
 
 `own-pr` owns lifecycle state and transitions. Use `pr-description-discipline` for the body, `binks-pr-review` for applicable local preflight, `get-pr-green` for CI/review repair, `get-pr-merged` only after explicit merge authority, and `run-project` for project metadata. None releases lifecycle ownership.
 
-Use the PR surface required by the repository. For GitHub writes, use `gw`; for Meteorite/Gitstream writes, use `gsw` (`gsw pr create`, `gsw pr edit`, `gsw pr comment`, `gsw pr review`, or `gsw submit`). Load `pr-lookup` for cross-provider PR content, URL, commit, checks, and merge-status reads; continue using `gw view-md` for GitHub issues. Poll the PR itself; do not rely on Josh to relay notifications.
+Run `git pr-cli` in the intended checkout before PR work and inspect the selected client's `--help` and subcommand help. Use its native workflow rather than a common write interface. `git pr-host` supplies verified host/repository and lookup-helper capabilities when needed; optional read helpers include `git pr-view`, `git pr-url`, `git pr-checks`, `git pr-merged`, and `git pr-for-commit`. Load `pr-lookup` and the repository's current workflow. Never route from URL shape alone or treat a mirror as authoritative.
+
+Keep service-specific instructions and live documentation links in supported machine-local setup, not public shared skills. Bind native commands to the classified host/repository using the selected client's documented flags. Missing tooling, failed discovery, unsupported operations, or mismatched targets are blockers, not permission to fall back to another service.
+
+Prefer the selected attribution wrapper. If none exists, follow the repository/harness's supported generated-trailer path for explicit prose. Use only the generated attribution trailer, with no separate session field; never evade required attribution through implicit descriptions. Leave new PRs draft. Issue reads/writes use their owning system, which may differ from the PR host. The chooser identifies a client, not authorization for CI, review, queues, merging, or deployment.
+
+Poll the PR itself; do not rely on Josh to relay notifications.
 
 ## 1. Draft and validate
 
 1. Open the PR as a draft and assign Josh using the repository's required wrapper.
-2. After the PR has a stable URL, comment on every issue it claims to solve. The comment must say that work has opened and link the PR by its full title and URL, so issue readers can find current and historical implementation work. Write the comment to a scratchpad file and post it with `gw issue comment ISSUE_URL --body-file FILE`. Do not duplicate an existing link, comment on issues listed only as related context, or expose a private PR from a more-public issue. If visibility is unclear, ask Josh first.
-3. When inheriting a PR, read each source issue with `gw view-md`; backfill a missing PR comment before continuing.
-4. Trigger required CI and repository-required automated reviews.
+2. After the PR has a stable URL, comment on every issue it claims to solve. The comment must say that work has opened and link the PR by its full title and URL, so issue readers can find current and historical implementation work. Write the comment to a scratchpad file and post it through the issue system's owning tool (`gw issue comment ISSUE_URL --body-file FILE` for GitHub issues). Do not duplicate an existing link, comment on issues listed only as related context, or expose a private PR from a more-public issue. If visibility is unclear, ask Josh first.
+3. When inheriting a PR, read each source issue with its owning tool (`gw view-md` for GitHub); backfill a missing PR comment before continuing.
+4. Follow repository policy for CI and automated reviews; do not trigger on-demand work without the authorization that repository requires.
 5. Check CI, the conversation, review threads, and mergeability. A green check summary alone is insufficient. Schedule the next check with `pana schedule wake` when waiting on external progress.
 6. Diagnose failures, answer every comment, push fixes, rerun affected checks/reviews, and continue until clean and green. Update the checklist after handling each change.
 7. Rebase when the branch conflicts with or is too stale against its base (use scheduled wakes to monitor conflicts/staleness with base). Resolve only mechanical conflicts autonomously; ask about product or risky conflicts.

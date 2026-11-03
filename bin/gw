@@ -28,21 +28,54 @@ writes_prose() {
 # --body and --body-file through one path avoids quoting a trailer back into an
 # inline argument.
 trailer_tmp=""
+metadata_value_option() {
+  if [[ "${cmd:-} ${args[0]:-}" == 'pr review' ]]; then
+    case "$1" in -a|-r) return 1 ;; esac
+  fi
+  case "$1" in
+    --title|-t|--base|-B|--head|-H|--repo|-R) return 0 ;;
+    --assignee|-a|--reviewer|-r|--label|-l|--project|-p) return 0 ;;
+    --milestone|-m|--template|-T|--recover|--attach|--reason) return 0 ;;
+    --add-assignee|--remove-assignee|--add-reviewer|--remove-reviewer) return 0 ;;
+    --add-label|--remove-label|--add-project|--remove-project|--type|--parent) return 0 ;;
+    --blocked-by|--blocking|--add-blocked-by|--remove-blocked-by) return 0 ;;
+    --add-blocking|--remove-blocking|--add-sub-issue|--remove-sub-issue) return 0 ;;
+  esac
+  return 1
+}
+
 inject_trailer() {
   local mode="${1:-body}"
   local presentation="${2:-artifact}"
   local i idx=-1 kind="" value="" joined=0 content
   for ((i = 0; i < ${#args[@]}; i++)); do
+    if metadata_value_option "${args[i]}"; then
+      [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: metadata option requires a value' >&2; return 2; }
+      ((i+=1))
+      continue
+    fi
     if [[ $mode == comment ]]; then
       case "${args[i]}" in
-        --comment | -c) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --comment | -c)
+          [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: comment option requires a value' >&2; return 2; }
+          kind=inline; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1)) ;;
+        -c=*) kind=inline; idx=$i; value="${args[i]#-c=}"; joined=1 ;;
+        -c?*) kind=inline; idx=$i; value="${args[i]#-c}"; joined=1 ;;
         --comment=*) kind=inline; idx=$i; value="${args[i]#--comment=}"; joined=1 ;;
       esac
     else
       case "${args[i]}" in
-        --body | -b) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --body | -b)
+          [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: body option requires a value' >&2; return 2; }
+          kind=inline; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1)) ;;
+        -b=*) kind=inline; idx=$i; value="${args[i]#-b=}"; joined=1 ;;
+        -b?*) kind=inline; idx=$i; value="${args[i]#-b}"; joined=1 ;;
+        -F=*) kind=file; idx=$i; value="${args[i]#-F=}"; joined=1 ;;
+        -F?*) kind=file; idx=$i; value="${args[i]#-F}"; joined=1 ;;
         --body=*) kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1 ;;
-        --body-file | -F) kind=file; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --body-file | -F)
+          [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: body-file option requires a value' >&2; return 2; }
+          kind=file; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1)) ;;
         --body-file=*) kind=file; idx=$i; value="${args[i]#--body-file=}"; joined=1 ;;
       esac
     fi
@@ -60,7 +93,7 @@ inject_trailer() {
     if [[ $value == "-" ]]; then
       content="$(cat)"
     else
-      content="$(cat "$value")"
+      content="$(cat -- "$value")"
     fi
   else
     content="$value"
@@ -71,14 +104,19 @@ inject_trailer() {
   # original owner for a rewrite they did not make.
   local trailer
   trailer="$(agent-trailer)"
+  local already=0
   if printf '%s\n' "$content" | grep -Fqx -- "$trailer"; then
-    return 0
+    already=1
+    # Reading stdin consumed it; preserve an already-attributed body in a file.
+    if [[ ! ( $kind == file && $value == "-" ) ]]; then return 0; fi
   fi
 
-  if [[ $presentation == conversation ]]; then
-    content="$trailer"$'\n\n'"$(printf '%s\n' "$content" | sed 's/^/> /; s/^> $/>/')"
-  else
-    content="$content"$'\n\n'"$trailer"
+  if [[ $already -eq 0 ]]; then
+    if [[ $presentation == conversation ]]; then
+      content="$trailer"$'\n\n'"$(printf '%s\n' "$content" | sed 's/^/> /; s/^> $/>/')"
+    else
+      content="$content"$'\n\n'"$trailer"
+    fi
   fi
 
   # --comment has no file variant, so the attributed body rides inline; args
@@ -134,13 +172,15 @@ cmd="$1"
 shift
 
 has_help_flag() {
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      -h|--help)
-        return 0
-        ;;
-    esac
+  local i
+  local fields=("$@")
+  for ((i = 0; i < ${#fields[@]}; i++)); do
+    if metadata_value_option "${fields[i]}"; then ((i+=1)); continue; fi
+    case "${fields[i]}" in --body|-b|--body-file|-F) ((i+=1)); continue ;; esac
+    if [[ "${cmd:-} ${fields[0]:-}" == 'pr close' || "${cmd:-} ${fields[0]:-}" == 'pr reopen' || "${cmd:-} ${fields[0]:-}" == 'issue close' || "${cmd:-} ${fields[0]:-}" == 'issue reopen' ]]; then
+      case "${fields[i]}" in --comment|-c) ((i+=1)); continue ;; esac
+    fi
+    case "${fields[i]}" in -h|--help) return 0 ;; esac
   done
   return 1
 }

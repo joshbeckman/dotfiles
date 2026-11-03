@@ -85,6 +85,8 @@ Many small utilities. [Agent coordination](.agents/skills/agent-teams/SKILL.md) 
 
 Run any script with `--help` or read the source — they're short.
 
+Select the repository's client with `git pr-cli`, then inspect its native help. `git pr-host` provides structured host/repository context for optional read helpers. Load `pr-lookup` and the repository's current workflow before commands. Public instructions remain provider-neutral, while client selection and live service guidance stay machine-local. Never infer a provider from URL path shape or treat a mirror as authoritative.
+
 ## Conventions
 
 - **Symlinks, not copies.** `dfm install` symlinks files into `$HOME`. Editing a dotfile here edits the live config.
@@ -109,6 +111,8 @@ Weigh designs against the [Principles of Good Systems](https://www.joshbeckman.o
 ## Work and private content
 
 This repo is **public** and used on both personal and work (Shopify) machines. Internal tooling on the work machine writes proprietary content into tracked files — e.g. `/opt/dev/...` scripts add proxy URLs and an `apiKeyHelper` to `.claude/settings.json`; setup scripts drop a Shopify email, signing key, and internal paths into `.gitconfig`. These lines reappear after they're removed, so every commit needs a manual pass.
+
+A client installed on a work machine is not necessarily public. Confirm the publication boundary before adding provider names, API details, operational guidance, or generated metadata. Public instructions and fixtures should use generic hosting interfaces; machine-specific service guidance stays local.
 
 **Before every commit**, review staged changes and strip anything that matches:
 

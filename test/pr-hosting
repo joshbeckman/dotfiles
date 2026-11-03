@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# Shared macOS/Linux suite: fake network clients and disposable Git repositories.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/repo" "$tmp/bin"
+git -C "$tmp/repo" init -q -b feature
+git -C "$tmp/repo" config user.name Test
+git -C "$tmp/repo" config user.email test@example.invalid
+printf 'base\n' >"$tmp/repo/file"
+git -C "$tmp/repo" add file
+git -C "$tmp/repo" commit -qm 'base'
+base="$(git -C "$tmp/repo" rev-parse HEAD)"
+printf 'feature\n' >>"$tmp/repo/file"
+git -C "$tmp/repo" commit -qam 'feature (#42)'
+commit="$(git -C "$tmp/repo" rev-parse HEAD)"
+git -C "$tmp/repo" remote add origin https://native.example.invalid/team/project.git
+git -C "$tmp/repo" remote add github https://github.com/example/project.git
+# Simulate a stale local resolver and historical browser template. It must not
+# outrank positively discovered native, nor leak through commit-to-PR fallback.
+git -C "$tmp/repo" config prLookup.provider legacy
+git -C "$tmp/repo" config prLookup.cli review-cli
+git -C "$tmp/repo" config prLookup.urlTemplate 'https://reviews.example.invalid/repos/team/project/pulls/{number}'
+git -C "$tmp/repo" config prLookup.trailer Old-Review
+cat >"$tmp/bin/review-cli" <<'RUBY'
+#!/usr/bin/env ruby
+require 'json'
+File.open(ENV.fetch('CALLS'), 'a') { |f| f.puts ARGV.join(' ') }
+abort 'missing explicit host' unless ARGV.shift == '--host'
+host = ARGV.shift
+abort 'unexpected explicit route' unless ['https://native.example.invalid', ENV['CANONICAL_HOST']].include?(host) && ARGV.shift == '-R' && ARGV.shift == 'team/project'
+case ARGV.shift(2)
+when ['repo', 'view']
+  abort 'discovery refused' if ENV['DISCOVERY_FAIL']
+  puts JSON.generate(full_name: ENV.fetch('REPO_NAME', 'team/project'), html_url: "#{ENV.fetch('CANONICAL_HOST', 'https://native.example.invalid')}/team/project")
+when ['pr', 'list']
+  abort 'list refused' if ENV['LIST_FAIL']
+  puts JSON.generate(Array.new(ENV.fetch('PR_COUNT', '1').to_i) { |i| {number: 42 + i} })
+when ['pr', 'view']
+  n = ARGV.shift
+  abort 'PR not found' if ENV['MISSING_PR']
+  if ARGV.include?('--comments')
+    puts '# Full native PR', 'Description', 'Conversation and inline review comments'
+  else
+    puts JSON.generate(number: n.to_i, head: {sha: ENV.fetch('HEAD_SHA', ENV.fetch('COMMIT'))}, merge_commit_sha: ENV['MERGE_SHA'], merged: ENV['UNMERGED'] != 'true', merged_at: ENV['UNMERGED'] == 'true' ? nil : '2026-02-03T04:05:06Z')
+  end
+when ['pr', 'checks']
+  puts 'CI success'
+  exit ENV.fetch('CHECK_EXIT', '0').to_i
+else
+  call = File.readlines(ENV.fetch('CALLS')).last
+  if call.include?('/merge-readiness')
+    abort 'readiness refused' if ENV['READINESS_FAIL']
+    state = ENV.fetch('CHECK_STATE', 'success')
+    puts JSON.generate(status_check_rollup: {contexts: [
+      {name: 'Required CI', required: true, present: state != 'missing', status: state == 'pending' ? 'in_progress' : 'completed', conclusion: state == 'pending' ? nil : state},
+      {name: 'Optional CI', required: false, present: true, status: 'completed', conclusion: 'failure'}
+    ]})
+  elsif call.include?('/commits?')
+    abort 'commit page refused' if ENV['PAGE_FAIL'] && call.match?(/[&?]page=2\s*$/)
+    if ENV['REPEAT_PAGE']
+      puts JSON.generate(Array.new(100) { |i| {sha: "other#{i}"} })
+    elsif ENV['PAGINATED'] && call.match?(/[&?]page=1\s*$/)
+      puts JSON.generate(Array.new(100) { |i| {sha: "other#{i}"} })
+    else
+      puts JSON.generate(ENV['NO_ASSOC'] ? [] : [{sha: ENV.fetch('COMMIT')}])
+    end
+  else
+    abort "unexpected review-cli call: #{call}"
+  end
+end
+RUBY
+for tool in gs gw; do
+  cat >"$tmp/bin/$tool" <<'SH'
+#!/bin/sh
+printf 'wrong provider invoked\n' >&2
+exit 99
+SH
+done
+chmod +x "$tmp/bin/"*
+export COMMIT="$commit" CALLS="$tmp/calls"
+run() { (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git "$@"); }
+expect_failure() {
+  local status="$1" message="$2"; shift 2
+  local actual=0
+  run "$@" >"$tmp/out" 2>"$tmp/err" || actual=$?
+  [[ "$actual" -eq "$status" ]] || { cat "$tmp/out" "$tmp/err"; printf 'wanted exit %s, got %s\n' "$status" "$actual" >&2; exit 1; }
+  grep -Fq "$message" "$tmp/err"
+}
+url='https://native.example.invalid/team/project/pull/42'
+[[ "$(run pr-url)" == "$url" ]]
+[[ "$(run pr-url feature)" == "$url" ]]
+[[ "$(run pr-url 42)" == "$url" ]]
+[[ "$(CANONICAL_HOST=https://canonical.example.invalid run pr-url "$url")" == 'https://canonical.example.invalid/team/project/pull/42' ]]
+[[ "$(run pr-url "$url?tab=comments#note")" == "$url" ]]
+[[ "$(run pr-url 'https://reviews.example.invalid/repos/team/project/pulls/42')" == "$url" ]]
+run pr-view "$url" >"$tmp/out"
+grep -Fq 'Conversation and inline review comments' "$tmp/out"
+[[ "$(run pr-merged feature)" == '2026-02-03T04:05:06Z' ]]
+UNMERGED=true expect_failure 1 'not merged' pr-merged 42
+run pr-checks 42 >"$tmp/out"
+grep -Fq 'CI success' "$tmp/out"
+status=0; CHECK_EXIT=8 run pr-checks 42 >"$tmp/out" || status=$?; [[ "$status" -eq 8 ]]
+run pr-checks 42 --required >"$tmp/out"
+grep -Fq '| Required CI | success | Required |' "$tmp/out"
+if grep -Fq 'Optional CI' "$tmp/out"; then exit 1; fi
+for state in failure pending missing unknown; do
+  status=0; CHECK_STATE="$state" run pr-checks 42 --required >"$tmp/out" || status=$?
+  if [[ "$state" == failure || "$state" == unknown ]]; then [[ "$status" -eq 1 ]]; else [[ "$status" -eq 8 ]]; fi
+done
+READINESS_FAIL=1 expect_failure 1 'readiness refused' pr-checks 42 --required
+PR_COUNT=0 expect_failure 1 'found 0' pr-url feature
+PR_COUNT=2 expect_failure 1 'found 2' pr-url feature
+LIST_FAIL=1 expect_failure 1 'list refused' pr-url feature
+MISSING_PR=1 expect_failure 1 'PR not found' pr-url 42
+DISCOVERY_FAIL=1 expect_failure 1 'discovery refused' pr-url 42
+REPO_NAME=other/project expect_failure 1 'different repository' pr-url 42
+git -C "$tmp/repo" config prLookup.remote absent
+expect_failure 1 'configured PR remote does not exist' pr-url 42
+git -C "$tmp/repo" config prLookup.remote origin
+expect_failure 1 'does not match' pr-url https://other.example.invalid/team/project/pull/42
+expect_failure 1 'does not match' pr-url https://native.example.invalid/other/project/pull/42
+expect_failure 1 'does not match' pr-url https://reviews.example.invalid/repos/other/project/pulls/42
+[[ "$(run pr-for-commit "$commit")" == "$url" ]]
+# A number or legacy trailer is merely a hint. API membership supplies proof.
+HEAD_SHA=unrelated PAGINATED=1 run pr-for-commit "$commit" >"$tmp/out"
+grep -Fxq "$url" "$tmp/out"
+grep -Fq 'per_page=100&page=2' "$CALLS"
+HEAD_SHA=unrelated PAGINATED=1 PAGE_FAIL=1 expect_failure 1 'commit page refused' pr-for-commit "$commit"
+HEAD_SHA=unrelated REPEAT_PAGE=1 expect_failure 1 'repeated PR commit page' pr-for-commit "$commit"
+PR_COUNT=100 expect_failure 1 'too many PR candidates' pr-for-commit "$commit"
+HEAD_SHA=unrelated NO_ASSOC=1 expect_failure 1 'no verified native pull request found' pr-for-commit "$commit"
+PR_COUNT=2 expect_failure 1 'multiple native pull requests found' pr-for-commit "$commit"
+HEAD_SHA=unrelated MERGE_SHA="$commit" NO_ASSOC=1 run pr-for-commit "$commit" >"$tmp/out"
+grep -Fxq "$url" "$tmp/out"
+# No subject hint: use a containing branch, still with exact SHA verification.
+[[ "$(COMMIT="$base" run pr-for-commit "$base")" == "$url" ]]
+# Detached HEAD requires an explicit number or URL for PR inspection.
+git -C "$tmp/repo" checkout -q --detach
+expect_failure 1 'detached HEAD' pr-url
+[[ "$(run pr-url 42)" == "$url" ]]
+# Remote-only discovery does not require a provider override.
+git -C "$tmp/repo" config --unset-all prLookup.provider
+[[ "$(run pr-url 42)" == "$url" ]]
+# Explicit provider + routing and SSH remote discovery are supported.
+git -C "$tmp/repo" config prLookup.provider native
+git -C "$tmp/repo" remote set-url origin git@native.example.invalid:team/project.git
+[[ "$(run pr-url 42)" == "$url" ]]
+git -C "$tmp/repo" remote remove origin
+git -C "$tmp/repo" config --unset-all prLookup.remote
+git -C "$tmp/repo" config prLookup.host native.example.invalid
+git -C "$tmp/repo" config prLookup.repo team/project
+[[ "$(run pr-url 42)" == "$url" ]]
+# Missing tooling must fail without touching the GitHub mirror.
+mv "$tmp/bin/review-cli" "$tmp/bin/review-cli.saved"
+# Keep PATH isolated from any machine's real review-cli.
+mkdir "$tmp/system"
+for tool in git ruby bash dirname tr; do ln -s "$(command -v "$tool")" "$tmp/system/$tool"; done
+status=0
+(cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$tmp/system" "$root/bin/git-pr-url" 42) >"$tmp/out" 2>"$tmp/err" || status=$?
+[[ "$status" -eq 1 ]]
+grep -Fq 'review-cli is required' "$tmp/err" || { cat "$tmp/err"; exit 1; }
+# Distinct full pages must also stop at the hard bound, not loop forever.
+ruby -r "$root/bin/lib/pr_lookup.rb" -e '
+  adapter = PRLookup::Native.new("https://reviews.example.invalid", "team/project")
+  calls = 0
+  adapter.define_singleton_method(:json) do |*command|
+    calls += 1
+    Array.new(100) { |i| {"sha" => "page#{calls}-#{i}"} }
+  end
+  begin
+    adapter.associated?({"number" => 42}, "unrelated")
+    abort "expected pagination bound to fail"
+  rescue RuntimeError => e
+    abort e.message unless e.message.include?("too many PR commit pages") && calls == 100
+  end
+'
+printf 'pr-hosting tests passed\n'

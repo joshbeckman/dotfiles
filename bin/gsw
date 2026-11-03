@@ -35,9 +35,12 @@ under_agent() {
 }
 
 has_help_flag() {
-  local arg
-  for arg in "$@"; do
-    case "$arg" in -h|--help) return 0 ;; esac
+  local i
+  local fields=("$@")
+  for ((i = 0; i < ${#fields[@]}; i++)); do
+    if metadata_value_option "${fields[i]}"; then ((i+=1)); continue; fi
+    case "${fields[i]}" in --body|-b|--body-file|-F) ((i+=1)); continue ;; esac
+    case "${fields[i]}" in -h|--help) return 0 ;; esac
   done
   return 1
 }
@@ -60,17 +63,41 @@ writes_prose() {
 }
 
 trailer_tmp=""
+metadata_value_option() {
+  case "$1" in
+    --title|-t|--base|-B|--head|-H|--repo|-R) return 0 ;;
+    --assignee|-a|--reviewer|-r|--label|-l|--project|-p) return 0 ;;
+    --milestone|-m|--template|-T|--recover|--attach|--reason) return 0 ;;
+    --add-assignee|--remove-assignee|--add-reviewer|--remove-reviewer) return 0 ;;
+    --add-label|--remove-label|--add-project|--remove-project|--type|--parent) return 0 ;;
+    --blocked-by|--blocking|--add-blocked-by|--remove-blocked-by) return 0 ;;
+    --add-blocking|--remove-blocking|--add-sub-issue|--remove-sub-issue) return 0 ;;
+  esac
+  return 1
+}
+
 inject_trailer() {
   local presentation="${1:-artifact}"
   local i idx=-1 kind="" value="" joined=0 content already=0 trailer
   for ((i = 0; i < ${#args[@]}; i++)); do
+    if metadata_value_option "${args[i]}"; then
+      [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gsw: metadata option requires a value' >&2; return 2; }
+      ((i+=1))
+      continue
+    fi
     case "${args[i]}" in
       --body|-b)
-        kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0
+        [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gsw: body option requires a value' >&2; return 2; }
+        kind=inline; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1))
         ;;
       --body-file|-F)
-        kind=file; idx=$i; value="${args[i + 1]-}"; joined=0
+        [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gsw: body-file option requires a value' >&2; return 2; }
+        kind=file; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1))
         ;;
+      -b=*) kind=inline; idx=$i; value="${args[i]#-b=}"; joined=1 ;;
+      -b?*) kind=inline; idx=$i; value="${args[i]#-b}"; joined=1 ;;
+      -F=*) kind=file; idx=$i; value="${args[i]#-F=}"; joined=1 ;;
+      -F?*) kind=file; idx=$i; value="${args[i]#-F}"; joined=1 ;;
       --body=*)
         kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1
         ;;
@@ -86,7 +113,7 @@ inject_trailer() {
   [[ $idx -ge 0 ]] || return 0
 
   if [[ $kind == file ]]; then
-    if [[ $value == "-" ]]; then content="$(cat)"; else content="$(cat "$value")"; fi
+    if [[ $value == "-" ]]; then content="$(cat)"; else content="$(cat -- "$value")"; fi
   else
     content="$value"
   fi

@@ -22,6 +22,7 @@ printf '%s\n' "$*" >>"$CALLS"
 trap 'printf "%s\n" "${FAKE_STDOUT:-}"; printf "%s" "${FAKE_STDERR:-}" >&2; exit "${FAKE_STATUS:-0}"' EXIT
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[0]:-} ${args[1]:-}" == "pr review" && "${args[i]}" == --comment ]]; then continue; fi
   case "${args[i]}" in
     --body-file|-F)
       cat "${args[i + 1]}" >"$CAPTURE"
@@ -120,6 +121,99 @@ $historical
 
 $trailer
 "
+
+# Exercise the real wrapper parsers, not a stub of the wrapper boundary.
+printf 'From file.\n' >"$tmp/body with spaces"
+for wrapper in gw gsw; do
+  for option in '-bShort body.' '-b=Short body.'; do
+    "$root/bin/$wrapper" pr comment 1 "$option"
+    assert_capture "$trailer
+
+> Short body.
+"
+  done
+  for option in "-F$tmp/body with spaces" "-F=$tmp/body with spaces"; do
+    "$root/bin/$wrapper" pr comment 1 "$option"
+    assert_capture "$trailer
+
+> From file.
+"
+  done
+  printf 'Already attributed.\n\n%s\n' "$trailer" | "$root/bin/$wrapper" pr review 1 --comment -F-
+  assert_capture "Already attributed.
+
+$trailer
+"
+done
+for option in '-cClosing note.' '-c=Closing note.'; do
+  "$root/bin/gw" pr close 1 "$option"
+  assert_capture "$trailer
+
+> Closing note.
+"
+done
+
+# A prose value is data even when it begins with another short option.
+for wrapper in gw gsw; do
+  for body in '-bhello' '-Fbody-file' '--body=literal'; do
+    "$root/bin/$wrapper" pr comment 1 --body "$body"
+    assert_capture "$trailer
+
+> $body
+"
+  done
+  printf 'Leading filename.\n' >"$tmp/-Fbody-file"
+  (cd "$tmp" && "$root/bin/$wrapper" pr comment 1 --body-file '-Fbody-file')
+  assert_capture "$trailer
+
+> Leading filename.
+"
+  rc=0
+  "$root/bin/$wrapper" pr comment 1 --body >"$tmp/missing-body.out" 2>"$tmp/missing-body.err" || rc=$?
+  [[ $rc -eq 2 ]]
+  grep -Fq 'requires a value' "$tmp/missing-body.err"
+done
+for body in '-chello' '-c=literal'; do
+  "$root/bin/gw" pr close 1 --comment "$body"
+  assert_capture "$trailer
+
+> $body
+"
+done
+
+# Metadata values are not flags, even after the body option.
+for wrapper in gw gsw; do
+  for title in '-bTitle' '--body=Title' '-h'; do
+    "$root/bin/$wrapper" pr edit 1 --body hello --title "$title"
+    assert_capture "hello
+
+$trailer
+"
+    tail -n 1 "$CALLS" >"$tmp/metadata-call"
+    grep -Fq -- "--title $title" "$tmp/metadata-call"
+  done
+  "$root/bin/$wrapper" pr edit 1 --body hello --add-label '-FLabel'
+  assert_capture "hello
+
+$trailer
+"
+  tail -n 1 "$CALLS" >"$tmp/metadata-call"
+  grep -Fq -- '--add-label -FLabel' "$tmp/metadata-call"
+  "$root/bin/$wrapper" pr comment 1 --body '--help'
+  assert_capture "$trailer
+
+> --help
+"
+done
+
+# Review short switches are booleans, unlike their create-command aliases.
+for option in -a -r; do
+  "$root/bin/gw" pr review 1 "$option" --body 'Review note.'
+  assert_capture "$trailer
+
+> Review note.
+"
+done
 
 # GW-01: a pana session's bash tool has none of the harness variables the stub
 # above fakes, so the wrapper tests use the real generator. That is also how gw and
