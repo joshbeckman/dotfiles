@@ -121,15 +121,27 @@ module PRLookup
     [provider, host, repo.empty? ? '-' : repo]
   end
 
+  def executable?(command)
+    paths = command.include?('/') ? [command] : ENV.fetch('PATH', '').split(File::PATH_SEPARATOR).map { |dir| File.join(dir, command) }
+    paths.any? { |path| File.file?(path) && File.executable?(path) }
+  end
+
+  def selected_cli(provider)
+    candidates = case provider
+    when 'github' then executable?('gh') ? %w[gw gh] : []
+    when 'native' then [native_cli]
+    when 'legacy' then executable?('gs') ? %w[gsw gs] : []
+    end
+    candidates.find { |command| executable?(command) }
+  end
+
   def classification(selector)
     provider, host, repo = route(selector)
     scoped = provider != 'legacy'
     {
       provider: provider, host: host, repo: repo == '-' ? nil : repo,
-      read_cli: {'github' => 'gw', 'native' => native_cli, 'legacy' => nil}.fetch(provider),
-      write_cli: {'github' => 'gw', 'native' => 'pr-native-write', 'legacy' => nil}.fetch(provider),
-      capabilities: {view: scoped, url: scoped, checks: scoped, merged: scoped, write: scoped, for_commit: scoped},
-      read_commands: scoped ? %w[git-pr-view git-pr-url git-pr-checks git-pr-merged git-pr-for-commit] : []
+      cli: selected_cli(provider),
+      helper_capabilities: {view: scoped, url: scoped, checks: scoped, merged: scoped, for_commit: scoped}
     }
   end
 

@@ -85,7 +85,7 @@ Many small utilities. [Agent coordination](.agents/skills/agent-teams/SKILL.md) 
 
 Run any script with `--help` or read the source — they're short.
 
-PR helpers discover the owning host and capabilities with `git pr-host` before routing reads or attributed writes. Load `pr-lookup` and the repository's current workflow; use `git pr-write` for PR prose. Public instructions remain provider-neutral, while client selection and live service guidance stay machine-local. Never infer a provider from URL path shape or treat a mirror as authoritative.
+Select the repository's client with `git pr-cli`, then inspect its native help. `git pr-host` provides structured host/repository context for optional read helpers. Load `pr-lookup` and the repository's current workflow before commands. Public instructions remain provider-neutral, while client selection and live service guidance stay machine-local. Never infer a provider from URL path shape or treat a mirror as authoritative.
 
 ## Conventions
 

@@ -71,6 +71,10 @@ inject_trailer() {
       --body-file|-F)
         kind=file; idx=$i; value="${args[i + 1]-}"; joined=0
         ;;
+      -b=*) kind=inline; idx=$i; value="${args[i]#-b=}"; joined=1 ;;
+      -b?*) kind=inline; idx=$i; value="${args[i]#-b}"; joined=1 ;;
+      -F=*) kind=file; idx=$i; value="${args[i]#-F=}"; joined=1 ;;
+      -F?*) kind=file; idx=$i; value="${args[i]#-F}"; joined=1 ;;
       --body=*)
         kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1
         ;;

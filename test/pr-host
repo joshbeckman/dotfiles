@@ -6,16 +6,20 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/repo" "$tmp/bin"
 git -C "$tmp/repo" init -q -b feature
+for client in gh gw gs gsw; do
+  printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/$client"
+  chmod +x "$tmp/bin/$client"
+done
 run() { (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git pr-host "$@"); }
 check() {
   run "$@" >"$tmp/out"
-  ruby -rjson -e 'j=JSON.parse(File.read(ARGV[0])); abort j.inspect unless j["provider"] == ARGV[1] && j["host"] == ARGV[2] && j["repo"] == (ARGV[3] == "null" ? nil : ARGV[3]); abort j.inspect unless (j["read_cli"] == (ARGV[4] == "null" ? nil : ARGV[4])) && (j["write_cli"] == (ARGV[5] == "null" ? nil : ARGV[5])); abort j.inspect unless j.fetch("capabilities").fetch("view") == (j["provider"] != "legacy") && j.fetch("capabilities").fetch("write") == (j["provider"] != "legacy")' "$tmp/out" "$provider" "$host" "$repo" "$read_cli" "$write_cli"
+  ruby -rjson -e 'j=JSON.parse(File.read(ARGV[0])); abort j.inspect unless j["provider"] == ARGV[1] && j["host"] == ARGV[2] && j["repo"] == (ARGV[3] == "null" ? nil : ARGV[3]); abort j.inspect unless j["cli"] == ARGV[4]; abort j.inspect unless j.fetch("helper_capabilities").fetch("view") == (j["provider"] != "legacy"); abort j.inspect if j.key?("write_cli")' "$tmp/out" "$provider" "$host" "$repo" "$cli"
 }
 fail() {
   if run "$@" >"$tmp/out" 2>"$tmp/err"; then echo 'expected classifier failure' >&2; exit 1; fi
   [[ ! -s "$tmp/out" ]]
 }
-provider=github host=https://github.com repo=example/project read_cli=gw write_cli=gw
+provider=github host=https://github.com repo=example/project cli=gw
 check https://github.com/example/project/pull/42
 fail https://github.com/example/project/issues/42
 fail https://github.com:8443/example/project/pull/42
@@ -39,7 +43,7 @@ abort 'wrong discovery route' unless ARGV == ['--host', 'https://reviews.example
 puts JSON.generate(full_name: ENV.fetch('REPO_NAME', 'team/project'), html_url: "#{ENV.fetch('CANONICAL_HOST', 'https://reviews.example.invalid')}/team/project")
 RUBY
 chmod +x "$tmp/bin/review-cli"
-provider=native host=https://reviews.example.invalid repo=team/project read_cli=review-cli write_cli=pr-native-write
+provider=native host=https://reviews.example.invalid repo=team/project cli=review-cli
 check
 check feature
 check 42
@@ -63,8 +67,8 @@ git -C "$tmp/repo" config --unset-all prLookup.remote
 git -C "$tmp/repo" remote remove origin
 git -C "$tmp/repo" config prLookup.provider legacy
 git -C "$tmp/repo" config prLookup.urlTemplate 'https://old-reviews.example.invalid/repos/team/project/pulls/{number}'
-provider=legacy host=https://old-reviews.example.invalid repo=null read_cli=null write_cli=null
-# Template-only binding reports no invented repository and no write capability.
+provider=legacy host=https://old-reviews.example.invalid repo=null cli=gsw
+# Template-only binding reports no invented repository and no target-bound helper capability.
 check 42
 check https://old-reviews.example.invalid/repos/team/project/pulls/42
 fail https://old-reviews.example.invalid/repos/other/project/pulls/42

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/repo" "$tmp/bin"
+git -C "$tmp/repo" init -q -b feature
+ln -s "$(command -v git)" "$tmp/bin/git"
+for name in gh gw gs gsw; do
+  printf '#!/bin/sh\nexit 0\n' >"$tmp/bin/$name"
+  chmod +x "$tmp/bin/$name"
+done
+run() { (cd "$tmp/repo" && PATH="$tmp/bin:/usr/bin:/bin" "$root/bin/git-pr-cli" "$@"); }
+fail() {
+  if run "$@" >"$tmp/out" 2>"$tmp/err"; then echo 'expected client selection failure' >&2; exit 1; fi
+  [[ ! -s "$tmp/out" ]]
+}
+git -C "$tmp/repo" remote add origin https://github.com/example/project.git
+[[ "$(run)" == gw ]]
+[[ "$(run https://github.com/other/project/pull/42)" == gw ]]
+mv "$tmp/bin/gw" "$tmp/gw.saved"
+[[ "$(run)" == gh ]]
+# An attribution wrapper without its underlying client is not usable.
+mv "$tmp/bin/gh" "$tmp/gh.saved"
+mv "$tmp/gw.saved" "$tmp/bin/gw"
+fail
+mv "$tmp/gh.saved" "$tmp/bin/gh"
+fail https://unrelated.example.invalid/other/project/pull/42
+fail --unknown
+fail 42 43
+
+git -C "$tmp/repo" remote set-url origin https://reviews.example.invalid/team/project.git
+git -C "$tmp/repo" config prLookup.cli review-cli
+cat >"$tmp/bin/review-cli" <<'RUBY'
+#!/usr/bin/env ruby
+require 'json'
+abort 'discovery refused' if ENV['DISCOVERY_FAIL']
+abort 'wrong target' unless ARGV == ['--host', 'https://reviews.example.invalid', '-R', 'team/project', 'repo', 'view', '--json']
+puts JSON.generate(full_name: ENV.fetch('REPO_NAME', 'team/project'), html_url: 'https://reviews.example.invalid/team/project')
+RUBY
+chmod +x "$tmp/bin/review-cli"
+[[ "$(run)" == review-cli ]]
+[[ "$(run 42)" == review-cli ]]
+DISCOVERY_FAIL=1 fail
+REPO_NAME=other/project fail
+mv "$tmp/bin/review-cli" "$tmp/review.saved"
+fail
+mv "$tmp/review.saved" "$tmp/bin/review-cli"
+
+git -C "$tmp/repo" config prLookup.provider legacy
+git -C "$tmp/repo" config prLookup.host old-reviews.example.invalid
+git -C "$tmp/repo" config prLookup.repo team/project
+[[ "$(run)" == gsw ]]
+mv "$tmp/bin/gsw" "$tmp/gsw.saved"
+[[ "$(run)" == gs ]]
+mv "$tmp/bin/gs" "$tmp/gs.saved"
+fail
+"$root/bin/git-pr-cli" --help >"$tmp/out"
+grep -Fq 'selected installed client' "$tmp/out"
+printf 'pr-cli tests passed\n'

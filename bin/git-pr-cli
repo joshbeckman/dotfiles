@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+# Select the repository's client; its own help defines the command interface.
+require_relative 'lib/pr_lookup'
+
+if ARGV == ['--help'] || ARGV == ['-h']
+  puts 'Usage: git pr-cli [PR_URL|PR_NUMBER|BRANCH]'
+  puts 'Print the selected installed client; inspect that client with --help.'
+  exit 0
+end
+if ARGV.length > 1 || ARGV.any? { |arg| arg.start_with?('-') }
+  warn 'Usage: git pr-cli [PR_URL|PR_NUMBER|BRANCH]'
+  exit 2
+end
+begin
+  provider, = PRLookup.route(ARGV.fetch(0, ''))
+  client = PRLookup.selected_cli(provider)
+  raise 'no supported client is installed for the classified repository' unless client
+  raise 'client path contains unsupported control characters' if client.match?(/[\r\n\0]/)
+  puts client
+rescue StandardError => error
+  warn "git pr-cli: #{error.message}"
+  exit 1
+end

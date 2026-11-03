@@ -36,11 +36,17 @@ inject_trailer() {
     if [[ $mode == comment ]]; then
       case "${args[i]}" in
         --comment | -c) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        -c=*) kind=inline; idx=$i; value="${args[i]#-c=}"; joined=1 ;;
+        -c?*) kind=inline; idx=$i; value="${args[i]#-c}"; joined=1 ;;
         --comment=*) kind=inline; idx=$i; value="${args[i]#--comment=}"; joined=1 ;;
       esac
     else
       case "${args[i]}" in
         --body | -b) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        -b=*) kind=inline; idx=$i; value="${args[i]#-b=}"; joined=1 ;;
+        -b?*) kind=inline; idx=$i; value="${args[i]#-b}"; joined=1 ;;
+        -F=*) kind=file; idx=$i; value="${args[i]#-F=}"; joined=1 ;;
+        -F?*) kind=file; idx=$i; value="${args[i]#-F}"; joined=1 ;;
         --body=*) kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1 ;;
         --body-file | -F) kind=file; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
         --body-file=*) kind=file; idx=$i; value="${args[i]#--body-file=}"; joined=1 ;;
@@ -71,14 +77,19 @@ inject_trailer() {
   # original owner for a rewrite they did not make.
   local trailer
   trailer="$(agent-trailer)"
+  local already=0
   if printf '%s\n' "$content" | grep -Fqx -- "$trailer"; then
-    return 0
+    already=1
+    # Reading stdin consumed it; preserve an already-attributed body in a file.
+    if [[ ! ( $kind == file && $value == "-" ) ]]; then return 0; fi
   fi
 
-  if [[ $presentation == conversation ]]; then
-    content="$trailer"$'\n\n'"$(printf '%s\n' "$content" | sed 's/^/> /; s/^> $/>/')"
-  else
-    content="$content"$'\n\n'"$trailer"
+  if [[ $already -eq 0 ]]; then
+    if [[ $presentation == conversation ]]; then
+      content="$trailer"$'\n\n'"$(printf '%s\n' "$content" | sed 's/^/> /; s/^> $/>/')"
+    else
+      content="$content"$'\n\n'"$trailer"
+    fi
   fi
 
   # --comment has no file variant, so the attributed body rides inline; args

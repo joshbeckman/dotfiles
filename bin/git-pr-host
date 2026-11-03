@@ -4,7 +4,7 @@ require_relative 'lib/pr_lookup'
 
 if ARGV == ['--help'] || ARGV == ['-h']
   puts 'Usage: git pr-host [PR_URL|PR_NUMBER|BRANCH]'
-  puts 'Print JSON with provider, host, repo, read_cli, write_cli, and read capabilities.'
+  puts 'Print JSON with provider, host, repo, selected cli, and lookup-helper capabilities.'
   exit 0
 end
 if ARGV.length > 1 || ARGV.any? { |arg| arg.start_with?('-') }
