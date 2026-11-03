@@ -1374,7 +1374,7 @@ describeBrowser("pana in a browser", () => {
 		]);
 		const seeded = await seedSession("make it long");
 		await open();
-		const view = await evaluatePage<{ fromBottom: number; stickyTop: number; topbar: number; controls: boolean }>(`
+		const view = await evaluatePage<{ fromBottom: number; scrollTop: number; stickyTop: number; topbar: number; controls: boolean }>(`
 			location.hash = "#/sessions/${seeded.session.id}";
 			await until(() => !document.getElementById("session").hidden);
 			await until(() => document.getElementById("transcript").textContent.includes("the newest entry"));
@@ -1384,13 +1384,16 @@ describeBrowser("pana in a browser", () => {
 			const stop = document.querySelector("[data-testid=session-stop]").getBoundingClientRect();
 			return {
 				fromBottom: root.scrollHeight - root.scrollTop - root.clientHeight,
+				scrollTop: root.scrollTop,
 				stickyTop: sticky.top,
 				topbar: document.querySelector(".topbar").getBoundingClientRect().bottom,
 				controls: stop.top >= 0 && stop.bottom <= innerHeight,
 			};
 		`);
 		expect(view.fromBottom).toBeLessThan(2);
-		expect(Math.abs(view.stickyTop - view.topbar)).toBeLessThan(4);
+		// Folded tool outputs can make the newest page fit without scrolling: sticky has not engaged.
+		if (view.scrollTop > 0) expect(Math.abs(view.stickyTop - view.topbar)).toBeLessThan(4);
+		else expect(view.stickyTop).toBeGreaterThanOrEqual(view.topbar);
 		expect(view.controls).toBe(true);
 
 		// The header shows the session's pana:// URL, as a thread's header does.

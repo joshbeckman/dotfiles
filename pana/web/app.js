@@ -4406,6 +4406,12 @@ document.addEventListener("visibilitychange", () => {
 	else void resumeApp().catch(() => {});
 });
 
+// Keep sticky content below the actual header when mobile navigation wraps or fonts load.
+const topbar = document.querySelector(".topbar");
+const measureTopbar = () => document.documentElement.style.setProperty("--topbar-h", `${topbar.getBoundingClientRect().height}px`);
+measureTopbar();
+new ResizeObserver(measureTopbar).observe(topbar);
+
 // The thread from a notification click arrives as `?thread=<id>` (PSH-03).
 const bootParams = new URLSearchParams(location.search);
 if (bootParams.get("thread")) history.replaceState(null, "", `/#/threads/${bootParams.get("thread")}`);

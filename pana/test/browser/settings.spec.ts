@@ -86,12 +86,6 @@ describeBrowser("settings", () => {
 		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, ui: { userColor: "green", future: { keep: true } }, maxDailyUsd: 25 }, configRevision: "revision-1" });
 		expect(saved.notice).toContain("Restart");
 		expect(saved.warning).toContain("Restart required");
-		if (process.env.PANA_SETTINGS_SHOTS) {
-			mkdirSync(process.env.PANA_SETTINGS_SHOTS, { recursive: true });
-			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-desktop.png"));
-			await emulateViewport("390x844x1,mobile,touch", "dark");
-			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-phone-dark.png"));
-		}
 		const conflict = await evaluatePage<{ draft: string; revision: string; error: string; color: string }>(`
 			const editor = document.getElementById("settings-config");
 			editor.value = JSON.stringify({...window.settingsFixture.config,maxDailyUsd:30,ui:{...window.settingsFixture.config.ui,userColor:"purple"}}); editor.dispatchEvent(new Event("input"));
@@ -152,6 +146,10 @@ describeBrowser("settings", () => {
 			document.getElementById("reply-body").value = "Keep my draft";
 			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};
 		`)).toEqual({ user: "red", domain: "black" });
+		if (process.env.PANA_SETTINGS_SHOTS) {
+			mkdirSync(process.env.PANA_SETTINGS_SHOTS, { recursive: true });
+			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "thread-color-before.png"));
+		}
 		const settings = await t.client.get<any>("/settings");
 		const saved = await t.client.post("/settings", {
 			config: { ...settings.body.config, ui: { ...settings.body.config.ui, userColor: "purple" } },
@@ -165,6 +163,7 @@ describeBrowser("settings", () => {
 				head:window.colorHead === window.__pana.state.draft.after,
 				all:[...document.querySelectorAll('[data-user-color="true"]')].every(n=>n.dataset.color === "purple")};
 		`)).toEqual({ same: true, domain: "black", draft: "Keep my draft", head: true, all: true });
+		if (process.env.PANA_SETTINGS_SHOTS) copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "thread-color-after.png"));
 		expect(await evaluatePage(`
 			location.hash = "#/settings";
 			await until(() => !document.getElementById("settings-config").disabled);
@@ -175,5 +174,12 @@ describeBrowser("settings", () => {
 			await until(() => document.getElementById("settings-status").textContent.includes("saved"));
 			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};
 		`)).toEqual({ user: "green", domain: "black" });
+		// Mobile emulation can reload the page; capture last, after all fixture/draft assertions.
+		if (process.env.PANA_SETTINGS_SHOTS) {
+			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-desktop.png"));
+			await emulateViewport("390x844x1,mobile,touch", "dark");
+			await evaluatePage(`await until(() => document.getElementById("settings-user-color").value === "green" && !document.getElementById("settings-config").disabled); return true;`);
+			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-phone-dark.png"));
+		}
 	});
 });
