@@ -71,10 +71,17 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 	const common = realPath(await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
 	const name = safeName(input.name ?? basename(repo));
 	const adapter = runtime.config?.worktreeAdapters?.find((a) => realPath(a.repo) === common);
-	const treeName = `pana-${safeName(sessionId)}-${name}`;
-	const path = adapter
+	// External materializers commonly require lowercase IDs; use that portable form up front.
+	const treeName = `pana-${safeName(sessionId)}-${name}`.toLowerCase();
+	let path = adapter
 		? join(realPath(adapter.root), treeName, adapter.subdir ?? "")
 		: join(realPath(runtime.paths.dir), "worktrees", sessionId, name);
+	if (adapter) {
+		// Do not relocate a previously verified owned tree created with the old case-preserving ID.
+		const legacyPath = join(realPath(adapter.root), `pana-${safeName(sessionId)}-${name}`, adapter.subdir ?? "");
+		if (legacyPath !== path && owners(runtime.paths.dir).some((o) =>
+			o.path === legacyPath && o.session === sessionId && o.common === common && checkoutCommon(o.path) === common)) path = legacyPath;
+	}
 	const previous = pending.get(path) ?? Promise.resolve();
 	const work = previous.catch(() => {}).then(async () => {
 		if (realPath(path) !== resolve(path)) throw ApiError.badRequest("invalid_worktree", "worktree destination contains a symlink");

@@ -18,7 +18,8 @@ machine's Pana `config.json`, not in a public project or shared memory:
 `repo` must match `git rev-parse --path-format=absolute --git-common-dir` from any
 checkout of that repository. The create executable runs in the source checkout,
 with arguments passed directly (no shell evaluation). It must create the expected
-checkout at `root/pana-SESSION-NAME/subdir` on `{branch}`, reusing an existing branch
+checkout at `root/pana-session-name/subdir` on `{branch}` (the generated external tree ID
+is lowercase, including session and name), reusing an existing branch
 if its own lifecycle supports that. `{repo}` is the source checkout path, not the
 shared git directory; `{path}` is the full expected checkout path. Omit `subdir` for
 repositories whose checkout is the tree directory itself. Use absolute paths in
@@ -27,7 +28,8 @@ configuration; `~` and environment variables are not expanded.
 Both `pana worktree add REPO` and profiles with `cwd: "worktree"` use this adapter.
 Ordinary repositories still use Pana's state layout, but profile-created trees now
 use `<state>/worktrees/<session>/<repo-name>`, like the API. Existing profile cwd values
-and state-layout trees remain usable. Always use the returned path.
+and state-layout trees remain usable. Previously verified owned adapter trees retain
+their original paths, including case-preserving IDs. Always use the returned path.
 
 A command exit of zero is not enough: Pana checks the path, shared repository,
 branch, and worktree-specific git registration/back-pointer before publishing ownership.
