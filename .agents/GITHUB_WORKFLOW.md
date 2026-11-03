@@ -10,7 +10,7 @@ Use the PR surface owned by the repository, not a mirror or a URL path guess:
 
 Use the `pr-lookup` skill for cross-provider PR reads, `gw view-md` for GitHub issue reads, and the issue system's owning tool for other issue operations. Machine-specific hosts, repositories, and provider configuration belong in supported local setup, not shared instructions. Do not change Git configuration when the repository forbids it.
 
-Assign a Delta PR with `dtw pr edit <PR> --add-assignee <verified-identity>`; on GitHub use `gw pr edit <PR> --add-assignee @me`. Keep new PRs draft. `dtw` accepts explicit `--body`/`--body-file`, including stdin; it refuses implicit agent `submit` descriptions. Push through the repository-supported Git remote, then use `dtw pr create/edit` with a body instead. Do not install or redirect native tools to another host to work around a failure.
+Assign a Delta PR with `dtw pr edit <PR> --add-assignee <verified-identity>`; on GitHub use `gw pr edit <PR> --add-assignee @me`. Keep new PRs draft. `dtw` accepts explicit `--body`/`--body-file`, including stdin. Agent attachment writes require an explicit body; the wrapper refuses implicit agent `submit` descriptions. Push through the repository-supported Git remote, then use `dtw pr create/edit` with a body instead. Do not install or redirect native tools to another host to work around a failure.
 
 ## References
 

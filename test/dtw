@@ -79,6 +79,24 @@ class Dtw(unittest.TestCase):
         args = self.run_dtw('pr', 'review', '-F' + str(path))
         self.assertEqual('--body=' + TRAILER + '\n\n> joined', args[-1])
 
+    def test_short_equals_body_and_file_syntax(self):
+        args = self.run_dtw('pr', 'comment', '-b=hello')
+        self.assertEqual('--body=' + TRAILER + '\n\n> hello', args[-1])
+        path = self.home / 'equals.md'
+        path.write_text('file')
+        args = self.run_dtw('pr', 'review', '-F=' + str(path))
+        self.assertEqual('--body=' + TRAILER + '\n\n> file', args[-1])
+        self.assertEqual(['pr', 'comment', '-b=hello'], self.run_dtw('pr', 'comment', '-b=hello', human=True))
+
+    def test_attachment_only_agent_writes_are_refused(self):
+        for verb in ('review', 'edit', 'create', 'comment'):
+            self.run_dtw('pr', verb, '--attach', 'demo.png#alt', success=False)
+            self.run_dtw('pr', verb, '--attach=demo.png#alt', success=False)
+            args = self.run_dtw('pr', verb, '--body', 'description', '--attach', 'demo.png#alt')
+            self.assertTrue(any(TRAILER in arg for arg in args))
+        args = ('pr', 'review', '--attach', 'demo.png#alt')
+        self.assertEqual(list(args), self.run_dtw(*args, human=True))
+
     def test_human_native_and_file_bodies_preserve_trailing_newlines(self):
         body = 'human\n\n'
         for flags in [('--body', body), ('-b', body), ('--body=' + body,), ('-b' + body,)]:

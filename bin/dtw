@@ -75,12 +75,16 @@ attribute() {
   esac
 }
 body_count=0
+has_attachment=0
 for ((i=subcommand_index+1; i<${#args[@]}; i++)); do
   kind='' value=''
   case "${args[i]}" in
     --body|-b|--body-file|-F)
       [[ $((i+1)) -lt ${#args[@]} ]] || { echo 'dtw: missing body value' >&2; exit 2; }
       kind="${args[i]}"; value="${args[i+1]}"; joined=0 ;;
+    -b=*) kind='--body'; value="${args[i]#-b=}"; joined=1 ;;
+    -F=*) kind='--body-file'; value="${args[i]#-F=}"; joined=1 ;;
+    --attach|--attach=*) has_attachment=1; continue ;;
     -b?*) kind='--body'; value="${args[i]#-b}"; joined=1 ;;
     -F?*) kind='--body-file'; value="${args[i]#-F}"; joined=1 ;;
     --body=*|--body-file=*) kind="${args[i]%%=*}"; value="${args[i]#*=}"; joined=1 ;;
@@ -109,6 +113,10 @@ for ((i=subcommand_index+1; i<${#args[@]}; i++)); do
   if [[ $joined -eq 1 ]]; then args[i]="--body=$value"; else args[i]='--body'; args[i+1]="$value"; ((i+=1)); fi
   body_count=$((body_count+1))
 done
+if [[ $is_agent -eq 1 && $has_attachment -eq 1 && $body_count -eq 0 ]]; then
+  echo 'dtw: agent attachments require an explicit --body or --body-file for attribution' >&2
+  exit 2
+fi
 if [[ $is_agent -eq 1 ]] && [[ "$cmd $subcmd" == 'pr create' || "$cmd $subcmd" == 'pr comment' ]]; then
   [[ $body_count -gt 0 ]] || { echo 'dtw: agent prose creation requires an explicit --body or --body-file' >&2; exit 2; }
 fi
