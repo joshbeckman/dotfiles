@@ -28,7 +28,7 @@ export interface HttpConfig {
 	port: number;
 }
 
-/** How hard a session is kept out of the user's primary checkouts (GUARD-01, GUARD-06). */
+/** File-path protection and optional filesystem isolation for unowned checkouts. */
 export type CheckoutGuard = "guard" | "sandbox" | "off";
 
 export const CHECKOUT_GUARDS: readonly CheckoutGuard[] = ["guard", "sandbox", "off"];
@@ -37,9 +37,10 @@ export interface ToolsConfig {
 	/** The time limit of a `bash` call that names none of its own (ISO-05). */
 	bashTimeoutSec: number;
 	/**
-	 * `guard` refuses a write in a checkout and a command that enters one, for no measurable cost;
-	 * `sandbox` adds the per-call mount namespace that makes it impossible (~2 ms per checkout);
-	 * `off` disables both.
+	 * `guard` protects file-tool writes and the actual execution cwd, not Bash command text;
+	 * `sandbox` additionally mounts unowned checkouts read-only where namespaces are supported;
+	 * `off` disables checkout protection. Without a supported sandbox, Bash writes rely on
+	 * the instructed worktree workflow rather than a shell-command allowlist.
 	 */
 	protectCheckouts: CheckoutGuard;
 }

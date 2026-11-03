@@ -20,7 +20,6 @@ import { browserScope } from "./browser.ts";
 import type { CheckoutGuard } from "../config/index.ts";
 import {
 	primaryCheckoutOf,
-	checkoutCommandRefusal,
 	primaryCheckoutRefusal,
 	primaryCheckouts,
 	realPath,
@@ -53,7 +52,7 @@ export interface PanaEnvOptions {
 	scratchDir?: string;
 	/** Overrides `HOME`, for a host whose session home differs from panad's. Default: panad's `HOME`. */
 	home?: string;
-	/** GUARD-01/06: how hard to keep a session out of the user's checkouts. `tools.protectCheckouts`. */
+	/** File-path protection and optional filesystem isolation. `tools.protectCheckouts`. */
 	protectCheckouts?: CheckoutGuard;
 	/** Where to scan for primary checkouts (GUARD-04). HOME by default; a test names its own root. */
 	checkoutRoots?: readonly string[];
@@ -269,8 +268,9 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 			inheritEnv: false,
 			env: { ...this.panaEnv, ...options?.env },
 		};
-		// GUARD-06: the admission check every call gets, which costs string work rather than a
-		// process. `sandbox` adds GUARD-02's mounts on top, for what the check cannot see.
+		// Ownership is checked against actual paths, never inferred from shell command text.
+		// In guard mode Bash isolation relies on the worktree workflow; sandbox additionally
+		// mounts unowned checkouts read-only where the host supports user namespaces.
 		let checkouts: string[] = [];
 		if (this.protectCheckouts !== "off") {
 			const receipts = this.stateDir ? owners(this.stateDir) : [];
@@ -278,18 +278,7 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 			if (cwdRoot && !this.allowed(cwdRoot, receipts)) {
 				return err(new ExecutionError("unknown", `pana refused execution in an unowned checkout: ${cwdRoot}. Use your own worktree as cwd.`));
 			}
-			checkouts = this.checkouts(receipts);
-			const peerPaths = new Set(receipts.filter((o) => o.session !== this.sessionId).map((o) => o.path));
-			const refusal = checkoutCommandRefusal(typeof command === "string" ? command : command.join(" "), {
-				cwd: this.cwd,
-				home: this.home,
-				checkouts,
-				noFastForward: this.stateDir ? checkouts.filter((root) =>
-					under(realPath(join(this.stateDir!, "worktrees")), root) ||
-					under(realPath(join(this.stateDir!, "memory", "worktrees")), root) ||
-					peerPaths.has(root)) : [],
-			});
-			if (refusal !== undefined) return err(new ExecutionError("unknown", refusal));
+			if (this.protectCheckouts === "sandbox" && this.namespace !== false) checkouts = this.checkouts(receipts);
 		}
 		const mounts = this.protectCheckouts === "sandbox" && this.namespace !== false ? checkouts : [];
 		if (mounts.length === 0) return super.exec(command, execOptions, context);
