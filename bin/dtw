@@ -81,18 +81,31 @@ for ((i=subcommand_index+1; i<${#args[@]}; i++)); do
     --body|-b|--body-file|-F)
       [[ $((i+1)) -lt ${#args[@]} ]] || { echo 'dtw: missing body value' >&2; exit 2; }
       kind="${args[i]}"; value="${args[i+1]}"; joined=0 ;;
+    -b?*) kind='--body'; value="${args[i]#-b}"; joined=1 ;;
+    -F?*) kind='--body-file'; value="${args[i]#-F}"; joined=1 ;;
     --body=*|--body-file=*) kind="${args[i]%%=*}"; value="${args[i]#*=}"; joined=1 ;;
     --file-comment)
       [[ $((i+1)) -lt ${#args[@]} ]] || { echo 'dtw: missing file comment' >&2; exit 2; }
+      [[ $is_agent -eq 1 ]] || { ((i+=1)); continue; }
       value="${args[i+1]}"; [[ "$value" == *=* ]] || { echo 'dtw: file comment must be PATH=BODY' >&2; exit 2; }
       args[i+1]="${value%%=*}=$(attribute "${value#*=}")"; ((i+=1)); continue ;;
     --file-comment=*)
+      [[ $is_agent -eq 1 ]] || continue
       value="${args[i]#*=}"; [[ "$value" == *=* ]] || { echo 'dtw: file comment must be PATH=BODY' >&2; exit 2; }
       args[i]="--file-comment=${value%%=*}=$(attribute "${value#*=}")"; continue ;;
     *) continue ;;
   esac
-  case "$kind" in --body-file|-F) if [[ "$value" == '-' ]]; then value=$(cat); else value=$(cat -- "$value"); fi ;; esac
-  value=$(attribute "$value")
+  case "$kind" in
+    --body-file|-F)
+      if [[ "$value" == '-' ]]; then value=$(cat && printf '.'); else value=$(cat -- "$value" && printf '.'); fi
+      value="${value%.}" ;;
+    *)
+      if [[ $is_agent -eq 0 ]]; then
+        [[ $joined -eq 1 ]] || ((i+=1))
+        continue
+      fi ;;
+  esac
+  [[ $is_agent -eq 0 ]] || value=$(attribute "$value")
   if [[ $joined -eq 1 ]]; then args[i]="--body=$value"; else args[i]='--body'; args[i+1]="$value"; ((i+=1)); fi
   body_count=$((body_count+1))
 done

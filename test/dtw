@@ -69,6 +69,30 @@ class Dtw(unittest.TestCase):
         args = self.run_dtw('pr', 'comment', '--body-file=-', input=body)
         self.assertEqual('--body=' + TRAILER + '\n\n> ' + body.replace('\n', '\n> '), args[-1])
 
+    def test_joined_short_body_flags_are_attributed(self):
+        for verb in ('create', 'edit', 'review', 'comment'):
+            args = self.run_dtw('pr', verb, '-bhello')
+            expected = f'{TRAILER}\n\n> hello' if verb in ('review', 'comment') else f'hello\n\n{TRAILER}'
+            self.assertEqual('--body=' + expected, args[-1])
+        path = self.home / 'joined.md'
+        path.write_text('joined')
+        args = self.run_dtw('pr', 'review', '-F' + str(path))
+        self.assertEqual('--body=' + TRAILER + '\n\n> joined', args[-1])
+
+    def test_human_native_and_file_bodies_preserve_trailing_newlines(self):
+        body = 'human\n\n'
+        for flags in [('--body', body), ('-b', body), ('--body=' + body,), ('-b' + body,)]:
+            args = self.run_dtw('pr', 'comment', *flags, human=True)
+            self.assertEqual(['pr', 'comment', *flags], args)
+        args = self.run_dtw('pr', 'comment', '--body-file=-', input=body, human=True)
+        self.assertEqual('--body=' + body, args[-1])
+        path = self.home / 'newlines.md'
+        path.write_text(body)
+        args = self.run_dtw('pr', 'comment', '-F' + str(path), human=True)
+        self.assertEqual('--body=' + body, args[-1])
+        args = self.run_dtw('pr', 'review', '--file-comment', 'a.rb=' + body, human=True)
+        self.assertEqual('a.rb=' + body, args[-1])
+
     def test_exact_current_trailer_is_not_duplicated(self):
         body = 'other attribution\nCo-authored-by: AI someone-else\n' + TRAILER
         args = self.run_dtw('pr', 'review', '--body', body)
