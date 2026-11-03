@@ -229,9 +229,16 @@ export function checkoutCommandRefusal(
 	}
 
 	for (const match of command.matchAll(MUTATOR)) {
-		for (const token of (match[1] ?? "").split(/\s+/)) {
-			const root = inside(token);
-			if (root !== undefined) return refusedEntry(root);
+		const after = command.slice((match.index ?? 0) + match[0].length);
+		const words = shellWords(after);
+		if (match[1] === "sed" && readOnlySed(words)) continue;
+		// Script arguments may themselves name output files. Keep checking their path words,
+		// and fail conservatively when expansion prevents literal argument classification.
+		for (const word of words.length ? words : after.split(/\s+/)) {
+			for (const token of [word, ...word.split(/\s+/)]) {
+				const root = inside(token);
+				if (root !== undefined) return refusedEntry(root);
+			}
 		}
 	}
 	return undefined;
@@ -245,9 +252,16 @@ const GIT_C = /(?:^|[\s;&|(`])-C\s+("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 const GIT_DIR = /(?:^|[\s;&|(`])--git-dir[=\s]("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
 /** A shell redirect's target: `> path`, `>> path`. */
 const REDIRECT = /(?:^|[^0-9<>])>>?\s*("[^"]*"|'[^']*'|[^\s;&|()`]+)/g;
-/** A command that writes its arguments, with everything up to the next separator as its words. */
+/** Candidate mutators; their arguments need quote-aware command boundaries. */
 const MUTATOR =
-	/(?:^|[\s;&|(`])(?:rm|mv|cp|ln|touch|mkdir|rmdir|tee|truncate|chmod|chown|dd|install|rsync|sed|perl|patch)\s+([^;&|`]*)/g;
+	/(?:^|[\s;&|(`])(rm|mv|cp|ln|touch|mkdir|rmdir|tee|truncate|chmod|chown|dd|install|rsync|sed|perl|patch)\s+/g;
+/** Only literal print scripts are admitted: absence of -i is not proof that sed cannot write. */
+function readOnlySed(words: readonly string[]): boolean {
+	const [option, script, ...files] = words;
+	return option === "-n" && /^(?:[0-9]+(?:,(?:[0-9]+|\$))?)?p$/.test(script ?? "") &&
+		files.length > 0 && files.every((file) => !file.startsWith("-"));
+}
+
 /** Git subcommands that only read; `git -C <checkout> log` is how a session inspects the user's work. */
 const READ_ONLY_GIT = new Set([
 	"status",
@@ -369,8 +383,12 @@ const REMOTE_URL = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|[^/\s:]+@[^/\s:]+:)/;
 
 /** The words of the git invocation `match` found, up to the next shell separator. */
 function gitWords(command: string, match: RegExpMatchArray): string[] {
-	const after = command.slice((match.index ?? 0) + match[0].length);
-	// Keep quoted format strings intact: splitting at a quoted `(` can hide later write flags.
+	return shellWords(command.slice((match.index ?? 0) + match[0].length));
+}
+
+/** Literal words up to the next unquoted command separator; expansions fail classification. */
+function shellWords(after: string): string[] {
+	// Keep quoted scripts/format strings intact: splitting inside one can hide later write flags.
 	const words: string[] = [];
 	let word = "";
 	let started = false;
