@@ -594,7 +594,7 @@ describeBrowser("pana in a browser", () => {
 		const reply = await t!.client.post(`/threads/${first.thread.id}/messages`, { after: joined.body.message.id, body: "New session reply" }, { caller: second.session.id });
 		expect(reply.status).toBe(200);
 		const thread = await t!.client.get<{ thread: { participants: Array<{ url: string; kind: string }> } }>(`/threads/${first.thread.id}`);
-		const expected = participantColor(second.session.url, thread.body.thread.participants);
+		const expected = participantColor(second.session.url, { participants: thread.body.thread.participants });
 		const stale = await evaluatePage<{ color: string; draft: string }>(`
 			document.getElementById("reply-form").requestSubmit();
 			await until(() => !document.getElementById("stale").hidden);

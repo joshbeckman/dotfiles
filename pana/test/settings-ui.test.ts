@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, validUserColor, userColorPickerValue, userColorFromPicker, participantColor, PALETTE } from "../web/views.js";
+import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, validUserColor, userColorPickerValue, userColorFromPicker, participantColor, participantPattern, PALETTE } from "../web/views.js";
 import { routeFromHash } from "../web/links.js";
 import { matchCommands, paletteCommands } from "../web/palette.js";
 
@@ -36,12 +36,23 @@ describe("user message color", () => {
 		expect(configUserColor({ ui: { future: true } })).toBe("blue");
 		for (const color of Object.keys(PALETTE)) {
 			expect(configUserColor({ ui: { userColor: color } })).toBe(color);
-			expect(participantColor(user, color)).toBe(color);
-			expect(participantColor(user.url, color)).toBe(color);
-			expect(participantColor(session, color)).toBe(participantColor(session));
-			expect(participantColor("pana://test.example", color)).toBe("black");
+			expect(participantColor(user, { userColor: color })).toBe(color);
+			expect(participantColor(user.url, { userColor: color })).toBe(color);
+			expect(participantColor(session, { userColor: color })).toBe(participantColor(session));
+			expect(participantColor("pana://test.example", { userColor: color })).toBe("black");
 		}
-		expect(participantColor(user, "toString")).toBe("blue");
+		expect(participantColor(user, { userColor: "toString" })).toBe("blue");
+	});
+	it("keeps thread-roster session colors and overflow patterns unchanged when user color changes", () => {
+		const sessions = Array.from({ length: 14 }, (_, i) => `pana://test.example/sessions/${i}`);
+		const user = "pana://test.example/users/tester";
+		const participants = [user, "pana://test.example", ...sessions];
+		const before = sessions.map((session) => [participantColor(session, { participants }), participantPattern(session, participants)]);
+		for (const userColor of ["red", "#abc", "#12345678"]) {
+			expect(participantColor(user, { participants, userColor })).toBe(userColor);
+			expect(sessions.map((session) => [participantColor(session, { participants, userColor }), participantPattern(session, participants)])).toEqual(before);
+		}
+		expect(before[12]).toEqual([before[0]![0], "dashed"]);
 	});
 	it("pairs native RGB picking with arbitrary hex entry without losing alpha", () => {
 		expect(userColorPickerValue("blue")).toBe("#002fa7");
@@ -69,7 +80,7 @@ describe("user message color", () => {
 			expect(validUserColor(color)).toBe(true);
 			expect(configUserColor({ ui: { userColor: color } })).toBe(color);
 			expect(configWithUserColor({}, color).ui.userColor).toBe(color);
-			expect(participantColor({ kind: "user" }, color)).toBe(color);
+			expect(participantColor({ kind: "user" }, { userColor: color })).toBe(color);
 		}
 		for (const color of ["#12", "#12345", "#1234567", "#123456789", "#ggg", "#fff; color:red", "url(x)", null]) expect(validUserColor(color)).toBe(false);
 	});

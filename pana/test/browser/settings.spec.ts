@@ -139,14 +139,25 @@ describeBrowser("settings", () => {
 	it("applies hello and cross-window settings.ui to existing user nodes without replacing messages or drafts", async () => {
 		t = await startTestPanad({ config: { ui: { userColor: "red" } } });
 		const notice = await postNotice(t.runtime, { body: "Color test notice" });
-		const sent = await t.client.post(`/threads/${notice.thread.id}/messages`, { after: notice.message.id, body: "My colored message" });
+		const sessionId = t.runtime.newId();
+		const sessionUrl = t.runtime.url({ kind: "session", id: sessionId });
+		const now = t.clock.now();
+		await t.runtime.db.write(async (tx) => {
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", sessionId, sessionUrl, now);
+			await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'stopped', 0, ?, ?)", sessionId, now, now);
+		});
+		const sent = await t.client.post<any>(`/threads/${notice.thread.id}/messages`, { after: notice.message.id, body: "My colored message", cc: [sessionId] });
 		expect(sent.status).toBe(200);
+		expect((await t.client.post(`/threads/${notice.thread.id}/messages`, { after: sent.body.message.id, body: "Session identity stays stable" }, { caller: sessionId })).status).toBe(200);
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
 		expect(await evaluatePage(`
 			location.hash = "#/threads/${notice.thread.id}";
 			await until(() => document.querySelector('#thread-messages .message[data-user-color="true"]'));
 			window.colorUser = document.querySelector('#thread-messages .message[data-user-color="true"]');
 			window.colorDomain = document.querySelector('#thread-messages .message[data-user-color="false"]');
+			window.colorSession = document.querySelector('#thread-messages .message[data-sender="${sessionUrl}"]');
+			window.colorSessionIdentity = {color:window.colorSession.dataset.color,pattern:window.colorSession.dataset.pattern,border:getComputedStyle(window.colorSession).borderLeftColor};
+			if(window.colorSessionIdentity.color !== "session-1") throw new Error("Thread-local session color missing");
 			window.colorHead = window.__pana.state.draft.after;
 			document.getElementById("reply-body").value = "Keep my draft";
 			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};
@@ -164,6 +175,8 @@ describeBrowser("settings", () => {
 		expect(await evaluatePage(`
 			await until(() => window.colorUser.dataset.color === "#AbC123");
 			if(window.colorUser.style.getPropertyValue("--who") !== "#AbC123") throw new Error("Custom CSS color not applied");
+			const identity = {color:window.colorSession.dataset.color,pattern:window.colorSession.dataset.pattern,border:getComputedStyle(window.colorSession).borderLeftColor};
+			if(JSON.stringify(identity) !== JSON.stringify(window.colorSessionIdentity)) throw new Error("User color changed session identity");
 			return {same:window.colorUser === document.querySelector('#thread-messages .message[data-user-color="true"]'),
 				domain:window.colorDomain.dataset.color,draft:document.getElementById("reply-body").value,
 				head:window.colorHead === window.__pana.state.draft.after,

@@ -149,15 +149,17 @@ let settingsBusy = false;
 let settingsRestarting = false;
 
 /** Mark user-colored nodes explicitly: palette colors may also belong to sessions. */
-function colorParticipant(node, participant) {
+function participantIdentity(node, participant, participants = state.thread?.participants ?? []) {
 	const url = typeof participant === "string" ? participant : participant?.url ?? "";
 	const kind = typeof participant === "string" ? "" : participant?.kind;
 	node.dataset.userColor = String(kind === "user" || (!kind && /^pana:\/\/[^/]+\/users\//.test(url)));
-	setVisualColor(node, participantColor(participant, state.userColor));
+	setVisualColor(node, participantColor(participant, { participants, userColor: state.userColor }));
+	node.dataset.pattern = participantPattern(participant, participants);
 }
 
 function setVisualColor(node, color) {
-	node.dataset.color = color;
+	if (color) node.dataset.color = color;
+	else delete node.dataset.color;
 	if (validUserColor(color) && color.startsWith("#")) node.style.setProperty("--who", color);
 	else node.style.removeProperty("--who");
 }
@@ -801,14 +803,6 @@ function copyingLink(link, url) {
 		}
 	});
 	return link;
-}
-
-/** Apply thread-local identity to every border/swatch from the same participant ordering. */
-function participantIdentity(node, person, participants = state.thread?.participants ?? []) {
-	const color = participantColor(person, participants);
-	if (color) node.dataset.color = color;
-	else delete node.dataset.color;
-	node.dataset.pattern = participantPattern(person, participants);
 }
 
 /** A participant as a short, colored name that links to its view (REF-08, UX-06). */

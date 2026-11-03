@@ -521,7 +521,7 @@ A reply draft records the thread head when it opens. If the thread moves before 
 
 Both composers attach files: an Attach button, a file dropped anywhere on the composer, or a screenshot pasted into the message box. The bytes upload to `panad` before the message is sent, and the body gets the same Markdown reference `--attach` writes, so the message reads the same either way.
 
-Each participant keeps one color in every thread: the user chooses a hex color in Settings (blue by default), the domain's notices are black, and each session keeps the style guide palette color its URL hashes to. Opening a thread shows its newest message; a message link shows that message.
+The user keeps their chosen hex color across threads (blue by default), and domain notices remain black. Session identities are allocated within each thread from its append-ordered participant roster, using twelve generated colors and four overflow patterns; they do not change when the user changes their color. Opening a thread shows its newest message; a message link shows that message.
 
 While a session works, it shows just above the reply box in its own color with a pulsing dot and what it is doing, such as "running bash · 3m", and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
 

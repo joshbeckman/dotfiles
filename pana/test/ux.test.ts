@@ -436,11 +436,11 @@ describe("UX-06 participant colors", () => {
 		expect(participantColor("pana://a.example")).toBe("black");
 		const urls = Array.from({ length: 49 }, (_, i) => `pana://a.example/sessions/session${i}`);
 		expect(participantColor(urls[0]!)).toBeUndefined();
-		const colors = urls.map((url) => participantColor(url, urls));
+		const colors = urls.map((url) => participantColor(url, { participants: urls }));
 		expect(SESSION_COLORS).toHaveLength(12);
 		expect(new Set(colors.slice(0, SESSION_COLORS.length)).size).toBe(SESSION_COLORS.length);
 		expect(colors[SESSION_COLORS.length]).toBe(colors[0]);
-		const identities = urls.map((url) => `${participantColor(url, urls)}:${participantPattern(url, urls)}`);
+		const identities = urls.map((url) => `${participantColor(url, { participants: urls })}:${participantPattern(url, urls)}`);
 		expect(new Set(identities.slice(0, 48)).size).toBe(48);
 		expect(identities[48]).toBe(identities[0]);
 		expect(participantPattern(urls[12]!, urls)).toBe("dashed");
@@ -448,12 +448,12 @@ describe("UX-06 participant colors", () => {
 		for (const color of colors) expect(SESSION_COLORS).toContain(color);
 		// Appending a participant, duplicate membership, or a user/domain cannot recolor a prefix.
 		const original = urls.slice(0, 3);
-		expect(original.map((url) => participantColor(url, original))).toEqual(colors.slice(0, 3));
+		expect(original.map((url) => participantColor(url, { participants: original }))).toEqual(colors.slice(0, 3));
 		const people = ["pana://a.example/users/josh", ...urls, urls[0]!, "pana://a.example"];
-		expect(urls.map((url) => participantColor({ url, kind: "session" }, people))).toEqual(colors);
+		expect(urls.map((url) => participantColor({ url, kind: "session" }, { participants: people }))).toEqual(colors);
 		// Reloads are deterministic, but another thread can give the same session another color.
-		expect(urls.map((url) => participantColor(url, JSON.parse(JSON.stringify(urls))))).toEqual(colors);
-		expect(participantColor(urls[0]!, [urls[1]!, urls[0]!])).not.toBe(colors[0]);
+		expect(urls.map((url) => participantColor(url, { participants: JSON.parse(JSON.stringify(urls)) }))).toEqual(colors);
+		expect(participantColor(urls[0]!, { participants: [urls[1]!, urls[0]!] })).not.toBe(colors[0]);
 	});
 
 	it("UX-06 identity swatches contrast against both themes and start with separated colors", () => {
@@ -465,7 +465,7 @@ describe("UX-06 participant colors", () => {
 		for (const hex of Object.values(SESSION_TEXT_PALETTE)) expect(1.05/(luminance(hex)+0.05)).toBeGreaterThan(4.5);
 		for (const hex of Object.values(SESSION_DARK_PALETTE)) expect((luminance(hex)+0.05)/(luminance("#0d0d0d")+0.05)).toBeGreaterThan(4.5);
 		const participants = ["pana://a.example/sessions/a", "pana://a.example/sessions/b"];
-		expect(participants.map((url) => participantColor(url, participants))).toEqual(["session-1", "session-2"]);
+		expect(participants.map((url) => participantColor(url, { participants }))).toEqual(["session-1", "session-2"]);
 	});
 
 	it("UX-06 all twelve colors pass pairwise normal and color-vision audits in both themes", () => {

@@ -542,7 +542,7 @@ describeBrowser("pana usability in a browser", () => {
 		`);
 		expect(new Set(identities.slice(0, 12).map((identity) => identity.color)).size).toBe(12);
 		for (const identity of identities) {
-			expect(identity.color).toBe(participantColor(identity.sender, created.body.thread.participants));
+			expect(identity.color).toBe(participantColor(identity.sender, { participants: created.body.thread.participants }));
 			expect(identity.pattern).toBe(participantPattern(identity.sender, created.body.thread.participants));
 			expect(identity.line).toBe(identity.pattern);
 		}
@@ -979,7 +979,7 @@ describeBrowser("pana usability in a browser", () => {
 		const sessionId = seeded!.capital.sessionId;
 		const sessionUrl = seeded!.capital.sessionUrl;
 		const thread = (await t.client.get(`/threads/${threadId}`)).body as { thread: { participants: Array<{ url: string; kind: string }> } };
-		const color = participantColor({ url: sessionUrl, kind: "session" }, thread.thread.participants);
+		const color = participantColor({ url: sessionUrl, kind: "session" }, { participants: thread.thread.participants });
 
 		// The session is idle, so the inbox row carries no mark.
 		await evaluatePage(`await until(() => document.querySelectorAll("#inbox-list [data-thread]").length >= 3); return true;`);
@@ -1065,7 +1065,7 @@ describeBrowser("pana usability in a browser", () => {
 		const sessionId = seeded!.capital.sessionId;
 		const sessionUrl = seeded!.capital.sessionUrl;
 		const thread = (await t.client.get(`/threads/${threadId}`)).body as { thread: { participants: Array<{ url: string; kind: string }> } };
-		const color = participantColor({ url: sessionUrl, kind: "session" }, thread.thread.participants);
+		const color = participantColor({ url: sessionUrl, kind: "session" }, { participants: thread.thread.participants });
 
 		// The session is idle and has nothing scheduled, so nothing sits above the reply box.
 		await evaluatePage(`
