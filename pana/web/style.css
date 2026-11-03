@@ -33,7 +33,7 @@
 	--font-condensed: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
 	--font-mono: "Berkeley Mono", "IBM Plex Mono", ui-monospace, monospace;
 	--font-signal: "Departure Mono", var(--font-mono);
-	--control-h: 2.25rem;
+	--control-h: 2rem;
 }
 @media (prefers-color-scheme: dark) {
 	:root {
@@ -435,6 +435,11 @@ select {
 	background: var(--c-bg);
 	border: 1px solid var(--c-border);
 	border-radius: var(--radius);
+}
+/* Single-line fields align with compact buttons; multiline text keeps its reading rhythm. */
+input:not([type="checkbox"]),
+select {
+	line-height: 1.25;
 }
 input[type="checkbox"] {
 	margin: 0;
@@ -1592,11 +1597,7 @@ kbd {
 	#nav::-webkit-scrollbar {
 		display: none;
 	}
-	/* Thumbs: a session's controls take the full 44 px target instead of 36 px. */
-	.view-header .header-actions button,
-	.view-header .header-actions .button {
-		min-height: 2.75rem;
-	}
+	/* Session controls keep the compact shared height, including on narrow screens. */
 	/* The message menu keeps its size on screen but takes a thumb's 44 px target around itself. */
 	.message-menu > summary {
 		position: relative;
