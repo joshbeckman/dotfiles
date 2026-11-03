@@ -35,20 +35,26 @@ inject_trailer() {
   for ((i = 0; i < ${#args[@]}; i++)); do
     if [[ $mode == comment ]]; then
       case "${args[i]}" in
-        --comment | -c) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --comment | -c)
+          [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: comment option requires a value' >&2; return 2; }
+          kind=inline; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1)) ;;
         -c=*) kind=inline; idx=$i; value="${args[i]#-c=}"; joined=1 ;;
         -c?*) kind=inline; idx=$i; value="${args[i]#-c}"; joined=1 ;;
         --comment=*) kind=inline; idx=$i; value="${args[i]#--comment=}"; joined=1 ;;
       esac
     else
       case "${args[i]}" in
-        --body | -b) kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --body | -b)
+          [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: body option requires a value' >&2; return 2; }
+          kind=inline; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1)) ;;
         -b=*) kind=inline; idx=$i; value="${args[i]#-b=}"; joined=1 ;;
         -b?*) kind=inline; idx=$i; value="${args[i]#-b}"; joined=1 ;;
         -F=*) kind=file; idx=$i; value="${args[i]#-F=}"; joined=1 ;;
         -F?*) kind=file; idx=$i; value="${args[i]#-F}"; joined=1 ;;
         --body=*) kind=inline; idx=$i; value="${args[i]#--body=}"; joined=1 ;;
-        --body-file | -F) kind=file; idx=$i; value="${args[i + 1]-}"; joined=0 ;;
+        --body-file | -F)
+          [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gw: body-file option requires a value' >&2; return 2; }
+          kind=file; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1)) ;;
         --body-file=*) kind=file; idx=$i; value="${args[i]#--body-file=}"; joined=1 ;;
       esac
     fi
@@ -66,7 +72,7 @@ inject_trailer() {
     if [[ $value == "-" ]]; then
       content="$(cat)"
     else
-      content="$(cat "$value")"
+      content="$(cat -- "$value")"
     fi
   else
     content="$value"

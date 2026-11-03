@@ -66,10 +66,12 @@ inject_trailer() {
   for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
       --body|-b)
-        kind=inline; idx=$i; value="${args[i + 1]-}"; joined=0
+        [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gsw: body option requires a value' >&2; return 2; }
+        kind=inline; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1))
         ;;
       --body-file|-F)
-        kind=file; idx=$i; value="${args[i + 1]-}"; joined=0
+        [[ $((i + 1)) -lt ${#args[@]} ]] || { echo 'gsw: body-file option requires a value' >&2; return 2; }
+        kind=file; idx=$i; value="${args[i + 1]}"; joined=0; ((i+=1))
         ;;
       -b=*) kind=inline; idx=$i; value="${args[i]#-b=}"; joined=1 ;;
       -b?*) kind=inline; idx=$i; value="${args[i]#-b}"; joined=1 ;;
@@ -90,7 +92,7 @@ inject_trailer() {
   [[ $idx -ge 0 ]] || return 0
 
   if [[ $kind == file ]]; then
-    if [[ $value == "-" ]]; then content="$(cat)"; else content="$(cat "$value")"; fi
+    if [[ $value == "-" ]]; then content="$(cat)"; else content="$(cat -- "$value")"; fi
   else
     content="$value"
   fi

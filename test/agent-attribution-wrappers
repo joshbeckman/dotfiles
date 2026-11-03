@@ -153,6 +153,34 @@ for option in '-cClosing note.' '-c=Closing note.'; do
 "
 done
 
+# A prose value is data even when it begins with another short option.
+for wrapper in gw gsw; do
+  for body in '-bhello' '-Fbody-file' '--body=literal'; do
+    "$root/bin/$wrapper" pr comment 1 --body "$body"
+    assert_capture "$trailer
+
+> $body
+"
+  done
+  printf 'Leading filename.\n' >"$tmp/-Fbody-file"
+  (cd "$tmp" && "$root/bin/$wrapper" pr comment 1 --body-file '-Fbody-file')
+  assert_capture "$trailer
+
+> Leading filename.
+"
+  rc=0
+  "$root/bin/$wrapper" pr comment 1 --body >"$tmp/missing-body.out" 2>"$tmp/missing-body.err" || rc=$?
+  [[ $rc -eq 2 ]]
+  grep -Fq 'requires a value' "$tmp/missing-body.err"
+done
+for body in '-chello' '-c=literal'; do
+  "$root/bin/gw" pr close 1 --comment "$body"
+  assert_capture "$trailer
+
+> $body
+"
+done
+
 # GW-01: a pana session's bash tool has none of the harness variables the stub
 # above fakes, so the wrapper tests use the real generator. That is also how gw and
 # gsw detect a caller at all: attribution is one script's job, not three.
