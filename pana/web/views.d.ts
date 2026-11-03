@@ -81,7 +81,7 @@ export const SESSION_PATTERNS: string[];
 export const SESSION_PALETTE: Record<string, string>;
 export const SESSION_DARK_PALETTE: Record<string, string>;
 export const SESSION_TEXT_PALETTE: Record<string, string>;
-export function participantColor(participant: string | { url?: string; kind?: string }, participants?: Array<string | { url?: string; kind?: string }>): string | undefined;
+export function participantColor(participant: string | { url?: string; kind?: string }, options?: { participants?: Array<string | { url?: string; kind?: string }>; userColor?: string }): string | undefined;
 export function participantPattern(participant: string | { url?: string; kind?: string }, participants?: Array<string | { url?: string; kind?: string }>): string;
 export function refLabel(url: string): string;
 export function shortTime(at: number, now?: number, locale?: string): string;
@@ -341,3 +341,6 @@ export interface BuildInfo { sha: string; message: string; dirty: boolean; finge
 export function buildSyncLabel(source: BuildInfo | null, running: BuildInfo | null): string;
 export function buildLabel(build: BuildInfo | null): string;
 export function configFromText(text: string): Record<string, unknown>;
+
+export function configUserColor(config: Record<string, any>): string;
+export function configWithUserColor(config: Record<string, any>, userColor: string): Record<string, any>;

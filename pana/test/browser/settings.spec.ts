@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
+import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { startTestPanad, type TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, screenshot } from "./cli.ts";
@@ -25,7 +26,7 @@ describeBrowser("settings", () => {
 			const realFetch = window.fetch.bind(window);
 			window.settingsCalls = [];
 			window.settingsFixture = {
-				config: {domain:"test.example",user:"tester",future:{enabled:true},maxDailyUsd:10},
+				config: {domain:"test.example",user:"tester",future:{enabled:true},ui:{userColor:"blue",future:{keep:true}},maxDailyUsd:10},
 				configPath:"/tmp/pana-test/config.json",configRevision:"revision-1",configRequiresRestart:false,
 				source:{sha:"1234567890abcdef1234567890abcdef12345678",message:"Add settings page",dirty:false,fingerprint:"source"},
 				processes:[{role:"panad",pid:12345,startedAt:Date.now()-3661000,
@@ -57,25 +58,32 @@ describeBrowser("settings", () => {
 		expect(loaded.age).toContain("Started");
 		expect(loaded.age).toContain("running for");
 		expect(loaded.disabled).toBe(true);
-		const invalid = await evaluatePage<{ error: string; saves: number }>(`
+		const invalid = await evaluatePage<{ error: string; saves: number; colorDisabled: boolean }>(`
 			const editor = document.getElementById("settings-config");
 			editor.value = "{"; editor.dispatchEvent(new Event("input"));
 			document.getElementById("settings-form").requestSubmit();
 			return {error:document.getElementById("settings-config-error").textContent,
-				saves:window.settingsCalls.filter(c=>c.method==="POST").length};
+				saves:window.settingsCalls.filter(c=>c.method==="POST").length,
+				colorDisabled:document.getElementById("settings-user-color").disabled};
 		`);
 		expect(invalid.error).toContain("Invalid JSON");
 		expect(invalid.saves).toBe(0);
+		expect(invalid.colorDisabled).toBe(true);
 		const saved = await evaluatePage<{ body: any; notice: string; warning: string }>(`
 			const editor = document.getElementById("settings-config");
 			editor.value = JSON.stringify({...window.settingsFixture.config,maxDailyUsd:25});
-			editor.dispatchEvent(new Event("input")); document.getElementById("settings-form").requestSubmit();
+			editor.dispatchEvent(new Event("input"));
+			const select = document.getElementById("settings-user-color");
+			if(select.value !== "blue") throw new Error("JSON did not update selector");
+			select.value = "green"; select.dispatchEvent(new Event("change"));
+			if(document.getElementById("settings-color-preview").dataset.color !== "green") throw new Error("Missing preview");
+			document.getElementById("settings-form").requestSubmit();
 			await until(()=>document.getElementById("settings-status").textContent.includes("saved"));
 			return {body:window.settingsCalls.find(c=>c.method==="POST").body,
 				notice:document.getElementById("settings-status").textContent,
 				warning:document.getElementById("settings-config-warning").textContent};
 		`);
-		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, maxDailyUsd: 25 }, configRevision: "revision-1" });
+		expect(saved.body).toEqual({ config: { domain: "test.example", user: "tester", future: { enabled: true }, ui: { userColor: "green", future: { keep: true } }, maxDailyUsd: 25 }, configRevision: "revision-1" });
 		expect(saved.notice).toContain("Restart");
 		expect(saved.warning).toContain("Restart required");
 		if (process.env.PANA_SETTINGS_SHOTS) {
@@ -84,9 +92,9 @@ describeBrowser("settings", () => {
 			await emulateViewport("390x844x1,mobile,touch", "dark");
 			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-phone-dark.png"));
 		}
-		const conflict = await evaluatePage<{ draft: string; revision: string; error: string }>(`
+		const conflict = await evaluatePage<{ draft: string; revision: string; error: string; color: string }>(`
 			const editor = document.getElementById("settings-config");
-			editor.value = JSON.stringify({...window.settingsFixture.config,maxDailyUsd:30}); editor.dispatchEvent(new Event("input"));
+			editor.value = JSON.stringify({...window.settingsFixture.config,maxDailyUsd:30,ui:{...window.settingsFixture.config.ui,userColor:"purple"}}); editor.dispatchEvent(new Event("input"));
 			window.settingsFixture.configRevision = "external-revision";
 			document.getElementById("settings-refresh").click();
 			await until(()=>document.getElementById("settings-status").textContent.includes("unsaved"));
@@ -94,8 +102,9 @@ describeBrowser("settings", () => {
 			document.getElementById("settings-form").requestSubmit();
 			await until(()=>!document.getElementById("settings-config-error").hidden);
 			return {draft:editor.value,revision:window.settingsCalls.filter(c=>c.method==="POST").at(-1).body.configRevision,
-				error:document.getElementById("settings-config-error").textContent};
+				error:document.getElementById("settings-config-error").textContent,color:document.getElementById("settings-user-color").value};
 		`);
+		expect(conflict.color).toBe("purple");
 		expect(JSON.parse(conflict.draft).maxDailyUsd).toBe(30);
 		expect(conflict.revision).toBe("revision-2");
 		expect(conflict.error).toContain("Your draft is kept");
@@ -127,5 +136,44 @@ describeBrowser("settings", () => {
 		expect(unavailable.disabled).toBe(true);
 		expect(unavailable.source).toContain("unavailable");
 		expect(unavailable.overflow).toBe(false);
+	});
+	it("applies hello and cross-window settings.ui to existing user nodes without replacing messages or drafts", async () => {
+		t = await startTestPanad({ config: { ui: { userColor: "red" } } });
+		const notice = await postNotice(t.runtime, { body: "Color test notice" });
+		const sent = await t.client.post(`/threads/${notice.thread.id}/messages`, { after: notice.message.id, body: "My colored message" });
+		expect(sent.status).toBe(200);
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		expect(await evaluatePage(`
+			location.hash = "#/threads/${notice.thread.id}";
+			await until(() => document.querySelector('#thread-messages .message[data-user-color="true"]'));
+			window.colorUser = document.querySelector('#thread-messages .message[data-user-color="true"]');
+			window.colorDomain = document.querySelector('#thread-messages .message[data-user-color="false"]');
+			window.colorHead = window.__pana.state.draft.after;
+			document.getElementById("reply-body").value = "Keep my draft";
+			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};
+		`)).toEqual({ user: "red", domain: "black" });
+		const settings = await t.client.get<any>("/settings");
+		const saved = await t.client.post("/settings", {
+			config: { ...settings.body.config, ui: { ...settings.body.config.ui, userColor: "purple" } },
+			configRevision: settings.body.configRevision,
+		});
+		expect(saved.status).toBe(200);
+		expect(await evaluatePage(`
+			await until(() => window.colorUser.dataset.color === "purple");
+			return {same:window.colorUser === document.querySelector('#thread-messages .message[data-user-color="true"]'),
+				domain:window.colorDomain.dataset.color,draft:document.getElementById("reply-body").value,
+				head:window.colorHead === window.__pana.state.draft.after,
+				all:[...document.querySelectorAll('[data-user-color="true"]')].every(n=>n.dataset.color === "purple")};
+		`)).toEqual({ same: true, domain: "black", draft: "Keep my draft", head: true, all: true });
+		expect(await evaluatePage(`
+			location.hash = "#/settings";
+			await until(() => !document.getElementById("settings-config").disabled);
+			const color = document.getElementById("settings-user-color");
+			color.value = "green"; color.dispatchEvent(new Event("change"));
+			if(window.colorUser.dataset.color !== "purple") throw new Error("Unsaved preview changed messages");
+			document.getElementById("settings-form").requestSubmit();
+			await until(() => document.getElementById("settings-status").textContent.includes("saved"));
+			return {user:window.colorUser.dataset.color,domain:window.colorDomain.dataset.color};
+		`)).toEqual({ user: "green", domain: "black" });
 	});
 });

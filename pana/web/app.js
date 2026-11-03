@@ -28,6 +28,9 @@ import {
 	buildLabel,
 	buildSyncLabel,
 	configFromText,
+	configUserColor,
+	configWithUserColor,
+	PALETTE,
 	charterBody,
 	charterView,
 	commitView,
@@ -78,6 +81,7 @@ const APPLE = isApplePlatform(navigator.userAgentData?.platform || navigator.pla
 
 const state = {
 	domain: "",
+	userColor: "blue",
 	domainResolved: undefined,
 	section: "inbox",
 	thread: null,
@@ -142,6 +146,38 @@ let settingsConfigRevision;
 let settingsBusy = false;
 let settingsRestarting = false;
 
+/** Mark user-colored nodes explicitly: palette colors may also belong to sessions. */
+function colorParticipant(node, participant) {
+	const url = typeof participant === "string" ? participant : participant?.url ?? "";
+	const kind = typeof participant === "string" ? "" : participant?.kind;
+	node.dataset.userColor = String(kind === "user" || (!kind && /^pana:\/\/[^/]+\/users\//.test(url)));
+	node.dataset.color = participantColor(participant, state.userColor);
+}
+
+function applyUserColor(color) {
+	state.userColor = Object.hasOwn(PALETTE, color) ? color : "blue";
+	for (const node of document.querySelectorAll('[data-user-color="true"]')) node.dataset.color = state.userColor;
+}
+
+function syncSettingsColor() {
+	const select = $("settings-user-color");
+	const preview = $("settings-color-preview");
+	try {
+		const color = configUserColor(configFromText($("settings-config").value));
+		select.value = color;
+		select.disabled = !settingsData || settingsBusy || settingsRestarting;
+		preview.dataset.color = color;
+		preview.textContent = `Your message · ${color}`;
+		$("settings-color-hint").textContent = "Preview only until saved. Your message color applies immediately on save; other configuration changes require a restart.";
+	} catch {
+		select.value = "";
+		select.disabled = true;
+		preview.removeAttribute("data-color");
+		preview.textContent = "Preview unavailable";
+		$("settings-color-hint").textContent = "Fix the JSON and ui.userColor in the editor to use the color selector. Your draft is unchanged.";
+	}
+}
+
 function settingsNotice(text, error = false) {
 	$("settings-status").textContent = text;
 	$("settings-status").classList.toggle("error", error);
@@ -157,6 +193,7 @@ function updateSettingsControls() {
 	$("settings-restart-yes").disabled = settingsBusy || settingsRestarting;
 	$("settings-restart-no").disabled = settingsBusy;
 	$("settings-draft").textContent = changed ? "Unsaved changes" : "";
+	syncSettingsColor();
 }
 
 function renderSettings(data) {
@@ -190,7 +227,7 @@ function renderSettings(data) {
 		? `Configuration on disk is invalid: ${data.configValidationError}. Fix and save it before restarting.`
 		: data.configRequiresRestart
 		? "Saved configuration differs from the running daemon. Restart required to apply it."
-		: "Configuration changes require a daemon restart. Saving writes the file but does not change the running daemon.";
+		: "Your message color applies immediately on save. Other configuration changes require a daemon restart.";
 	updateSettingsControls();
 }
 
@@ -237,7 +274,8 @@ async function saveSettings(event) {
 		settingsSavedText = data.configText ?? (JSON.stringify(data.config, null, 2) + "\n");
 		$("settings-config").value = settingsSavedText;
 		renderSettings(data);
-		settingsNotice("Configuration saved. Restart the daemon to apply changes.");
+		applyUserColor(configUserColor(data.config));
+		settingsNotice("Configuration saved. Your message color is applied. Restart the daemon to apply other changes.");
 	} catch (error) {
 		errorNode.textContent = error.status === 409
 			? `${error.message} Your draft is kept. Copy it before using Reload configuration to read the current file.`
@@ -473,7 +511,12 @@ function handleEvent(event) {
 		applyThreadSubject(event.threadId, event.subject);
 		return;
 	}
+	if (event.kind === "settings.ui") {
+		applyUserColor(event.userColor);
+		return;
+	}
 	if (event.kind === "hello") {
+		applyUserColor(event.userColor);
 		if (typeof event.domain === "string") state.domain = event.domain;
 		state.domainResolved?.();
 		return;
@@ -4202,6 +4245,20 @@ for (const input of [$("palette-input"), $("palette-search-input")]) {
 	input.addEventListener("keydown", onPaletteKeydown);
 }
 
+for (const color of Object.keys(PALETTE)) {
+	const option = document.createElement("option");
+	option.value = color;
+	option.textContent = color[0].toUpperCase() + color.slice(1);
+	$("settings-user-color").append(option);
+}
+$("settings-user-color").addEventListener("change", () => {
+	try {
+		const config = configWithUserColor(configFromText($("settings-config").value), $("settings-user-color").value);
+		$("settings-config").value = JSON.stringify(config, null, 2) + "\n";
+		$("settings-config-error").hidden = true;
+		updateSettingsControls();
+	} catch (error) { settingsNotice(error.message, true); syncSettingsColor(); }
+});
 $("settings-form").addEventListener("submit", (event) => void saveSettings(event));
 $("settings-config").addEventListener("input", () => {
 	$("settings-config-error").hidden = true;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLabel, buildSyncLabel, configFromText } from "../web/views.js";
+import { buildLabel, buildSyncLabel, configFromText, configUserColor, configWithUserColor, participantColor, PALETTE } from "../web/views.js";
 import { routeFromHash } from "../web/links.js";
 import { matchCommands, paletteCommands } from "../web/palette.js";
 
@@ -25,5 +25,35 @@ describe("settings presentation", () => {
 		expect(configFromText('{"future":{"enabled":true},"zero":0}')).toEqual({ future: { enabled: true }, zero: 0 });
 		for (const text of ["[]", "null", "3", '"text"']) expect(() => configFromText(text)).toThrow("JSON object");
 		expect(() => configFromText("{")).toThrow("Invalid JSON");
+	});
+});
+
+describe("user message color", () => {
+	it("defaults to blue and supports every palette name without changing session/domain colors", () => {
+		const user = { url: "pana://test.example/users/tester", kind: "user" };
+		const session = { url: "pana://test.example/sessions/session-id", kind: "session" };
+		expect(configUserColor({})).toBe("blue");
+		expect(configUserColor({ ui: { future: true } })).toBe("blue");
+		for (const color of Object.keys(PALETTE)) {
+			expect(configUserColor({ ui: { userColor: color } })).toBe(color);
+			expect(participantColor(user, color)).toBe(color);
+			expect(participantColor(user.url, color)).toBe(color);
+			expect(participantColor(session, color)).toBe(participantColor(session));
+			expect(participantColor("pana://test.example", color)).toBe("black");
+		}
+		expect(participantColor(user, "toString")).toBe("blue");
+	});
+	it("preserves nested UI and other draft keys without mutating the input", () => {
+		const config = { ui: { userColor: "blue", future: { enabled: true } }, zero: 0, unknown: [1, 2] };
+		expect(configWithUserColor(config, "green")).toEqual({ ...config, ui: { ...config.ui, userColor: "green" } });
+		expect(config.ui.userColor).toBe("blue");
+		expect(configWithUserColor({ unknown: true }, "red")).toEqual({ unknown: true, ui: { userColor: "red" } });
+	});
+	it("does not overwrite malformed UI drafts or accept arbitrary CSS colors", () => {
+		for (const ui of [null, [], "blue", { userColor: "#123456" }, { userColor: "toString" }, { userColor: null }]) {
+			expect(() => configUserColor({ ui })).toThrow();
+			expect(() => configWithUserColor({ ui }, "green")).toThrow();
+		}
+		expect(() => configWithUserColor({}, "cyan")).toThrow();
 	});
 });

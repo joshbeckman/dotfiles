@@ -127,10 +127,10 @@ export function participantPattern(participant, participants = []) {
 }
 
 /** Color within a thread's append-ordered participants. Sessions outside threads have no swatch. */
-export function participantColor(participant, participants = []) {
+export function participantColor(participant, { participants = [], userColor = "blue" } = {}) {
 	const url = typeof participant === "string" ? participant : String(participant?.url ?? "");
 	const kind = typeof participant === "string" ? kindOf(url) : String(participant?.kind || kindOf(url));
-	if (kind === "user") return "blue";
+	if (kind === "user") return Object.hasOwn(PALETTE, userColor) ? userColor : "blue";
 	if (kind === "domain") return "black";
 	const index = sessionIndex(url, participants);
 	return index < 0 ? undefined : SESSION_COLORS[index % SESSION_COLORS.length];
@@ -929,4 +929,20 @@ export function configFromText(text) {
 	catch (error) { throw new Error(`Invalid JSON: ${error.message}`); }
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Configuration must be a JSON object.");
 	return config;
+}
+
+/** Read the draft's color without silently replacing malformed UI configuration. */
+export function configUserColor(config) {
+	if (config.ui === undefined) return "blue";
+	if (!config.ui || typeof config.ui !== "object" || Array.isArray(config.ui)) throw new Error("Configuration ui must be a JSON object.");
+	const color = config.ui.userColor === undefined ? "blue" : config.ui.userColor;
+	if (typeof color !== "string" || !Object.hasOwn(PALETTE, color)) throw new Error("Choose a named palette color for ui.userColor.");
+	return color;
+}
+
+/** Changing the convenience selector preserves all other draft keys. */
+export function configWithUserColor(config, userColor) {
+	configUserColor(config);
+	if (!Object.hasOwn(PALETTE, userColor)) throw new Error("Choose a named palette color for ui.userColor.");
+	return { ...config, ui: { ...config.ui, userColor } };
 }

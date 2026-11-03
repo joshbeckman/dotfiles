@@ -495,7 +495,12 @@
 				<form id="settings-form" class="panel">
 					<h3>Configuration</h3><p id="settings-config-path" class="hint"></p>
 					<p class="hint">Domain and user identify existing records and cannot be changed here. Unknown configuration keys are preserved.</p>
-					<p class="notice" id="settings-config-warning">Configuration changes require a daemon restart. Saving writes the file but does not change the running daemon.</p>
+					<p class="notice" id="settings-config-warning">Your message color applies immediately on save. Other configuration changes require a daemon restart.</p>
+					<div class="field"><label for="settings-user-color">Your message color</label>
+						<select id="settings-user-color" aria-describedby="settings-color-hint" disabled></select>
+						<p id="settings-color-preview" class="settings-color-preview" aria-live="polite">Your message · blue</p>
+						<p id="settings-color-hint" class="hint">Your message color applies immediately on save.</p>
+					</div>
 					<div class="field"><label for="settings-config">Configuration (JSON)</label>
 						<textarea id="settings-config" data-testid="settings-config" rows="20" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="settings-config-warning" disabled></textarea>
 					</div>

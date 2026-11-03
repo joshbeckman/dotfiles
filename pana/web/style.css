@@ -2035,3 +2035,5 @@ kbd {
 .settings-build, #settings-config { font-family: var(--font-mono); font-size: 0.875rem; }
 #settings-config { tab-size: 2; }
 #settings-status:empty { display: none; }
+
+.settings-color-preview { border-left: 4px solid var(--who, var(--c-border)); padding: .75rem; }

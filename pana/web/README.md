@@ -230,7 +230,11 @@ daemon's full commit ID, message, process ID, start time, and ticking age. Commi
 fingerprint differences mark the daemon out of sync; unavailable build metadata stays explicit.
 
 The JSON editor preserves every configuration key, including unknown keys. Saving writes the
-configuration file; a daemon restart is required to apply it. Domain and user cannot change here.
+configuration file. The **Your message color** selector edits `ui.userColor` in that same JSON
+draft and previews a named palette color (blue by default). Saving applies that preference
+immediately to user messages and participant marks, including in other connected windows;
+session colors and black domain notices are unchanged. Other configuration requires a daemon
+restart. Domain and user cannot change here.
 A save carries the revision the editor read, so an external edit is a conflict rather than a lost
 update. Refresh status keeps an unsaved draft and its original revision. Reload configuration
 reads the file again and asks before discarding edits. Copy a conflicted draft before reloading.
@@ -243,4 +247,5 @@ PANA_SETTINGS_SHOTS=/tmp/pana-settings-shots npm run test:web -- test/browser/se
 ```
 
 The browser regression uses a real test-domain shell with deterministic settings responses and
-never restarts the user's daemon. Optional screenshots are desktop and phone/dark, kept out of Git.
+never restarts the user's daemon. A test-domain integration also covers initial and live message
+colors. Optional screenshots are desktop and phone/dark, kept out of Git.
