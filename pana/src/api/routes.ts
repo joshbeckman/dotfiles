@@ -80,6 +80,9 @@ export const ROUTES = [
 	{ method: "GET", pattern: "/push/subscriptions", name: "push.subscriptions.list", wp: "WP8" },
 	{ method: "POST", pattern: "/push/subscriptions", name: "push.subscriptions.create", wp: "WP8" },
 	{ method: "GET", pattern: "/events", name: "events.stream", wp: "WP8" },
+	{ method: "GET", pattern: "/settings", name: "settings.read", wp: "WP0" },
+	{ method: "POST", pattern: "/settings", name: "settings.update", wp: "WP0" },
+	{ method: "POST", pattern: "/settings/restart", name: "settings.restart", wp: "WP0" },
 	// The PWA shell. `web.index` and `web.static` are the only routes that answer without the
 	// bearer token (see `src/web/static.ts`); the catch-all must stay last so it never shadows
 	// an API route.

@@ -122,6 +122,14 @@ tailscale serve --bg 8766
 
 Run `panad` in the foreground with a key in its environment: `s FIREWORKS_API_KEY -- pana/bin/panad`. `PANA_STATE` selects another state directory, for both `panad` and the CLI.
 
+### Settings and daemon version
+
+Open **Settings** in the UI to edit `config.json` as JSON. Optional keys use the defaults in [SPEC.md](SPEC.md#config-and-state); unknown keys are preserved. Saves are validated and reject an intervening file edit. `domain` and `user` are existing data identities, so change neither through this editor. Configuration changes require a restart; saving does not change active sessions halfway through a run.
+
+The page compares source on disk (commit SHA, message and local edits) with the revision captured when panad started, and shows the daemon's PID, start time and age. Missing Git metadata is shown as unknown. One panad serves each state directory; sessions are managed inside it, not separate pana daemon processes.
+
+**Restart pana** confirms the interruption, closes the daemon gracefully, then replaces it with a fresh Node process using the same arguments and environment. This reloads source and configuration without depending on launchd/systemd. It requires macOS/Linux and Node's `execve`; embedded/test servers cannot restart themselves. Restart may interrupt active runs; durable sessions recover at startup. If you change `http.port`, reconnect at the new port (and update your Tailscale Serve forwarding if applicable).
+
 To try pana from this checkout without installing the service, run `pana/scripts/try`. It writes a scratch `config.json` in `~/tmp/pana-try` (`PANA_STATE` overrides) on first run, reads the anthropic, openai, and fireworks keys from pi's `~/.pi/agent/auth.json` into `panad` only, and starts `panad` in the foreground. `--fresh` wipes the scratch state first.
 
 `pana/scripts/smoke` checks a real model end to end on a throwaway state directory: `s FIREWORKS_API_KEY -- pana/scripts/smoke`. Add `--keep` to leave that `panad` running for a look in the PWA.

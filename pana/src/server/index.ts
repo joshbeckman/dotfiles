@@ -3,6 +3,7 @@
 // on SIGTERM (SRV-02), resuming work a previous process left behind (SRV-03), and reporting a
 // daemon that stopped without being asked to (SRV-04).
 
+import { runningRevision } from "../config/source.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { Harness, type HarnessOptions, type HarnessSettings, type Registry } from "@earendil-works/pi-durable";
@@ -35,6 +36,8 @@ import { startScratchSweeper } from "../scratch/index.ts";
 import { startBrowserSweeper, type SweepBrowsersOptions } from "../extension/browser.ts";
 
 export interface StartOptions {
+	/** Entrypoint-owned lifecycle callback; absent for embedded/test servers. */
+	onRestart?: () => void;
 	/** State directory; default `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
 	stateDir?: string;
 	clock?: Clock;
@@ -74,6 +77,8 @@ export interface Panad {
 
 /** Start panad. Throws `ConfigError` with the exit code for config and lock failures. */
 export async function startPanad(options: StartOptions = {}): Promise<Panad> {
+	const clock = options.clock ?? systemClock;
+	const startedAt = clock.now();
 	const dir = options.stateDir ?? defaultStateDir();
 	const config = loadConfig(dir);
 	const paths = ensureStateLayout(dir);
@@ -81,7 +86,6 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 	const cleanup: Array<() => Promise<void> | void> = [releaseLock];
 
 	try {
-		const clock = options.clock ?? systemClock;
 		const onFatal =
 			options.onFatal ??
 			((error: unknown) => {
@@ -122,6 +126,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		let runtime!: Runtime;
 		runtime = {
 			config,
+			processInfo: { startedAt, running: runningRevision, requestRestart: options.onRestart },
 			paths,
 			db,
 			harness,
@@ -294,11 +299,15 @@ export function exitCodeWithoutStop(stopping: boolean, code: number): number {
 /** `panad` entry point. Returns the exit code. `options` lets a test fixture swap in a faux model. */
 export async function main(_argv: string[], options: StartOptions = {}): Promise<number> {
 	let panad: Panad;
+	let restart: (() => void) | undefined;
+	const canRestart = (process.platform === "darwin" || process.platform === "linux") && typeof process.execve === "function";
 	// API-05: answer to the tailnet name Tailscale Serve forwards. Only the entry point asks
 	// tailscale; tests that call startPanad pass names explicitly.
 	const tailscaleNames = options.tailscaleNames ?? (await detectTailscaleNames());
 	try {
-		panad = await startPanad({ ...options, tailscaleNames });
+		panad = await startPanad({ ...options, tailscaleNames,
+			onRestart: canRestart ? () => restart?.() : undefined,
+		});
 	} catch (error) {
 		if (error instanceof ConfigError) {
 			console.error(`panad: ${error.message}`);
@@ -335,17 +344,37 @@ export async function main(_argv: string[], options: StartOptions = {}): Promise
 			console.error(`panad: exited ${code} without a stop request; reporting ${reported} so the service restarts`);
 			process.exitCode = reported;
 		});
+		let restarting = false;
 		const stop = () => {
 			// A second signal means the operator is done waiting: leave now, without a clean close.
 			if (stopping) process.exit(1);
 			stopping = true;
 			panad.close().then(
-				() => resolve(0),
+				() => {
+					if (restarting) {
+						try {
+							// execve replaces this process, retaining its service-manager identity and credentials.
+							process.execve!(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
+								Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)));
+						} catch (error) {
+							console.error("panad: restart failed:", error);
+							resolve(1);
+							return;
+						}
+					}
+					resolve(0);
+				},
 				(error) => {
 					console.error("panad: close failed:", error);
 					resolve(1);
 				},
 			);
+		};
+		restart = () => {
+			if (stopping) return;
+			restarting = true;
+			console.error("panad: restart requested from settings");
+			stop();
 		};
 		process.once("SIGTERM", stop);
 		process.once("SIGINT", stop);

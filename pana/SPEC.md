@@ -42,6 +42,12 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 - [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `web-token`. `web-token` has mode 0600.
 - [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
+### Settings
+
+- [x] **SET-01** User-only settings reads and atomic, validated saves of `config.json`; preserve unknown keys, reject stale revisions and domain/user identity changes. Saved configuration takes effect on restart, not halfway through a running session.
+- [x] **SET-02** Report the current source commit SHA/message and local edits separately from the revision captured at daemon startup. Missing Git metadata is unknown, never a false match.
+- [x] **SET-03** The panad entrypoint reports its start time and supports user-requested graceful re-exec on macOS/Linux. Acknowledge before closing; preserve argv/environment and reload configuration and source. Embedded runtimes report restart unavailable.
+
 ### IDs and URLs
 
 - [x] **ID-01** New IDs are monotonic ULIDs. Two IDs made in the same millisecond sort in creation order.
@@ -102,6 +108,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/objectives/:id/limits` | set or clear the objective's limits (the user only), one event per change |
 | GET, POST | `/push/key`, `/push/subscriptions` | Web Push |
 | POST | `/worktrees` | a session makes a worktree of a repository (GUARD-03) |
+| GET, POST | `/settings` | user-only configuration and source/runtime status; save with `configRevision` |
+| POST | `/settings/restart` | user-only graceful daemon restart |
 | GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake` |
 
 - [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`.

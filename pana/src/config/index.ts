@@ -132,7 +132,12 @@ export function loadConfig(dir = stateDir()): Config {
 	} catch (error) {
 		throw new ConfigError(`config.json is not valid JSON: ${(error as Error).message}`, 2);
 	}
-	if (typeof raw !== "object" || raw === null) {
+	return parseConfig(raw);
+}
+
+/** Validate the same configuration shape at startup and before a settings save. */
+export function parseConfig(raw: unknown): Config {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
 		throw new ConfigError("config.json must be a JSON object", 2);
 	}
 	const obj = raw as Record<string, unknown>;
@@ -144,6 +149,20 @@ export function loadConfig(dir = stateDir()): Config {
 		throw new ConfigError("config.json is missing required key: user", 2);
 	}
 
+	for (const key of ["budget", "files", "http", "tools", "scratch", "objectives"]) {
+		if (obj[key] !== undefined && (!obj[key] || typeof obj[key] !== "object" || Array.isArray(obj[key]))) {
+			throw new ConfigError(`config.json ${key} must be an object`, 2);
+		}
+	}
+	for (const key of ["timezone", "subjectModel", "defaultModel"]) {
+		if (obj[key] !== undefined && (typeof obj[key] !== "string" || !obj[key])) {
+			throw new ConfigError(`config.json ${key} must be a nonempty string`, 2);
+		}
+	}
+	if (obj.timezone !== undefined) {
+		try { new Intl.DateTimeFormat("en", { timeZone: obj.timezone as string }); }
+		catch { throw new ConfigError("config.json timezone must be a valid time zone", 2); }
+	}
 	const budget = (obj.budget ?? {}) as Record<string, unknown>;
 	const files = (obj.files ?? {}) as Record<string, unknown>;
 	const http = (obj.http ?? {}) as Record<string, unknown>;
@@ -159,17 +178,17 @@ export function loadConfig(dir = stateDir()): Config {
 		timezone: typeof obj.timezone === "string" ? obj.timezone : systemTimezone(),
 		subjectModel: typeof obj.subjectModel === "string" ? obj.subjectModel : undefined,
 		defaultModel: typeof obj.defaultModel === "string" ? obj.defaultModel : undefined,
-		spawnDepth: typeof obj.spawnDepth === "number" ? obj.spawnDepth : DEFAULTS.spawnDepth,
+		spawnDepth: nonnegative(obj.spawnDepth, "spawnDepth", true) ?? DEFAULTS.spawnDepth,
 		budget: {
-			sessionUsd: typeof budget.sessionUsd === "number" ? budget.sessionUsd : DEFAULTS.budget.sessionUsd,
+			sessionUsd: nonnegative(budget.sessionUsd, "budget.sessionUsd") ?? DEFAULTS.budget.sessionUsd,
 			domainDailyUsd:
-				typeof budget.domainDailyUsd === "number" ? budget.domainDailyUsd : DEFAULTS.budget.domainDailyUsd,
+				nonnegative(budget.domainDailyUsd, "budget.domainDailyUsd") ?? DEFAULTS.budget.domainDailyUsd,
 		},
 		files: {
-			maxBytes: typeof files.maxBytes === "number" ? files.maxBytes : DEFAULTS.files.maxBytes,
+			maxBytes: positive(files.maxBytes, "files.maxBytes", "bytes") ?? DEFAULTS.files.maxBytes,
 		},
 		http: {
-			port: typeof http.port === "number" ? http.port : DEFAULTS.http.port,
+			port: portNumber(http.port) ?? DEFAULTS.http.port,
 		},
 		tools: {
 			bashTimeoutSec: positive(tools.bashTimeoutSec, "tools.bashTimeoutSec") ?? DEFAULTS.tools.bashTimeoutSec,
@@ -215,6 +234,20 @@ function checkoutGuard(value: unknown): CheckoutGuard | undefined {
 	if (value === false) return "off";
 	if (typeof value === "string" && (CHECKOUT_GUARDS as readonly string[]).includes(value)) return value as CheckoutGuard;
 	throw new ConfigError(`tools.protectCheckouts must be one of ${CHECKOUT_GUARDS.join(", ")}`, 2);
+}
+
+function nonnegative(value: unknown, key: string, integer = false): number | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) {
+		throw new ConfigError(`config.json ${key} must be a nonnegative ${integer ? "integer" : "number"}`, 2);
+	}
+	return value;
+}
+
+function portNumber(value: unknown): number | undefined {
+	const port = nonnegative(value, "http.port", true);
+	if (port !== undefined && port > 65535) throw new ConfigError("config.json http.port must be between 0 and 65535", 2);
+	return port;
 }
 
 /** A positive number, or undefined when absent. A zero limit would kill every call or every scratch. */
