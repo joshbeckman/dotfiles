@@ -19,7 +19,7 @@ Run `git pr-cli [PR_URL|PR_NUMBER|BRANCH]` in the intended checkout first. It pr
 
 An adapter that cannot bind its client to the verified target reports unsupported capabilities and does not run that client. Historical routing information alone does not grant a read or write capability.
 
-Native writes use the selected client and its own syntax. Preserve the classified target and follow repository/harness attribution requirements; the chooser neither executes a command nor grants permission.
+Native writes use the selected client and its own syntax. Preserve the classified target and follow repository/harness attribution requirements; the chooser may verify repository metadata but neither executes the requested PR operation nor grants permission.
 
 Read full content before acting. Load the repository's current workflow before writes, CI, reviews, queues, or deployment. The classifier does not grant permission for any action. Discover client flags with its `--help`; don't copy changing provider policy into this skill.
 

@@ -20,7 +20,7 @@ Reference every issue or pull request with its title and full URL:
 
 ## Attribution
 
-Use an existing attribution wrapper when it is selected. If the native client has no wrapper, follow the repository and harness's supported attribution path with an explicit body and the generated trailer. The chooser grants no write permission and does not add attribution or execute a command.
+Use an existing attribution wrapper when it is selected. If the native client has no wrapper, follow the repository and harness's supported attribution path with an explicit body and the generated trailer. Host verification may perform a read-only repository query. The chooser grants no write permission, adds no attribution, and does not execute a requested PR operation.
 
 Preserve other authors' attribution and suppress only the current exact duplicate. Use only the generated trailer; never add a separate `Session:` field or repeat the session URL. Do not use implicit description generation or a low-level mutation to evade required attribution. Do not post an approval again to edit its prose; first establish a supported edit path.
 
