@@ -206,6 +206,15 @@ $trailer
 "
 done
 
+# Review short switches are booleans, unlike their create-command aliases.
+for option in -a -r; do
+  "$root/bin/gw" pr review 1 "$option" --body 'Review note.'
+  assert_capture "$trailer
+
+> Review note.
+"
+done
+
 # GW-01: a pana session's bash tool has none of the harness variables the stub
 # above fakes, so the wrapper tests use the real generator. That is also how gw and
 # gsw detect a caller at all: attribution is one script's job, not three.

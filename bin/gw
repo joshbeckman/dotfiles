@@ -29,6 +29,9 @@ writes_prose() {
 # inline argument.
 trailer_tmp=""
 metadata_value_option() {
+  if [[ "${cmd:-} ${args[0]:-}" == 'pr review' ]]; then
+    case "$1" in -a|-r) return 1 ;; esac
+  fi
   case "$1" in
     --title|-t|--base|-B|--head|-H|--repo|-R) return 0 ;;
     --assignee|-a|--reviewer|-r|--label|-l|--project|-p) return 0 ;;
