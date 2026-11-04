@@ -2,6 +2,7 @@
 // wrapper, a renderer per section, and one keyboard module. The server owns auth (API-04); this
 // file only carries the token.
 
+import { choiceText, draftHasChoice, toggleChoice } from "./choices.js";
 import {
 	CONFIRM_ARCHIVE_SESSION,
 	CONFIRM_EDIT,
@@ -1710,11 +1711,11 @@ async function openThread(id, focusMessage) {
 }
 
 /**
- * WEB-10: a choice is picked exactly when its reply is a line of the draft. Deleting the line
+ * WEB-10: a choice is picked exactly when its reply block is in the draft. Deleting the block
  * unpicks the button, so the draft below is the only place a pick is stored.
  */
 function draftHas(reply) {
-	return $("reply-body").value.split("\n").some((line) => line.trim() === reply);
+	return draftHasChoice($("reply-body").value, reply);
 }
 
 /**
@@ -1725,17 +1726,14 @@ function draftHas(reply) {
 function pickChoice(option) {
 	if (!state.draft) return;
 	const box = $("reply-body");
-	const lines = box.value.split("\n");
-	const at = lines.findIndex((line) => line.trim() === option.reply);
-	if (at === -1) {
-		const head = box.value.replace(/\s+$/, "");
-		box.value = head ? `${head}\n${option.reply}` : option.reply;
-		status(`Added “${option.label}” to your reply.`);
-	} else {
-		lines.splice(at, 1);
-		box.value = lines.join("\n").replace(/^\s*\n+/, "").replace(/\s+$/, "");
-		status(`Removed “${option.label}” from your reply.`);
-	}
+	const picked = draftHasChoice(box.value, choiceText(option));
+	const peers = [...document.querySelectorAll("button[data-choice][data-question]")].map((button) => ({
+		question: button.dataset.question,
+		label: button.textContent,
+		reply: button.dataset.answer,
+	}));
+	box.value = toggleChoice(box.value, option, peers);
+	status(`${picked ? "Removed" : "Added"} “${option.label}” ${picked ? "from" : "to"} your reply.`);
 	// Save the draft the way a keystroke does, then let the buttons follow it.
 	box.dispatchEvent(new Event("input", { bubbles: true }));
 	// Every message on screen, including the ones a stale reply lists above the box.

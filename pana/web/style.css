@@ -997,6 +997,17 @@ a.button.quiet:hover,
 	gap: var(--s2);
 	margin: 0 0 var(--s3);
 }
+.choice-question-group {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	width: 100%;
+}
+.choice-question {
+	flex-basis: 100%;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
 .choice {
 	display: inline-flex;
 	flex-direction: column;

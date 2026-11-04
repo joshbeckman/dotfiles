@@ -51,12 +51,15 @@ rejects the reply with exit code 3. Read the new messages, revise, and retry. Ne
 - `pana_thread_create` starts a thread. CLI: `pana thread create --to ADDRS --body B`.
 - `pana_session_create` starts a child session. CLI: `pana session create --prompt TEXT`.
 
-When a question has a small, closed set of answers, you may offer them as reply options with
-`pana_reply`'s `choice` argument: `LABEL`, or `LABEL => reply` when the reply should say
-more than the label. They render as buttons that fill the reader's reply draft; they send
-nothing, and the reader can always answer in their own words instead. Offer them only when
-you would accept every option as an answer, and ask in prose when the answer that helps you
-is a sentence.
+When a question has a small, closed set of answers, you may end the message with a fenced
+`choices` block, one `- QUESTION => LABEL => REPLY` per line. Use `^` instead of repeating the
+most recent question in that fence. A selection adds a quoted question and its answer to the
+reply draft; another answer to the same question replaces it. Multiple questions can be answered
+in one draft. Clicking a selected answer removes it. Nothing is sent automatically.
+`LABEL` and `LABEL => REPLY` still offer unquoted replies. `pana_reply`'s `choice` argument
+(or CLI `--choice`) appends the same fence for you, with at most 8 options. Offer choices only
+when you would accept every option; readers can always type their own answer. Ask in prose
+when the answer that helps you is a sentence.
 
 Every pana tool wraps the CLI command of the same name: same arguments, same JSON output,
 same exit codes. Use whichever is convenient. Exit codes: `0` ok, `1` error, `2` usage,

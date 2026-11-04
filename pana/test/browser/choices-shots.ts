@@ -11,12 +11,13 @@ const dir = process.argv[2] ?? "";
 if (!dir) throw new Error("usage: node test/browser/choices-shots.ts DIR");
 
 const MENU = [
-	"Which way should this ship?",
+	"Two decisions before we ship:",
 	"",
 	"```choices",
-	"- Ship it now",
-	"- Behind a flag => Ship behind PANA_CHOICES and tell me when it is fully on",
-	"- Something else — tell me",
+	"- Which approach? => Fix forward => Keep the change and fix forward.",
+	"- ^ => Revert => Revert the change until the regression is fixed.",
+	"- When should we ship? => Today => Ship today.",
+	"- ^ => Next release => Ship in the next release.",
 	"```",
 ].join("\n");
 
@@ -45,20 +46,21 @@ try {
 
 	await shot(
 		"desktop",
-		`await until(() => document.querySelectorAll('[data-testid="message-choice"]').length === 3);
+		`await until(() => document.querySelectorAll('[data-testid="message-choice"]').length === 4);
 		 const menu = document.querySelector('[data-testid="message-choices"]');
 		 scrollTo(0, menu.getBoundingClientRect().top + scrollY - 220);`,
 	);
 	await shot(
 		"picked",
-		`document.querySelectorAll('[data-testid="message-choice"]')[1].click();
+		`document.querySelectorAll('[data-testid="message-choice"]')[0].click();
+		 document.querySelectorAll('[data-testid="message-choice"]')[2].click();
 		 await until(() => document.querySelector('[data-testid="reply-body"]').value.length > 0);
 		 await sleep(200);`,
 	);
 	// The phone is its own viewport emulation, so it is its own shot.
 	await emulateViewport("390x844x3,mobile,touch", "light");
 	await evaluatePage(`
-		await until(() => document.querySelectorAll('[data-testid="message-choice"]').length === 3);
+		await until(() => document.querySelectorAll('[data-testid="message-choice"]').length === 4);
 		const menu = document.querySelector('[data-testid="message-choices"]');
 		scrollTo(0, menu.getBoundingClientRect().top + scrollY - 160);
 		return true;`);

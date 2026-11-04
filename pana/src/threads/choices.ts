@@ -11,8 +11,7 @@
 // - Behind a flag => Ship behind PANA_CHOICES and tell me when it is fully on
 // ```
 //
-// The browser parses the same syntax in `web/render.js`, the way `referenceFor` there matches
-// `appendAttachmentMarkdown` here.
+// The CLI and browser share the grammar in `web/choices.js`.
 
 export const CHOICES_LANGUAGE = "choices";
 
@@ -24,29 +23,8 @@ export const MAX_CHOICE_LENGTH = 200;
 
 /** The fence a message ends with, before the body is cleaned: ```choices … ```. */
 const FENCE = new RegExp(`^\`\`\`${CHOICES_LANGUAGE}[ \\t]*\\n([\\s\\S]*?)^\`\`\`[ \\t]*$`, "gm");
-/** One option line: a list marker and the text after it. */
-const OPTION_LINE = /^[-*][ \t]+(.*)$/;
-
-export interface Choice {
-	/** What the button says. */
-	label: string;
-	/** What the click writes into the draft; the label itself when no `=>` was given. */
-	reply: string;
-}
-
-/**
- * One option, as `LABEL` or `LABEL => REPLY`. The separator needs spaces on both sides so an
- * arrow inside a label (`->`, `=>` in code) does not split it.
- */
-export function parseChoice(line: string): Choice | undefined {
-	const trimmed = line.trim();
-	const text = OPTION_LINE.exec(trimmed)?.[1] ?? trimmed;
-	const at = text.indexOf(" => ");
-	const label = (at === -1 ? text : text.slice(0, at)).trim();
-	if (!label) return undefined;
-	const reply = at === -1 ? label : text.slice(at + 4).trim() || label;
-	return { label, reply };
-}
+export { parseChoice, type Choice } from "../../web/choices.js";
+import { parseChoice, parseChoices } from "../../web/choices.js";
 
 /** The `choices` fence for a list of options, as the CLI appends it to a body. */
 export function choicesMarkdown(choices: readonly string[]): string {
@@ -69,13 +47,19 @@ export function withChoices(body: string, choices: readonly string[]): string {
  */
 export function choiceProblem(choices: readonly string[]): string | undefined {
 	if (choices.length > MAX_CHOICES) return `give at most ${MAX_CHOICES} --choice options`;
+	let question: string | undefined;
 	for (const choice of choices) {
-		const option = parseChoice(choice);
-		if (!option) return "every --choice needs a label";
-		if (option.label.length > MAX_CHOICE_LENGTH || option.reply.length > MAX_CHOICE_LENGTH) {
-			return `--choice labels and replies must be ${MAX_CHOICE_LENGTH} characters or fewer`;
+		if (choice.includes("\n") || choice.includes("\r")) return "--choice must fit on one line";
+		const option = parseChoice(choice, question);
+		if (!option) return "every --choice needs a label and ^ needs a preceding question";
+		if (option.question) question = option.question;
+		if (
+			(option.question?.length ?? 0) > MAX_CHOICE_LENGTH ||
+			option.label.length > MAX_CHOICE_LENGTH ||
+			option.reply.length > MAX_CHOICE_LENGTH
+		) {
+			return `--choice questions, labels and replies must be ${MAX_CHOICE_LENGTH} characters or fewer`;
 		}
-		if (option.reply.includes("\n")) return "--choice must fit on one line";
 	}
 	return undefined;
 }
@@ -87,10 +71,7 @@ export function choiceProblem(choices: readonly string[]): string | undefined {
  */
 export function summarizeChoices(body: string): string {
 	return String(body ?? "").replace(FENCE, (fence, inner: string) => {
-		const labels = String(inner)
-			.split("\n")
-			.map((line) => parseChoice(line)?.label)
-			.filter((label): label is string => Boolean(label));
-		return labels.length > 0 ? labels.join(" / ") : fence;
+		const options = parseChoices(inner);
+		return options ? options.map((option) => option.label).join(" / ") : fence;
 	});
 }

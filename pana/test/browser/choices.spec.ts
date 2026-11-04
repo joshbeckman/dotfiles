@@ -157,6 +157,76 @@ describeBrowser("reply options", () => {
 		expect(await messageCount(threadId)).toBe(before);
 	});
 
+	it("WEB-10a composes quoted answers, switches only one question, and keeps draft state on reload", async () => {
+		seeded = await seedDomain();
+		const threadId = await openWith([
+			"Two decisions:", "", "```choices",
+			"- Which approach? => Fix forward => Keep the change.",
+			"- ^ => Revert => Revert the change.",
+			"- When? => Today => Ship today.",
+			"- ^ => Later => Ship later.", "```",
+		].join("\n"));
+		const before = await messageCount(threadId);
+		await emulateViewport("390x844x3,mobile,touch", "light");
+		const composed = await evaluatePage<{ body: string; questions: string[]; pressed: string[]; overflow: boolean }>(`
+			await until(() => document.querySelectorAll('[data-testid="message-choice"]').length === 4);
+			const box = document.querySelector('[data-testid="reply-body"]');
+			box.value = "My notes.";
+			box.dispatchEvent(new Event("input", { bubbles: true }));
+			const buttons = [...document.querySelectorAll('[data-testid="message-choice"]')];
+			buttons[0].click();
+			buttons[2].click();
+			buttons[1].click();
+			return {
+				body: box.value,
+				questions: [...document.querySelectorAll('.choice-question')].map((q) => q.textContent),
+				pressed: buttons.map((b) => b.getAttribute('aria-pressed')),
+				overflow: document.documentElement.scrollWidth > innerWidth,
+			};
+		`);
+		expect(composed.body).toBe("My notes.\n\n> Which approach?\n\nRevert the change.\n\n> When?\n\nShip today.");
+		expect(composed.questions).toEqual(["Which approach?", "When?"]);
+		expect(composed.pressed).toEqual(["false", "true", "true", "false"]);
+		expect(composed.overflow).toBe(false);
+		await evaluatePage("location.reload(); return true;");
+		const reloaded = await evaluatePage<{ body: string; pressed: string[] }>(`
+			await until(() => document.querySelectorAll('[data-testid="message-choice"]').length === 4);
+			return {
+				body: document.querySelector('[data-testid="reply-body"]').value,
+				pressed: [...document.querySelectorAll('[data-testid="message-choice"]')].map((b) => b.getAttribute('aria-pressed')),
+			};
+		`);
+		expect(reloaded.body).toBe(composed.body);
+		expect(reloaded.pressed).toEqual(composed.pressed);
+		const removed = await evaluatePage<{ body: string; pressed: string[] }>(`
+			const buttons = [...document.querySelectorAll('[data-testid="message-choice"]')];
+			buttons[1].click();
+			const box = document.querySelector('[data-testid="reply-body"]');
+			box.value = box.value.replace('> When?\\n\\nShip today.', 'My timing note.');
+			box.dispatchEvent(new Event("input", { bubbles: true }));
+			return { body: box.value, pressed: buttons.map((b) => b.getAttribute('aria-pressed')) };
+		`);
+		expect(removed.body).not.toContain("Which approach?");
+		expect(removed.body).toContain("My notes.");
+		expect(removed.body).toContain("My timing note.");
+		expect(removed.pressed).toEqual(["false", "false", "false", "false"]);
+		expect(await messageCount(threadId)).toBe(before);
+	});
+
+	it("WEB-10a leaves orphan shorthand visible instead of rendering a misleading button", async () => {
+		seeded = await seedDomain();
+		await openWith("```choices\n- ^ => Yes => Yes\n```");
+		const result = await evaluatePage<{ buttons: number; code: string }>(`
+			await until(() => document.querySelector('.message pre > code.language-choices'));
+			return {
+				buttons: document.querySelectorAll('[data-testid="message-choice"]').length,
+				code: document.querySelector('.message pre > code.language-choices').textContent,
+			};
+		`);
+		expect(result.buttons).toBe(0);
+		expect(result.code).toContain("^ => Yes => Yes");
+	});
+
 	it("WEB-10 leaves a fence it cannot read as code, and offers no buttons without a draft", async () => {
 		// A session's own words can carry a fence too; a transcript has no reply box, so the
 		// renderer is given no `onPick` there and the block stays code.

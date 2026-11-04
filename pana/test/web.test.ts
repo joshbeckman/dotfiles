@@ -247,9 +247,7 @@ describe("PWA shell and static assets", () => {
 	});
 
 	it("WEB-10 a choices fence parses to options and reads back as labels in a row", async () => {
-		// The renderer's parse (web/render.js) and the writer's fence (src/threads/choices.ts) are
-		// two copies of one convention, pinned together here the way referenceFor and
-		// appendAttachmentMarkdown are.
+		// The browser and CLI share the grammar; fence output and inbox summaries must agree.
 		expect(parseChoices("- Ship it\n- Hold => Wait for the migration")).toEqual([
 			{ label: "Ship it", reply: "Ship it" },
 			{ label: "Hold", reply: "Wait for the migration" },
