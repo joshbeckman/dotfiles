@@ -11,7 +11,7 @@ afterEach(async () => {
 	await seeded?.t.close();
 });
 (chromeDevtoolsAvailable() ? describe : describe.skip)("copy self URLs", () => {
-	it("UX-17 copies all five self URLs without navigation, preserves reference navigation, and reports clipboard failures", async () => {
+	it("UX-17 copies all six self URLs without navigation, preserves reference navigation, and reports clipboard failures", async () => {
 		seeded = await seedDomain({ capitalReply: "Paris. [Memory](pana://test.example/memory/files/notes/pana.md)" });
 		const { t, capital } = seeded;
 		const origin = loopbackOrigin(t.panad.tcpPort!);
@@ -44,6 +44,7 @@ afterEach(async () => {
 				if (location.hash !== hash) throw new Error("copy navigated");
 			};
 			await check("#thread-url a");
+			await check("#thread-subject a");
 			await check("[data-testid=message-link]");
 			location.hash = "#/sessions/${capital.sessionId}";
 			await until(() => document.querySelector("#session-title a[data-copy-url]"));
@@ -58,13 +59,14 @@ afterEach(async () => {
 			await check("#memory-path a");
 			return window.copied;
 		`);
-		expect(copied.slice(0, 4)).toEqual([
+		expect(copied.slice(0, 5)).toEqual([
+			`pana://test.example/threads/${capital.threadId}`,
 			`pana://test.example/threads/${capital.threadId}`,
 			`pana://test.example/threads/${capital.threadId}?message=${capital.messageIds[0]}`,
 			capital.sessionUrl, capital.sessionUrl,
 		]);
-		expect(copied[4]).toMatch(/^pana:\/\/test.example\/schedules\//);
-		expect(copied[5]).toBe("pana://test.example/memory/files/notes/pana.md");
+		expect(copied[5]).toMatch(/^pana:\/\/test.example\/schedules\//);
+		expect(copied[6]).toBe("pana://test.example/memory/files/notes/pana.md");
 		await evaluatePage(`
 			location.hash = "#/threads/${capital.threadId}";
 			await until(() => document.querySelector('#thread-messages .body a[href="#/memory/files/notes/pana.md"]'));
