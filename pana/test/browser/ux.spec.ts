@@ -74,7 +74,11 @@ describeBrowser("pana usability in a browser", () => {
 			expect(await evaluatePage<number>(`return innerWidth;`)).toBe(width);
 			const controls = await evaluatePage<Array<{ label: string; height: number; expected: number; lineHeight: number }>>(`
 				location.hash = "#/sessions/${seeded!.capital.sessionId}";
-				await until(() => document.querySelector("#session .header-actions button").getBoundingClientRect().height > 0 && document.querySelectorAll("#transcript [data-testid=entry]").length >= 2);
+				await until(() => document.querySelectorAll("#transcript [data-testid=entry]").length >= 2);
+				// MOB-08: a phone folds the session's controls behind a menu, so open it to measure them.
+				const summary = document.querySelector("#session .header-menu > summary");
+				if (summary && getComputedStyle(summary).display !== "none" && !summary.parentElement.open) summary.click();
+				await until(() => document.querySelector("#session .header-actions button").getBoundingClientRect().height > 0);
 				await document.fonts.ready;
 				document.getElementById("session-confirm").hidden = false;
 				return [...document.querySelectorAll("#nav a, #nav-settings, #session .header-actions button, #session-confirm-yes")].map(el => ({

@@ -133,16 +133,23 @@
 				</div>
 
 				<article id="thread" data-testid="thread" hidden>
-					<header class="view-header thread-header">
-						<a href="#/threads" class="back" data-testid="back">Back</a>
-						<h2 id="thread-subject" tabindex="-1"></h2>
-						<div class="header-actions">
-							<button type="button" id="thread-subject-regenerate" class="quiet" data-testid="thread-subject-regenerate" title="Ask the subject model for a new subject">Regenerate subject</button>
-							<button type="button" id="thread-archive" class="quiet" data-testid="thread-archive">Archive</button>
-						</div>
-					</header>
-					<p class="meta-line">
-						<span id="thread-participants" data-testid="thread-participants" class="people"></span>
+					<div class="view-sticky" data-testid="thread-sticky">
+						<header class="view-header thread-header">
+							<a href="#/threads" class="back" data-testid="back">Back</a>
+							<h2 id="thread-subject" tabindex="-1"></h2>
+							<details class="header-menu" data-testid="thread-menu">
+								<summary aria-label="Thread actions" title="Thread actions">⋯</summary>
+								<div class="header-actions">
+									<button type="button" id="thread-subject-regenerate" class="quiet" data-testid="thread-subject-regenerate" title="Ask the subject model for a new subject">Regenerate subject</button>
+									<button type="button" id="thread-archive" class="quiet" data-testid="thread-archive">Archive</button>
+								</div>
+							</details>
+						</header>
+						<p class="meta-line">
+							<span id="thread-participants" data-testid="thread-participants" class="people"></span>
+						</p>
+					</div>
+					<p class="meta-line view-details">
 						<span id="thread-url" data-testid="thread-url" class="hint"></span>
 					</p>
 					<div id="thread-messages" data-testid="messages" class="messages"></div>
@@ -210,26 +217,30 @@
 				</div>
 
 				<article id="session" data-testid="session" hidden>
-					<div class="session-sticky" data-testid="session-sticky">
-					<header class="view-header thread-header">
-						<a href="#/sessions" class="back">Back</a>
-						<h2 id="session-title"></h2>
-						<div class="header-actions">
-							<button type="button" class="quiet" data-action="stop" data-testid="session-stop">Stop</button>
-							<button type="button" class="quiet" data-action="compact" data-testid="session-compact">Compact</button>
-							<button type="button" class="quiet" data-action="reload" data-testid="session-reload">Reload</button>
-							<button type="button" class="quiet" data-action="archive-session" id="session-archive" data-testid="session-archive">Archive</button>
-						</div>
-					</header>
-					<p id="session-meta" class="meta-line"></p>
-					<div id="session-confirm" data-testid="session-confirm" class="confirm" hidden>
-						<p id="session-confirm-text"></p>
-						<div class="form-actions">
-							<button type="button" id="session-confirm-no" data-testid="session-confirm-no">Cancel</button>
-							<button type="button" id="session-confirm-yes" class="danger" data-testid="session-confirm-yes">Yes, archive</button>
+					<div class="view-sticky" data-testid="session-sticky">
+						<header class="view-header thread-header">
+							<a href="#/sessions" class="back">Back</a>
+							<h2 id="session-title"></h2>
+							<details class="header-menu" data-testid="session-menu">
+								<summary aria-label="Session actions" title="Session actions">⋯</summary>
+								<div class="header-actions">
+									<button type="button" class="quiet" data-action="stop" data-testid="session-stop">Stop</button>
+									<button type="button" class="quiet" data-action="compact" data-testid="session-compact">Compact</button>
+									<button type="button" class="quiet" data-action="reload" data-testid="session-reload">Reload</button>
+									<button type="button" class="quiet" data-action="archive-session" id="session-archive" data-testid="session-archive">Archive</button>
+								</div>
+							</details>
+						</header>
+						<p id="session-meta" data-testid="session-meta" class="meta-line"></p>
+						<div id="session-confirm" data-testid="session-confirm" class="confirm" hidden>
+							<p id="session-confirm-text"></p>
+							<div class="form-actions">
+								<button type="button" id="session-confirm-no" data-testid="session-confirm-no">Cancel</button>
+								<button type="button" id="session-confirm-yes" class="danger" data-testid="session-confirm-yes">Yes, archive</button>
+							</div>
 						</div>
 					</div>
-					</div>
+					<p id="session-details" data-testid="session-details" class="meta-line view-details"></p>
 					<section id="session-wakes" data-testid="session-wakes" aria-label="Scheduled wakes"></section>
 					<div id="transcript" data-testid="transcript" class="transcript"></div>
 					<div id="transcript-live" data-testid="transcript-live" class="transcript-live" aria-live="polite" hidden></div>
