@@ -1025,7 +1025,7 @@ describeBrowser("pana in a browser", () => {
 		const notice = await postNotice(t!.runtime, { body: "we should talk about the lantern\nand the schedule" });
 		await open();
 
-		const regenerated = await evaluatePage<{ before: string; after: string; status: string; label: string; disabled: boolean }>(`
+		const regenerated = await evaluatePage<{ before: string; after: string; status: string; label: string; disabled: boolean; copy: string }>(`
 			location.hash = "#/threads/${notice.thread.id}";
 			await until(() => !document.getElementById("thread").hidden);
 			await until(() => document.getElementById("thread-subject").textContent === "we should talk about the lantern");
@@ -1039,10 +1039,13 @@ describeBrowser("pana in a browser", () => {
 				status: document.getElementById("status").textContent,
 				label: button.textContent,
 				disabled: button.disabled,
+				// UX-17: a regenerated subject is still the thread's own copy link.
+				copy: document.querySelector("#thread-subject a[data-copy-url]")?.dataset.copyUrl ?? "",
 			};
 		`);
 		expect(regenerated.before).toBe("we should talk about the lantern");
 		expect(regenerated.after).toBe("Lantern maintenance plan");
+		expect(regenerated.copy).toBe(notice.thread.url);
 		expect(regenerated.status).toContain("Subject regenerated");
 		// The button comes back for another try, rather than staying busy.
 		expect(regenerated.label).toBe("Regenerate subject");

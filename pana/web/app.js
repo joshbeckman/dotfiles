@@ -509,7 +509,7 @@ function learnDomain(value) {
 function applyThreadSubject(threadId, subject) {
 	if (state.thread?.id === threadId) {
 		state.thread.subject = subject;
-		$("thread-subject").textContent = subject;
+		renderThreadSubject(subject);
 	}
 	for (const row of document.querySelectorAll("[data-thread]")) {
 		if (row.dataset.thread === threadId) {
@@ -517,6 +517,17 @@ function applyThreadSubject(threadId, subject) {
 			if (label) label.textContent = subject;
 		}
 	}
+}
+
+/**
+ * UX-17: the subject is the thread's own copy link, the way a session's title is its own. The
+ * heading keeps the whole subject for a hover, since the pinned header clamps it to two lines.
+ */
+function renderThreadSubject(subject) {
+	const heading = $("thread-subject");
+	const url = state.thread?.url ?? `pana://${state.domain}/threads/${state.thread?.id ?? ""}`;
+	heading.replaceChildren(copyLink(url, "thread", subject));
+	heading.title = subject;
 }
 
 function handleEvent(event) {
@@ -1588,9 +1599,9 @@ async function openThread(id, focusMessage) {
 	$("stale-new").replaceChildren();
 	parkConfirm();
 
-	$("thread-subject").textContent = thread?.subject ?? "(no subject)";
-	// A long subject is clamped to two lines in the pinned header, so keep the whole one on hover.
-	$("thread-subject").title = thread?.subject ?? "";
+	// UX-17: the subject copies the thread's own URL, the way a session's title does; a long one
+	// is clamped to two lines in the pinned header, so the whole subject stays on the heading's title.
+	renderThreadSubject(thread?.subject ?? "(no subject)");
 	const threadUrl = $("thread-url");
 	threadUrl.replaceChildren(copyLink(thread?.url ?? `pana://${state.domain}/threads/${id}`, "thread"));
 	// REF-08 and UX-06: participants are colored links to their own views.
