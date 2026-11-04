@@ -112,22 +112,44 @@ describeBrowser("MOB the PWA at phone width", () => {
 		expect(failures).toEqual([]);
 	});
 
-	it("MOB-03 the session header keeps the session ID on one line and its controls below it", async () => {
+	it("MOB-03 a phone's view header keeps Back, the title, and the controls' menu on one row", async () => {
 		seeded = await seedDomain();
 		const { t } = seeded;
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
 		await emulateViewport(PHONE);
-		const layout = await evaluatePage<{ titleLines: number; actionsBelow: boolean }>(`
+		const layout = await evaluatePage<{
+			titleLines: number;
+			sameRow: boolean;
+			folded: boolean;
+			opened: { visible: boolean; inView: boolean };
+		}>(`
 			location.hash = "#/sessions/${seeded.capital.sessionId}";
 			await until(() => document.querySelectorAll("#transcript [data-testid=entry]").length >= 2);
 			await sleep(200);
+			const box = (el) => el.getBoundingClientRect();
 			const title = document.getElementById("session-title");
 			const lineHeight = parseFloat(getComputedStyle(title).lineHeight) || 24;
-			const actions = document.querySelector("#session .header-actions").getBoundingClientRect();
-			return { titleLines: Math.round(title.getBoundingClientRect().height / lineHeight), actionsBelow: actions.top >= title.getBoundingClientRect().bottom - 1 };
+			const menu = document.querySelector("#session .header-menu");
+			const summary = menu.querySelector("summary");
+			const actions = menu.querySelector(".header-actions");
+			const middle = (el) => box(el).top + box(el).height / 2;
+			const sameRow = Math.abs(middle(summary) - middle(title)) < 8;
+			const folded = actions.offsetParent === null;
+			summary.click();
+			await sleep(150);
+			const stop = box(document.querySelector("#session [data-testid=session-stop]"));
+			return {
+				titleLines: Math.round(box(title).height / lineHeight),
+				sameRow,
+				folded,
+				opened: { visible: stop.width > 0 && stop.height > 0, inView: stop.top >= 0 && stop.bottom <= innerHeight },
+			};
 		`);
-		expect(layout.titleLines).toBeLessThanOrEqual(1);
-		expect(layout.actionsBelow).toBe(true);
+		expect(layout.titleLines).toBe(1);
+		expect(layout.sameRow).toBe(true);
+		// MOB-08: the controls cost the pinned header no row until the reader asks for them.
+		expect(layout.folded).toBe(true);
+		expect(layout.opened).toEqual({ visible: true, inView: true });
 	});
 
 	it("MOB-04 the nav fits one phone row, and Settings is reachable outside it", async () => {
@@ -187,38 +209,88 @@ describeBrowser("MOB the PWA at phone width", () => {
 		expect(onSettings).toEqual({ current: "page", navCurrent: false });
 	});
 
-	it("MOB-05 the session header stacks its details on a phone instead of running them together", async () => {
+	it("MOB-05 a phone pins a session's state and facts, and lets its path and URL scroll", async () => {
 		seeded = await seedDomain();
 		const { t } = seeded;
-		// A session with a working directory, so the row the phone dedicates to it has something in it.
+		// A session with a working directory, so the details line has a path to show.
 		const cwd = mkdtempSync(join(tmpdir(), "pana-mob-session-"));
 		const created = await t.client.post<{ session: { id: string } }>("/sessions", { prompt: "Compose one", cwd });
 		expect(created.status, JSON.stringify(created.body)).toBe(201);
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
 		await emulateViewport(PHONE);
-		const layout = await evaluatePage<{ facts: number; urlOwnRow: boolean; cwdOwnRow: boolean; wakesHidden: boolean }>(`
+		const layout = await evaluatePage<{ facts: number; path: string; url: string; pinned: boolean; sticky: number; wakesHidden: boolean }>(`
 			location.hash = "#/sessions/${created.body.session.id}";
-			await until(() => !document.getElementById("session").hidden && document.querySelector("[data-testid=session-facts] .fact-cwd"));
+			await until(() => !document.getElementById("session").hidden && document.querySelector("[data-testid=session-cwd]"));
 			await sleep(200);
-			const meta = document.getElementById("session-meta");
-			const facts = meta.querySelector("[data-testid=session-facts]");
-			const url = meta.querySelector("[data-testid=session-url]");
-			const cwd = meta.querySelector(".fact-cwd");
+			const sticky = document.querySelector("[data-testid=session-sticky]");
+			const details = document.getElementById("session-details");
 			const wakes = document.getElementById("session-wakes");
-			const box = (el) => el.getBoundingClientRect();
 			return {
-				facts: facts.querySelectorAll(".fact").length,
-				// The URL and the working directory each own a row: neither shares a line with a fact.
-				urlOwnRow: Math.abs(box(url).left - box(meta).left) < 2 && box(url).top >= box(facts).bottom - 1,
-				cwdOwnRow: box(cwd).width >= box(meta).width - 2 && box(cwd).left <= box(meta).left + 2,
-				wakesHidden: box(wakes).height === 0,
+				facts: document.querySelectorAll("[data-testid=session-facts] .fact").length,
+				path: document.querySelector("[data-testid=session-cwd]").textContent,
+				url: document.querySelector("[data-testid=session-url]").textContent,
+				// MOB-08: the path and the URL are reference, not reading matter, so they scroll.
+				pinned: !sticky.contains(details),
+				sticky: Math.round(sticky.getBoundingClientRect().height),
+				wakesHidden: wakes.getBoundingClientRect().height === 0,
 			};
 		`);
 		expect(layout.facts).toBeGreaterThanOrEqual(2);
-		expect(layout.urlOwnRow).toBe(true);
-		expect(layout.cwdOwnRow).toBe(true);
+		expect(layout.path).toBe(cwd);
+		expect(layout.url).toBe(`pana://test.example/sessions/${created.body.session.id}`);
+		expect(layout.pinned).toBe(true);
+		// The pinned header leaves the phone to the transcript.
+		expect(layout.sticky).toBeLessThanOrEqual(120);
 		expect(layout.wakesHidden).toBe(true);
 		rmSync(cwd, { recursive: true, force: true });
+	});
+
+	it("MOB-07 a thread's header stays in view while its messages scroll", async () => {
+		seeded = await seedDomain();
+		page = await newPage(`${loopbackOrigin(seeded.t.panad.tcpPort!)}/#${seeded.t.panad.webToken}`);
+		await emulateViewport(PHONE);
+		const pinned = await evaluatePage<{
+			scrolled: boolean;
+			landedBelow: boolean;
+			pinnedTop: boolean;
+			subject: boolean;
+			participants: boolean;
+			height: number;
+			actions: string[];
+		}>(`
+			location.hash = "#/threads/${seeded.group.threadId}";
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length >= 4);
+			await sleep(200);
+			const sticky = document.querySelector("[data-testid=thread-sticky]");
+			const topbar = document.querySelector(".topbar").getBoundingClientRect();
+			const box = (el) => el.getBoundingClientRect();
+			// UX-05 lands on the newest message: it must arrive below the header, not under it.
+			const newest = box(document.querySelector("#thread-messages [data-testid=message]:last-of-type"));
+			const landedBelow = newest.top >= box(sticky).bottom - 1;
+			scrollTo(0, document.documentElement.scrollHeight);
+			await sleep(200);
+			const inSight = (el) => box(el).top >= topbar.bottom - 1 && box(el).bottom <= innerHeight;
+			const menu = document.querySelector("#thread .header-menu");
+			menu.querySelector("summary").click();
+			await sleep(150);
+			return {
+				scrolled: scrollY > 0,
+				landedBelow,
+				// The header is pinned under the nav, not scrolled away with the messages.
+				pinnedTop: Math.abs(box(sticky).top - topbar.bottom) < 2,
+				subject: inSight(document.getElementById("thread-subject")),
+				participants: inSight(document.getElementById("thread-participants")),
+				height: Math.round(box(sticky).height),
+				actions: [...menu.querySelectorAll(".header-actions button")].filter((button) => button.getBoundingClientRect().height > 0).map((button) => button.textContent.trim()),
+			};
+		`);
+		expect(pinned.scrolled).toBe(true);
+		expect(pinned.landedBelow).toBe(true);
+		expect(pinned.pinnedTop).toBe(true);
+		expect(pinned.subject).toBe(true);
+		expect(pinned.participants).toBe(true);
+		expect(pinned.actions).toEqual(["Regenerate subject", "Archive"]);
+		expect(pinned.height).toBeLessThanOrEqual(120);
 	});
 
 	it("MOB-06 a phone's transcript keeps its width for text", async () => {

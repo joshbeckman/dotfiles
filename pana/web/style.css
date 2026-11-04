@@ -296,17 +296,36 @@ main {
 	flex-direction: column;
 	gap: var(--s4);
 }
-/* The session's header, details, and controls stay in reach at the bottom of a long transcript. */
-.session-sticky {
+/* A view's own header stays in reach while its content scrolls (MOB-07): a thread's subject,
+   participants, and controls; a session's title, state, and controls. It carries only what a
+   reader needs while reading, so the pinned strip stays short and the content gets the height
+   (MOB-08). */
+.view-sticky {
 	position: sticky;
 	top: var(--topbar-h);
 	z-index: 2;
 	display: flex;
 	flex-direction: column;
-	gap: var(--s2);
-	padding: var(--s3) 0;
+	gap: var(--s1);
+	padding: var(--s2) 0;
 	background: var(--c-bg);
 	border-bottom: 1px solid var(--c-border);
+}
+/* The pinned subject is a heading, not the whole essay: two lines bound the strip whatever the
+   subject lengths the model writes. The full text stays on the heading's title. */
+.view-sticky #thread-subject {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+}
+/* A view header's secondary controls: a row beside the title on a wide screen, folded behind one
+   menu button on a phone, where a pinned header cannot spare a row of its own (MOB-08). */
+.header-menu {
+	display: contents;
+}
+.header-menu > summary {
+	display: none;
 }
 .view-header {
 	display: flex;
@@ -358,8 +377,25 @@ main {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
-/* MOB-05: on a wide screen a session's facts read as one sentence. Each fact is its own node so
-   the phone rules below can stack them. */
+/* A view's reference details — the working directory and the canonical pana:// URL — scroll with
+   the content instead of holding rows in the pinned header, and sit just under it rather than a
+   full section gap below (MOB-08). */
+.view-details {
+	margin-top: calc(var(--s4) * -1 + var(--s1));
+	font-size: 0.8125rem;
+}
+.session-cwd {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+}
+/* UX-05: what a link scrolls to must clear the pinned header above it, whose height the app
+   writes onto the view as --sticky-h, since a subject or the facts can wrap. */
+#thread,
+#session {
+	--sticky-h: 0px;
+}
+/* MOB-05: a session's facts read as one sentence. Each fact is its own node, so a phone can wrap
+   the run of them without breaking a model ID or a path apart. */
 .session-facts .fact + .fact::before {
 	content: " · ";
 	color: var(--c-text-alt);
@@ -819,7 +855,7 @@ a.button.quiet:hover,
 	border-radius: var(--radius);
 	padding: var(--s3) var(--s4);
 	background: var(--c-bg);
-	scroll-margin-top: calc(var(--topbar-h) + var(--s4));
+	scroll-margin-top: calc(var(--topbar-h) + var(--s4) + var(--sticky-h));
 }
 .message:focus {
 	outline: none;
@@ -1124,6 +1160,7 @@ a.button.quiet:hover,
 	padding: var(--s1) var(--s3);
 	white-space: pre-wrap;
 	word-break: break-word;
+	scroll-margin-top: calc(var(--topbar-h) + var(--s4) + var(--sticky-h));
 }
 .entry[data-role="assistant"] {
 	border-left-color: var(--p-blue);
@@ -1597,6 +1634,58 @@ kbd {
 	#nav::-webkit-scrollbar {
 		display: none;
 	}
+	/* MOB-08: a pinned view header cannot spare a row for its secondary controls, so on a phone
+	   they fold behind one menu button on the title's row and unfold over the content below the
+	   whole pinned strip. */
+	.header-menu {
+		display: block;
+		flex: none;
+		align-self: center;
+	}
+	.header-menu > summary {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: var(--control-h);
+		height: var(--control-h);
+		border: 1px solid var(--c-border);
+		border-radius: var(--radius);
+		list-style: none;
+		font-size: 1.15rem;
+		line-height: 1;
+		color: var(--c-text);
+		cursor: pointer;
+	}
+	.header-menu > summary::-webkit-details-marker {
+		display: none;
+	}
+	.header-menu[open] > summary {
+		background: var(--c-bg-alt);
+	}
+	/* A closed menu is only its button: a details still lays its content out otherwise, and a
+	   hidden row of buttons would widen the page. */
+	.header-menu:not([open]) > .header-actions {
+		display: none;
+	}
+	.header-menu > .header-actions {
+		/* The sticky header is the containing block, so the menu drops below the whole strip
+		   rather than over the title row's neighbours. */
+		position: absolute;
+		top: 100%;
+		right: 0;
+		z-index: 3;
+		flex-direction: column;
+		flex-wrap: nowrap;
+		align-items: stretch;
+		gap: var(--s1);
+		padding: var(--s1);
+		background: var(--c-bg);
+		border: 1px solid var(--c-text);
+		border-radius: var(--radius);
+	}
+	.header-menu > .header-actions button {
+		white-space: nowrap;
+	}
 	/* The message menu keeps its size on screen but takes a thumb's 44 px target around itself. */
 	.message-menu > summary {
 		position: relative;
@@ -1633,25 +1722,8 @@ kbd {
 	.session-facts .fact + .fact::before {
 		content: none;
 	}
-	.session-facts .fact-cwd {
-		order: 1;
-		flex-basis: 100%;
-		white-space: normal;
-		font-family: var(--font-mono);
-		font-size: 0.75rem;
-	}
-	#session-meta .session-url {
-		flex-basis: 100%;
-		font-size: 0.75rem;
-	}
-	/* The canonical URL stays readable but stops competing with the session's name: the title
-	   above already copies it. */
-	#session-meta .session-url a {
-		color: var(--c-text-alt);
-		text-decoration-color: var(--c-border);
-	}
-	/* An empty list of wakes is two lines of nothing above the transcript, and its absence must
-	   not leave the header's rule and the transcript's rule 16 px apart. */
+	/* MOB-05: an empty list of wakes is two lines of nothing above the transcript, and its absence
+	   must not leave the header's rule and the transcript's rule 16 px apart. */
 	#session-wakes[data-empty="true"] {
 		display: none;
 	}
@@ -1666,11 +1738,12 @@ kbd {
 	#transcript .entry pre {
 		padding-inline: var(--s2);
 	}
-	/* MOB-03: the title and Back share the first row; the controls take their own row below. */
+	/* MOB-03: the title and Back share the first row. A view whose controls fold into a menu
+	   (MOB-08) keeps them on that row; every other view puts its controls on their own row. */
 	.view-header {
 		flex-wrap: wrap;
 	}
-	.view-header .header-actions {
+	.view-header > .header-actions {
 		flex-basis: 100%;
 	}
 	/* Keep Inbox compose in thumb reach, clear of the home indicator and last row. */

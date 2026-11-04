@@ -1536,6 +1536,24 @@ function closeMessageMenus(except) {
 	for (const menu of document.querySelectorAll(".message-menu[open]")) if (menu !== except) menu.open = false;
 }
 
+/**
+ * MOB-08: on a phone a view header's secondary controls fold behind one menu button, because a
+ * pinned header cannot spare a row for them; on a wide screen they are the row they always were.
+ * The open state carries that, so a closed detail never has to render its content.
+ */
+const phoneWidth = matchMedia("(max-width: 40rem)");
+function syncHeaderMenus() {
+	for (const menu of document.querySelectorAll(".header-menu")) menu.open = !phoneWidth.matches;
+}
+syncHeaderMenus();
+phoneWidth.addEventListener("change", syncHeaderMenus);
+
+/** The same for a view header's folded controls, so only one is open at a time. */
+function closeHeaderMenus() {
+	if (!phoneWidth.matches) return; // A wide screen shows these as a row, not as a menu.
+	for (const menu of document.querySelectorAll(".header-menu[open]")) menu.open = false;
+}
+
 /** Put the edit and redact form back in its hidden home before the messages are replaced. */
 function parkConfirm() {
 	$("confirm").hidden = true;
@@ -1571,6 +1589,8 @@ async function openThread(id, focusMessage) {
 	parkConfirm();
 
 	$("thread-subject").textContent = thread?.subject ?? "(no subject)";
+	// A long subject is clamped to two lines in the pinned header, so keep the whole one on hover.
+	$("thread-subject").title = thread?.subject ?? "";
 	const threadUrl = $("thread-url");
 	threadUrl.replaceChildren(copyLink(thread?.url ?? `pana://${state.domain}/threads/${id}`, "thread"));
 	// REF-08 and UX-06: participants are colored links to their own views.
@@ -1669,6 +1689,8 @@ async function openThread(id, focusMessage) {
 	const target = (focusMessage && container.querySelector(".focus")) || container.querySelector("[data-testid=message]:last-of-type");
 	if (target) {
 		select(target, { scroll: false });
+		// UX-05: the pinned header (MOB-07) must not cover the message the link scrolled to.
+		syncStickyHeights();
 		target.scrollIntoView({ block: focusMessage ? "center" : "start" });
 	}
 	if (focusMessage) await api("POST", `/messages/${focusMessage}/read`).catch(() => {});
@@ -1853,14 +1875,14 @@ async function openSession(id) {
 	title.replaceChildren(copyLink(state.session.url ?? `pana://${state.domain}/sessions/${state.session.id}`, "session", refLabel(state.session.url ?? "") || state.session.id));
 	const meta = $("session-meta");
 	meta.replaceChildren(badge(state.session.state ?? "unknown", "state-badge"));
-	// MOB-05: each fact is its own node, so a phone can put the working directory on its own row
-	// instead of letting one long sentence break inside a model ID or a path.
+	// MOB-05: each fact is its own node, so a phone can wrap the run of them without splitting a
+	// model ID apart. Only what a reader needs while reading is pinned: the state and these facts.
+	// The path and the URL scroll with the transcript (MOB-08).
 	const facts = document.createElement("span");
 	facts.className = "session-facts";
 	facts.dataset.testid = "session-facts";
 	for (const [name, part] of [
 		["model", state.session.model],
-		["cwd", state.session.cwd],
 		["parent", state.session.parent ? refLink(state.session.parentUrl ?? state.session.parent, "session", `parent ${state.session.parent}`) : undefined],
 		["cost", cost(state.session.costUsd)],
 		["scratch", scratchSize(state.session.scratch)],
@@ -1869,21 +1891,33 @@ async function openSession(id) {
 		if (part === undefined || part === null || part === "") continue;
 		const fact = document.createElement("span");
 		fact.className = `fact fact-${name}`;
-		// The row can ellipsize a path or a model on a narrow screen; the title keeps it whole.
+		// The row can ellipsize a model on a narrow screen; the title keeps it whole.
 		if (typeof part === "string") fact.title = part;
 		if (part instanceof Node) fact.append(part);
 		else fact.textContent = String(part);
 		facts.append(fact);
 	}
 	meta.append(facts);
-	// Like a thread's header, the session's header shows its canonical pana:// URL.
+	// Like a thread's header, the session's view shows its working directory and canonical pana://
+	// URL; both are reference, not reading matter, so they sit below the pinned header.
+	const details = $("session-details");
+	details.replaceChildren();
+	if (state.session.cwd) {
+		const cwd = document.createElement("span");
+		cwd.className = "session-cwd";
+		cwd.dataset.testid = "session-cwd";
+		cwd.title = state.session.cwd;
+		cwd.textContent = state.session.cwd;
+		details.append(cwd);
+	}
 	if (state.session.url) {
 		const url = document.createElement("span");
 		url.className = "hint session-url";
 		url.dataset.testid = "session-url";
 		url.append(copyLink(state.session.url, "session"));
-		meta.append(url);
+		details.append(url);
 	}
+	details.hidden = details.childElementCount === 0;
 	renderSessionWakes();
 	const archive = $("session-archive");
 	if (archive) {
@@ -1899,6 +1933,7 @@ async function openSession(id) {
 	renderTranscript(transcript.entries);
 	rememberLive(state.session.id, body.session.live);
 	renderLive();
+	syncStickyHeights();
 	scrollToLatest();
 }
 
@@ -4083,7 +4118,11 @@ function runKey(action, { target, form }) {
 	if (action === "submit") return form?.requestSubmit();
 	if (action === "leave-input") return target?.blur?.();
 	if (action === "help") return toggleHelp();
-	if (action === "back") return goBack();
+	if (action === "back") {
+		// A phone's folded menu is in front of the page, so it closes before the page does.
+		if (phoneWidth.matches && document.querySelector(".header-menu[open]")) return closeHeaderMenus();
+		return goBack();
+	}
 	// UX-15: the palette opens over whatever is in front, help included, and the same chord closes it.
 	if (action === "palette") {
 		if (palette.open) return closePalette();
@@ -4340,10 +4379,14 @@ $("reply-body").addEventListener("input", () => {
 });
 $("confirm").addEventListener("submit", (event) => void confirmAction(event));
 $("confirm-no").addEventListener("click", cancelAction);
-$("thread-subject-regenerate").addEventListener("click", () => void regenerateThreadSubject());
+$("thread-subject-regenerate").addEventListener("click", () => {
+	closeHeaderMenus();
+	void regenerateThreadSubject();
+});
 $("thread-archive").addEventListener("click", () => {
 	const thread = state.thread;
 	if (!thread) return;
+	closeHeaderMenus();
 	const button = $("thread-archive");
 	void archiveThread(thread.id, button.dataset.archived !== "true");
 });
@@ -4417,7 +4460,10 @@ document.addEventListener("focusin", (event) => {
 document.addEventListener("click", (event) => {
 	// A click that is not on a message's actions closes whichever one is open.
 	if (!event.target?.closest?.(".message-menu")) closeMessageMenus();
+	// A view header's folded controls work the same way: open one, click anywhere else, it closes.
+	if (!event.target?.closest?.(".header-menu")) closeHeaderMenus();
 	const action = event.target?.closest?.("[data-action]")?.dataset.action;
+	if (action) closeHeaderMenus();
 	if (action === "stop" || action === "compact") void sessionAction(action);
 	if (action === "archive-session") askArchiveSession();
 	if (action === "reload") {
@@ -4444,6 +4490,22 @@ const topbar = document.querySelector(".topbar");
 const measureTopbar = () => document.documentElement.style.setProperty("--topbar-h", `${topbar.getBoundingClientRect().height}px`);
 measureTopbar();
 new ResizeObserver(measureTopbar).observe(topbar);
+
+// MOB-07: a view's pinned header covers what a link scrolls to, so the view carries its height as
+// --sticky-h for `.message` and `.entry` scroll margins. It changes when a subject or the facts
+// wrap, so measure it rather than guessing.
+const stickyViewSizes = [...document.querySelectorAll(".view-sticky")].map((sticky) => {
+	const view = sticky.parentElement;
+	const measure = () => {
+		if (!view || view.hidden) return;
+		view.style.setProperty("--sticky-h", `${Math.round(sticky.getBoundingClientRect().height)}px`);
+	};
+	new ResizeObserver(measure).observe(sticky);
+	return measure;
+});
+function syncStickyHeights() {
+	for (const measure of stickyViewSizes) measure();
+}
 
 // The thread from a notification click arrives as `?thread=<id>` (PSH-03).
 const bootParams = new URLSearchParams(location.search);
