@@ -1,12 +1,7 @@
 // Types for the browser module `render.js`, which Node tests import directly.
 
-/** One reply option in a `choices` fence (WEB-10). */
-export interface Choice {
-	/** What the button says. */
-	label: string;
-	/** The line a click writes into the draft. */
-	reply: string;
-}
+import type { Choice } from "./choices.js";
+export type { Choice } from "./choices.js";
 
 export interface RenderOptions {
 	marked?: unknown;

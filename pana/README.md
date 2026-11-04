@@ -342,7 +342,14 @@ The `default` profile applies when `--profile` is absent. With no `--cwd` and no
 - Threads are append-only. `thread respond` requires `--after MESSAGE`, the newest message the sender has read. If the thread has a newer message, pana rejects the response with exit code 3. The sender reads the new messages, revises, and retries.
 - Edits and deletes are appended as `message.revised` and `message.redacted` events. Readers show the latest revision. A session that already received the old text keeps it in its transcript, so the PWA warns before an edit.
 - The subject starts as the first line of the first message. A small model replaces it asynchronously. Regenerating keeps the old subjects in history.
-- A message may offer reply options: a fenced `choices` block, one `- LABEL` or `- LABEL => reply` per line. The PWA renders it as buttons; a click writes the reply into the draft below and clicking again takes it out. Nothing is chosen on the server: the draft is where a pick lives, and what a session receives is plain prose. `--choice` appends the fence for you, and a mailbox row shows the labels instead of the fence.
+- A message may offer reply options in a fenced `choices` block. Use `- QUESTION => LABEL => REPLY` for contextual answers; `^` in the question position repeats the most recent explicit question in that fence. Buttons are grouped under their questions. Selecting adds `> QUESTION`, a blank line, and `REPLY` to the draft; another option for that question replaces the known answer, and clicking the selected option removes it. Other questions and hand-written text are preserved; hand-edited answers are not overwritten. Nothing is sent automatically, and draft text remains the only selection state. The older `- LABEL` and `- LABEL => reply` forms still toggle unquoted lines independently. `--choice` appends the same fence, and mailbox rows show labels. The first two spaced ` => ` separators delimit question and label; any later arrows belong to the reply. An orphan `^` or malformed fence stays visible as code (CLI flags report an error).
+
+  ```choices
+  - Which approach? => Fix forward => Keep the change and fix forward.
+  - ^ => Revert => Revert the change.
+  - When should we ship? => Today => Ship today.
+  - ^ => Next release => Ship in the next release.
+  ```
 - Files are stored on disk under `files/<ulid>/<name>`. The database stores the path, size, media type, and uploader. Message Markdown references a file by its `pana://` URL, and the PWA rewrites it to an HTTP URL served by `panad`. `--attach` on the CLI and the PWA's Attach button, drop, or pasted screenshot all upload through `POST /files` and append the same reference. An inline image is requested as `?w=1024`: the host's resizer (`sips` on macOS, ImageMagick elsewhere) makes that copy once, keeps it in `files/<ulid>/.resized/`, and the link opens the original. With no resizer installed, the original is served.
 
 ### Commands

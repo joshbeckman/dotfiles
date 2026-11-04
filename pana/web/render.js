@@ -7,34 +7,9 @@
 
 import { appHref, panaLinkSegments } from "./links.js";
 
-/**
- * WEB-10: a fenced `choices` block, the way `src/threads/choices.ts` writes one. Each option is
- * `- LABEL` or `- LABEL => reply`; the label is the button and the reply is the line a click puts
- * in the draft. A click toggles, so no selection state is stored anywhere but the draft itself.
- */
+import { parseChoices, choiceText } from "./choices.js";
+export { parseChoices } from "./choices.js";
 export const CHOICES_LANGUAGE = "choices";
-
-/** One option line: a list marker and the text after it. */
-const OPTION_LINE = /^[-*][ \t]+(.*)$/;
-
-/** Parse a choices fence, or null when it is not one a reader should click on. */
-export function parseChoices(text) {
-	const options = [];
-	for (const raw of String(text ?? "").split("\n")) {
-		const line = raw.trim();
-		if (!line) continue;
-		const match = OPTION_LINE.exec(line);
-		// A line that is not a list item means this is someone's code, not an offer: leave it.
-		if (!match) return null;
-		const body = match[1];
-		const at = body.indexOf(" => ");
-		const label = (at === -1 ? body : body.slice(0, at)).trim();
-		if (!label) return null;
-		const reply = at === -1 ? label : body.slice(at + 4).trim() || label;
-		options.push({ label, reply });
-	}
-	return options.length > 0 ? options : null;
-}
 
 // DOMPurify strips an unknown scheme from href/src unless it is listed. Pana links are ours,
 // and they are rewritten to app routes before the HTML reaches the DOM.
@@ -270,12 +245,31 @@ export function renderChoices(root, { onPick } = {}) {
 		group.dataset.testid = "message-choices";
 		group.setAttribute("role", "group");
 		group.setAttribute("aria-label", "Reply options");
+		const groups = new Map();
 		for (const option of options) {
+			let target = group;
+			if (option.question) {
+				if (!groups.has(option.question)) {
+					const section = document_.createElement("div");
+					section.className = "choice-question-group";
+					section.setAttribute("role", "group");
+					section.setAttribute("aria-label", option.question);
+					const heading = document_.createElement("div");
+					heading.className = "choice-question";
+					heading.textContent = option.question;
+					section.append(heading);
+					group.append(section);
+					groups.set(option.question, section);
+				}
+				target = groups.get(option.question);
+			}
 			const button = document_.createElement("button");
 			button.type = "button";
 			button.className = "choice";
 			button.dataset.choice = "";
-			button.dataset.reply = option.reply;
+			button.dataset.reply = choiceText(option);
+			button.dataset.answer = option.reply;
+			if (option.question) button.dataset.question = option.question;
 			button.dataset.testid = "message-choice";
 			button.setAttribute("aria-pressed", "false");
 			button.textContent = option.label;
@@ -288,7 +282,7 @@ export function renderChoices(root, { onPick } = {}) {
 				button.append(reply);
 			}
 			button.addEventListener("click", () => onPick(option, button, group));
-			group.append(button);
+			target.append(button);
 		}
 		code.parentNode.replaceWith(group);
 		rendered += 1;

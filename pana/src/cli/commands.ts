@@ -239,7 +239,7 @@ const BODY_FLAGS = [
 
 /** WEB-10: reply options a message offers, appended to the body as one `choices` fence. */
 const CHOICE_FLAGS = [
-	list("choice", "--choice TEXT", "Offer a reply option, LABEL or LABEL => reply (repeatable)"),
+	list("choice", "--choice TEXT", "Offer LABEL, LABEL => reply, or QUESTION => LABEL => reply (^ repeats question; repeatable)"),
 ] as const;
 
 /** SCALE-03: every list command pages. `nextCursor` in the output is the next page's `--cursor`. */
