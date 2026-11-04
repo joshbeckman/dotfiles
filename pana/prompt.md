@@ -61,6 +61,11 @@ in one draft. Clicking a selected answer removes it. Nothing is sent automatical
 when you would accept every option; readers can always type their own answer. Ask in prose
 when the answer that helps you is a sentence.
 
+```choices
+- Deploy now? => Yes => Deploy now.
+- ^ => No => Hold off.
+```
+
 Every pana tool wraps the CLI command of the same name: same arguments, same JSON output,
 same exit codes. Use whichever is convenient. Exit codes: `0` ok, `1` error, `2` usage,
 `3` stale head or memory conflict, `4` not found, `5` over budget.
