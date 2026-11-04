@@ -351,6 +351,140 @@ Nothing here saves 5% of a file without losing a plan: the four indexes and the 
 
 Source: `EXPLAIN QUERY PLAN` over the 20 delivery statements on a seeded database, and `dbstat` over the same rows rebuilt `WITHOUT ROWID`, 2026-11-02.
 
+## Retention: what a `deliveries` rule would remove, and what it would cost
+
+One row per recipient per message, five indexes behind it, and nothing ever deletes a row: that is the 53%, and it is why the file grows. This section measures a retention rule instead of building one. It answers three questions with numbers — what a rule would remove, what it would visibly break, and what running it would cost — on a throwaway database built through panad's own routes. No live database was opened, no migration was added, and no bench was run (this is database shape, not latency).
+
+### The database this measures
+
+Built by a script that starts a real `panad` on a temporary state directory and drives it over its socket, the way `scripts/bench` does: seven sessions created through `POST /sessions`, 500 threads with replies, reads, partial reads, and per-participant archives, twelve failing runs (which post notices), three objectives drafted, launched, given charter revisions and members, and discussed in their threads, and three sessions archived by the user — 534 threads in all, once session creates and objective launches are counted. Then panad was stopped and the file was copied; the copy's `created_at`/`read_at` were wound back per thread so 45% of the threads are today's, a quarter are a day to six days old, and a third are a week to three months old, and the copy was `VACUUM`ed so page slack from the rewrites does not count against anything.
+
+| | |
+|---|---|
+| participants / sessions / archived sessions | 18 / 16 / 3 |
+| threads / messages / deliveries | 534 / 2,977 / 3,441 |
+| thread archives (per participant) | 159 |
+| objectives / `objective_events` | 3 / 66 (`run.started` 15, `run.ended` 15, `member.created` 6, …) |
+| deliveries read / unread | 2,864 / 577 |
+| deliveries to the user / to sessions | 1,558 (999 read) / 1,883 (1,865 read) |
+| file, after aging and `VACUUM` | 9,175,040 B |
+| of that, the tables pana defines (`pi_*` excluded) | 4,272,128 B |
+
+`dbstat` on that file, for the table this section is about and each of its indexes:
+
+| Object | Bytes | A row | Share of pana-owned |
+|---|---|---|---|
+| `deliveries` (the table) | 507,904 | 148 | 11.9% |
+| `sqlite_autoindex_deliveries_1` (PK `id`) | 122,880 | 36 | 2.9% |
+| `sqlite_autoindex_deliveries_2` (`message_id, recipient_id`) | 184,320 | 54 | 4.3% |
+| `deliveries_recipient` (`recipient_id, created_at`) | 114,688 | 33 | 2.7% |
+| `deliveries_recipient_submission` (`recipient_id, wake_submission_id`) | 98,304 | 29 | 2.3% |
+| `deliveries_recipient_unread` (`recipient_id, thread_id` where unread) | 28,672 | 50 a row, unread only | 0.7% |
+| `deliveries_pending_wake` (`wake_request_id` where pending) | 4,096 | empty here | 0.1% |
+| **the table and its five indexes** | **1,060,864** | **308** | **24.8%** |
+
+A delivery costs 308 B, 148 of them row payload, and half of the footprint is indexes. The share here is 24.8% rather than P4's 53% only because this build carries sixteen sessions, and `sessions_fts` (indexing their transcripts) is 36% of the pana-owned bytes; the per-row cost is the same story, and the removable share below is stated as a fraction of the delivery footprint, so it moves to P4's shape unchanged.
+
+Deliveries by age, on the aged copy (`read_at`, so "read and archived" is the reader's own archive):
+
+| Bucket | Total | Read | Unread | Read and archived | To the user |
+|---|---|---|---|---|---|
+| today | 1,774 | 1,516 | 258 | 249 | 790 |
+| 1–6 days | 653 | 532 | 121 | 85 | 300 |
+| 7+ days | 1,014 | 816 | 198 | 98 | 468 |
+
+### Every statement that reads a delivery without filtering to unread
+
+`grep -rn "FROM deliveries\|UPDATE deliveries\|deliveries d" src/` is 31 statements in 9 files: 8 name one row by id or insert one, 9 filter to unread, 4 are migration SQL, and the other 10 read the table without an unread filter. Each of the 10 was run on the copy before and after the rule, and the counts below are that run.
+
+| Statement | What a deleted read delivery does | A@30: read+archived | B@7: any read |
+|---|---|---|---|
+| `store.ts:900` the inbox page | the item is gone from the inbox; the archived view is the only one that shows read history | archived items 432 → 346, threads 159 → 126 | items 1,126 → 954 and 432 → 334; 55 threads leave the live inbox |
+| `store.ts:926` the recipients an item names | the message loses that recipient from its delivered-to line | unchanged (all removed rows are the user's own) | 1,883 → 1,337 |
+| `store.ts:346` `readTimes`, the thread's read marks | the message view loses `readAt`; `read.has()` is false, so the field is absent rather than null | read marks 999 → 913 | 999 → 729 |
+| `reply.ts:65` the auto-reply's starter, by `(recipient_id, wake_submission_id)` | **the run's trigger cannot be found, so no automatic reply is posted at all** — a wake marks its delivery read, so this lookup needs a read row by definition | unchanged (the user's rows carry no submission) | 1,865 → 1,319, and the one probe row goes from a row to nothing |
+| `reply.ts:89` the session's newer deliveries in the thread | the walk that decides which messages an answer covers starts in the wrong place | unchanged | 1,865 → 1,319 |
+| `runtime.ts:314` a stop's requeue, by `(recipient_id, wake_submission_id)` | queued mail is deleted instead of returned to unread, so a resume never delivers it | unchanged | 1,865 → 1,319 |
+| `runtime.ts:501` `#reconcile`'s last submission after a restart | a session whose last run is older than N loses the submission it would settle, so a crash-recovered run is set idle instead of settled | unchanged: the newest submission of each of the 16 sessions is younger than 30 days | all 16 sessions still keep their newest; the older submissions are gone |
+| `runtime.ts:626` `triggeringDelivery` (`#settle`) | a failed run's notice is posted in a new thread instead of the one that failed, and `run.ended` records no thread to read (OBJ-36) | unchanged | 1,865 → 1,319 |
+| `limits.ts:119` `objectiveUserMessagesToday` | the day's count drops, so `maxDailyUserMessages` lets the objective send more than its limit | unchanged, since the day window is inside any N ≥ 1 | today 706 unchanged; a week's window 913 → 910 |
+| `unread.ts:30/33` the counter's `COUNT` | nothing: the count is `read_at IS NULL`, and no rule here touches an unread row | 577 → 577 | 577 → 577 |
+| `unread_counts` (the badge) | nothing, for the same reason | 577 → 577 | 577 → 577 |
+| `thread_archives` | nothing: the archive is a thread, not a delivery, so the thread stays archived with nothing left in it | 159 rows unchanged | 159 unchanged |
+
+The last three rows are not delivery statements; they are what must not change, and does not. `outbox.ts:48` (`pendingWakes`: a request with no submission) and `runtime.ts:217` (`deliverHeld`) are unread-only in practice — a row whose wake was submitted is read, and one whose submission is missing is unread — so no rule that keeps unread rows can reach them (both counted 577 and 0 before and after). `runtime.ts:367` (the archive settle) and `hold.ts:343/550` filter `read_at IS NULL`. `schema.ts:279/510` are migrations 11 and 14 and run once.
+
+### Three rules, measured against each other
+
+Each rule on its own copy of the aged database: `DELETE`, then bytes before the delete, after it, and after a full `VACUUM` (churn alone returns nothing — P4 measured that); the delete's own time on that copy (one cold run, then warm ones); and the rows each statement above loses.
+
+| Rule | Rows | % of deliveries | Delivery footprint after `VACUUM` | Freed | % of the file | Delete, cold / warm |
+|---|---|---|---|---|---|---|
+| **A** read+archived, 7 d | 98 | 2.8% | 1,044,480 B | 16,384 B | 0.2% | 20.3 / 0.65 ms |
+| **A** read+archived, 30 d | 86 | 2.5% | 1,044,480 B | 16,384 B | 0.2% | 20.3 / 0.65 ms |
+| **A** read+archived, 90 d | 7 | 0.2% | 1,060,864 B | 0 | 0 | 24.7 / 0.3 ms |
+| **B** any read, 7 d | 816 | 23.7% | 806,912 B | 253,952 B | 2.8% | 27.4 / 0.3 ms |
+| **B** any read, 30 d | 644 | 18.7% | 868,352 B | 192,512 B | 2.1% | 27.7 / 0.3 ms |
+| **C** archived session's read, 7 d | 273 | 7.9% | 970,752 B | 90,112 B | 1.0% | 27.3 / 0.3 ms |
+| **C** archived session's read, 30 d | 202 | 5.9% | 987,136 B | 73,728 B | 0.8% | 26.6 / 0.3 ms |
+
+What each costs where a reader can see it, from the routes on the copy (walking every page of `/inbox` as the user):
+
+| Rule | Live inbox items / threads | Archived inbox items / threads | `unreadTotal` | Read marks lost | Wake-submission lookups lost |
+|---|---|---|---|---|---|
+| baseline | 1,126 / 363 | 432 / 159 | 559 | 0 | 0 |
+| A@30 | 1,126 / 363 | 346 / 126 | 559 | 86 | 0 |
+| B@7 | 954 / 308 | 334 / 120 | 559 | 270 | 546 |
+| C@7 | 1,126 / 363 | 432 / 159 | 559 | 0 | 273 |
+
+Nothing frees whole pages: 86 rows out of 3,441 leave the file exactly the same size, `freelist_count` 0, and a full `VACUUM` returns 16,384 B — two pages' worth of slack. B@7 frees 8 pages on its own and 254 KB after `VACUUM`. The deleted rows' space sits inside pages that the next deliveries reuse, which is why a rule like this caps growth rather than shrinking the file.
+
+Ranked by bytes per unit of visible loss: **C** is free in the inbox and loses only the read marks of sessions that can never run again (73,728 B for 0 inbox items, 0 live bytes of any other kind); **A** costs 496 B of file for each archived thread it empties (16,384 B for 33 threads, and the archived inbox keeps 30 days instead of everything); **B** buys the most bytes by breaking the reply path — 254 KB for 55 threads gone from the live inbox *and* 546 wake-submission rows that the auto-reply, the stop requeue, and the failure notice look up (proved above: the starter probe goes from a row to nothing).
+
+### What the tests say
+
+The rule was applied to a copy of the source twice — once per scaffolding below — and the whole suite run against each; both patches were reverted, `npx tsc --noEmit` is clean, and nothing but this file is in the branch.
+
+| Scaffolding | Where it deletes | `npx vitest run` |
+|---|---|---|
+| the strongest sensible rule applied at read time: any read delivery, window 0 | after every read mark | **41 failed** of 600, in 14 of 53 files |
+| the recommended rule at its strongest: read and archived, window 0 | when the archive is recorded | **0 failed** (598 passed, 2 skipped) |
+| the same rule as a sweep | at startup, next to `sweepWakes` | **1 failed**: `test/db.test.ts` DB-03 |
+
+The 41 fall into three groups, and they say which statements matter more than the SQL table above does:
+
+- **The answer never arrives.** `RPL-01/02/03/06`, `DLV-04`, `SES-02`, `STA-03`, `LIM-03`, `STA-08` ×3, `INT-01/02/03/04`, both `REF-09` tests, both smoke tests, and the bench all time out waiting for a reply or for the messages an answer would add: `reply.ts:65` cannot find the delivery the run was woken by.
+- **The row a test inspects, or the message it counts, is gone.** `DLV-01/03/05`, `THR-10`, `INB-02`, `REF-05`, `STA-01`, `STA-02`, `STA-07`, `OBJ-18` ×2, `OBJ-19`, `OBJ-20`, `OBJ-33` ×2, `OBJ-34`, `OBJ-36`, `OBJ-40`, `OBJ-41`: they read `read_at` or `wake_submission_id` from a row the rule deleted, or expect a notice or answer built from one.
+- **The count is wrong, not just the row.** `OBJ-24` twice and `OBJ-32`: the lead's briefing reads `1 of 10` where it said `2 of 10`, and one message to the user today counts zero — `limits.ts:119` undercounting a limit that exists to be enforced.
+
+The recommended rule at window 0 passing everything is **untested, not safe**: no test asserts that an archived thread's inbox keeps its read history. The one assertion that does notice — DB-03, which compares the whole `deliveries` table across a restart and expects a read-and-archived row back — only fails when the delete runs at startup rather than at archive time. The visible loss A@30 has (86 inbox items, 33 threads, 86 read marks) is real and the suite is silent about it; the suite is loud only about the reply path and the daily count.
+
+On the same database **before** the aging, where every delivery is from today — which is what a panad younger than N days looks like — all seven rules removed **0 rows**. The live file was 137 MB on 2026-11-04 and grew 31 MB in two days, so at ~300 B a row and deliveries at 53% of it, it holds roughly nine days of mail: **any rule with N ≥ 14 removes nothing from the database that exists today**, and one at N = 7 removes the oldest two days of it, about a fifth of the file. Retention changes the future, not the current file.
+
+### Recommended: A at 30 days, or nothing
+
+`read and archived by that recipient, read more than 30 days ago`, and its session-only sibling C at the same window if the user wants the free part. What that does:
+
+- **visible cost:** an archived thread keeps 30 days of inbox history instead of all of it. Threads whose mail is all older than that leave the archived inbox entirely (33 of 159 in this build), and their message views stop reporting read marks. A thread's messages, its subject, and its archive stay: search, discovery, and the thread view are unchanged.
+- **byte win, on this aged database:** 2.5% of the delivery rows, 1.5% of the delivery footprint, 0.2% of the file. On the live one, nothing for another three weeks: the live file is 137 MB at ~15 MB/day, so it holds about nine days of mail and a 30-day rule has nothing to delete until the database is that old. After that it holds 30 days of deliveries instead of every day since the database was made — roughly a 460 MB file at today's rate, where unbounded growth reaches ~5.7 GB in a year — and the space the deletions leave inside pages is reused by new deliveries, so the file plateaus rather than shrinking.
+- **what it never touches:** anything unread, anything the user has not archived, anything to a session, and every row whose `wake_submission_id` an answer depends on. That last one is why A can be considered at all and B cannot: 0 of the removed rows carry a submission, where B's 816 carry 546.
+
+If the only acceptable loss is zero, the answer is **C at 30 days alone** (0.8% of this file, no inbox item, no read mark a reader can see) and, more honestly, that the file keeps growing.
+
+What A does not fix: it bounds the delivery table, and the delivery table is about half the growth — 53% in P4's build, 25% of pana-owned bytes here, where the transcripts of sixteen sessions are the larger half. The `pi_*` tables, the message bodies and their FTS rows keep every day they have ever held. A retention rule is a cap on the half that has a defensible definition of "spent"; nothing here says the other half is fine.
+
+### Where it would run, if it is approved
+
+Not a migration: a migration runs once at boot, in one transaction, and would need a `VACUUM` of the live file (105 ms for 9.2 MB, and it needs room for a second copy) to return anything.
+
+- **A sweep in panad at startup**, next to the outbox's `sweepWakes` (`src/server/index.ts:149`) — the existing place for "finish the work the last process left" — plus a daily timer at the local day turn — the same `clock.setTimer(nextDayStart)` that `#armRollover` already builds for budgets. Not `#settleIdle`: that is pi-durable's idle-context check, and it runs often enough to matter and not often enough to be a schedule.
+- **Cost per run:** one scan of `deliveries`. 3,441 rows take 0.35 ms warm and 20 ms cold (WAL and pages to read); the scan is ~0.1 µs a row, so 100,000 rows ~10 ms and 1,000,000 ~100 ms. In **bounded batches** of 200 rows, one transaction each, the 816-row delete took 48 ms total and 8 ms a batch, so no single write line is held long.
+- **An index to make it a seek:** `deliveries_read (read_at) WHERE read_at IS NOT NULL`, needs no statement change. 45,056 B for 2,864 read rows (17 B a read row, ~5% of a delivery), 26 ms to build on this copy; it turns `SCAN d` into `SEARCH d USING INDEX deliveries_read (read_at>? AND read_at<?)` and the cold delete from 20.3 ms to 7.8 ms.
+- **A vacuum strategy:** a full `VACUUM` is the only thing that shrinks the file, and it needs twice the file's size free; `incremental_vacuum` returns the freelist only and only on a database created with `auto_vacuum=incremental` (P4). The cheap shape is none: deleted rows leave page slack that the next deliveries fill, so the file plateaus instead of shrinking, and `VACUUM` belongs to an explicit maintenance command rather than to the sweep.
+- **A decision the user has to make:** that an archived thread's inbox history is 30 days. Nothing in the code needs to change to make A safe; the statement that would break — `reply.ts:65` and the three lookups beside it — is excluded by the rule's own predicate, which is the measured reason to prefer A over B.
+
+Source: scripts that drove a real `panad` over its socket (never the bench), `dbstat` and `EXPLAIN QUERY PLAN` on throwaway copies, and two patched builds of the suite, 2026-11-04. The scripts are throwaway and are not in the branch.
+
 ## Objectives reads in the bench (`--objectives`)
 
 The objectives routes were measured by an ad-hoc harness until now; the default bench never drove them. This adds an opt-in phase so they are measured by the same driver, against the same request log, whenever someone is working on them:
