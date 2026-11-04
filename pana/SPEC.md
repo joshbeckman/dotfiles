@@ -65,6 +65,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 - [x] **DB-02** Pana tables: `participants`, `sessions`, `threads`, `thread_participants`, `messages`, `message_events`, `deliveries`, `files`, `schedules`, `push_subscriptions`, `subjects`, plus FTS5 tables `messages_fts` and `sessions_fts`.
 - [x] **DB-03** Migrations run at startup, are numbered, and are idempotent. A database newer than the code refuses to open with code 1.
 - [x] **DB-04** A message insert, its deliveries, and the pi-durable submission that wakes a recipient session commit in one transaction. A crash injected between any two statements leaves none of them.
+- [x] **DB-05** `panad` sweeps deliveries when it starts and every 24 hours after, on `runtime.clock`. A delivery is deleted only when its recipient read it at or before `now - retention.readDeliveryDays`, the recipient has archived its thread, and it never carried a wake (`wake_submission_id IS NULL`); `retention.readDeliveryDays` defaults to 30 in `config.json` and `0` disables the sweep. The sweep deletes at most 200 rows per transaction and 20 batches a run, so a boot or a run is never held, and it leaves the rest for the next sweep. It never deletes an unread delivery, so `unread_counts` and the inbox badge are unchanged, and it never deletes a delivery a wake lookup needs, so a session's answer still finds its trigger. It never runs `VACUUM`: the space a deleted row leaves inside its page is reused by the next delivery.
 
 ### API contract
 

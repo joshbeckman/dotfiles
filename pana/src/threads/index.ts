@@ -7,6 +7,15 @@
 // `delivery.ts`). It runs inside the append transaction, once per delivery row.
 
 export {
+	RETENTION_BATCH_SIZE,
+	RETENTION_MAX_BATCHES,
+	sweepRetention,
+	startRetentionSweeper,
+	type RetentionOptions,
+	type RetentionResult,
+	type RetentionSweeper,
+} from "./retention.ts";
+export {
 	addressList,
 	archiveThread,
 	createThread,
