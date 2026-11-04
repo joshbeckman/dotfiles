@@ -34,6 +34,7 @@ export const PANA_ENV_NAMES = [
 	"LANG",
 	"TERM",
 	"PANA_SESSION",
+	"PANA_THREAD",
 	"PANA_STATE",
 	"PANA_SCRATCH",
 	"PANA_BROWSER_SESSION",
@@ -43,6 +44,8 @@ export interface PanaEnvOptions {
 	cwd: string;
 	/** The session's ULID, exported as `PANA_SESSION`; absent for a conversation that is not a session. */
 	sessionId?: string;
+	/** The originating thread URL, never the latest wake thread or an ancestor thread. */
+	threadUrl?: string;
 	/**
 	 * panad's state directory, exported as `PANA_STATE` so `pana` inside `bash` reaches this
 	 * panad's socket even when it does not run on the default state directory.
@@ -76,6 +79,7 @@ export function panaShellEnv(options: PanaEnvOptions): Record<string, string> {
 	};
 	if (options.sessionId) {
 		env.PANA_SESSION = options.sessionId;
+		env.PANA_THREAD = options.threadUrl ?? "";
 		// ISO-06: `bin/chrome-devtools` names this session's browser daemon with it.
 		env.PANA_BROWSER_SESSION = browserScope(options.sessionId);
 	}
@@ -296,7 +300,7 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 
 /**
  * The `env` option for `Harness.open`: one clean environment per conversation, resolving the
- * session from the conversation so `bash` can export `PANA_SESSION` and attribute commits.
+ * session from the conversation so `bash` can export its identity and thread attribution.
  */
 /**
  * A session's memory worktree is made on first use: the first prompt render or tool call. Making
@@ -316,6 +320,11 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 	return async (target: { conversationId: number; cwd?: string }): Promise<ExecutionEnv> => {
 		const runtime = getRuntime();
 		const row = await runtime.db.get<{ id: string }>("SELECT id FROM sessions WHERE conversation_id = ?", target.conversationId);
+		// The first delivery starts the session. Later wakes and parentage do not change attribution.
+		const origin = row ? await runtime.db.get<{ thread_id: string }>(
+			"SELECT thread_id FROM deliveries WHERE recipient_id = ? ORDER BY created_at, id LIMIT 1",
+			row.id,
+		) : undefined;
 		if (row) await ensureMemoryWorktree(runtime, row.id);
 		// SCR-01: made on every open, because a sweep may have removed it while the session was idle.
 		const scratch = row ? ensureScratch(runtime, row.id) : undefined;
@@ -323,6 +332,7 @@ export function createPanaEnv(getRuntime: () => Runtime) {
 			// SCR-02: a session with no cwd of its own runs in its scratch; never in panad's cwd.
 			cwd: target.cwd ?? scratch ?? homedir(),
 			sessionId: row?.id,
+			threadUrl: origin ? runtime.url({ kind: "thread", id: origin.thread_id }) : undefined,
 			scratchDir: scratch,
 			stateDir: runtime.paths.dir,
 			managedLayouts: runtime.config.worktreeAdapters,

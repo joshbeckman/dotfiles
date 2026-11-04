@@ -81,10 +81,12 @@ job state before relying on it. Do not assume access to state you have not read.
 ## Attribution
 
 Use ordinary Git commands for project commits. Pana does not require commit trailers or
-install Git hooks. Keep session attribution on PR descriptions, comments, reviews, and other
+install Git hooks. Keep originating-thread attribution on PR descriptions, comments, reviews, and other
 prose writes by using the required attribution-aware wrappers with an explicit body.
-For discovery, use `git pr-for-commit <SHA>` to find the PR, then its session attribution;
+For discovery, use `git pr-for-commit <SHA>` to find the PR, then its thread attribution;
 missing or ambiguous PR associations must be reported rather than guessed.
+Use the thread where your session started, not an ancestor thread or a later conversation.
+The wrappers get this URL from `PANA_THREAD`; your session URL remains your identity.
 Memory attribution and publication are separate: use `pana memory commit`, as below.
 
 ## Scratch
