@@ -9,12 +9,13 @@ Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/mai
 ## Principles
 
 - **Idle costs nothing but storage.** No active task, no context in memory, no background process between runs.
-- **Everything has a URL.** Sessions, threads, messages, memory, and schedules can be linked to and shared. A session’s URL is also its identity, address, and attribution. It needs no name.
+- **Everything has a URL.** Sessions, threads, messages, memory, and schedules can be linked to and shared. A session’s URL is also its identity and address. It needs no name.
 - **CLI first.** Users and agents use the same commands. Other programs can use them too.
 - **UI second, not second-class.** The UI stays fast and makes common actions easy. Sessions communicate with users through messages and links.
 - **One place to see the work.** Threads, sessions, memory, schedules, tool calls, costs, and state.
 - **Sessions are temporary and run in parallel.** They respond quickly and release resources when a run ends.
 - **Scratch is temporary. Memory lasts.** Each session has its own scratch directory. Preserve useful work in its canonical home; shared memory preserves understanding and routing pointers. Git tracks each memory change and its author.
+- **Link work to the thread where it started.** Threads keep the instructions, decisions, and results; sessions identify the agents that did the work. A child session uses its own originating thread, not its parent’s. Later conversations do not change this link.
 - **Threads are for communication.** Participants work together through messages. Every participant gets every message. Threads can be read and shared.
 - **Read before you write.** Each new message must name the latest message the sender has read. If the thread has changed, the write fails. Read the new messages and try again. Memory changes must also resolve conflicts before publication.
 - **Messages wake idle sessions.** During a run, user messages arrive after the current tool round. Messages from other sessions wait for the next run.
@@ -156,7 +157,7 @@ To try pana from this checkout without installing the service, run `pana/scripts
 
 IDs are ULIDs, except usernames. Every command accepts a URL or a bare ID. In an address list, a bare ULID is a session and anything else is a username. ULIDs are 26 uppercase Crockford characters and usernames are lowercase, so the two never collide.
 
-A session has no name. Its URL is its identity, its attribution, and its address. All sessions are the same agent; they differ only in configuration and transcript.
+A session has no name. Its URL is its identity and address. Its originating thread URL is its attribution. All sessions are the same agent; they differ only in configuration and transcript.
 
 ## Architecture
 
@@ -182,7 +183,7 @@ Pana runs beside the current pi setup and shares nothing with it.
 
 - `panad` builds its own pi-durable registry with two extensions: `CodingTools` (`read`, `write`, `edit`, `bash`) from pi-durable, and `pana`, which adds the pana tools and system prompt sections.
 - Sessions load no pi-coding-agent extensions, skills, prompt templates, MCP servers, or `~/.pi/agent/AGENTS.md`.
-- The `bash` tool runs commands with a clean environment: `PATH` (with pana's own `bin` first, so `pana` in a session is this `panad`'s build), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_STATE`, `PANA_SCRATCH`, `PANA_BROWSER_SESSION`. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
+- The `bash` tool runs commands with a clean environment: `PATH` (with pana's own `bin` first, so `pana` in a session is this `panad`'s build), `HOME`, `USER`, `LANG`, `TERM=dumb`, `PANA_SESSION`, `PANA_THREAD`, `PANA_STATE`, `PANA_SCRATCH`, `PANA_BROWSER_SESSION`. `PANA_STATE` points `pana` in `bash` at the session's own `panad`. Provider credentials stay in `panad`. `AGENT_*` and `PI_*` variables never reach a session.
 - `bin/chrome-devtools` is that `bin`, so a session's `chrome-devtools` runs the installed CLI with `--sessionId $PANA_BROWSER_SESSION` and drives its own daemon: its own socket, pid file, and headless Chrome. The scope is the session id in hex, because the CLI accepts only `[a-fA-F0-9-]` for `--sessionId` and rejects anything else on every command. Two sessions on one machine no longer share the same pages. `panad` stops the daemon when it archives the session, and sweeps every five minutes to stop the daemons of sessions idle for ten minutes. That first start also gets an `--executablePath` for the first browser the shim finds — `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` on `PATH`, then the Chrome app bundle on a Mac — because the CLI otherwise probes only `/opt/google/chrome`, so on a Linux box with a distro Chromium and no Chrome the daemon starts and every call then fails. A call that names its own `--sessionId`, or a shell with no `PANA_BROWSER_SESSION`, runs the CLI unchanged.
 - The coding `read` tool prepares images with pi-durable’s worker-backed Photon processor, automatically honoring the model’s dimension and base64 byte limits without modifying the original. This is separate from the thread UI’s host-command resizer and requires no local image-command configuration.
 - A `bash` call that names no timeout stops after `tools.bashTimeoutSec` in `config.json` (600 seconds by default). Pana kills the command's whole process group, and the model gets an error result that says the call timed out.
@@ -227,12 +228,15 @@ Every pana tool wraps one CLI command with the same arguments, output, and exit 
 
 ### Attribution
 
-Session provenance belongs on PR descriptions, comments, reviews, and other prose writes:
+Thread attribution belongs on PR descriptions, comments, reviews, and other prose writes:
 
 ```
-Co-authored-by: AI pana://<domain>/sessions/<ulid>
+Co-authored-by: AI pana://<domain>/threads/<ulid>
 ```
 
+`panad` exports the originating thread URL as `PANA_THREAD`. `agent-trailer` uses it for
+prose and the optional email form; `--raw` still reports the session ID for diagnostics.
+Missing or invalid thread URLs fail rather than substituting a session or parent thread.
 The `gw` wrapper adds this attribution from the session environment for supported
 writes with an explicit body. Direct clients, web edits, and bodyless/editor-generated writes
 are not universally covered; use the required wrappers with `--body` or `--body-file`.
@@ -240,7 +244,7 @@ are not universally covered; use the required wrappers with `--body` or `--body-
 Use ordinary Git commands for project commits. Pana does not require commit trailers, provide
 a special commit operation, install Git hooks, or override `core.hooksPath`. Repository hooks
 and signing remain entirely native. Discover a commit's PR with `git pr-for-commit <SHA>`,
-then follow the PR's session attribution. The resolver uses hosting-provider associations or
+then follow the PR's thread attribution. The resolver uses hosting-provider associations or
 a configured PR-number merge trailer, not Pana coauthor trailers. It needs the relevant API
 access or local history/configuration, and fails for missing or ambiguous associations rather
 than guessing. Unpublished commits may have no PR yet.
@@ -560,6 +564,6 @@ Sessions show things to the user only through message Markdown (images, Mermaid)
 Pana starts empty and runs beside the old stack, so nothing has to change for it to work. Once pana has replaced daily use, remove:
 
 - Session naming: name allocation, realms, the identity registry, `agent-identity-backfill`, `agent-slug`, surname inheritance, and RFC 0001.
-- `agent-trailer`, once `gw` derives session attribution from `PANA_SESSION` itself. Project commits need no Pana trailer.
+- `agent-trailer`, once `gw` derives thread attribution from `PANA_THREAD` itself. Project commits need no Pana trailer.
 - `agent-team`, scratchpads, and `agent-find`, unless pana keeps an equivalent.
 - The AGENTS.md sections on names, scratchpads, teams, notifications, and attribution. Replace them with one section on pana.

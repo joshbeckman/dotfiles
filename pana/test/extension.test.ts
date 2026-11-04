@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPanaRegistry, runPanaCli } from "../src/extension/index.ts";
-import { PANA_BIN, PANA_ENV_NAMES, panaShellEnv } from "../src/extension/env.ts";
+import { PANA_BIN, PANA_ENV_NAMES, createPanaEnv, panaShellEnv } from "../src/extension/env.ts";
 import { BROWSER_IDLE_MS, browserScope, SCOPE_PATTERN, scopeSession, sweepBrowsers } from "../src/extension/browser.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { FAUX_MODEL, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
@@ -150,7 +150,7 @@ describe("extension isolation", () => {
 		}
 	});
 
-	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_STATE, PANA_SCRATCH, PANA_BROWSER_SESSION", async () => {
+	it("ISO-03 bash runs with exactly PATH, HOME, USER, LANG, TERM=dumb, PANA_SESSION, PANA_THREAD, PANA_STATE, PANA_SCRATCH, PANA_BROWSER_SESSION", async () => {
 		const seeded = await start({ capture: true });
 		const first = seeded.sessions[0]!;
 		const conversation = await conversationOf(t!, first.conversationId);
@@ -167,6 +167,8 @@ describe("extension isolation", () => {
 
 		expect(env.TERM).toBe("dumb");
 		expect(env.PANA_SESSION).toBe(first.id);
+		// This fixture has no starting message or delivery.
+		expect(env.PANA_THREAD).toBe("");
 		expect(env.PANA_BROWSER_SESSION).toBe(browserScope(first.id));
 		expect(env.PANA_STATE).toBe(t!.runtime.paths.dir);
 		expect(env.PANA_SCRATCH).toBe(join(t!.runtime.paths.scratch, first.id));
@@ -174,6 +176,37 @@ describe("extension isolation", () => {
 		expect(env.GIT_CONFIG_KEY_0).toBeUndefined();
 		expect(env.GIT_CONFIG_VALUE_0).toBeUndefined();
 		expect(env.HOME).toBe(process.env.HOME);
+	});
+
+	it("GW-01 a child keeps its own originating thread after deliveries in other threads", async () => {
+		const parent = await start();
+		const child = await seedThread(t!.runtime.db, t!.runtime.harness, t!.runtime.newId, t!.clock.now(), {
+			domain: TEST_DOMAIN, user: TEST_USER, count: 1,
+		});
+		const first = child.sessions[0]!;
+		await t!.runtime.db.write(async (tx) => {
+			await tx.run("UPDATE sessions SET parent = ?, depth = 1 WHERE id = ?", parent.sessions[0]!.id, first.id);
+			// Same timestamp: delivery IDs preserve creation order, not thread-ID order.
+			for (const threadId of [child.threadId, parent.threadId]) {
+				const message = t!.runtime.newId();
+				await tx.run(
+					"INSERT INTO messages (id, thread_id, seq, sender_id, body, created_at) VALUES (?, ?, 1, ?, 'task', ?)",
+					message, threadId, TEST_USER, t!.clock.now(),
+				);
+				await tx.run(
+					"INSERT INTO deliveries (id, message_id, thread_id, recipient_id, created_at) VALUES (?, ?, ?, ?, ?)",
+					t!.runtime.newId(), message, threadId, first.id, t!.clock.now(),
+				);
+			}
+		});
+		// Opening twice also checks the value does not depend on an in-memory cache.
+		for (let open = 0; open < 2; open++) {
+			const env = await createPanaEnv(() => t!.runtime)({ conversationId: first.conversationId });
+			let output = "";
+			const result = await env.exec('printf "%s" "$PANA_THREAD"', { onOutput: (text) => { output += text; } }, ctx);
+			expect(result.ok).toBe(true);
+			expect(output).toBe(`pana://${TEST_DOMAIN}/threads/${child.threadId}`);
+		}
 	});
 
 	it("ISO-04 provider credentials never appear in bash output, the transcript, or panad.log", async () => {

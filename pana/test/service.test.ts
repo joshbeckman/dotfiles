@@ -172,7 +172,7 @@ describe("WP9 service units", () => {
 });
 
 describe("WP9 attribution", () => {
-	it("GW-01 gw attributes posts when PANA_SESSION is set, using the session URL in the trailer", async () => {
+	it("GW-01 gw attributes posts when PANA_SESSION is set, using the originating thread URL in the trailer", async () => {
 		const home = tempHome();
 		const capture = join(home, "captured");
 		mkdirSync(join(home, ".local", "state", "pana"), { recursive: true });
@@ -180,7 +180,8 @@ describe("WP9 attribution", () => {
 		writeExecutable(join(home, "bin", "gh"), FAKE_GITHUB);
 
 		const session = "01JB8ZQ4V0K3W9X2Y7Z5A6B8C9";
-		const trailer = `Co-authored-by: AI pana://test.example/sessions/${session}`;
+		const thread = "pana://test.example/threads/01JB8ZQ4V0K3W9X2Y7Z5A6B8CA";
+		const trailer = `Co-authored-by: AI ${thread}`;
 		// A pana session's bash tool has none of the harness variables agent-trailer
 		// sniffs, so an explicit environment is also what the service really gets.
 		const env = {
@@ -188,6 +189,7 @@ describe("WP9 attribution", () => {
 			PATH: `${join(home, "bin")}:${join(repo, "bin")}:/usr/bin:/bin`,
 			CAPTURE: capture,
 			PANA_SESSION: session,
+			PANA_THREAD: thread,
 		};
 
 		await exec("/bin/bash", [join(repo, "bin", "gw"), "issue", "comment", "1", "--body", "Pana finding."], { env });

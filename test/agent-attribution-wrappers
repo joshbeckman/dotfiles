@@ -208,7 +208,8 @@ ln -s "$root/bin/agent-trailer" "$tmp/bin/agent-trailer"
 mkdir -p "$tmp/home/.local/state/pana"
 printf '{"domain":"test.example","user":"tester"}\n' >"$tmp/home/.local/state/pana/config.json"
 pana_session=01JB8ZQ4V0K3W9X2Y7Z5A6B8C9
-pana_trailer="Co-authored-by: AI pana://test.example/sessions/$pana_session"
+pana_thread="pana://test.example/threads/01JB8ZQ4V0K3W9X2Y7Z5A6B8CA"
+pana_trailer="Co-authored-by: AI $pana_thread"
 
 # Run the way a pana session's bash tool runs: clean of both the old harness
 # variables and the agent name, which panad never passes to a session.
@@ -217,7 +218,7 @@ run_pana() {
     -u PI_CODING_AGENT -u PI_PACKAGE_DIR -u PI_SESSION_ID -u PI_SESSION_FILE \
     -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CURSOR_AGENT -u CODEX_HOME \
     -u CODEX_SANDBOX -u AIDER_MODEL -u PANA_STATE \
-    HOME="$tmp/home" PANA_SESSION="$pana_session" "$@"
+    HOME="$tmp/home" PANA_SESSION="$pana_session" PANA_THREAD="$pana_thread" "$@"
 }
 
 run_pana "$root/bin/gw" issue comment 1 --body $'Pana first.\n\nPana second.'
@@ -266,5 +267,13 @@ FAKE_STATUS=7 run_pana "${command[@]}" --body 'New PR.' >"$tmp/out" 2>"$tmp/err"
 [[ $rc -eq 7 ]]
 [[ $(wc -l <"$CALLS") -eq 3 ]]
 [[ ! -e "$MONITOR_CALLS" ]]
+
+# Detection still recognizes Pana without a thread, but the write must not reach gh.
+before="$(wc -l <"$CALLS")"
+rc=0
+pana_thread='' run_pana "$root/bin/gw" pr edit 1 --body 'Must not publish.' >"$tmp/out" 2>"$tmp/err" || rc=$?
+[[ $rc -ne 0 ]]
+[[ $(wc -l <"$CALLS") -eq $before ]]
+grep -Fxq 'agent-trailer: PANA_THREAD must be the originating thread URL for PANA_SESSION' "$tmp/err"
 
 echo 'agent attribution wrapper tests passed'

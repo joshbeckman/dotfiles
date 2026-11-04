@@ -175,6 +175,19 @@ describe("INT-02 schedule edits keep their time", () => {
 	});
 });
 
+describe("GW-01 originating thread environment", () => {
+	it("GW-01 the first real session run receives its originating thread URL", async () => {
+		await start([
+			{ toolCalls: [{ name: "bash", args: { command: 'printf "%s" "$PANA_THREAD" > origin.txt' } }] },
+			{ text: "done" },
+		]);
+		const created = await createSession({ prompt: "Record the originating thread." });
+		await until(async () => (await t!.runtime.db.get("SELECT 1 FROM messages WHERE thread_id = ? AND seq = 2", created.thread.id)) ?? false, "the reply");
+		expect(readFileSync(join(t!.runtime.paths.scratch, created.session.id, "origin.txt"), "utf8"))
+			.toBe(`pana://test.example/threads/${created.thread.id}`);
+	});
+});
+
 describe("INT-02 the PWA reads the real handler shapes", () => {
 	it("INT-02 every view mapper reads real responses from inbox, threads, sessions, memory, and schedules", async () => {
 		await start([{ toolCalls: [{ name: "bash", args: { command: "true" } }] }, { text: "Paris." }]);
