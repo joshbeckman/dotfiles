@@ -216,6 +216,39 @@ describe("DB-05 the predicate", () => {
 		await expectCounterExact();
 	});
 
+	it("DB-05 a session's own read mail survives: an inbox is a user's", async () => {
+		await start({ retention: { readDeliveryDays: 0 } });
+		const session = await createSession();
+		const { threadId, messages } = await createThread([session]);
+		// A session can archive its own view of a thread, and a retired objective's `settleUnread`
+		// marks its queued mail read without ever waking it — so this row is read, archived by its
+		// recipient, old, and carries no submission. It is exactly what the participants clause
+		// exists to keep: `reply.ts`'s newer-delivery walk reads a session's rows.
+		expect((await t!.client.post(`/sessions/${session}/stop`)).status).toBe(200);
+		expect((await t!.client.post(`/threads/${threadId}/messages`, { body: "queued", after: messages[1] })).status).toBe(200);
+		const queued = (await t!.runtime.db.get<{ id: string }>("SELECT id FROM messages WHERE thread_id = ? ORDER BY seq DESC LIMIT 1", threadId))!.id;
+		expect(await deliveryOf(queued, session)).toMatchObject({ read_at: null, wake_submission_id: null });
+		await sessionRuntime(t!.runtime).archive(session, "objective", { settleUnread: true });
+		expect((await t!.client.post(`/threads/${threadId}/archive`, {}, { caller: session })).status).toBe(200);
+		await backdateReads([queued], 31 * DAY);
+
+		const row = await t!.runtime.db.get<{ read_at: number; wake_submission_id: number | null }>(
+			"SELECT read_at, wake_submission_id FROM deliveries WHERE message_id = ? AND recipient_id = ?",
+			queued,
+			session,
+		);
+		expect(row!.read_at).toBeLessThan(t!.clock.now() - 30 * DAY);
+		expect(row!.wake_submission_id).toBeNull();
+		expect(await t!.runtime.db.get("SELECT 1 AS archived FROM thread_archives WHERE thread_id = ? AND participant_id = ?", threadId, session)).toBeDefined();
+		expect(await deliveryOf(messages[0]!, session)).toMatchObject({ wake_submission_id: expect.any(Number) });
+
+		expect(await sweepRetention(t!.runtime, { days: 30 })).toMatchObject({ deleted: 0 });
+		expect((await deliveryOf(queued, session))!.read_at).toBe(row!.read_at);
+		// The user's side of the thread is untouched too: the user never read it or archived it.
+		expect((await deliveryOf(messages[1]!, TEST_USER))!.read_at).toBeNull();
+		await expectCounterExact();
+	});
+
 	it("DB-05 the window's edge: exactly `days` old goes, a millisecond younger stays", async () => {
 		await start({ retention: { readDeliveryDays: 0 } });
 		const session = await createSession();

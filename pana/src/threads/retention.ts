@@ -11,6 +11,11 @@
 //   construction; this clause makes that unreachable rather than unlikely.
 // - archived by that recipient — the live inbox lists read history too, and only the archived
 //   view is allowed to forget it.
+// - a user recipient — an inbox is a user's. A session can archive its own view of a thread
+//   (`archiveThread` resolves the caller the same way an inbox read does), and its deliveries are
+//   the ones `reply.ts`'s newer-delivery walk reads, so a session's mail is not this sweep's to
+//   drop even when it was read without a wake (a retired objective's `settleUnread`). The wake
+//   clause is the second line of defence, not the only one.
 // - older than the window — the reader has had the thread's contents for a month.
 //
 // The sweep runs when panad starts and once a day after (server/index.ts), in bounded batches with
@@ -64,6 +69,8 @@ async function deleteBatch(tx: SqliteExecutor, cutoff: number, limit: number): P
                      AND x.wake_submission_id IS NULL
                      AND EXISTS (SELECT 1 FROM thread_archives a
                                   WHERE a.thread_id = x.thread_id AND a.participant_id = x.recipient_id)
+                     AND EXISTS (SELECT 1 FROM participants p
+                                  WHERE p.id = x.recipient_id AND p.kind = 'user')
                    LIMIT ?)`,
 		cutoff,
 		limit,
