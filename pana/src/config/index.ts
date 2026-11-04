@@ -53,6 +53,16 @@ export interface ScratchConfig {
 }
 
 /**
+ * Delivery retention (DB-05). The sweep deletes a delivery only when the reader has read it, has
+ * archived its thread, read it more than `readDeliveryDays` ago, and it never carried a wake
+ * (`wake_submission_id IS NULL`). `0` disables the sweep and keeps every row.
+ */
+export interface RetentionConfig {
+	/** Days a read, archived delivery is kept before the sweep may drop it. 0 disables the sweep. */
+	readDeliveryDays: number;
+}
+
+/**
  * Objective defaults (OBJ-16, OBJ-24, OBJ-18). An objective row overrides any of them per
  * objective; these are what a new objective starts with.
  */
@@ -98,6 +108,7 @@ export interface Config {
 	http: HttpConfig;
 	tools: ToolsConfig;
 	scratch: ScratchConfig;
+	retention: RetentionConfig;
 	objectives: ObjectivesConfig;
 	worktreeAdapters?: WorktreeAdapter[];
 }
@@ -109,6 +120,7 @@ export const DEFAULTS = {
 	http: { port: 8766 },
 	tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 	scratch: { ttlDays: 8 },
+	retention: { readDeliveryDays: 30 },
 	objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 } as const;
 
@@ -159,7 +171,7 @@ export function parseConfig(raw: unknown): Config {
 		throw new ConfigError("config.json is missing required key: user", 2);
 	}
 
-	for (const key of ["budget", "files", "http", "tools", "scratch", "objectives", "ui"]) {
+	for (const key of ["budget", "files", "http", "tools", "scratch", "retention", "objectives", "ui"]) {
 		if (obj[key] !== undefined && (!obj[key] || typeof obj[key] !== "object" || Array.isArray(obj[key]))) {
 			throw new ConfigError(`config.json ${key} must be an object`, 2);
 		}
@@ -182,6 +194,7 @@ export function parseConfig(raw: unknown): Config {
 	const http = (obj.http ?? {}) as Record<string, unknown>;
 	const tools = (obj.tools ?? {}) as Record<string, unknown>;
 	const scratch = (obj.scratch ?? {}) as Record<string, unknown>;
+	const retention = (obj.retention ?? {}) as Record<string, unknown>;
 	const objectives = (obj.objectives ?? {}) as Record<string, unknown>;
 	const maxTotalMB = positive(scratch.maxTotalMB, "scratch.maxTotalMB", "megabytes");
 
@@ -212,6 +225,11 @@ export function parseConfig(raw: unknown): Config {
 		scratch: {
 			ttlDays: positive(scratch.ttlDays, "scratch.ttlDays", "days") ?? DEFAULTS.scratch.ttlDays,
 			...(maxTotalMB === undefined ? {} : { maxTotalMB }),
+		},
+		retention: {
+			// Zero is meaningful here, so this one accepts it: it turns the sweep off.
+			readDeliveryDays:
+				nonnegative(retention.readDeliveryDays, "retention.readDeliveryDays") ?? DEFAULTS.retention.readDeliveryDays,
 		},
 		objectives: {
 			maxMembersPerRun:

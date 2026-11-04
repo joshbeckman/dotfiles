@@ -485,6 +485,52 @@ Not a migration: a migration runs once at boot, in one transaction, and would ne
 
 Source: scripts that drove a real `panad` over its socket (never the bench), `dbstat` and `EXPLAIN QUERY PLAN` on throwaway copies, and two patched builds of the suite, 2026-11-04. The scripts are throwaway and are not in the branch.
 
+## Retention: the sweep that runs now (DB-05)
+
+The rule above, approved and built. `src/threads/retention.ts` deletes a delivery only when all five clauses hold, and each clause is the answer to a statement that reads the row:
+
+```sql
+DELETE FROM deliveries
+ WHERE id IN (SELECT x.id FROM deliveries AS x
+               WHERE x.read_at IS NOT NULL            -- the unread counter and its badge count only unread rows
+                 AND x.read_at <= :cutoff             -- read more than retention.readDeliveryDays ago
+                 AND x.wake_submission_id IS NULL     -- a row a wake lookup needs (reply.ts, the stop requeue, #reconcile)
+                 AND EXISTS (SELECT 1 FROM thread_archives a
+                              WHERE a.thread_id = x.thread_id AND a.participant_id = x.recipient_id)  -- the archived view only
+                 AND EXISTS (SELECT 1 FROM participants p
+                              WHERE p.id = x.recipient_id AND p.kind = 'user')                       -- an inbox is a user's
+               LIMIT :batch)`;
+```
+
+- **Where it runs:** `startRetentionSweeper` (`src/threads/retention.ts`) is started in `src/server/index.ts` beside `sweepWakes`, on the same pattern as `startScratchSweeper` (SCR-05): once at startup, then every 24 hours on `runtime.clock`. The startup run is not awaited, so a boot never waits for it. Not `#settleIdle`: that is pi-durable's idle-context check, which runs whenever a task settles and is a cost, not a schedule. With `retention.readDeliveryDays` at `0` the sweeper arms no timer and issues no query.
+- **The window:** `config.json` → `retention.readDeliveryDays`, default **30**, `0` disables the sweep. It is read when a sweep runs, so a change to it takes a restart to apply, like every other operational key (only `ui` is live).
+- **Batches and the cap:** 200 rows a transaction and at most 20 batches a run (`RETENTION_BATCH_SIZE`, `RETENTION_MAX_BATCHES`), so a run spends at most 4,000 rows and leaves the rest for the next one. Every row the predicate admits stays admitted, so the batches need no `ORDER BY` and always make progress.
+- **Why the recipient must be a user:** `archiveThread` resolves the caller the way an inbox read does, so a *session* can archive its own view of a thread, and a retired objective's `settleUnread` marks a session's queued mail read without ever waking it — a row with no submission at all. Those rows are `reply.ts`'s newer-delivery walk, so the sweep is limited to users: the wake clause is the second line of defence, not the only one.
+
+### What it costs, measured
+
+A throwaway database through the routes (the same script as above, 2,034 threads), aged and `VACUUMed`: 11,587 messages, 13,522 deliveries, 11,296 read, 1,694 read-and-archived, 370 eligible at 30 days, 33.8 MB. `sweepRetention` called on that runtime, cold then warm:
+
+| | Measured | A row |
+|---|---|---|
+| the predicate's scan of `deliveries` | 1.7 ms over 13,522 rows | 0.13 µs |
+| a full sweep, 370 rows deleted | 9.6 ms cold, 2.2 ms warm | — |
+| one batch of 50 rows (one transaction) | 1.2–2.0 ms | — |
+| a batch that finds nothing (scan, no delete) | 2.3 ms | — |
+| file size after the deletions | 33,820,672 B → 33,820,672 B | 0 |
+
+Nothing frees a page: 370 rows out of 13,522 leave the file exactly the same size, as P9 measured. The space those rows leave inside their pages is reused by the next deliveries, which is what caps the table instead of shrinking it.
+
+**No index.** `deliveries_read (read_at) WHERE read_at IS NOT NULL` would turn the scan into a range seek: 1.7 ms → 0.12 ms, and 163,840 B on this file (15 B a read row, +0.5%), 13 ms to build. It is not added because 1.7 ms a scan is nothing, the sweep's scan runs twice a day (plus once per batch while it is deleting), and the index grows with exactly the rows retention exists to cap — the one cost of this feature that never plateaus. At the live file's scale (137 MB, roughly 240,000 deliveries at ~300 B a row) the same 0.13 µs a row is ~30 ms a scan; the index that would save it would be ~3.6 MB and growing. If a later measurement finds the daily scan above ~250 ms, that is the time to add it.
+
+### What it buys
+
+The delivery table stops at 30 days instead of holding every day since the database was made. At the live rate — ~15 MB a day, deliveries at 53% of it, ~300 B a delivery — that is roughly 26,000 rows and 7.8 MB a day: a delivery table that levels near 780,000 rows (≈240 MB) against one that reaches ~9.5 million rows (≈2.8 GB) in a year, with the file following it to the 450 MB–5.7 GB range P9 stated. Nothing shrinks now: the live file is ~9 days of mail, so the first deletion is about three weeks after the upgrade.
+
+What it does not do: it never deletes a row delivered to a session, or an unread delivery (so `unread_counts` and the inbox badge cannot move — `test/retention.test.ts` checks that counter against its own `COUNT` after every sweep), it never deletes a row that carried a wake (so a session's answer still finds its trigger), and it never deletes a row in a thread the recipient has not archived (so the live inbox keeps its read history). The archived inbox is the one view that forgets: an archived thread keeps 30 days of it. It never runs `VACUUM` — that is a separate maintenance decision, and it would need room for a second copy of the file.
+
+Source: the seeded database and `sweepRetention` on a real `panad` (never the bench), 2026-11-04. The measurement scripts are throwaway and are not in the branch; the tests are `test/retention.test.ts`.
+
 ## Objectives reads in the bench (`--objectives`)
 
 The objectives routes were measured by an ad-hoc harness until now; the default bench never drove them. This adds an opt-in phase so they are measured by the same driver, against the same request log, whenever someone is working on them:

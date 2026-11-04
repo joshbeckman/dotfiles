@@ -33,6 +33,7 @@ import { withAuthRetries } from "./retry.ts";
 import { detectTailscaleNames } from "./tailscale.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 import { startScratchSweeper } from "../scratch/index.ts";
+import { startRetentionSweeper } from "../threads/index.ts";
 import { startBrowserSweeper, type SweepBrowsersOptions } from "../extension/browser.ts";
 
 export interface StartOptions {
@@ -149,6 +150,11 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		await sweepWakes(db, runtime.wake, (error, wake) => report(error, `wake for delivery ${wake.deliveryId}`));
 		harness.resume();
 		sessions.recover();
+		// DB-05: drop the deliveries nobody will be handed again — read, archived by that recipient,
+		// older than `retention.readDeliveryDays`, and never woken — now and once a day after. Batched
+		// and capped, so a boot spends at most 4,000 rows of it and the next run continues.
+		const retention = startRetentionSweeper(runtime, report);
+		cleanup.unshift(() => retention.close());
 
 		const webToken = readWebToken(dir);
 		const logger =
