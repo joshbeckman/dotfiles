@@ -32,17 +32,22 @@ and state-layout trees remain usable. Previously verified owned adapter trees re
 their original paths, including case-preserving IDs. Always use the returned path.
 
 A command exit of zero is not enough: Pana checks the path, shared repository,
-branch, and worktree-specific git registration/back-pointer before publishing ownership.
-Ownership records under `<state>/worktree-owners`
-are retained across restart and archive. No external existing tree is auto-adopted,
-and another session's linked tree is not writable merely because `.git` is a file.
+branch, and worktree-specific git registration/back-pointer before recording ownership.
+Ownership records are rows in pana's database (`worktree_owners`), which only panad
+writes, and are retained across restart and archive. A `<state>/worktree-owners`
+directory from an older build is adopted once at startup (only for records whose git
+pointer still agrees) and renamed `worktree-owners.migrated`; no later directory is
+authority. No external existing tree is auto-adopted, and another session's linked
+tree is not writable merely because `.git` is a file.
 Known peer ownership overrides even an explicit cwd, and implicit-cwd shell execution
 in an unowned checkout is refused. These are accidental-write guards, not a security
 boundary against arbitrary code. `guard` mode checks file-tool write paths and the
 actual execution cwd, never Bash command text. Commands launched from scratch may
 name or enter unowned checkouts; the session instructions still require owned trees
-for changes. `sandbox` adds read-only mounts on hosts supporting user mount namespaces;
-macOS falls back to file-tool/cwd checks without Bash write enforcement.
+for changes. `sandbox` adds read-only mounts on hosts supporting user mount namespaces, and runs
+the command without `CAP_SYS_ADMIN` so it cannot remount them writable or bind an
+ancestor over them; macOS falls back to file-tool/cwd checks without Bash write
+enforcement.
 
 ## Failure and cleanup
 
@@ -61,8 +66,8 @@ be lost. Use `git worktree remove` for ordinary trees and the repository's own r
 tool for managed trees; never force removal, unlock trees, or delete branches as part
 of this cleanup. Retain unsafe, blocked, or still-needed trees and report each path and
 reason in the task thread. This grants no bulk-cleanup authority over old/peer trees
-or user checkouts; ownership receipts remain retained and must not be hand-edited.
-Retained receipts grant no access after the git pointer changes to a different repository.
+or user checkouts; ownership records remain retained and are not hand-edited.
+A retained record grants no access after the git pointer changes to a different repository.
 
 For rollout, the owner should first test the configured tool on a fresh session tree,
 verify allowed owner file-tool writes and refused peer file-tool writes, plus actual

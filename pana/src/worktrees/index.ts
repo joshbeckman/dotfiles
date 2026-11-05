@@ -5,7 +5,6 @@
 // what that command writes. So the one command a refused session needs runs here, in panad, where
 // nothing is mounted read-only. Managed repositories use a machine-configured creation adapter.
 
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -79,13 +78,13 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 	if (adapter) {
 		// Do not relocate a previously verified owned tree created with the old case-preserving ID.
 		const legacyPath = join(realPath(adapter.root), `pana-${safeName(sessionId)}-${name}`, adapter.subdir ?? "");
-		if (legacyPath !== path && owners(runtime.paths.dir).some((o) =>
+		if (legacyPath !== path && (await owners(runtime.db)).some((o) =>
 			o.path === legacyPath && o.session === sessionId && o.common === common && checkoutCommon(o.path) === common)) path = legacyPath;
 	}
 	const previous = pending.get(path) ?? Promise.resolve();
 	const work = previous.catch(() => {}).then(async () => {
 		if (realPath(path) !== resolve(path)) throw ApiError.badRequest("invalid_worktree", "worktree destination contains a symlink");
-		const owner = owners(runtime.paths.dir).find((o) => o.path === path);
+		const owner = (await owners(runtime.db)).find((o) => o.path === path);
 		if (owner && (owner.session !== sessionId || owner.common !== common)) {
 			throw ApiError.badRequest("worktree_collision", "destination belongs to another session or repository");
 		}
@@ -122,7 +121,7 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 		}
 		const actualBranch = await git(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
 		if (created && actualBranch !== branch) throw ApiError.badRequest("invalid_worktree", "adapter checked out the wrong branch");
-		saveOwner(runtime.paths.dir, createHash("sha256").update(path).digest("hex"), { session: sessionId, path, common });
+		await saveOwner(runtime.db, { session: sessionId, path, common });
 		return { session: sessionId, repo, path, branch: actualBranch, created };
 	});
 	pending.set(path, work);

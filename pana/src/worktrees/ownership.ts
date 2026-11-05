@@ -1,7 +1,13 @@
-// Ownership receipts live outside scratch and are retained across archive/restart. A receipt
-// permits only its checkout, not the surrounding managed tree (caches may belong to other tools).
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+// Ownership records live in pana's database, which only panad writes. A tree's owner is retained
+// across archive/restart, and a record permits only its checkout, not the surrounding managed tree
+// (caches may belong to other tools).
+//
+// They were JSON files under `<state>/worktree-owners` until migration 16: `exec()` re-reads
+// ownership on every call, so a file any `bash` command could write was a grant any `bash` command
+// could forge. `adoptLegacyOwners` carries a pre-database install's records across once.
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { PanaDatabase } from "../db/atomic.ts";
 import { realPath } from "../extension/checkouts.ts";
 
 export interface WorktreeOwner { session: string; path: string; common: string }
@@ -22,26 +28,46 @@ export function checkoutCommon(path: string): string | undefined {
 	} catch { return undefined; }
 }
 
-export function owners(state: string): WorktreeOwner[] {
+export async function owners(db: PanaDatabase): Promise<WorktreeOwner[]> {
+	return db.all<WorktreeOwner>("SELECT session, path, common FROM worktree_owners");
+}
+
+export async function ownedPaths(db: PanaDatabase, session: string): Promise<string[]> {
+	return (await owners(db)).filter((o) => o.session === session && checkoutCommon(o.path) === o.common).map((o) => o.path);
+}
+
+const RECORD = "INSERT INTO worktree_owners (path, session, common) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET session = excluded.session, common = excluded.common";
+
+export async function saveOwner(db: PanaDatabase, owner: WorktreeOwner): Promise<void> {
+	await db.write((tx) => tx.run(RECORD, owner.path, owner.session, owner.common));
+}
+
+/**
+ * GUARD-07: adopt the `worktree-owners` directory a build before migration 16 wrote, once. A
+ * record whose git pointer no longer agrees with it grants nothing and is dropped; a directory
+ * that appears after the adoption is not authority, so a session cannot reintroduce one.
+ */
+export async function adoptLegacyOwners(db: PanaDatabase, state: string): Promise<void> {
 	const dir = join(state, "worktree-owners");
-	if (!existsSync(dir)) return [];
-	// Malformed receipts fail closed: they grant nothing, and creation reports a collision.
-	return readdirSync(dir).filter((n) => n.endsWith(".json")).flatMap((n) => {
+	const adopted = `${dir}.migrated`;
+	if (existsSync(adopted) || !existsSync(dir)) return;
+	const keeping: WorktreeOwner[] = [];
+	for (const name of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
 		try {
-			const value = JSON.parse(readFileSync(join(dir, n), "utf8"));
-			return typeof value.session === "string" && typeof value.path === "string" && typeof value.common === "string" ? [value as WorktreeOwner] : [];
-		} catch { return []; }
+			const value = JSON.parse(readFileSync(join(dir, name), "utf8"));
+			if (typeof value.session !== "string" || typeof value.path !== "string" || typeof value.common !== "string") continue;
+			if (checkoutCommon(value.path) !== value.common) continue;
+			keeping.push({ session: value.session, path: value.path, common: value.common });
+		} catch {
+			// A malformed record failed closed before this change too, and still grants nothing.
+		}
+	}
+	await db.write(async (tx) => {
+		for (const owner of keeping) await tx.run(RECORD, owner.path, owner.session, owner.common);
 	});
-}
-
-export function ownedPaths(state: string, session: string): string[] {
-	return owners(state).filter((o) => o.session === session && checkoutCommon(o.path) === o.common).map((o) => o.path);
-}
-
-export function saveOwner(state: string, key: string, owner: WorktreeOwner): void {
-	const path = join(state, "worktree-owners", `${key}.json`);
-	mkdirSync(dirname(path), { recursive: true });
-	const temp = `${path}.tmp`;
-	writeFileSync(temp, JSON.stringify(owner) + "\n", { mode: 0o600 });
-	renameSync(temp, path);
+	try {
+		renameSync(dir, adopted);
+	} catch {
+		// Left in place: adoption is idempotent, and the records it holds still face the git check.
+	}
 }

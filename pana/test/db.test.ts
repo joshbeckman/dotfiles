@@ -39,6 +39,8 @@ const PANA_TABLES = [
 	"objective_costs",
 	// Migration 14: the unread counter (REF-06).
 	"unread_counts",
+	// Migration 16: worktree ownership (GUARD-07).
+	"worktree_owners",
 ];
 
 const opened: TestPanad[] = [];

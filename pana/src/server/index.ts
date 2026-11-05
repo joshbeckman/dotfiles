@@ -24,6 +24,7 @@ import { startScheduler } from "../schedules/index.ts";
 import { startSessions } from "../sessions/runtime.ts";
 import { defaultWakeSubmitter } from "../sessions/wake.ts";
 import { launchUrl, loopbackOrigin } from "../web/static.ts";
+import { adoptLegacyOwners } from "../worktrees/ownership.ts";
 import { createApp, type RequestLogEntry } from "./app.ts";
 import { defaultHandlers } from "./handlers.ts";
 import { acquirePidLock } from "./lock.ts";
@@ -139,6 +140,10 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			...urlHelpers(config.domain, config.user),
 			wake: (options.wake ?? defaultWakeSubmitter)(getRuntime),
 		};
+
+		// GUARD-07: ownership records a build before migration 16 wrote as JSON files are adopted
+		// once, before any session runs, so a live install keeps its trees.
+		await adoptLegacyOwners(db, paths.dir);
 
 		// PSH-01: the VAPID pair exists before the first push, not on the first request.
 		initPush(runtime);
