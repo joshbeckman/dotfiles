@@ -120,6 +120,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **API-03** On the socket, the caller is the session named by the `Pana-Caller` header, or the configured user when the header is absent. An unknown session in `Pana-Caller` returns 400.
 - [x] **API-04** On TCP, every request needs `Authorization: Bearer <web-token>`. A missing or wrong token returns 403. The caller is always the configured user.
 - [x] **API-05** TCP accepts `Host` values of `127.0.0.1`, `localhost`, and the machine's Tailscale name. Any other `Host` returns 403.
+- [x] **API-06** A request body is read only after the caller is resolved, and never beyond `files.maxBytes`: a body that declares more, or streams past it, is refused at the byte that crosses the limit with 413 (`payload_too_large`) and none of the rest is kept. An upload keeps FIL-03's 400 (`file_too_large`).
 
 ### Test harness
 
@@ -186,7 +187,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **FIL-04** `GET /files/:id/:name` serves the bytes with the recorded media type. A wrong name returns 404.
 - [x] **FIL-05** File bytes are never stored in SQLite.
 - [x] **FIL-06** Both PWA composers attach files: an Attach button, a file dropped on the composer, and a screenshot pasted into the message box each upload through `POST /files` and append the FIL-02 Markdown reference to the body, so the composer shows exactly the message it sends. A failed upload says why and leaves the body unchanged.
-- [x] **FIL-07** `GET /files/:id/:name?w=N` serves an image no wider than N pixels (16 to 2048, clamped; anything else serves the original). The copy is made on first request by the host's resizer (`sips`, `magick`, or `convert`) and kept in `files/<ulid>/.resized/`, so a second request and a reopened thread read it again. The original bytes are never modified and no derivative outlives a failed run. A request at or above the source width, a type the resizer does not handle (only JPEG and PNG are), a host with no resizer, and a resizer that fails all serve the original. The PWA asks for `?w=1024` for an inline image and links the original. File bytes answer with `cache-control: private, max-age=604800`, since a file never changes.
+- [x] **FIL-07** `GET /files/:id/:name?w=N` serves an image no wider than N pixels (16 to 2048, clamped to a 16-pixel grid, at most 128 copies per image; anything else serves the original). The copy is made on first request by the host's resizer (`sips`, `magick`, or `convert`) and kept in `files/<ulid>/.resized/`, so a second request and a reopened thread read it again. The original bytes are never modified and no derivative outlives a failed run. A request at or above the source width, a type the resizer does not handle (only JPEG and PNG are), a source over 50 megapixels (a cheap request must not buy a decompression bomb's pixels), a host with no resizer, and a resizer that fails all serve the original. At most two resizer processes run at once, so requests queue instead of stacking decodes. The PWA asks for `?w=1024` for an inline image and links the original. File bytes answer with `cache-control: private, max-age=604800`, since a file never changes.
 
 ---
 

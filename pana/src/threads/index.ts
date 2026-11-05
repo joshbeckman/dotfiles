@@ -84,10 +84,13 @@ export { FILES_CACHE_CONTROL } from "./handlers.ts";
 export {
 	findBackend,
 	imageSize,
+	MAX_CONCURRENT_RESIZES,
+	MAX_PIXELS,
 	MAX_WIDTH,
 	MIN_WIDTH,
 	parseWidth,
 	resizedImage,
+	WIDTH_STEP,
 	type ResizeBackend,
 	type ServedImage,
 } from "./resize.ts";
