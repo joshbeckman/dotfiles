@@ -1,19 +1,6 @@
 import { build } from "esbuild";
 import { readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-const projectRoot = dirname(fileURLToPath(import.meta.url));
-// Lockfile keys name the directories licence text is read from. package-lock.json is tracked, so
-// any branch can put "../../.." in a key; that would read files outside this project and copy
-// them into the licence notice this one asks to be committed. Refuse keys that leave the project.
-function packageDirectory(key) {
-  const directory = resolve(projectRoot, key);
-  const offset = relative(projectRoot, directory);
-  if (isAbsolute(key) || isAbsolute(offset) || offset === ".." || offset.startsWith(".." + sep)) {
-    throw new Error(`package-lock.json key escapes this project: ${key}`);
-  }
-  return directory;
-}
+import { join } from "node:path";
 await build({
   entryPoints: ["renderers.js"],
   bundle: true,
@@ -64,9 +51,8 @@ let licenses =
   "\n" +
   "IBM Plex fonts are self-hosted in fonts/ under the SIL Open Font License 1.1,\n" +
   "with the licence text alongside them in fonts/LICENSE.txt.\n";
-for (const [key, info] of Object.entries(lock.packages).sort()) {
-  if (!key || info.dev || info.optional) continue;
-  const path = packageDirectory(key);
+for (const [path, info] of Object.entries(lock.packages).sort()) {
+  if (!path || info.dev || info.optional) continue;
   const pkg = JSON.parse(await readFile(join(path, "package.json"), "utf8"));
   licenses +=
     "\n\n=== " +
