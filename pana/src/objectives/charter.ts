@@ -17,7 +17,7 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { CHARTER_SECTIONS, objectBody, type CharterSection, type ObjectiveRow } from "./schema.ts";
-import { loadObjective, objectiveId, personView, recordObjectiveEvent, type ObjectivePersonView } from "./state.ts";
+import { loadObjective, objectiveId, personView, recordObjectiveEvent, requireOnObjective, type ObjectivePersonView } from "./state.ts";
 
 const CANONICAL = new Map<string, CharterSection>(CHARTER_SECTIONS.map((section) => [section.toLowerCase(), section]));
 
@@ -141,8 +141,10 @@ function baseRevision(value: unknown): number | undefined {
 
 /**
  * `POST /objectives/:id/charter` (OBJ-09, OBJ-10): append one revision. A session may write only
- * `Notes`. `baseRev` is the revision the caller read; a charter that moved since then is 409
- * `stale_charter` and writes nothing. Omitted `baseRev` writes the newest version.
+ * `Notes`, and only on an objective it leads or belongs to — the Notes are injected into that
+ * objective's next lead briefing, so any other session is a 403, not a revision. `baseRev` is the
+ * revision the caller read; a charter that moved since then is 409 `stale_charter` and writes
+ * nothing. Omitted `baseRev` writes the newest version.
  */
 export async function setCharter(runtime: Runtime, caller: Caller, value: string | null | undefined, raw: unknown): Promise<CharterView> {
 	const input = objectBody(raw) as SetCharterInput;
@@ -158,6 +160,7 @@ export async function setCharter(runtime: Runtime, caller: Caller, value: string
 
 	await runtime.db.atomically(async (tx) => {
 		const row = await loadObjective(tx, id);
+		await requireOnObjective(tx, row, caller);
 		if (baseRev !== undefined && baseRev !== row.charter_rev) {
 			throw new ApiError(409, "stale_charter", `charter ${id} is at revision ${row.charter_rev}, not ${baseRev}`, {
 				objective: id,

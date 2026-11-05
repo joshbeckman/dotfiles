@@ -548,6 +548,37 @@ it("OBJ-07 done needs every targeted metric at target and the user, or the chart
 	expect((finished.body as { objective: ObjectiveView }).objective.phase).toBe("done");
 });
 
+it("OBJ-07 autonomy: auto finishes for the objective's own sessions, not for any session", async () => {
+	await start();
+	const objective = await draft("Sweep the drive", { autonomy: "auto" });
+	const lead = await seedSession(objective.id);
+	const stranger = await seedSession(null);
+	const elsewhere = await seedSession((await draft("Another goal")).id);
+	await activate(objective.id, lead);
+
+	// OBJ-07's `auto` is the objective's grant, not the domain's: a session with no relationship to
+	// this objective cannot mark it done, and the refusal writes nothing.
+	for (const caller of [stranger, elsewhere]) {
+		const refused = await t!.client.post(`/objectives/${objective.id}/done`, {}, { caller });
+		expect(refused.status).toBe(403);
+		expect((refused.body as { error: { code: string } }).error.code).toBe("forbidden");
+	}
+	expect((await view(objective.id)).phase).toBe("active");
+	expect(await t!.runtime.db.all("SELECT kind FROM objective_events WHERE objective_id = ? AND kind = 'done'", objective.id)).toEqual([]);
+
+	// The lead and the objective's own members still finish it, and the user's confirmation is
+	// unchanged.
+	const finished = await t!.client.post<{ objective: ObjectiveView }>(`/objectives/${objective.id}/done`, {}, { caller: lead });
+	expect(finished.status).toBe(200);
+	expect(finished.body.objective.phase).toBe("done");
+
+	const second = await draft("Sweep the attic", { autonomy: "auto" });
+	const secondLead = await seedSession(second.id);
+	const secondMember = await seedSession(second.id);
+	await activate(second.id, secondLead);
+	expect((await t!.client.post(`/objectives/${second.id}/done`, {}, { caller: secondMember })).status).toBe(200);
+});
+
 it("OBJ-07 archive requires stopped or done, and cascades to member sessions through the REF-02 path", async () => {
 	await start({ script: [{ text: "I am the lead." }] });
 	const objective = await draft("Finishing touches");

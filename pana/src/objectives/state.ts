@@ -10,6 +10,7 @@
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
+import type { Caller } from "../api/types.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { CLOSED_PHASES, type ObjectiveDisplayState, type ObjectiveEventKind, type ObjectiveMemberRow, type ObjectivePhase, type ObjectiveRow } from "./schema.ts";
@@ -57,6 +58,17 @@ export function personView(runtime: Runtime, id: string): ObjectivePersonView {
 
 export function objectiveUrl(runtime: Runtime, id: string): string {
 	return runtime.url({ kind: "objective", id });
+}
+
+/**
+ * OBJ-07/OBJ-10: a session caller reaches an objective only through a relationship with it — it
+ * leads it or belongs to it — so the charter's `autonomy: auto` and its `Notes` are the objective's
+ * own sessions' to use, not any session on the domain. The user keeps their broad permission.
+ */
+export async function requireOnObjective(db: SqliteExecutor, row: ObjectiveRow, caller: Caller): Promise<void> {
+	if (caller.kind !== "session" || row.lead_id === caller.id) return;
+	const member = await db.get<{ id: string }>("SELECT id FROM sessions WHERE id = ? AND objective_id = ?", caller.id, row.id);
+	if (member === undefined) throw ApiError.forbidden(`session ${caller.id} neither leads nor belongs to objective ${row.id}`, { objective: row.id });
 }
 
 /** The lead and every member: the sessions carrying this objective's `id` (OBJ-15). */
