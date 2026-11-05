@@ -13,7 +13,6 @@
       "Bash(/usr/bin/osascript:*)",
       "Bash(terminal-notifier:*)",
       "Bash(grep:*)",
-      "Bash(mcp:*)",
       "Bash(pwd:*)",
       "mcp__josh-notes__search_posts",
       "WebFetch(domain:www.joshbeckman.org)",
