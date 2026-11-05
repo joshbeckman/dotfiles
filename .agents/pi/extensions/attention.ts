@@ -51,11 +51,11 @@ function setAttention(event: AttentionEvent) {
 	const paneTitle = `${marker} ${attentionTitle(event)}`;
 
 	snapshotPaneTitle(pane);
-	tmux(["select-pane", "-t", pane, "-T", paneTitle]);
+	tmux(["select-pane", "-t", pane, "-T", tmuxFormatText(paneTitle)]);
 	if (event.bell !== false) ringBell();
 
 	if (event.message) {
-		tmux(["display-message", "-t", pane, "-d", "4000", event.message.slice(0, 180)]);
+		tmux(["display-message", "-t", pane, "-d", "4000", tmuxFormatText(event.message.slice(0, 180))]);
 	}
 }
 
@@ -67,8 +67,15 @@ function clearAttention(_pi: ExtensionAPI, _cwd = process.cwd()) {
 	if (!fs.existsSync(stateFile)) return;
 
 	const paneTitle = fs.readFileSync(stateFile, "utf8");
-	tmux(["select-pane", "-t", pane, "-T", paneTitle]);
+	tmux(["select-pane", "-t", pane, "-T", tmuxFormatText(paneTitle)]);
 	fs.rmSync(stateFile, { force: true });
+}
+
+// tmux reads both `display-message` and `select-pane -T` text as a format, so
+// `#(command)` in an attention message -- which comes from model or user text --
+// would run on the way to the status line. `##` is tmux's literal `#`.
+export function tmuxFormatText(text: string): string {
+	return text.replace(/#/g, "##");
 }
 
 function attentionTitle(event: AttentionEvent): string {
