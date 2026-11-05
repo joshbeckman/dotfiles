@@ -122,8 +122,9 @@ export async function uploadFile(runtime: Runtime, input: UploadInput): Promise<
 		created_at: runtime.clock.now(),
 	};
 
-	mkdirSync(join(root, id), { recursive: true });
-	writeFileSync(absolute, input.bytes);
+	// 0700/0600: an attachment is a user's upload, and the tree it lands in is state (CFG-04).
+	mkdirSync(join(root, id), { recursive: true, mode: 0o700 });
+	writeFileSync(absolute, input.bytes, { mode: 0o600 });
 	try {
 		await runtime.db.write(async (tx) => {
 			// The uploader may be the user, whose participant row no earlier write needed.

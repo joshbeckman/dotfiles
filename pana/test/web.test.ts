@@ -79,17 +79,16 @@ function openSse(port: number, token: string): { waitFor(needle: string, timeout
 	};
 }
 
-/** Wait for a child's stderr to contain a line matching a pattern. */
-function waitForLine(child: ReturnType<typeof spawn>, pattern: RegExp): Promise<RegExpExecArray> {
+/** Wait until a child's stderr matches a pattern, then hand back everything it printed so far. */
+function waitForLine(child: ReturnType<typeof spawn>, pattern: RegExp): Promise<string> {
 	return new Promise((resolve, reject) => {
 		let text = "";
 		const timer = setTimeout(() => reject(new Error(`no line matching ${pattern}; got ${text}`)), 15_000);
 		child.stderr?.on("data", (chunk: Buffer) => {
 			text += chunk.toString("utf8");
-			const match = pattern.exec(text);
-			if (!match) return;
+			if (!pattern.test(text)) return;
 			clearTimeout(timer);
-			resolve(match);
+			resolve(text);
 		});
 		child.once("exit", (code) => {
 			if (pattern.test(text)) return;
@@ -129,7 +128,7 @@ describe("PWA shell and static assets", () => {
 		}
 	});
 
-	it("WEB-01 panad serves the PWA at / on TCP and prints a launch URL with the token in the fragment", async () => {
+	it("WEB-01 panad serves the PWA at / on TCP and keeps the launch token out of its log", async () => {
 		t = await startTestPanad();
 		const port = t.panad.tcpPort!;
 
@@ -151,14 +150,25 @@ describe("PWA shell and static assets", () => {
 		const url = launchUrl(loopbackOrigin(port), t.panad.webToken);
 		expect(url).toBe(`http://localhost:${port}/#${t.panad.webToken}`);
 
-		// The real entry point prints that URL and keeps the token out of the path.
+		// The real entry point names the 0600 file that holds the token, and never prints the token
+		// itself: under launchd and journald, stderr is a durable log other users can read.
 		const dir = makeStateDir({ http: { port: 0 } });
 		const child = spawn(process.execPath, [panadBin], { env: { ...process.env, PANA_STATE: dir } });
 		try {
-			const match = await waitForLine(child, /panad: open (http:\/\/localhost:(\d+)\/#(\S+))/);
-			const [, , printedPort, printedToken] = match;
-			expect(printedToken).toBe(readFileSync(join(dir, "web-token"), "utf8").trim());
-			expect(Number(printedPort)).toBeGreaterThan(0);
+			// The `open` line follows the one naming the file, so both are in `stderr` by now.
+			const stderr = await waitForLine(child, /panad: open http:\/\/localhost:\d+\/\n/);
+			const token = readFileSync(join(dir, "web-token"), "utf8").trim();
+			expect(stderr).not.toContain(token);
+			expect(stderr).toContain(`panad: launch URL with the web token: ${join(dir, "launch-url")}`);
+
+			expect(statSync(join(dir, "launch-url")).mode & 0o777).toBe(0o600);
+			const urls = readFileSync(join(dir, "launch-url"), "utf8").trim().split("\n");
+			// The loopback URL comes first; a machine with tailscale adds its tailnet name after it.
+			const printed = /^http:\/\/localhost:(\d+)\/#(\S+)$/.exec(urls[0]!);
+			expect(printed, urls[0]).not.toBeNull();
+			expect(printed![2]).toBe(token);
+			expect(Number(printed![1])).toBeGreaterThan(0);
+			for (const url of urls.slice(1)) expect(url.endsWith(`/#${token}`), url).toBe(true);
 			child.kill("SIGTERM");
 			await new Promise((resolve) => child.once("exit", resolve));
 		} finally {

@@ -7,11 +7,11 @@ import { runningRevision } from "../config/source.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { Harness, type HarnessOptions, type HarnessSettings, type Registry } from "@earendil-works/pi-durable";
-import { chmodSync, existsSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Handlers } from "../api/types.ts";
-import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
+import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir, writeLaunchUrls } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry } from "../extension/index.ts";
@@ -164,6 +164,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 				logger?.(entry);
 				options.onRequest?.(entry);
 			},
+			onError: (error: unknown, what: string) => report(error, `request ${what}`),
 		};
 
 		// WP6: recover runs missed while panad was down, then arm the timer on `runtime.clock`.
@@ -192,12 +193,18 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		const objectives = startObjectiveSweeper(runtime, report);
 		cleanup.unshift(() => objectives.close());
 
-		if (existsSync(paths.socket)) unlinkSync(paths.socket);
+		// API-04: the socket carries the user's authority, so no other user may ever connect to it.
+		// `listen(path)` creates the socket 0777 & ~umask, which the default umask makes 0755, and
+		// the chmod that follows leaves that window open. Bind a temporary name, restrict it, and
+		// rename it into place: the rename publishes the socket with the mode it already has.
+		const socketTemp = `${paths.socket}.tmp`;
+		for (const path of [paths.socket, socketTemp]) if (existsSync(path)) unlinkSync(path);
 		const socketServer = createServer(createApp(appOptions, "socket"));
-		await listen(socketServer, (s, done) => s.listen(paths.socket, done));
-		chmodSync(paths.socket, 0o600);
+		await listen(socketServer, (s, done) => s.listen(socketTemp, done));
+		chmodSync(socketTemp, 0o600);
+		renameSync(socketTemp, paths.socket);
 		cleanup.unshift(() => closeServer(socketServer), () => {
-			if (existsSync(paths.socket)) unlinkSync(paths.socket);
+			for (const path of [paths.socket, socketTemp]) if (existsSync(path)) unlinkSync(path);
 		});
 
 		let tcpPort: number | undefined;
@@ -326,11 +333,18 @@ export async function main(_argv: string[], options: StartOptions = {}): Promise
 		console.error(`panad: defaultModel ${config.defaultModel} is not available from the registered providers`);
 	}
 	// WEB-01: open this URL to authorize a window. The token sits in the fragment, so it is
-	// never sent to the server or written to an access log.
+	// never sent to the server or written to an access log; it goes to a 0600 file instead of
+	// stderr, which launchd and journald keep in a durable log that other users can read.
 	if (panad.tcpPort !== undefined) {
-		console.error(`panad: open ${launchUrl(loopbackOrigin(panad.tcpPort), panad.webToken)}`);
+		const origin = loopbackOrigin(panad.tcpPort);
+		writeLaunchUrls(panad.runtime.paths.launchUrl, [
+			launchUrl(origin, panad.webToken),
+			...tailscaleNames.map((name) => launchUrl(`https://${name}`, panad.webToken)),
+		]);
+		console.error(`panad: launch URL with the web token: ${panad.runtime.paths.launchUrl}`);
+		console.error(`panad: open ${origin}/`);
 		for (const name of tailscaleNames) {
-			console.error(`panad: open ${launchUrl(`https://${name}`, panad.webToken)} (after tailscale serve --bg ${panad.tcpPort})`);
+			console.error(`panad: open https://${name}/ (after tailscale serve --bg ${panad.tcpPort})`);
 		}
 	}
 	return new Promise((resolve) => {

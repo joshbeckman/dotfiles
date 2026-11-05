@@ -1,7 +1,7 @@
 // Config and state layout (CFG-01..05).
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, closeSync, openSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, closeSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -284,6 +284,8 @@ export interface StatePaths {
 	profiles: string;
 	defaultProfile: string;
 	webToken: string;
+	/** The launch URLs, token included, so it never goes to stderr's durable log (WEB-01). */
+	launchUrl: string;
 	socket: string;
 	pidFile: string;
 	log: string;
@@ -301,6 +303,7 @@ export function statePaths(dir = stateDir()): StatePaths {
 		profiles: join(dir, "profiles"),
 		defaultProfile: join(dir, "profiles", "default.json"),
 		webToken: join(dir, "web-token"),
+		launchUrl: join(dir, "launch-url"),
 		socket: join(dir, "panad.sock"),
 		pidFile: join(dir, "panad.pid"),
 		log: join(dir, "panad.log"),
@@ -311,27 +314,45 @@ export function statePaths(dir = stateDir()): StatePaths {
  * Create the state layout on first start (CFG-04): `pana.sqlite`, `files/`, `memory.git/`,
  * `memory/worktrees/`, `scratch/`, `profiles/default.json`, and a `web-token` with mode 0600.
  * Returns the resolved paths. Existing files are left untouched.
+ *
+ * Everything pana keeps is private to the user (CFG-04): the web token autorizes every API call,
+ * and the database, the request log, and the attachments hold sessions and user messages. A
+ * directory at 0700 is what keeps a file or a SQLite side file that some tool created too openly
+ * from being read by another user, so the directories are tightened on every start, not just when
+ * they are created.
  */
 export function ensureStateLayout(dir = stateDir()): StatePaths {
 	const paths = statePaths(dir);
-	mkdirSync(paths.dir, { recursive: true });
-	mkdirSync(paths.files, { recursive: true });
-	mkdirSync(paths.memoryGit, { recursive: true });
-	mkdirSync(paths.memoryWorktrees, { recursive: true });
-	mkdirSync(paths.scratch, { recursive: true });
-	mkdirSync(paths.profiles, { recursive: true });
+	for (const path of [paths.dir, paths.files, paths.memoryGit, paths.memoryWorktrees, paths.scratch, paths.profiles]) {
+		mkdirSync(path, { recursive: true, mode: 0o700 });
+		chmodSync(path, 0o700);
+	}
 
 	if (!existsSync(paths.defaultProfile)) {
-		writeFileSync(paths.defaultProfile, `${JSON.stringify({}, null, "\t")}\n`, { mode: 0o644 });
+		writeFileSync(paths.defaultProfile, `${JSON.stringify({}, null, "\t")}\n`, { mode: 0o600 });
+	}
+	for (const path of [paths.defaultProfile, paths.webToken, paths.sqlite, paths.log]) {
+		// A file an earlier panad or another tool left readable is repaired here.
+		if (existsSync(path)) chmodSync(path, 0o600);
 	}
 	if (!existsSync(paths.webToken)) {
 		writeFileSync(paths.webToken, randomBytes(32).toString("base64url"), { mode: 0o600 });
 	}
 	if (!existsSync(paths.sqlite)) {
 		// Touch the file so the layout is complete before the database adapter opens it.
-		closeSync(openSync(paths.sqlite, "a"));
+		closeSync(openSync(paths.sqlite, "a", 0o600));
 	}
 	return paths;
+}
+
+/**
+ * Write the launch URLs to `<state>/launch-url` at mode 0600 (WEB-01). panad prints the URL
+ * without the token: under launchd and journald, stderr lands in a durable log that other users
+ * can read, and the token in the fragment is the whole of the caller's authority.
+ */
+export function writeLaunchUrls(path: string, urls: readonly string[]): void {
+	writeFileSync(path, `${urls.join("\n")}\n`, { mode: 0o600 });
+	chmodSync(path, 0o600);
 }
 
 /** Read the web token used to authenticate the TCP listener (API-04). */

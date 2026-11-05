@@ -133,6 +133,15 @@ describe("config and state", () => {
 		}
 		expect(statSync(join(t.dir, "files")).isDirectory()).toBe(true);
 		expect(statSync(join(t.dir, "web-token")).mode & 0o777).toBe(0o600);
+		// The token file is worth nothing if the directory, the database and the log are readable
+		// by another user (CFG-04).
+		for (const path of ["", "files", "memory", "scratch", "profiles"]) {
+			expect(statSync(join(t.dir, path)).mode & 0o777, path || ".").toBe(0o700);
+		}
+		expect(statSync(join(t.dir, "pana.sqlite")).mode & 0o777).toBe(0o600);
+		// The request log is written on the first request, and it is private too.
+		expect((await t.client.get("/inbox")).status).toBe(200);
+		expect(statSync(join(t.dir, "panad.log")).mode & 0o777).toBe(0o600);
 		expect(readFileSync(join(t.dir, "web-token"), "utf8").length).toBeGreaterThanOrEqual(32);
 		expect(JSON.parse(readFileSync(join(t.dir, "profiles/default.json"), "utf8"))).toEqual({});
 

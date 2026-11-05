@@ -40,7 +40,8 @@ export function createRequestLogger(
 ): (entry: RequestLogEntry) => void {
 	return (entry) => {
 		try {
-			appendFileSync(path, `${JSON.stringify(logLine(entry, options.now()))}\n`);
+			// 0600: the request log names sessions and the paths they opened (CFG-04).
+			appendFileSync(path, `${JSON.stringify(logLine(entry, options.now()))}\n`, { mode: 0o600 });
 		} catch (error) {
 			options.onError?.(error);
 		}
