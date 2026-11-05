@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statusToExitCode } from "../src/api/errors.ts";
@@ -408,6 +408,59 @@ describe("memory", () => {
 		}
 		expect(readFileSync(join(path, "notes/keep.md"), "utf8")).toBe("keep\n");
 		expect(existsSync(join(path, "missing"))).toBe(false);
+	});
+
+	it("MEM-09 UI saves cannot write through a hardlink to a file outside the worktree", async () => {
+		t = await startTestPanad();
+		const path = await worktree();
+		// A file the writer must never touch: a provider config is one `ln` away from a memory path.
+		const outside = join(t.runtime.paths.dir, "provider.toml");
+		writeFileSync(outside, "token = \"mine\"\n");
+		mkdirSync(join(path, "notes"), { recursive: true });
+		linkSync(outside, join(path, "notes", "hard.md"));
+		// A tracked file, because a save refuses a dirty worktree and a hardlink is not dirty once staged.
+		expect((await commit("seed hardlink")).body.committed).toBe(true);
+
+		const saved = await t.tcp.post("/memory/files/notes/hard.md", { content: "pwned\n" });
+		expect(saved.status).toBe(201);
+		expect(readFileSync(outside, "utf8")).toBe("token = \"mine\"\n");
+		expect(await git(["-C", repo(), "show", "main:notes/hard.md"])).toBe("pwned");
+		expect(await git(["-C", await worktree(), "status", "--porcelain"])).toBe("");
+	});
+
+	it("MEM-02 a planted worktree root cannot point memory git at another checkout", async () => {
+		for (const plant of ["symlinked root", "planted .git file"] as const) {
+			t = await startTestPanad();
+			const checkout = join(t.runtime.paths.dir, "checkout");
+			mkdirSync(checkout, { recursive: true });
+			await git(["-C", checkout, "init", "--quiet", "--initial-branch=main"]);
+			await git(["-C", checkout, "config", "user.email", "user@example.com"]);
+			await git(["-C", checkout, "config", "user.name", "User"]);
+			writeFileSync(join(checkout, "keep.txt"), "user work\n");
+			await git(["-C", checkout, "add", "-A"]);
+			await git(["-C", checkout, "commit", "--quiet", "-m", "user work"]);
+			const head = await git(["-C", checkout, "rev-parse", "HEAD"]);
+
+			// Either plant makes <worktrees>/<caller> a worktree of the checkout above, so memory's git
+			// commands would stage, commit, and rebase there instead of in memory.
+			const planted = join(t.runtime.paths.memoryWorktrees, TEST_USER);
+			if (plant === "symlinked root") {
+				symlinkSync(checkout, planted);
+			} else {
+				mkdirSync(planted, { recursive: true });
+				writeFileSync(join(planted, ".git"), `gitdir: ${join(checkout, ".git")}\n`);
+			}
+
+			const res = await t.tcp.post("/memory/files/planted.md", { content: "pwned\n" });
+			expect(res.status, plant).toBe(500);
+			expect(res.body).toMatchObject({ error: { code: "untrusted_worktree" } });
+			expect(await git(["-C", checkout, "rev-parse", "HEAD"]), plant).toBe(head);
+			expect(await git(["-C", checkout, "status", "--porcelain"]), plant).toBe("");
+			expect(existsSync(join(checkout, "planted.md")), plant).toBe(false);
+
+			await t.close();
+			t = undefined;
+		}
 	});
 
 	it("MEM-09 concurrent UI saves by the same writer are serialized before writing or staging", async () => {
