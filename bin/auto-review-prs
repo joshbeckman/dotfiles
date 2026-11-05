@@ -133,8 +133,17 @@ while true; do
       esac
 
       echo "Running claude review..."
-      # Run claude with the review-pr command
-      if /opt/dev/bin/devx claude "/review-pr $PR_URL"; then
+      # Prefer the work-machine devx wrapper, but fall back to a plain claude binary
+      # so the poller still reviews on machines without /opt/dev.
+      REVIEW_CMD=(claude)
+      if [[ -x /opt/dev/bin/devx ]]; then
+        REVIEW_CMD=(/opt/dev/bin/devx claude)
+      elif ! command -v claude >/dev/null 2>&1; then
+        echo "Skipping review: neither /opt/dev/bin/devx nor claude is installed"
+        continue
+      fi
+
+      if "${REVIEW_CMD[@]}" "/review-pr $PR_URL"; then
         echo "Successfully reviewed PR: $PR_URL"
         /usr/bin/osascript -e "display notification \"Successfully reviewed PR\" with title \"Auto PR Review\" sound name \"Glass\""
         REVIEWED_ANY=true
