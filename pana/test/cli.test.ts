@@ -180,6 +180,49 @@ describe("pana CLI", () => {
 		expect(JSON.parse(forced.stdout)).toEqual({ id: "01JBTHREAD", subject: "Paris", participants: ["tester"] });
 	});
 
+	it("CLI-08 text output cannot be driven by escape sequences in a message body or a schedule label", async () => {
+		// The two surfaces the daemon fills with other people's text: a message body and a label.
+		const esc = "\u001b";
+		const bel = "\u0007";
+		const csi = "\u009b"; // C1 has a one-byte form of CSI, so stripping C0 alone is not enough
+		const bodyText = [
+			`Look at [the docs](https://example.com/a_b) ${esc}]52;c;ZXZpbA==${bel} here`,
+			`${esc}[2Jand ${csi}0;a title this terminal never sees`,
+			`backspaces: \b\b\b\b`,
+		].join("\n\t");
+		const label = `${esc}]8;;https://evil.example${bel}Schedule${esc}]8;;${bel} ${esc}[31mred`;
+		const t = await start({
+			handlers: {
+				"threads.read": () => ({ status: 200, body: { id: "01JBTHREAD", subject: "Paris", body: bodyText } }),
+				"schedules.list": () => ({ status: 200, body: { schedules: [{ id: "01JSCHED", kind: "wake", subject: label }] } }),
+			},
+		});
+
+		const unsafe = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+
+		const message = await run(["thread", "read", "01JBTHREAD"], t);
+		expect(message.code).toBe(0);
+		// Each sequence prints literally: its payload is there, with no introducer left to act on it.
+		expect(message.stdout).toContain("]52;c;ZXZpbA== here");
+		expect(message.stdout).toContain("[2Jand 0;a title this terminal never sees");
+		// What a person wrote still renders: a Markdown link, the line breaks, and the tab.
+		expect(message.stdout).toContain("[the docs](https://example.com/a_b)");
+		expect(message.stdout).toContain("backspaces:");
+		expect(message.stdout).toContain("\n\t[2Jand 0;a");
+		expect(message.stdout).not.toMatch(unsafe);
+
+		const labels = await run(["schedule", "list"], t);
+		expect(labels.code).toBe(0);
+		expect(labels.stdout).toContain("subject: ]8;;https://evil.exampleSchedule]8;; [31mred");
+		expect(labels.stdout).not.toMatch(unsafe);
+
+		// JSON is for a machine: the exact string survives, escaped rather than stripped, and no
+		// C0/C1 byte reaches a terminal that happens to be showing it.
+		const machine = await run(["--json", "thread", "read", "01JBTHREAD"], t);
+		expect(JSON.parse(machine.stdout)).toEqual({ id: "01JBTHREAD", subject: "Paris", body: bodyText });
+		expect(machine.stdout).not.toMatch(unsafe);
+	});
+
 	it("CLI-04 --body, --body-file, and --body - are exclusive, and a required body is enforced", async () => {
 		const bodies: unknown[] = [];
 		const t = await start({
