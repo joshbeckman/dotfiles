@@ -318,6 +318,10 @@ def state_root():
 @contextmanager
 def locked(sid):
     import fcntl
+    # `sid` names files in the state root, and every writer goes through here, so this
+    # is the boundary that must hold: a value like `../../x` would write outside it.
+    if not UUID.fullmatch(sid):
+        raise ValueError('expected a complete session UUID')
     root = state_root()
     fd = os.open(root / f'{sid}.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:

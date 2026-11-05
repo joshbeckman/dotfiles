@@ -14,11 +14,14 @@ realm_file = File.join(home, '.config', 'agent-realm')
 realms_file = File.expand_path('../share/realms.txt', __dir__)
 dry_run = false
 requested_realm = nil
+legacy_tmp = false
 
 OptionParser.new do |o|
-  o.banner = 'Usage: agent-identity-backfill [--realm NAME] [--dry-run]'
+  o.banner = 'Usage: agent-identity-backfill [--realm NAME] [--dry-run] [--legacy-tmp]'
   o.on('--realm NAME', 'Permanent realm for this computer (must differ across computers)') { |v| requested_realm = v }
   o.on('--dry-run', 'Report what would change') { dry_run = true }
+  # /tmp is world-writable, so its pads are not evidence of anything on their own.
+  o.on('--legacy-tmp', 'Also read legacy /tmp/agent pads, only for ids in a session log') { legacy_tmp = true }
   o.on('-h', '--help') { puts o; exit }
 end.parse!
 
@@ -38,10 +41,16 @@ if File.exist?(realms_file)
   abort "agent-identity-backfill: unknown realm #{realm} (choose: #{allowed.join(', ')})" unless allowed.include?(realm)
 end
 
+# A name must look like a person's name before it can become a slug or a claim.
+valid_name = lambda do |candidate|
+  candidate.match?(/\A[A-Z][A-Za-z'-]+ [A-Z][A-Za-z'-]+(?: of [A-Z][A-Za-z'-]+)?\z/)
+end
+
 # Session JSONLs survive scratchpad cleanup. Keep the newest named title from
-# each file; scratchpad metadata below overrides it when both exist because it
-# binds the full session id and original name in one small record.
+# each file; durable scratchpad metadata below overrides it when both exist because
+# it binds the full session id and original name in one small record.
 found = {}
+logged_ids = {}
 Dir.glob(File.join(home, '.pi', 'agent', 'sessions', '**', '*.jsonl')).each do |path|
   session_id = nil
   name = nil
@@ -51,21 +60,30 @@ Dir.glob(File.join(home, '.pi', 'agent', 'sessions', '**', '*.jsonl')).each do |
     next unless event['type'] == 'session_info' && event['name']&.include?(' · ')
 
     candidate = event['name'].split(' · ', 2).first.strip
-    name = candidate if candidate.match?(/\A[A-Z][A-Za-z'-]+ [A-Z][A-Za-z'-]+(?: of [A-Z][A-Za-z'-]+)?\z/)
+    name = candidate if valid_name.call(candidate)
   end
+  logged_ids[session_id] = true if session_id
   found[session_id] = name if session_id && name
 end
 
 scratch_roots = [
-  ENV['AGENT_SCRATCH_ROOT'] || File.join(home, '.local', 'state', 'agent', 'scratchpads'),
-  '/tmp/agent', # legacy pads from before durable storage
-].uniq
-scratch_roots.each do |root|
+  [ENV['AGENT_SCRATCH_ROOT'] || File.join(home, '.local', 'state', 'agent', 'scratchpads'), false],
+]
+# Legacy pads from before durable storage. They are world-writable, so a name there
+# is only believed for a session id the session log proves existed and does not
+# already name: verified evidence never loses to an unverified pad.
+scratch_roots << ['/tmp/agent', true] if legacy_tmp
+scratch_roots.each do |root, legacy|
   Dir.glob(File.join(root, '*', 'session.md')).each do |path|
     text = File.read(path)
     session_id = text[/^- session: (.+)$/, 1]
     name = text[/^# (.+)$/, 1]
-    found[session_id] = name if session_id && name
+    next unless session_id && name
+    if legacy
+      next unless logged_ids.key?(session_id) && !found.key?(session_id) && valid_name.call(name)
+    end
+
+    found[session_id] = name
   rescue Errno::ENOENT
     # A live agent can create or prune only its own scratchpad while this scans.
   end
