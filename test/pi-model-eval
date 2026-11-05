@@ -346,6 +346,7 @@ fi
 mkdir "$tmp/boundary"
     printf x >"$tmp/boundary/file.txt"
     ln -s /etc/passwd "$tmp/boundary/link.txt"
+    ln -s "$tmp/outside-target.txt" "$tmp/boundary/dangling.txt"
     mkdir -p "$tmp/config/skills/example" "$tmp/explicit-skill"
     printf skill >"$tmp/config/skills/example/SKILL.md"
     printf explicit >"$tmp/explicit-skill/SKILL.md"
@@ -363,6 +364,7 @@ const {pathToFileURL} = require("node:url");
     if (handler({toolName: "read", input: {path: JSON.parse(process.env.PI_EVAL_SKILL_ROOTS)[0] + "/SKILL.md"}})) throw new Error("explicit skill read blocked");
     if (!handler({toolName: "write", input: {path: process.env.PI_EVAL_CONFIG_ROOT + "/skills/example/SKILL.md"}})?.block) throw new Error("configured skill write allowed");
     if (!handler({toolName: "write", input: {path: "link.txt"}})?.block) throw new Error("symlink write allowed");
+    if (!handler({toolName: "write", input: {path: "dangling.txt"}})?.block) throw new Error("dangling symlink write allowed");
     const shellInput = {command: "ruby check.rb"};
     if (handler({toolName: "bash", input: shellInput})) throw new Error("allowed command blocked");
     if (!shellInput.command.startsWith("/usr/bin/env -i ") || shellInput.timeout !== 7) throw new Error("allowed command was not isolated");
