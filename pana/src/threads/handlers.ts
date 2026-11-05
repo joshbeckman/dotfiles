@@ -2,13 +2,16 @@
 
 import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
-import { inlineDisposition, loadFile, uploadFile } from "./files.ts";
+import { attachmentDisposition, INLINE_MEDIA_TYPES, inlineDisposition, loadFile, sniffMediaType, uploadFile } from "./files.ts";
 import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
 import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
 /** FIL-07: a file's bytes never change for one id and width, so a browser may keep them. */
 export const FILES_CACHE_CONTROL = "private, max-age=604800";
+
+/** FIL-04: a download is one reader's copy and renders nothing, so it is not kept at all. */
+export const ATTACHMENT_CACHE_CONTROL = "private, no-store";
 
 function bodyObject(ctx: RequestContext): Record<string, unknown> {
 	const body = ctx.body;
@@ -131,7 +134,6 @@ export const handlers: Handlers = {
 		const name = ctx.query.get("name") ?? header(ctx, "x-pana-name") ?? header(ctx, "x-file-name");
 		const view = await uploadFile(ctx.runtime, {
 			name,
-			mediaType: header(ctx, "content-type") ?? null,
 			bytes: ctx.rawBody,
 			uploader: { id: ctx.caller.id, kind: ctx.caller.kind, url: ctx.caller.url },
 		});
@@ -142,16 +144,24 @@ export const handlers: Handlers = {
 		const loaded = await loadFile(ctx.runtime, ctx.params.id!, ctx.params.rest ?? "");
 		// FIL-07: `?w=N` asks for an inline-sized copy; the bytes are the original otherwise.
 		const image = await resizedImage(ctx.runtime, loaded, parseWidth(ctx.query.get("w")));
+		// FIL-04: the served bytes decide how they may be served, never the stored record alone,
+		// so a file uploaded before this rule is no more dangerous than one uploaded after it.
+		// Only a raster image is inert on the PWA's origin; everything else, HTML and SVG
+		// included, leaves as an opaque download.
+		const mediaType = sniffMediaType(image.bytes);
+		const inline = mediaType !== null && INLINE_MEDIA_TYPES.has(mediaType);
 		return {
 			status: 200,
 			bytes: image.bytes,
 			headers: {
-				"content-type": image.mediaType,
-				"content-disposition": inlineDisposition(loaded.row.name),
+				"content-type": inline ? mediaType : "application/octet-stream",
+				"content-disposition": inline ? inlineDisposition(loaded.row.name) : attachmentDisposition(loaded.row.name),
 				// FIL-07: a file's bytes never change, so a reopened thread and a second message
 				// showing the same picture read the copy the browser already has instead of
 				// megabytes of photo again. Private keeps a shared cache out of a token's window.
-				"cache-control": FILES_CACHE_CONTROL,
+				"cache-control": inline ? FILES_CACHE_CONTROL : ATTACHMENT_CACHE_CONTROL,
+				// A browser that believes the type above may not re-read the bytes to pick another.
+				"x-content-type-options": "nosniff",
 			},
 		};
 	},

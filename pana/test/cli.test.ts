@@ -652,7 +652,8 @@ describe("pana CLI routes", () => {
 				"files.upload": (request) => {
 					uploads.push({ headers: request.headers, bytes: request.rawBody.byteLength });
 					const name = request.query.get("name")!;
-					const mediaType = String(request.headers["content-type"]);
+					// FIL-04: the route reads the type from the bytes, so the fake does too.
+					const mediaType = request.rawBody[0] === 0x89 && request.rawBody[1] === 0x50 ? "image/png" : "application/octet-stream";
 					return {
 						status: 201,
 						body: { file: { id: "01JBFILE", name, url: `pana://${TEST_DOMAIN}/files/01JBFILE/${name}`, mediaType } },
@@ -671,8 +672,6 @@ describe("pana CLI routes", () => {
 		const result = await run(["--json", "thread", "create", "--to", "a", "--body", "look", "--attach", image, "--attach", text], t);
 		expect(result.code).toBe(0);
 		expect(uploads.map((upload) => upload.bytes)).toEqual([4, 5]);
-		expect(uploads[0]!.headers["content-type"]).toBe("image/png");
-		expect(uploads[1]!.headers["content-type"]).toBe("text/plain");
 		expect(JSON.parse(result.stdout)).toEqual({
 			to: ["a"],
 			body:

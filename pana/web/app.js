@@ -374,11 +374,9 @@ const fileUrls = new Map();
 /** FIL-01 from the browser: the bytes go to the same route `--attach` uploads to. */
 async function uploadFile(file) {
 	const body = await file.arrayBuffer();
-	const response = await raw(`/files?name=${encodeURIComponent(file.name)}`, {
-		method: "POST",
-		headers: { "content-type": file.type || "application/octet-stream" },
-		body,
-	});
+	// The route reads the media type from the bytes; a header from the browser would only be a
+	// claim it must not trust.
+	const response = await raw(`/files?name=${encodeURIComponent(file.name)}`, { method: "POST", body });
 	const data = await decode(response, "POST", "/files");
 	return data.file;
 }
