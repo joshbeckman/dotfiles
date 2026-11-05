@@ -101,14 +101,20 @@ while true; do
       PR_REPO=$(echo "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/.*|\1|')
       echo "Found PR to review: $PR_REPO#$PR_NUMBER - $PR_TITLE (by @$PR_AUTHOR)"
       
-      DIALOG_RESULT=$(/usr/bin/osascript -e "
-        set theAnswer to button returned of (display dialog \"${PR_REPO} PR #${PR_NUMBER} by @${PR_AUTHOR}\" & return & return & \"${PR_TITLE}\" & return & return & \"${PR_URL}\" ¬
-          buttons {\"Skip This Time\", \"Skip Always\", \"Review\"} ¬
-          default button \"Review\" ¬
-          with title \"Auto PR Review\" ¬
+      # The PR text arrives as script arguments, never as AppleScript source:
+      # a PR title is untrusted, and interpolating it would let it close the
+      # dialog's string literal and run arbitrary AppleScript (do shell script).
+      DIALOG_RESULT=$(/usr/bin/osascript -e 'on run argv
+        set theHeader to item 1 of argv
+        set theTitle to item 2 of argv
+        set theURL to item 3 of argv
+        set theAnswer to button returned of (display dialog theHeader & return & return & theTitle & return & return & theURL ¬
+          buttons {"Skip This Time", "Skip Always", "Review"} ¬
+          default button "Review" ¬
+          with title "Auto PR Review" ¬
           giving up after 30)
         return theAnswer
-      " 2>/dev/null || echo "timeout")
+      end run' "$PR_REPO PR #$PR_NUMBER by @$PR_AUTHOR" "$PR_TITLE" "$PR_URL" 2>/dev/null || echo "timeout")
 
       case "$DIALOG_RESULT" in
         "Skip This Time")
