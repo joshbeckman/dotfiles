@@ -268,6 +268,31 @@ it("OBJ-26 the check lives on the metric, runs on the clock with no session, and
 	expect(await counts()).toEqual(before);
 });
 
+it("OBJ-26 a check is the user's to define: a session may declare no check and change none", async () => {
+	await start();
+	const { objective, lead } = await active();
+	const declared = await addMetric(objective.id, { name: "weight", unit: "kg", direction: "down" });
+
+	// A check runs on a timer inside panad, out of the declaring session's reach, so a session is
+	// refused on both paths: declaring a metric with one, and adding one to a metric.
+	const asLead = await t!.client.post(
+		`/objectives/${objective.id}/metrics`,
+		{ name: "sneaky", unit: "x", direction: "up", check: "env", checkEvery: "1h" },
+		{ caller: lead },
+	);
+	expect(asLead.status).toBe(403);
+	const setAsLead = await t!.client.post(`/objectives/${objective.id}/metrics/weight`, { check: "env", checkEvery: "1h" }, { caller: lead });
+	expect(setAsLead.status).toBe(403);
+	// Clearing one is a definition edit too, and gets the same refusal.
+	expect((await t!.client.post(`/objectives/${objective.id}/metrics/weight`, { check: null }, { caller: lead })).status).toBe(403);
+	expect((await metric(objective.id, "weight")).check).toBeNull();
+	expect(declared.check).toBeNull();
+
+	// A metric without a check is still a session's to declare, so the gate is the check alone.
+	const plain = await t!.client.post(`/objectives/${objective.id}/metrics`, { name: "steps", unit: "count", direction: "up" }, { caller: lead });
+	expect(plain.status).toBe(201);
+});
+
 it("OBJ-26 a non-numeric stdout, other exit code, signal, timeout, or error records failed and posts one notice", async () => {
 	await start();
 	const { objective } = await active();

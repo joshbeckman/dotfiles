@@ -88,6 +88,42 @@ describe("schedule conditions", () => {
 		expect((await show(schedule.id)).state).toBe("active");
 	});
 
+	it("SCH-09 a check is the user's to define: a session's create and update are both refused", async () => {
+		t = await startTestPanad();
+		const session = t.runtime.newId();
+		const now = t.clock.now();
+		await t.runtime.db.write(async (tx) => {
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", session, t!.runtime.url({ kind: "session", id: session }), now);
+			await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", session, now, now);
+		});
+		const asSession = (extra: Record<string, unknown>) => t!.client.post("/schedules", { ...base, ...extra }, { caller: session });
+
+		expect((await asSession({ check: "touch planted" })).status).toBe(403);
+		expect((await asSession({ checkCwd: tmpdir() })).status).toBe(403);
+		// A session may still schedule its own work and change it; only the check is the user's.
+		const own = await asSession({ payload: { prompt: "my own work" } });
+		expect(own.status).toBe(201);
+		const id = (own.body as { schedule: ScheduleView }).schedule.id;
+		expect((await t.client.post(`/schedules/${id}`, { check: "touch planted" }, { caller: session })).status).toBe(403);
+		expect((await t.client.post(`/schedules/${id}`, { check: null }, { caller: session })).status).toBe(403);
+		expect((await t.client.post(`/schedules/${id}`, { payload: { prompt: "edited" } }, { caller: session })).status).toBe(200);
+		expect((await show(id)).check).toBeNull();
+	});
+
+	it("SCH-12 a check sees only PANA_ENV_NAMES, never panad's own environment", async () => {
+		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
+		const clock = createFakeClock();
+		process.env.PANA_TEST_SECRET = "panad-only";
+		try {
+			const command = 'printf "secret=%s home=%s session=%s\\n" "${PANA_TEST_SECRET:-unset}" "${HOME:+set}" "${PANA_SESSION:-none}"';
+			const result = await runCheck(command, dir, clock, new AbortController().signal);
+			expect(result).toMatchObject({ status: "passed", exitCode: 0, error: null });
+			expect(result.stdout.trim()).toBe("secret=unset home=set session=none");
+		} finally {
+			delete process.env.PANA_TEST_SECRET;
+		}
+	});
+
 	it("SCH-12 executes bash in the recorded cwd, bounds both streams, and records spawn/signal failures", async () => {
 		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
 		const clock = createFakeClock();
