@@ -6,7 +6,9 @@
 //
 // The extensions import "typebox" at runtime, which this repo does not install,
 // so a resolution hook maps it to a stub. Schemas are never validated here, only
-// the behaviour around them.
+// the behaviour around them. dotfiles-safety imports isToolCallEventType from
+// pi's own package, which is not installed beside this repo either, so the hook
+// stubs that too; every other extension imports pi for its types alone.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,10 +26,15 @@ const STUB =
   " String: () => ({ type: 'string' }), Optional: (s) => s, Boolean: () => ({ type: 'boolean' })," +
   " Literal: (v) => ({ const: v }), Union: (s) => ({ anyOf: s }), Number: () => ({ type: 'number' }) };";
 
+const PI_STUB = "export const isToolCallEventType = (type, event) => event?.toolName === type;";
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "typebox") {
       return { url: "data:text/javascript," + encodeURIComponent(STUB), shortCircuit: true };
+    }
+    if (specifier === "@earendil-works/pi-coding-agent") {
+      return { url: "data:text/javascript," + encodeURIComponent(PI_STUB), shortCircuit: true };
     }
     // Extensions import siblings by their emitted .js name; here the source is the .ts.
     if (specifier.startsWith("./") && specifier.endsWith(".js") && context.parentURL?.includes("/.agents/pi/extensions/")) {
@@ -131,8 +138,12 @@ function fakePi() {
       getThinkingLevel: () => "high",
       appendEntry: (customType, data) => entries.push({ customType, data }),
     },
+    // The return values are the handlers' own: a guard that refuses an operation
+    // reports that in what it returns, so the test has to be able to read it.
     async emit(event, payload = {}) {
-      for (const handler of handlers[event] || []) await handler(payload, ctx);
+      const results = [];
+      for (const handler of handlers[event] || []) results.push(await handler(payload, ctx));
+      return results;
     },
   };
 }
@@ -882,6 +893,93 @@ if (mode === "status") {
     output.args.includes("@shopify/dev-mcp@1.18.0") && !output.args.includes("latest"),
     JSON.stringify(output.args),
   );
+}
+
+// --- dotfiles public-repo guard ---------------------------------------------
+
+// The guard exists so the public dotfiles repo cannot publish work-only content.
+// Its gate used to be the directory name `dotfiles` and its scan was the index
+// alone, which means it never ran for the documented install ($HOME/.dotfiles)
+// and never saw what `git commit -a` publishes. Each case below is a throwaway
+// git repo; hasUI is false, so a guard that finds something refuses outright and
+// the refusal is the assertion.
+
+const dotfilesGuard = await load("dotfiles-safety.ts");
+const GUARD_DIR = mkdtempSync(join(tmpdir(), "pi-dotfiles-guard-"));
+const WORK_ONLY = "host: josh.beckman@shopify.com\n";
+
+const gitIn = (dir, ...args) =>
+  execFileSync("git", ["-c", "user.name=ci", "-c", "user.email=ci@example.invalid", ...args], {
+    cwd: dir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+// A committed clean file, so the working-tree cases have a tracked path to modify.
+function guardRepo(name, { remote, sentinel } = {}) {
+  const dir = join(GUARD_DIR, name);
+  mkdirSync(dir, { recursive: true });
+  gitIn(dir, "init", "-q", "-b", "main");
+  if (remote) gitIn(dir, "remote", "add", "origin", remote);
+  if (sentinel) {
+    mkdirSync(join(dir, ".agents/pi/extensions"), { recursive: true });
+    writeFileSync(join(dir, ".agents/pi/extensions/dotfiles-safety.ts"), "// sentinel\n");
+  }
+  writeFileSync(join(dir, "notes.md"), "public notes\n");
+  gitIn(dir, "add", "-A");
+  gitIn(dir, "commit", "-q", "-m", "initial");
+  return dir;
+}
+
+async function guardDecision(dir, command) {
+  const pi = fakePi();
+  dotfilesGuard(pi.api);
+  pi.ctx.cwd = dir;
+  pi.ctx.hasUI = false;
+  const decisions = await pi.emit("tool_call", { type: "tool_call", toolName: "bash", input: { command } });
+  return decisions.find((decision) => decision?.block === true);
+}
+
+{
+  const dir = guardRepo(".dotfiles");
+  writeFileSync(join(dir, "notes.md"), WORK_ONLY);
+  const refusal = await guardDecision(dir, "git commit -a -m tidy");
+  check("the guard runs in the documented $HOME/.dotfiles install", refusal !== undefined, "no finding: the guard is still skipped");
+  check(
+    "it names the working-tree content `git commit -a` would publish",
+    refusal?.reason.includes("working-tree diff") && refusal.reason.includes("Shopify"),
+    refusal?.reason,
+  );
+}
+
+{
+  // Neither the directory name nor a sentinel: only the remote says which repo this is.
+  const dir = guardRepo("checkout", { remote: "git@github.com:joshbeckman/dotfiles.git" });
+  writeFileSync(join(dir, "notes.md"), WORK_ONLY);
+  check("a checkout identified only by its remote is guarded", (await guardDecision(dir, "git commit -a -m tidy")) !== undefined);
+}
+
+{
+  const dir = guardRepo("any-name", { sentinel: true });
+  writeFileSync(join(dir, "notes.md"), WORK_ONLY);
+  check("a checkout identified only by the sentinel file is guarded", (await guardDecision(dir, "git add -A")) !== undefined);
+}
+
+{
+  const dir = guardRepo("staged/.dotfiles");
+  writeFileSync(join(dir, "notes.md"), WORK_ONLY);
+  gitIn(dir, "add", "notes.md");
+  const refusal = await guardDecision(dir, "git commit -m tidy");
+  check("staged content is still guarded", refusal?.reason.includes("staged diff"), refusal?.reason);
+  gitIn(dir, "commit", "-q", "-m", "tidy");
+  check("a commit with nothing left to publish is not", (await guardDecision(dir, "git commit --allow-empty -m later")) === undefined);
+}
+
+{
+  // Scoped, not paranoid: another repository's working tree is none of its business.
+  const dir = guardRepo("some-other-repo");
+  writeFileSync(join(dir, "notes.md"), WORK_ONLY);
+  check("a repo that is not dotfiles is left alone", (await guardDecision(dir, "git commit -a -m tidy")) === undefined);
 }
 
 // --- result -----------------------------------------------------------------

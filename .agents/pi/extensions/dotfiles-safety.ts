@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
@@ -30,16 +31,28 @@ const broadStagingCommands = [
 	/\bgit\s+ada\b/,
 ];
 
-const publishingCommands = [
+const commitCommands = [
 	/\bgit\s+(commit|c|ci|cm)\b/,
+];
+
+const publishingCommands = [
+	...commitCommands,
 	/\bgit\s+push\b/,
 	/\bgt\s+(submit|ship|ss)\b/,
 ];
 
+// The repo is identified by the directory name first (which covers $HOME/.dotfiles,
+// the documented install, and `dotfiles` worktrees), then by the origin remote's
+// name (which covers a checkout under any directory), then by a file only this
+// repo has. The sentinel is this extension, so a checkout that carries it is the
+// public dotfiles repo whatever it is called.
+const dotfilesRepoNames = new Set(["dotfiles", ".dotfiles"]);
+const dotfilesSentinel = ".agents/pi/extensions/dotfiles-safety.ts";
+
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		const root = gitRoot(ctx.cwd);
-		if (!root || path.basename(root) !== "dotfiles") return undefined;
+		if (!root || !isDotfilesRepo(root)) return undefined;
 
 		const findings = findingsForToolCall(event, ctx.cwd, root);
 		if (findings.length === 0) return undefined;
@@ -114,6 +127,13 @@ function findingsForBash(cwd: string, command: string): Finding[] {
 		findings.push(...findingsForContent(diff, "unstaged diff"));
 	}
 
+	// `git commit -a` and `git commit <pathspec>` publish working-tree content
+	// that never passes through the index, so the staged diff alone misses it.
+	if (commitCommands.some((pattern) => pattern.test(command))) {
+		const diff = gitOutput(cwd, ["diff", "--"]);
+		findings.push(...findingsForContent(diff, "working-tree diff"));
+	}
+
 	if (publishingCommands.some((pattern) => pattern.test(command))) {
 		const stagedDiff = gitOutput(cwd, ["diff", "--cached", "--"]);
 		const lastCommit = gitOutput(cwd, ["show", "--format=", "--no-ext-diff", "--unified=0", "HEAD"]);
@@ -130,6 +150,16 @@ function findingsForContent(content: string, source: string): Finding[] {
 	return sensitiveContentPatterns
 		.filter(([, pattern]) => pattern.test(content))
 		.map(([label]) => ({ kind: "content", label, detail: source }));
+}
+
+function isDotfilesRepo(root: string): boolean {
+	if (dotfilesRepoNames.has(path.basename(root))) return true;
+
+	const remoteUrl = gitOutput(root, ["remote", "get-url", "origin"]).trim();
+	const remoteName = remoteUrl.replace(/\.git$/, "").split(/[/:]/).pop() ?? "";
+	if (dotfilesRepoNames.has(remoteName)) return true;
+
+	return fs.existsSync(path.join(root, dotfilesSentinel));
 }
 
 function gitRoot(cwd: string): string | undefined {
