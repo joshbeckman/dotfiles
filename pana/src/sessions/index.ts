@@ -6,6 +6,7 @@
 export { createSession, loadProfile, parseModel, THINKING_LEVELS, WORKTREE, type CreateSessionInput, type CreatedSession, type Profile } from "./create.ts";
 export { createSessionHooks } from "./reply.ts";
 export {
+	assertThreadWritable,
 	creatorOf,
 	SESSION_STATES,
 	SessionRuntime,

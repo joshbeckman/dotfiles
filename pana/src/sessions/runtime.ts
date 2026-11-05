@@ -589,16 +589,27 @@ export function sessionRuntime(runtime: Runtime): SessionRuntime {
 // --- Helpers -------------------------------------------------------------------
 
 /**
- * STA-07: a thread with an archived session is read-only. Every delivery checks the whole thread,
- * so the first one, before any wake has joined the transaction, rejects and rolls back the append.
+ * STA-07: a thread with an archived session is read-only, so a delivery to it is refused.
+ *
+ * Exported for a caller that must know before it does work the database cannot take back: OBJ-35's
+ * regenerate creates the successor's pi-durable conversation first, and `PanaDatabase` commits
+ * rather than rolls back once that has joined, so a refusal after it would land half a swap.
  */
-async function rejectArchived(tx: SqliteExecutor, event: DeliveredEvent): Promise<void> {
+export async function assertThreadWritable(tx: SqliteExecutor, threadId: string): Promise<void> {
 	const archived = await tx.get<{ id: string }>(
 		`SELECT s.id FROM thread_participants tp JOIN sessions s ON s.id = tp.participant_id
 		  WHERE tp.thread_id = ? AND s.state = 'archived' LIMIT 1`,
-		event.threadId,
+		threadId,
 	);
 	if (archived) throw ApiError.stale(`session ${archived.id} is archived`, { session: archived.id });
+}
+
+/**
+ * Every delivery checks the whole thread, so the first one, before any wake has joined the
+ * transaction, rejects and rolls back the append.
+ */
+async function rejectArchived(tx: SqliteExecutor, event: DeliveredEvent): Promise<void> {
+	await assertThreadWritable(tx, event.threadId);
 }
 
 /** Submit one wake and record it: the submission, the read mark (DLV-03), and the `running` state (DLV-01). */

@@ -2,7 +2,7 @@
 
 import { afterEach, expect, it } from "vitest";
 import { BRIEF_TITLE } from "../src/objectives/index.ts";
-import { draft, events, inputs, launch, pana, settle, startObjectives, view } from "./harness/objectives.ts";
+import { draft, events, headOf, inputs, launch, pana, settle, startObjectives, view } from "./harness/objectives.ts";
 import type { Script, TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
@@ -109,6 +109,49 @@ it("OBJ-35 a concurrent regenerate leaves exactly one lead: one 200 and one 409"
 	const liveLeads = (await sessionsOf(objective.id)).filter((session) => session.state !== "archived" && session.state !== "stopped");
 	expect(liveLeads.map((session) => session.id)).toEqual([shown.lead!.id]);
 	expect((await events(t!, objective.id, "regenerated")).length).toBe(1);
+});
+
+it("OBJ-35 a handoff the objective's thread refuses leaves the objective and its lead unchanged", async () => {
+	await start();
+	const objective = await draft(t!, "Regenerate must not half-commit");
+	const launched = await launch(t!, objective.id);
+	const previous = launched.lead!.id;
+	const threadId = launched.thread!.id;
+
+	// The lead hires a member and brings it into the objective's thread; the user then archives it.
+	// STA-07 makes the thread read-only, so the handoff has nowhere to go. That failure lands after
+	// the successor's conversation is created, which is the window this test guards.
+	const hired = await t!.client.post<{ session: { id: string } }>("/sessions", { prompt: "Audit." }, { caller: previous });
+	expect(hired.status).toBe(201);
+	const member = hired.body.session.id;
+	await settle(t!);
+	const brought = await t!.client.post(
+		`/threads/${threadId}/messages`,
+		{ after: await headOf(t!, threadId), body: "Auditing the boiler.", cc: [member] },
+		{ caller: previous },
+	);
+	expect(brought.status, JSON.stringify(brought.body)).toBe(200);
+	expect((await t!.client.post(`/sessions/${member}/archive`)).status).toBe(200);
+
+	const failed = await t!.client.post(`/objectives/${objective.id}/regenerate-lead`, { reason: "It stopped answering." });
+	expect(failed.status).toBe(409);
+
+	// Nothing of the swap landed: same lead, no successor session, no handoff, no event, and the
+	// old lead is still stopped by nobody and still in the thread it answers in.
+	expect((await view(t!, objective.id)).lead!.id).toBe(previous);
+	expect((await sessionsOf(objective.id)).map((session) => session.id).filter((id) => id !== member)).toEqual([previous]);
+	expect(await t!.runtime.db.get("SELECT state, stopped_by FROM sessions WHERE id = ?", previous)).toMatchObject({ stopped_by: null });
+	expect(
+		await t!.runtime.db.get("SELECT 1 AS one FROM thread_participants WHERE thread_id = ? AND participant_id = ?", threadId, previous),
+	).toBeDefined();
+	expect(await events(t!, objective.id, "regenerated")).toEqual([]);
+	const handoff = await t!.runtime.db.get("SELECT 1 AS one FROM messages WHERE thread_id = ? AND body LIKE '%new lead%'", threadId);
+	expect(handoff).toBeUndefined();
+
+	// A thread that takes mail again lets the regenerate through, so the refusal was the thread's.
+	await t!.runtime.db.write((tx) => tx.run("UPDATE sessions SET state = 'idle' WHERE id = ?", member));
+	expect((await t!.client.post(`/objectives/${objective.id}/regenerate-lead`, { reason: "It stopped answering." })).status).toBe(200);
+	expect((await view(t!, objective.id)).lead!.id).not.toBe(previous);
 });
 
 // --- OBJ-36 --------------------------------------------------------------------
