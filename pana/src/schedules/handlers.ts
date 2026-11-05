@@ -28,7 +28,7 @@ export const handlers: Handlers = {
 
 	"schedules.update": async (ctx) => ({
 		status: 200,
-		body: { schedule: await updateSchedule(ctx.runtime, ctx.params.id!, ctx.body) },
+		body: { schedule: await updateSchedule(ctx.runtime, ctx.caller, ctx.params.id!, ctx.body) },
 	}),
 
 	"schedules.delete": async (ctx) => {
