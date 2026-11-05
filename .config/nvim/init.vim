@@ -34,10 +34,16 @@ nnoremap <Leader>v :vert sf
 nnoremap <Leader>h :sf 
 nnoremap <Leader>f :tabnew<CR>:Files<CR>
 nnoremap <Leader>F :tabnew<CR>:FindSimilarFiles<CR>
-nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
-vnoremap <Leader>g y:grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R>=escape(@",'[]().*^$\\')<CR>' ./<CR><CR>:cw<CR>
-nnoremap <Leader>G :let @z=expand('<cword>')<CR>:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include='*.<C-R>x' '<C-R>z' ./<CR><CR>:cw<CR>
-vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include='*.<C-R>x' '<C-R>=escape(@",'[]().*^$\\')<CR>' ./<CR><CR>:cw<CR>
+" Build a shell argument from buffer text. :grep and :! re-expand % and #
+" in the command line, inserting the raw buffer name quotes and all, so
+" escape those before shell-quoting.
+function! ShellArg(text)
+  return shellescape(escape(a:text, '%#'))
+endfunction
+nnoremap <Leader>g :grep -r --include=<C-R>=ShellArg('*.' . expand('%:e'))<CR> <C-R>=ShellArg(expand('<cword>'))<CR> ./<CR><CR>:cw<CR>
+vnoremap <Leader>g y:grep -r --include=<C-R>=ShellArg('*.' . expand('%:e'))<CR> <C-R>=ShellArg(escape(@", '[]().*^$\\'))<CR> ./<CR><CR>:cw<CR>
+nnoremap <Leader>G :let @z=expand('<cword>')<CR>:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include=<C-R>=ShellArg('*.' . @x)<CR> <C-R>=ShellArg(@z)<CR> ./<CR><CR>:cw<CR>
+vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include=<C-R>=ShellArg('*.' . @x)<CR> <C-R>=ShellArg(escape(@", '[]().*^$\\'))<CR> ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>s :Buffers<CR>
@@ -213,11 +219,11 @@ let &statusline = '%6*%m%*%7*%.20{expand("%:h")}/%5*%t%*  %<%5*%l/%L%*%=%5*%{Git
 autocmd FileType markdown let &l:statusline = &statusline . '%5*words:%{wordcount().words}%*'
 
 function! RubocopAutocorrect()
-  execute "!bundle exec rubocop -a " . bufname("%")
+  execute "!bundle exec rubocop -a " . ShellArg(bufname("%"))
   :e
 endfunction
 function! EslintAutocorrect()
-  execute "!eslint --fix " . bufname("%")
+  execute "!eslint --fix " . ShellArg(bufname("%"))
   :e
 endfunction
 

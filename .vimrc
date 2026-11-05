@@ -116,7 +116,13 @@ nnoremap <Leader>o :tabf
 nnoremap <Leader>v :vert sf 
 nnoremap <Leader>h :sf 
 nnoremap <Leader>f :tabnew<CR>:FZF<CR>
-nnoremap <Leader>g :grep -r --include='*.<C-R>=expand('%:e')<CR>' '<C-R><C-W>' ./<CR><CR>:cw<CR>
+" Build a shell argument from buffer text. :grep and :! re-expand % and #
+" in the command line, inserting the raw buffer name quotes and all, so
+" escape those before shell-quoting.
+function! ShellArg(text)
+  return shellescape(escape(a:text, '%#'))
+endfunction
+nnoremap <Leader>g :grep -r --include=<C-R>=ShellArg('*.' . expand('%:e'))<CR> <C-R>=ShellArg(expand('<cword>'))<CR> ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>t <C-w><C-]><C-w>T
@@ -255,11 +261,11 @@ if has("autocmd")
 endif
 
 function! RubocopAutocorrect()
-  execute "!rubocop -a " . bufname("%")
+  execute "!rubocop -a " . ShellArg(bufname("%"))
   :e
 endfunction
 function! EslintAutocorrect()
-  execute "!eslint --fix " . bufname("%")
+  execute "!eslint --fix " . ShellArg(bufname("%"))
   :e
 endfunction
 map <silent> <Leader>cop :call RubocopAutocorrect()<cr>
