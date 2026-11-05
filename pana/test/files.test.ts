@@ -13,11 +13,14 @@ import {
 	findBackend,
 	imageSize,
 	loadFile,
+	MAX_PIXELS,
 	MAX_WIDTH,
 	MIN_WIDTH,
 	parseWidth,
 	resizedImage,
 	sniffMediaType,
+	type ResizeBackend,
+	WIDTH_STEP,
 } from "../src/threads/index.ts";
 import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 
@@ -73,6 +76,16 @@ function chunk(type: string, data: Buffer): Buffer {
 	const crc = Buffer.alloc(4);
 	crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])), 0);
 	return Buffer.concat([head, data, crc]);
+}
+
+/** A PNG that only claims a size: the header a decoder reads, and no pixels to decode. */
+function pngHeader(width: number, height: number): Buffer {
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(width, 0);
+	ihdr.writeUInt32BE(height, 4);
+	ihdr[8] = 8;
+	ihdr[9] = 2;
+	return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr)]);
 }
 
 /** A real PNG of the given size, with noise so a smaller copy is also fewer bytes. */
@@ -323,11 +336,44 @@ describe("files", () => {
 		expect(readdirSync(join(t.dir, "files", file.id))).toEqual(["wide.png"]);
 	});
 
+	it("FIL-07 a picture too large to decode is served as it is, so a cheap request cannot buy its pixels", async () => {
+		const t = await start();
+		// A decompression bomb: 400 megapixels that a decoder would expand into gigabytes.
+		const bomb = pngHeader(20_000, 20_000);
+		expect(imageSize(bomb)).toEqual({ width: 20_000, height: 20_000 });
+		const file = await upload(t, "bomb.png", bomb);
+		const loaded = await loadFile(t.runtime, file.id, "bomb.png");
+
+		let runs = 0;
+		const spy: ResizeBackend = {
+			command: "no-such-resizer",
+			probe: [],
+			args: () => {
+				runs += 1;
+				return [];
+			},
+		};
+		expect(await resizedImage(t.runtime, loaded, parseWidth("64"), spy)).toEqual({ bytes: bomb, mediaType: "image/png" });
+		// Not one resizer run was started, and nothing was cached beside the original.
+		expect(runs).toBe(0);
+		expect(readdirSync(join(t.dir, "files", file.id))).toEqual(["bomb.png"]);
+
+		// The cap itself: the largest size that decodes and the first that does not.
+		expect(10_000 * 4_999).toBeLessThanOrEqual(MAX_PIXELS);
+		expect(10_000 * 5_001).toBeGreaterThan(MAX_PIXELS);
+	});
+
 	it("FIL-07 a requested width is clamped to the cache's range or ignored", () => {
 		expect(parseWidth("64")).toBe(64);
 		expect(parseWidth(" 128 ")).toBe(128);
 		expect(parseWidth("1")).toBe(MIN_WIDTH);
 		expect(parseWidth("99999")).toBe(MAX_WIDTH);
+		// Widths land on the cache's grid, at or below what was asked for, so one picture can hold
+		// only so many copies however many widths a session asks for.
+		expect(parseWidth("1030")).toBe(1024);
+		expect(parseWidth(String(MAX_WIDTH + 1))).toBe(MAX_WIDTH);
+		expect(parseWidth("47")! % WIDTH_STEP).toBe(0);
+		expect(parseWidth("47")!).toBeLessThanOrEqual(47);
 		expect(parseWidth("7.6")).toBe(MIN_WIDTH);
 		expect(parseWidth("abc")).toBeUndefined();
 		expect(parseWidth("0")).toBeUndefined();

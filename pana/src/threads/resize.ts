@@ -15,6 +15,20 @@ import type { LoadedFile } from "./files.ts";
 /** The narrowest and widest copy a request may ask for. */
 export const MIN_WIDTH = 16;
 export const MAX_WIDTH = 2048;
+/**
+ * Copies are kept on a 16-pixel grid, so one image can hold at most 128 of them however many
+ * widths a session asks for. A request is served the grid width at or below it, never above.
+ */
+export const WIDTH_STEP = 16;
+/**
+ * The most pixels a source may have and still be decoded. The resizer reads the whole picture, so
+ * a decompression bomb (a small file that claims 20000x20000) would otherwise cost gigabytes of
+ * memory for one cheap request. The derivative is never larger than the source, so this bounds
+ * both sides of the run; a picture past it is served as it is.
+ */
+export const MAX_PIXELS = 50_000_000;
+/** How many resizer processes may run at once. Each one decodes a whole picture in memory. */
+export const MAX_CONCURRENT_RESIZES = 2;
 
 /** The media types a resizer reads and writes back. Anything else serves the original bytes. */
 const RESIZABLE = new Set(["image/jpeg", "image/png"]);
@@ -72,7 +86,8 @@ export function parseWidth(value: unknown): number | undefined {
 	if (typeof value !== "string" || value.trim().length === 0) return undefined;
 	const parsed = Number(value.trim());
 	if (!Number.isFinite(parsed) || parsed < 1) return undefined;
-	return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(parsed)));
+	const clamped = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(parsed)));
+	return clamped - (clamped % WIDTH_STEP);
 }
 
 /** The pixel dimensions a JPEG or PNG header records, or undefined for another format. */
@@ -126,6 +141,28 @@ function derivativePath(loaded: LoadedFile, width: number, format: "jpeg" | "png
 /** A resizer run in flight for one derivative, so two requests at once make one copy. */
 const writing = new Map<string, Promise<void>>();
 
+/** Resizer runs now, and the requests waiting for one, so decodes cannot stack up. */
+let running = 0;
+const queued: Array<() => void> = [];
+
+/** Wait for a free slot. The releasing run hands its slot over; nothing to take again. */
+async function takeSlot(): Promise<void> {
+	if (running < MAX_CONCURRENT_RESIZES) {
+		running += 1;
+		return;
+	}
+	await new Promise<void>((resume) => queued.push(resume));
+}
+
+function releaseSlot(): void {
+	const next = queued.shift();
+	if (next) {
+		next();
+		return;
+	}
+	running -= 1;
+}
+
 function served(bytes: Uint8Array, format: "jpeg" | "png"): ServedImage {
 	return { bytes, mediaType: format === "png" ? "image/png" : "image/jpeg" };
 }
@@ -141,6 +178,7 @@ function copy(absolute: string, format: "jpeg" | "png"): ServedImage | undefined
 async function make(from: string, absolute: string, width: number, format: "jpeg" | "png", backend: ResizeBackend): Promise<void> {
 	mkdirSync(dirname(absolute), { recursive: true });
 	const temp = `${absolute}.${process.pid}-${Date.now()}.tmp`;
+	await takeSlot();
 	try {
 		await new Promise<void>((settle, reject) => {
 			execFile(backend.command, backend.args(from, temp, width, format), { timeout: 60_000 }, (error) =>
@@ -162,6 +200,8 @@ async function make(from: string, absolute: string, width: number, format: "jpeg
 			// Another copy lives there.
 		}
 		throw error;
+	} finally {
+		releaseSlot();
 	}
 }
 
@@ -186,6 +226,9 @@ export async function resizedImage(
 	const size = imageSize(loaded.bytes);
 	// Never enlarge: a copy wider than the source is only a bigger file.
 	if (!size || size.width <= width) return original;
+	// A source too large to decode is served as it is: a cheap request must not buy a whole
+	// picture's pixels, and a browser shows the original either way.
+	if (size.width * size.height > MAX_PIXELS) return original;
 
 	const format = loaded.mediaType === "image/png" ? "png" : "jpeg";
 	const root = resolve(runtime.paths.files);
