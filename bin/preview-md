@@ -133,10 +133,25 @@ if (( watch_interval > 0 )); then
     (
         # The rendered files are left behind on purpose: the last render stays
         # viewable after the watcher stops, and tmp_cleaner reaps them in ~3 days.
-        trap "kill 0 2>/dev/null; exit 0" TERM INT EXIT
+        #
+        # Kill only our own sleep child, never the process group: `kill 0` would
+        # also SIGTERM the caller's shell or agent harness, because the watcher
+        # shares their process group. The backgrounded sleep plus wait exists so
+        # a signal reaches this trap immediately instead of at the end of the nap.
+        child_pid=""
+        stop() {
+            if [[ -n "$child_pid" ]]; then
+                kill "$child_pid" 2>/dev/null
+                child_pid=""
+            fi
+        }
+        trap 'stop; exit 0' TERM INT
+        trap stop EXIT
         while :; do
             sleep "$watch_interval" &
-            wait $!
+            child_pid=$!
+            wait "$child_pid"
+            child_pid=""
             [[ -f "$source_file" ]] || break
             pandoc "${pandoc_args[@]}" "$source_file" > "$tmpfile_raw" 2>/dev/null || continue
             render
