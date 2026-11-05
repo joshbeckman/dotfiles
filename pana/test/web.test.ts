@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,16 +39,17 @@ afterEach(async () => {
 
 const panadBin = fileURLToPath(new URL("../bin/panad", import.meta.url));
 
+interface SseStream {
+	waitFor(needle: string, timeoutMs?: number): Promise<string>;
+	/** Everything the stream has received so far, for asserting what it never got. */
+	text(): string;
+	close(): void;
+}
+
 /** Minimal SSE reader: collect frames and wait for a substring. */
-function openSse(port: number, token: string): { waitFor(needle: string, timeoutMs?: number): Promise<string>; close(): void } {
+function sseStream(req: ClientRequest): SseStream {
 	let buffer = "";
 	const waiters: Array<{ needle: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout }> = [];
-	const req = httpRequest({
-		host: "127.0.0.1",
-		port,
-		path: "/events",
-		headers: { authorization: `Bearer ${token}`, host: `127.0.0.1:${port}`, accept: "text/event-stream" },
-	});
 	req.on("response", (res: IncomingMessage) => {
 		res.on("data", (chunk: Buffer) => {
 			buffer += chunk.toString("utf8");
@@ -62,6 +63,7 @@ function openSse(port: number, token: string): { waitFor(needle: string, timeout
 	});
 	req.end();
 	return {
+		text: () => buffer,
 		waitFor(needle, timeoutMs = 5000) {
 			if (buffer.includes(needle)) return Promise.resolve(buffer);
 			return new Promise((resolve, reject) => {
@@ -77,6 +79,25 @@ function openSse(port: number, token: string): { waitFor(needle: string, timeout
 			req.destroy();
 		},
 	};
+}
+
+/** The user's window: the token-holding origin, which the caller resolution always calls the user. */
+function openSse(port: number, token: string): SseStream {
+	return sseStream(httpRequest({
+		host: "127.0.0.1",
+		port,
+		path: "/events",
+		headers: { authorization: `Bearer ${token}`, host: `127.0.0.1:${port}`, accept: "text/event-stream" },
+	}));
+}
+
+/** A session watching `/events` over the socket it already has, naming itself with `Pana-Caller`. */
+function openSessionSse(socketPath: string, caller: string): SseStream {
+	return sseStream(httpRequest({
+		socketPath,
+		path: "/events",
+		headers: { "pana-caller": caller, accept: "text/event-stream" },
+	}));
 }
 
 /** Wait for a child's stderr to contain a line matching a pattern. */
@@ -400,6 +421,49 @@ describe("PWA shell and static assets", () => {
 			expect(matchRoute("POST", `/sessions/${sessionId}/${action}`)?.route.name).toBe(`sessions.${action}`);
 		}
 		expect(matchRoute("GET", `/sessions/${sessionId}/transcript`)?.route.name).toBe("sessions.transcript");
+	});
+
+	it("WEB-06 a session watching /events sees no other session's transcript", async () => {
+		t = await startTestPanad();
+		const now = t.clock.now();
+		const own = t.runtime.newId();
+		const other = t.runtime.newId();
+		await t.runtime.db.write(async (tx) => {
+			for (const id of [own, other]) {
+				await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, t!.runtime.url({ kind: "session", id }), now);
+				await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", id, now, now);
+			}
+		});
+		const session = openSessionSse(t.panad.socketPath, own);
+		const peer = openSessionSse(t.panad.socketPath, other);
+		const window = openSse(t.panad.tcpPort!, t.panad.webToken);
+		try {
+			for (const stream of [session, peer, window]) await stream.waitFor("event: hello");
+			expect(subscriberCount(t.runtime)).toBe(3);
+
+			await publish(t.runtime, { kind: "session.entry", sessionId: other, entry: { id: 2, kind: "pi.assistant", model: [{ role: "assistant", content: "other output" }] } });
+			await publish(t.runtime, { kind: "session.live", sessionId: other, live: { activity: "working", tools: [{ callId: "c1", name: "bash", arguments: { command: "other tool arguments" } }] } });
+			await publish(t.runtime, { kind: "session.entry", sessionId: own, entry: { id: 1, kind: "pi.assistant", model: [{ role: "assistant", content: "own output" }] } });
+			// Every window gets this, so a stream that received it saw the whole fan-out above.
+			await publish(t.runtime, { kind: "settings.ui", userColor: "red" });
+
+			// The owning session still receives its own entries live...
+			const mine = await session.waitFor("own output");
+			expect(mine).toContain("event: session.entry");
+			// ...and the user's window still receives every session's, which its Sessions view filters.
+			const user = await window.waitFor("own output");
+			expect(user).toContain("other output");
+			expect(user).toContain("other tool arguments");
+
+			await peer.waitFor("other output");
+			const theirs = peer.text();
+			expect(theirs).toContain('"sessionId":"' + other + '"');
+			expect(session.text()).not.toContain("other output");
+			expect(session.text()).not.toContain("other tool arguments");
+			expect(peer.text()).not.toContain("own output");
+		} finally {
+			for (const stream of [session, peer, window]) stream.close();
+		}
 	});
 
 	it("WEB-07 a reply draft records the thread head", () => {

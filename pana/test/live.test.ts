@@ -46,7 +46,8 @@ function events(t: TestPanad): { frames: WebEvent[]; close: () => void } {
 			return this;
 		},
 	} as unknown as ServerResponse;
-	subscribeEvents(t.runtime, res);
+	// These assertions are the user's own windows, which see every session.
+	subscribeEvents(t.runtime, res, { kind: "user", id: t.runtime.config.user, url: t.runtime.userUrl });
 	return { frames, close: () => handlers.forEach((handler) => handler()) };
 }
 
