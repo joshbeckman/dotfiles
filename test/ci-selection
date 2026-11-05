@@ -112,10 +112,17 @@ class History(unittest.TestCase):
         self.assertEqual(self.run_selector('pull_request', {})['repo'], 'true')
         self.assertEqual(self.push(self.base, self.base)['repo'], 'true')
 
-    def test_absent_pana_is_not_scheduled(self):
+    def test_deleting_the_manifest_does_not_skip_the_suite(self):
         self.git('rm', 'pana/package.json')
         result = self.push(self.base, self.commit())
-        self.assertEqual(result['pana'], 'false')
+        self.assertEqual(result['pana'], 'true')
+
+    def test_branch_predating_pana_is_not_scheduled(self):
+        self.git('rm', '-rq', 'pana')
+        self.git('commit', '-q', '--amend', '-m', 'pre-pana')
+        base = self.git('rev-parse', 'HEAD')
+        self.write('.agents/skills/a/SKILL.md', 'changed')
+        self.assertEqual(self.push(base, self.commit())['pana'], 'false')
 
 
 if __name__ == '__main__':
