@@ -3562,8 +3562,8 @@ function applyObjectiveStateEvent(event) {
 // ---- Renderer bundles -----------------------------------------------------------------------
 
 let vendorLoading;
-// The Markdown renderer is the bundle built in apps/agent-mail-web. Loading it from JS removes
-// any doubt about whether a deferred classic script has run before this module.
+// The Markdown renderer is the vendored bundle in web/vendor.js (see web/README.md). Loading it
+// from JS removes any doubt about whether a deferred classic script has run before this module.
 function ensureVendor() {
 	if (window.MailRenderers) return Promise.resolve();
 	if (!vendorLoading) {
