@@ -82,21 +82,22 @@ Set pana up as a service in six steps. Each step is safe to repeat.
    launchctl kickstart -k "gui/$(id -u)/org.joshbeckman.panad"   # restart after a change
    ```
 
-   On Linux, `setup` enables `panad.service`; restart it with `systemctl --user restart panad`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux. It names the providers panad registered and prints the launch URL:
+   On Linux, `setup` enables `panad.service`; restart it with `systemctl --user restart panad`. The log is `~/Library/Logs/panad.log` on macOS and `journalctl --user -u panad` on Linux. It names the providers panad registered and where the launch URL is:
 
    ```
    panad: listening on ~/.local/state/pana/panad.sock and http://127.0.0.1:8766
    panad: model providers: anthropic, fireworks, openai
-   panad: open http://localhost:8766/#<web-token>
+   panad: launch URL with the web token: /Users/you/.local/state/pana/launch-url
+   panad: open http://localhost:8766/
    ```
 
-6. **Open the PWA.** Open the launch URL in a browser. The part after `#` is the web token, also kept in `~/.local/state/pana/web-token` (mode 0600). The URL uses `localhost`, because Safari answers "denied" to notifications on `127.0.0.1`. A Safari web app added to the Dock starts with empty storage and shows **Authorize this app**: copy the token and paste it there.
+6. **Open the PWA.** Open the launch URL in a browser: `cat ~/.local/state/pana/launch-url`. That file is mode 0600, because the part after `#` is the web token, also kept in `~/.local/state/pana/web-token` (mode 0600); the log names the file instead of printing the token, since launchd and journald keep a log other users can read. The URL uses `localhost`, because Safari answers "denied" to notifications on `127.0.0.1`. A Safari web app added to the Dock starts with empty storage and shows **Authorize this app**: copy the token and paste it there.
 
    ```sh
    pbcopy < ~/.local/state/pana/web-token
    ```
 
-   For a phone, serve the port over HTTPS on the tailnet and open the `https://` launch URL that `panad` prints:
+   For a phone, serve the port over HTTPS on the tailnet and open the `https://` line of that same launch-URL file:
 
    ```sh
    tailscale serve --bg 8766
@@ -545,7 +546,7 @@ While a session works, it shows just above the reply box in its own color with a
 
 The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `s`, `m`, or `h` changes section (Inbox, Threads, Sessions, Memory, Schedules), `g c` starts a new thread, `/` searches, `r` replies, `e` archives an open thread you participate in or a selected inbox thread (and returns to the list when it archives the thread you are reading), `u` or `Esc` goes back, and `?` lists every key. Cmd+K (Ctrl+K off macOS) opens the command palette: every one of those actions in one fuzzy-matched list, plus a Search command that asks threads, sessions, and memory at once and jumps straight to the hit. A magnifier in the top bar opens it on a phone, where there is no Cmd. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
 
-`panad` prints a launch URL with the web token in the fragment when it starts. Treat that URL as private: anyone who has it can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
+`panad` writes its launch URL, with the web token in the fragment, to `~/.local/state/pana/launch-url` (mode 0600) when it starts, and prints the loopback URL without it. Treat that file as private: anyone who has the URL can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
 
 A new message or notice to the user triggers a Web Push notification that opens its thread — including when the browser only focuses the app, and when it opens the app at `/`: the worker leaves the route in the cache and the app adopts it on boot or on focus. Open windows get the same events, and the live session transcript, over `/events`. `panad` holds the VAPID keys and the push subscriptions. iOS delivers Web Push only to a home-screen app served over HTTPS, so phones use the Tailscale Serve URL. The **Notifications** button in the top bar subscribes the device. Once the device is subscribed, the button hides. It comes back when the browser's permission is revoked or the subscription stops working, and it reads **Notifications blocked** when the browser blocks pana. Click it to see how to unblock.
 

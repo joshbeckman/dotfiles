@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
@@ -129,6 +129,11 @@ describe("panad", () => {
 		// Pin one route to "unbuilt" so this stays a 501 whatever WP6 ships.
 		const t = await start({ handlers: { ...echo, "schedules.list": undefined } });
 		expect(typeof t.panad.tcpPort).toBe("number");
+
+		// API-04: only the user may connect. The socket is chmodded under a temporary name and
+		// renamed into place, so it is never connectable by another user, not even briefly.
+		expect(statSync(statePaths(t.dir).socket).mode & 0o777).toBe(0o600);
+		expect(readdirSync(t.dir).filter((name) => name.startsWith("panad.sock"))).toEqual(["panad.sock"]);
 
 		const secret = "SEKRIT-BODY-VALUE";
 		const socketInbox = await t.client.get("/inbox");
