@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
@@ -24,6 +25,46 @@ async function withSession(handlers: Handlers = {}, tailscaleNames?: string[]): 
 		await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", session, now, now);
 	});
 	return { t, session };
+}
+
+/**
+ * A POST that declares a body and sends none of it. The status can only arrive if the daemon
+ * answers before reading the body; a daemon that reads first never answers at all.
+ */
+function answerBeforeBody(endpoint: { host: string; port: number }, path: string, headers: Record<string, string>): Promise<number | undefined> {
+	return new Promise((resolve, reject) => {
+		const req = httpRequest({ ...endpoint, method: "POST", path, headers }, (res) => {
+			res.resume();
+			res.on("end", () => resolve(res.statusCode));
+			res.on("error", reject);
+		});
+		req.on("error", reject);
+		const timer = setTimeout(() => {
+			req.destroy();
+			resolve(undefined);
+		}, 2000);
+		req.on("close", () => clearTimeout(timer));
+		req.flushHeaders();
+	});
+}
+
+/** A chunked POST that sends `bytes` and then stops: the answer comes from mid-body. */
+function answerMidBody(endpoint: { socketPath: string } | { host: string; port: number }, path: string, bytes: number): Promise<number | undefined> {
+	return new Promise((resolve, reject) => {
+		const req = httpRequest({ ...endpoint, method: "POST", path, headers: { "content-type": "application/json" } }, (res) => {
+			res.resume();
+			res.on("end", () => resolve(res.statusCode));
+			res.on("error", reject);
+		});
+		req.on("error", reject);
+		const timer = setTimeout(() => {
+			req.destroy();
+			resolve(undefined);
+		}, 2000);
+		req.on("close", () => clearTimeout(timer));
+		// No content-length, so the daemon only learns the size as the chunks arrive.
+		req.write(Buffer.alloc(bytes, 0x20));
+	});
 }
 
 describe("API contract", () => {
@@ -146,6 +187,57 @@ describe("API contract", () => {
 			expect(res.status, host).toBe(403);
 			expect(res.body).toMatchObject({ error: { code: "forbidden_host" } });
 		}
+	});
+
+	it("API-06 a body is read only after the caller is resolved and never past files.maxBytes, and a refused upload keeps FIL-03's 400", async () => {
+		const LIMIT = 1024;
+		t = await startTestPanad({
+			config: { files: { maxBytes: LIMIT } },
+			// Echo the size so a body at the limit is visibly read in full.
+			handlers: { "threads.create": (ctx) => ({ status: 201, body: { bytes: ctx.rawBody.length } }) },
+		});
+		const base = { host: "127.0.0.1", port: t.panad.tcpPort! };
+
+		// A body declared and never sent. A daemon that read the body before the caller would never
+		// answer; this one answers with the caller's refusal and buffers none of it.
+		const early = await answerBeforeBody(base, "/threads", {
+			"content-type": "application/json",
+			"content-length": String(64 * 1024 * 1024),
+		});
+		expect(early).toBe(403);
+
+		// The same limit over a stream: refused at the byte that crosses it, mid-body.
+		expect(await answerMidBody({ socketPath: t.panad.socketPath }, "/threads", LIMIT * 2)).toBe(413);
+
+		const exact = { to: [TEST_USER], body: "" };
+		const pad = (bytes: number): Buffer => {
+			const head = `${JSON.stringify(exact).slice(0, -1)},"pad":"`;
+			return Buffer.from(`${head}${"a".repeat(bytes - head.length - 2)}"}`);
+		};
+		const atLimit = pad(LIMIT);
+		expect(atLimit.length).toBe(LIMIT);
+		const read = await request({ socketPath: t.panad.socketPath }, "POST", "/threads", {
+			bytes: atLimit,
+			headers: { "content-type": "application/json" },
+		});
+		expect(read.status).toBe(201);
+		expect(read.body).toEqual({ bytes: LIMIT });
+
+		const over = Buffer.concat([atLimit, Buffer.from(" ")]);
+		const refused = await request({ socketPath: t.panad.socketPath }, "POST", "/threads", {
+			bytes: over,
+			headers: { "content-type": "application/json" },
+		});
+		expect(refused.status).toBe(413);
+		expect(refused.body).toEqual({ error: { code: "payload_too_large", message: `request body is over the ${LIMIT} byte limit`, maxBytes: LIMIT } });
+		expect(statusToExitCode(refused.status)).toBe(1);
+
+		// FIL-03 keeps its own answer: an upload past its limit is a 400, and nothing is copied.
+		const upload = await request({ socketPath: t.panad.socketPath }, "POST", "/files?name=big.bin", {
+			bytes: Buffer.alloc(LIMIT + 1, 7),
+		});
+		expect(upload.status).toBe(400);
+		expect(upload.body).toMatchObject({ error: { code: "file_too_large", maxBytes: LIMIT } });
 	});
 
 	it("API route table covers every route in the SPEC.md API table", () => {

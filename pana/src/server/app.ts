@@ -53,14 +53,18 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 		// A request target that is not a URL, such as `//` from a browser's speculative probe, must
 		// not take the daemon down: every other request on both transports would die with it.
 		url = parseTarget(target);
-		const rawBody = await readBody(req);
 		// The app shell loads in a browser, which cannot attach the bearer token to a page load,
 		// so the shell assets are the one public part of the TCP surface. Everything else,
 		// including unknown paths, keeps API-04's token check.
 		const publicShell = transport === "tcp" && method === "GET" && isStaticAssetPath(url.pathname);
 		caller = await resolveCaller(options, transport, req, publicShell);
-		const body = parseJsonBody(req, rawBody);
+		// The body is read only once the caller is resolved, and never past the route's limit
+		// (API-06): a refused request buffers none of it. The route is matched here so the limit
+		// is known before a byte is read; the not-found error still comes after the JSON body,
+		// as it did when every body was read first.
 		const match = matchRoute(method, url.pathname);
+		const rawBody = await readBody(req, options.runtime.config.files.maxBytes, match?.route.name);
+		const body = parseJsonBody(req, rawBody);
 		if (!match) {
 			throw pathExists(url.pathname)
 				? new ApiError(404, "not_found", `${method} is not allowed on ${url.pathname}`)
@@ -179,13 +183,40 @@ function tokenMatches(header: string | undefined, token: string): boolean {
 	return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer> {
+/**
+ * API-06: the whole body, or a refusal. The bytes are kept only up to `limit`, so an oversized
+ * body costs one read ahead of the refusal rather than all of itself, and the connection drains
+ * what is left after the response instead of the daemon holding it.
+ */
+function readBody(req: IncomingMessage, limit: number, route: string | undefined): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
+		const declared = Number(req.headers["content-length"]);
+		if (Number.isFinite(declared) && declared > limit) {
+			reject(tooLarge(limit, route));
+			return;
+		}
 		const chunks: Buffer[] = [];
-		req.on("data", (chunk: Buffer) => chunks.push(chunk));
+		let size = 0;
+		req.on("data", (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > limit) {
+				// Refuse at the byte that crosses the limit, and stop keeping any of the rest.
+				reject(tooLarge(limit, route));
+				return;
+			}
+			chunks.push(chunk);
+		});
 		req.on("end", () => resolve(Buffer.concat(chunks)));
 		req.on("error", reject);
 	});
+}
+
+/** FIL-03 keeps its 400 for an upload's own limit; every other route answers 413 (API-06). */
+function tooLarge(maxBytes: number, route: string | undefined): ApiError {
+	if (route === "files.upload") {
+		return ApiError.badRequest("file_too_large", `file is over the ${maxBytes} byte limit`, { maxBytes });
+	}
+	return new ApiError(413, "payload_too_large", `request body is over the ${maxBytes} byte limit`, { maxBytes });
 }
 
 function parseJsonBody(req: IncomingMessage, raw: Buffer): unknown {
