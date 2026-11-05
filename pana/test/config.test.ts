@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ConfigError, DEFAULTS, loadConfig, stateDir } from "../src/config/index.ts";
+import { ConfigError, DEFAULTS, isWebToken, loadConfig, stateDir } from "../src/config/index.ts";
 import { makeStateDir, startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 
 const PANAD = join(import.meta.dirname, "..", "bin", "panad");
@@ -145,6 +145,22 @@ describe("config and state", () => {
 		const again = await startTestPanad({ stateDir: t.dir });
 		expect(readFileSync(join(t.dir, "web-token"), "utf8")).toBe(token);
 		await again.stop();
+	});
+
+	it("CFG-04 replaces a corrupt web-token atomically instead of locking every TCP client out", async () => {
+		const dir = makeStateDir();
+		dirs.push(dir);
+		// A bad write (empty, or a partial token) used to leave panad authenticating against "".
+		writeFileSync(join(dir, "web-token"), "", { mode: 0o644 });
+		t = await startTestPanad({ stateDir: dir });
+		const token = readFileSync(join(dir, "web-token"), "utf8");
+		expect(isWebToken(token)).toBe(true);
+		expect(token).toBe(t.panad.webToken);
+		expect(statSync(join(dir, "web-token")).mode & 0o777).toBe(0o600);
+		// The write lands by rename, so no partial sibling is left behind.
+		expect(readdirSync(dir).filter((name) => name.includes(".tmp"))).toEqual([]);
+		// And the token panad loaded is the one that answers.
+		expect((await t.tcp.get("/settings")).status).toBe(200);
 	});
 
 	it("CFG-05 a second panad on the same state directory exits 1 naming the running PID", async () => {
