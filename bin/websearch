@@ -14,7 +14,9 @@ Three engines, and the default is the cheap one:
               Costs an order of magnitude more, so it is opt-in.
 
 Secrets are injected per process with `s`, never exported, so a key reaches
-only this script's own HTTP call. Run `websearch --help` for the flags.
+only this script's own HTTP call. Run `websearch --help` for the flags. The URL
+overrides for the two keyed engines are honoured only on loopback, and those
+requests refuse redirects, so an environment value cannot route a key.
 
 Usage:
   websearch QUERY...              cheap keyword search
@@ -36,8 +38,29 @@ import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
 
-CERAMIC_URL = os.environ.get("WEBSEARCH_CERAMIC_URL", "https://api.ceramic.ai/search")
-OPENAI_URL = os.environ.get("WEBSEARCH_OPENAI_URL", "https://api.openai.com/v1/responses")
+# A test affordance, not a security judgement: the suite serves all three engines
+# from 127.0.0.1, and that is the only reason an override of a keyed URL is allowed.
+# A process running on this machine can therefore still be served a key; nothing off
+# this machine can.
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def pinned_endpoint(name: str, default: str) -> str:
+    """Honour a URL override only on loopback: the request carries a key."""
+    override = os.environ.get(name)
+    if not override:
+        return default
+    parts = urllib.parse.urlsplit(override)
+    if parts.scheme not in ("http", "https") or parts.hostname not in LOOPBACK:
+        print(f"websearch: {name}={override!r} is not a loopback URL, so refusing to send a key "
+              f"there; unset it to use {default}", file=sys.stderr)
+        raise SystemExit(2)
+    return override
+
+
+CERAMIC_URL = pinned_endpoint("WEBSEARCH_CERAMIC_URL", "https://api.ceramic.ai/search")
+OPENAI_URL = pinned_endpoint("WEBSEARCH_OPENAI_URL", "https://api.openai.com/v1/responses")
+# DuckDuckGo carries no credential, so its override needs no pinning.
 DDG_URL = os.environ.get("WEBSEARCH_DDG_URL", "https://html.duckduckgo.com/html/")
 TIMEOUT = 45
 # DuckDuckGo serves a challenge page instead of results to anything that looks
@@ -57,6 +80,19 @@ INJECTED = "WEBSEARCH_INJECTED"
 
 class SearchError(Exception):
     pass
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is a server-chosen destination; the key does not go there."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise SearchError(
+            f"refusing to follow a redirect from {urllib.parse.urlsplit(req.full_url).netloc} "
+            f"to {newurl} with a credential attached"
+        )
+
+
+PINNED_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 # --------------------------------------------------------------- secret plumbing
@@ -90,10 +126,12 @@ def shutil_which(name: str) -> str | None:
     return None
 
 
-def get(url: str, *, headers: dict[str, str], data: bytes | None = None) -> bytes:
+def get(url: str, *, headers: dict[str, str], data: bytes | None = None,
+        follow: bool = True) -> bytes:
     request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **headers})
+    opener = urllib.request.build_opener() if follow else PINNED_OPENER
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        with opener.open(request, timeout=TIMEOUT) as response:
             return response.read()
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", "replace")[:300]
@@ -116,6 +154,7 @@ def search_ceramic(query: str, limit: int) -> list[dict]:
         CERAMIC_URL,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         data=payload,
+        follow=False,
     )
     body = json.loads(raw)
     results = (body.get("result") or {}).get("results") or []
@@ -231,6 +270,7 @@ def search_openai(query: str) -> tuple[str, list[str]]:
         OPENAI_URL,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         data=payload,
+        follow=False,
     )
     body = json.loads(raw)
     if body.get("error"):

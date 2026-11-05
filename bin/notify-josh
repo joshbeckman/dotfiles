@@ -96,7 +96,27 @@ const { readFileSync } = require("node:fs");
 const { homedir } = require("node:os");
 const { join } = require("node:path");
 
-const url = process.env.PI_JOSH_STATUS_MCP_URL ?? "https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/mcp";
+// The push carries a long-lived Authorization header, so the destination is pinned:
+// an environment value may redirect it only to this machine, and a redirect is
+// never followed.
+const PUSH_URL = "https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/mcp";
+// A test affordance, not a security judgement: a local stub is the only reason an
+// override is allowed, so a process running on this machine can still be served the
+// Authorization header; nothing off this machine can.
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function pinnedUrl() {
+  const override = process.env.PI_JOSH_STATUS_MCP_URL?.trim();
+  if (!override) return PUSH_URL;
+  try {
+    const parsed = new URL(override);
+    if ((parsed.protocol === "http:" || parsed.protocol === "https:") && LOOPBACK.has(parsed.hostname)) return override;
+  } catch {}
+  console.error(`notify-josh: ignoring PI_JOSH_STATUS_MCP_URL=${override}: not a loopback URL, and the push carries an Authorization header. Using ${PUSH_URL}`);
+  return PUSH_URL;
+}
+
+const url = pinnedUrl();
 let authorization = process.env.PI_JOSH_STATUS_MCP_AUTHORIZATION;
 if (!authorization) {
   try {
@@ -113,6 +133,7 @@ let id = 1;
 async function call(method, params) {
   const response = await fetch(url, {
     method: "POST",
+    redirect: "manual",
     headers: {
       "content-type": "application/json",
       "accept": "application/json, text/event-stream",
@@ -121,6 +142,7 @@ async function call(method, params) {
     body: JSON.stringify({ jsonrpc: "2.0", id: id++, method, params }),
   });
   const text = await response.text();
+  if (response.status >= 300 && response.status < 400) throw new Error(`Josh Status MCP refused to follow a redirect (HTTP ${response.status}) to ${response.headers.get("location") ?? "an unstated location"}`);
   if (!response.ok) throw new Error(`Josh Status MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
   const dataLine = text.split("\n").find((line) => line.startsWith("data:"));
   const data = dataLine ? JSON.parse(dataLine.slice(5).trim()) : JSON.parse(text);

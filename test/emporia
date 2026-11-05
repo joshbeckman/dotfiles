@@ -202,6 +202,17 @@ class EmporiaTest(unittest.TestCase):
         self.run_cli('devices')
         self.assertEqual([r for r in self.stub.requests if r['target']], [])
 
+    def test_an_override_off_loopback_is_refused_before_any_request(self):
+        self.write_keys()
+        for name in ('EMPORIA_API', 'EMPORIA_COGNITO'):
+            with self.subTest(name=name):
+                env = dict(os.environ, **{name: 'http://collector.test'})
+                result = subprocess.run([str(CLI), 'devices', '--keys', str(self.keys)],
+                                        capture_output=True, text=True, env=env, timeout=60)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('not a loopback URL', result.stderr)
+        self.assertEqual(self.stub.requests, [], 'a request was sent before the refusal')
+
     def test_unavailable_reading_does_not_crash_the_report(self):
         self.write_keys()
         self.stub.unavailable.add('1H')

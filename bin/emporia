@@ -10,7 +10,9 @@ Usage:
   emporia --keys PATH     credentials file (default ~/.config/emporia/keys.json)
 
 EMPORIA_API and EMPORIA_COGNITO override the endpoints, which exists so the test
-suite can point at a stub server.
+suite can point at a stub server. An override is honoured only on loopback: the
+requests carry live tokens, so an environment value must not be able to route
+them off this machine, and redirects are refused for the same reason.
 
 Credentials: a JSON file holding id_token, access_token and refresh_token from a
 signed-in https://web.emporiaenergy.com tab (the account uses Sign in with Apple,
@@ -30,13 +32,14 @@ import os
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 
-API = os.environ.get('EMPORIA_API', 'https://api.emporiaenergy.com')
-COGNITO = os.environ.get('EMPORIA_COGNITO', 'https://cognito-idp.us-east-2.amazonaws.com/')
-CLIENT_ID = '4qte47jbstod8apnfic0bunmrq'
-KEYS = os.path.expanduser(os.environ.get('EMPORIA_KEYS', '~/.config/emporia/keys.json'))
-UTC = dt.timezone.utc
+# A test affordance, not a security judgement: the suite points EMPORIA_API and
+# EMPORIA_COGNITO at a stub server on 127.0.0.1, and that is the only reason an
+# override is allowed at all. A process running on this machine can therefore still
+# be served a live token; nothing off this machine can.
+LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
 
 
 def die(message, code=1):
@@ -44,11 +47,41 @@ def die(message, code=1):
     sys.exit(code)
 
 
+def endpoint(name, default):
+    """Honour an endpoint override only on this machine; both requests carry tokens."""
+    override = os.environ.get(name)
+    if not override:
+        return default
+    parts = urllib.parse.urlsplit(override)
+    if parts.scheme not in ('http', 'https') or parts.hostname not in LOOPBACK:
+        die(f'{name}={override!r} is not a loopback URL, so refusing to send credentials there; '
+            f'unset it to use {default}', 2)
+    return override
+
+
+API = endpoint('EMPORIA_API', 'https://api.emporiaenergy.com')
+COGNITO = endpoint('EMPORIA_COGNITO', 'https://cognito-idp.us-east-2.amazonaws.com/')
+CLIENT_ID = '4qte47jbstod8apnfic0bunmrq'
+KEYS = os.path.expanduser(os.environ.get('EMPORIA_KEYS', '~/.config/emporia/keys.json'))
+UTC = dt.timezone.utc
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is a server-chosen destination; the token does not go there."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise SystemExit(f'emporia: {req.full_url} redirected to {newurl}; refusing to follow '
+                         'a redirect with a live token attached')
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
+
+
 def request(url, headers=None, body=None, timeout=25):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with OPENER.open(req, timeout=timeout) as response:
             return json.loads(response.read().decode() or 'null')
     except urllib.error.HTTPError as error:
         detail = error.read().decode()[:400].strip()
