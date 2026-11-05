@@ -3,9 +3,11 @@
 //
 // Other packages publish here instead of writing to a socket: a delivery that lands for the
 // user is `{kind: "delivery", to: <user URL>, ...}`, and a notice is `{kind: "notice", ...}`.
-// `publish` streams the event to open windows and pushes it when the user is away.
+// `publish` streams the event to open windows and pushes it when the user is away. Each window
+// gets only what its caller may see, so a session cannot watch another session's transcript.
 
 import type { ServerResponse } from "node:http";
+import type { Caller } from "../api/types.ts";
 import { messageFor, pushToParticipant, type SendSummary } from "../push/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 
@@ -26,7 +28,22 @@ export interface WebEvent {
 }
 
 interface Subscriber {
+	caller: Caller;
 	send(event: WebEvent): void;
+}
+
+/**
+ * The event kinds that carry a session's own transcript. A committed entry holds tool arguments,
+ * tool output, and model text; the live view holds the same for work in progress. Both belong to
+ * the session that wrote them, so a session-caller subscriber sees only its own.
+ * The user's windows still receive every session's, which is what the Sessions view follows.
+ */
+const OWNED_KINDS = new Set(["session.entry", "session.live"]);
+
+function visibleTo(caller: Caller, event: WebEvent): boolean {
+	if (!OWNED_KINDS.has(event.kind)) return true;
+	if (caller.kind === "user") return true;
+	return event.sessionId === caller.id;
 }
 
 const hubs = new WeakMap<Runtime, Set<Subscriber>>();
@@ -45,11 +62,13 @@ function frame(event: WebEvent): string {
 }
 
 /**
- * Attach a response as an SSE subscriber. Returns the unsubscribe function; the caller must
- * also handle the response closing. The heartbeat keeps proxies from idling the connection out.
+ * Attach a response as an SSE subscriber, as the caller that opened it. Returns the unsubscribe
+ * function; the caller must also handle the response closing. The heartbeat keeps proxies from
+ * idling the connection out.
  */
-export function subscribeEvents(runtime: Runtime, res: ServerResponse): () => void {
+export function subscribeEvents(runtime: Runtime, res: ServerResponse, caller: Caller): () => void {
 	const subscriber: Subscriber = {
+		caller,
 		send: (event) => {
 			try {
 				res.write(frame(event));
@@ -86,9 +105,9 @@ export function subscriberCount(runtime: Runtime): number {
 }
 
 /**
- * Stream an event to every open window, and push it when it is a delivery or notice addressed
- * to the user (PSH-03). Callers may ignore the promise; awaiting it makes push delivery
- * observable in tests.
+ * Stream an event to every open window it is visible to, and push it when it is a delivery or
+ * notice addressed to the user (PSH-03). Callers may ignore the promise; awaiting it makes push
+ * delivery observable in tests.
  */
 export async function publish(
 	runtime: Runtime,
@@ -97,7 +116,9 @@ export async function publish(
 ): Promise<SendSummary | undefined> {
 	const at = event.at ?? runtime.clock.now();
 	const enriched: WebEvent = { ...event, at };
-	for (const subscriber of hub(runtime)) subscriber.send(enriched);
+	for (const subscriber of hub(runtime)) {
+		if (visibleTo(subscriber.caller, enriched)) subscriber.send(enriched);
+	}
 	if (event.to !== runtime.userUrl) return undefined;
 	if (event.kind !== "delivery" && event.kind !== "notice") return undefined;
 	return pushToParticipant(runtime, runtime.config.user, messageFor(enriched), (error) => onPushError(error));
