@@ -294,6 +294,66 @@ describe("GUARD-03 pana worktree add", () => {
 		expect(existsSync(marker)).toBe(false);
 	});
 
+	it("runs no filter driver the repository's own config names", async () => {
+		const t = setup();
+		const marker = join(t.home, "ran");
+		// Committed before the drivers exist, so only a checkout can run them.
+		writeFileSync(join(t.repo, ".gitattributes"), "* filter=evil\n");
+		t.git(t.repo, ["add", ".gitattributes"]);
+		t.git(t.repo, ["commit", "-q", "-m", "attributes"]);
+		for (const kind of ["smudge", "clean"]) t.git(t.repo, ["config", `filter.evil.${kind}`, `echo ${kind} >> ${marker}; cat`]);
+
+		// The payload is real: git runs the driver when nothing neutralises it.
+		t.git(t.repo, ["worktree", "add", "-q", "-b", "unscrubbed", join(t.home, "unscrubbed"), "HEAD"]);
+		expect(readFileSync(marker, "utf8")).toContain("smudge");
+		rmSync(marker);
+
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(result.created).toBe(true);
+		expect(existsSync(marker)).toBe(false);
+		expect(readFileSync(join(result.path, "tracked.txt"), "utf8")).toBe("primary\n");
+	});
+
+	it("takes a repository's long-running process filter out of play", async () => {
+		const t = setup();
+		const marker = join(t.home, "ran");
+		writeFileSync(join(t.repo, ".gitattributes"), "* filter=evil\n");
+		t.git(t.repo, ["add", ".gitattributes"]);
+		t.git(t.repo, ["commit", "-q", "-m", "attributes"]);
+		t.git(t.repo, ["config", "filter.evil.process", `echo process >> ${marker}; cat`]);
+
+		// The payload is real; git complains about the bogus protocol on stderr, so keep it out of the log.
+		execFileSync("git", ["worktree", "add", "-q", "-b", "unscrubbed", join(t.home, "unscrubbed"), "HEAD"], {
+			cwd: t.repo,
+			stdio: ["ignore", "pipe", "ignore"],
+			env: { PATH: process.env.PATH, HOME: t.home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+		});
+		expect(readFileSync(marker, "utf8")).toContain("process");
+		rmSync(marker);
+
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(result.created).toBe(true);
+		expect(existsSync(marker)).toBe(false);
+	});
+
+	it("refuses a required filter driver instead of checking out unfiltered bytes", async () => {
+		const t = setup();
+		const marker = join(t.home, "ran");
+		writeFileSync(join(t.repo, ".gitattributes"), "* filter=evil\n");
+		t.git(t.repo, ["add", ".gitattributes"]);
+		t.git(t.repo, ["commit", "-q", "-m", "attributes"]);
+		t.git(t.repo, ["config", "filter.evil.smudge", `echo smudge >> ${marker}; cat`]);
+		t.git(t.repo, ["config", "filter.evil.required", "true"]);
+
+		const state = tmp("pana-state-");
+		const runtime = { paths: { dir: state } } as unknown as Runtime;
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/requires filter 'evil'/);
+		expect(existsSync(marker)).toBe(false);
+		expect(existsSync(join(realPath(state), "worktrees", "session", "dotfiles"))).toBe(false);
+	});
+
 	it("ignores GIT_* variables inherited from the shell that started panad", async () => {
 		const t = setup();
 		const other = join(t.home, "other");

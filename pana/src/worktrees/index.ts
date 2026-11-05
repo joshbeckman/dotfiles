@@ -15,7 +15,7 @@ import { realPath } from "../extension/checkouts.ts";
 import { checkoutCommon, owners, saveOwner } from "./ownership.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { generatedBranch } from "./branch.ts";
-import { gitIn, scrubbedEnv } from "./git.ts";
+import { gitIn, scrubbedEnv, filterOverrides } from "./git.ts";
 
 const run = promisify(execFile);
 
@@ -126,6 +126,10 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 					throw ApiError.badRequest("worktree_adapter_failed", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
 				}
 			} else {
+				// Neutralised for this call, the only one that populates a checkout. The adapter above runs
+				// machine-configured code instead, which is not the caller's, and is left alone. A driver
+				// that cannot be neutralised refuses the repository before anything is made.
+				const filters = await filterOverrides(repo);
 				mkdirSync(join(runtime.paths.dir, "worktrees", sessionId), { recursive: true });
 				// The caller's path may be swapped after validation: re-resolve both the repository and
 				// the destination immediately before git touches either.
@@ -143,7 +147,7 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 				// A generated-name race must fail rather than join another writer's branch.
 				const exists = requested === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
 				try {
-					await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
+					await git(repo, [...filters, "worktree", "add", "-q", ...(exists === "" ? ["-b", branch, path, "HEAD"] : [path, branch])]);
 				} catch (error) {
 					// Leave no empty directory behind for the retry to trip over.
 					try { rmdirSync(path); } catch { /* git may have populated it; keep it for inspection */ }
