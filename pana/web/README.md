@@ -39,7 +39,7 @@ Chrome emulation checks computed font size, cursor contrast/color, and overflow,
 
 ## Authorize a window
 
-`panad` prints `panad: open http://127.0.0.1:<port>/#<web-token>`. The token lives in the fragment, which browsers never send to the server. The app stores it and clears the hash. Keep the launch URL private: anyone who has it can act as the user. A window with no usable token, or one that gets a 403, shows **Authorize this app** and accepts the launch URL or the token once.
+`panad` writes `panad: launch URL with the web token: <state>/launch-url` and prints the loopback URL without the token. The launch URL file (mode 0600) carries the token in the fragment, which browsers never send to the server. The app stores it and clears the hash. Keep that file private: anyone who has the URL can act as the user. A window with no usable token, or one that gets a 403, shows **Authorize this app** and accepts the launch URL or the token once.
 
 ## Tests
 
