@@ -14,7 +14,7 @@ export const handlers: Handlers = {
 	}),
 
 	"schedules.list": async (ctx) => {
-		const page = await listSchedules(ctx.runtime, ctx.query.get("kind"), {
+		const page = await listSchedules(ctx.runtime, ctx.caller, ctx.query.get("kind"), {
 			limit: parseLimit(ctx.query.get("limit"), SCHEDULE_LIMIT),
 			cursor: ctx.query.get("cursor"),
 		});
@@ -23,16 +23,16 @@ export const handlers: Handlers = {
 
 	"schedules.show": async (ctx) => ({
 		status: 200,
-		body: { schedule: await showSchedule(ctx.runtime, ctx.params.id!) },
+		body: { schedule: await showSchedule(ctx.runtime, ctx.caller, ctx.params.id!) },
 	}),
 
 	"schedules.update": async (ctx) => ({
 		status: 200,
-		body: { schedule: await updateSchedule(ctx.runtime, ctx.params.id!, ctx.body) },
+		body: { schedule: await updateSchedule(ctx.runtime, ctx.caller, ctx.params.id!, ctx.body) },
 	}),
 
 	"schedules.delete": async (ctx) => {
-		await deleteSchedule(ctx.runtime, ctx.params.id!);
+		await deleteSchedule(ctx.runtime, ctx.caller, ctx.params.id!);
 		return { status: 204 };
 	},
 };

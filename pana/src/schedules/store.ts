@@ -335,8 +335,19 @@ function kindFilter(value: string | null | undefined): ScheduleKind | undefined 
 	throw ApiError.badRequest("invalid_kind", `schedule kind must be session, thread, or wake, got ${value}`);
 }
 
-export async function showSchedule(runtime: Runtime, id: string): Promise<ScheduleView> {
-	const row = await runtime.db.get<ScheduleJoinRow>(`${SELECT_SCHEDULE} WHERE s.id = ?`, id);
+/**
+ * #203: a session reads and edits only the schedules it created; the user reads and edits
+ * every one. A row out of a session's scope answers 404 like a missing one, so a session cannot
+ * probe for the schedules (and the prompts and notes in them) of its neighbours.
+ */
+function callerScope(caller: Caller): { clause: string; params: string[] } {
+	if (caller.kind === "user") return { clause: "", params: [] };
+	return { clause: " AND s.creator_id = ?", params: [caller.id] };
+}
+
+export async function showSchedule(runtime: Runtime, caller: Caller, id: string): Promise<ScheduleView> {
+	const scope = callerScope(caller);
+	const row = await runtime.db.get<ScheduleJoinRow>(`${SELECT_SCHEDULE} WHERE s.id = ?${scope.clause}`, id, ...scope.params);
 	if (!row || row.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
 	if (row.subject === null) queueScheduleSubject(runtime, row);
 	return scheduleView(row, runtime);
@@ -363,18 +374,21 @@ const SCHEDULE_ORDER = "CASE s.state WHEN 'active' THEN 0 ELSE 1 END, s.next_at 
 /** SCH-07: active first, then the next time they run, one page at a time. Deleted rows are gone. */
 export async function listSchedules(
 	runtime: Runtime,
+	caller: Caller,
 	kind?: string | null,
 	page: { limit?: number; cursor?: string | null } = {},
 ): Promise<Page<ScheduleView>> {
 	const filter = kindFilter(kind);
+	const scope = callerScope(caller);
 	const limit = page.limit ?? SCHEDULE_LIMIT;
 	const after = decodeCursor(page.cursor, ["number", "number", "number", "number", "string"]);
 	const rows = await runtime.db.all<ScheduleJoinRow>(
 		`${SELECT_SCHEDULE}
-		  WHERE s.state <> 'deleted' ${filter ? "AND s.kind = ?" : ""} ${after ? `AND (${SCHEDULE_ORDER}) > (?, ?, ?, ?, ?)` : ""}
+		  WHERE s.state <> 'deleted' ${filter ? "AND s.kind = ?" : ""}${scope.clause} ${after ? `AND (${SCHEDULE_ORDER}) > (?, ?, ?, ?, ?)` : ""}
 		  ORDER BY ${SCHEDULE_ORDER}
 		  LIMIT ?`,
 		...(filter ? [filter] : []),
+		...scope.params,
 		...(after ?? []),
 		limit + 1,
 	);
@@ -443,7 +457,7 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
  * with neither `cron` nor `at` keeps the stored time and state, so editing only the prompt of an
  * `--at` schedule never moves or reactivates it.
  */
-export async function updateSchedule(runtime: Runtime, id: string, value: unknown): Promise<ScheduleView> {
+export async function updateSchedule(runtime: Runtime, caller: Caller, id: string, value: unknown): Promise<ScheduleView> {
 	const input = inputObject(value);
 	const suppliedSubject = input.subject === undefined ? undefined : parseScheduleSubject(input.subject);
 	let saved!: ScheduleJoinRow;
@@ -452,8 +466,14 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 	const retime = hasValue(typeof input.cron === "string" ? input.cron.trim() : input.cron) || hasValue(input.at);
 	const timing = retime ? scheduleTiming(input, runtime.config.timezone, now) : undefined;
 	// UX-09: an edit can retarget a wake, so both the old and the new session get the news.
-	const before = await runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
+	const scope = callerScope(caller);
+	const before = await runtime.db.get<ScheduleRow>(`SELECT s.* FROM schedules s WHERE s.id = ?${scope.clause}`, id, ...scope.params);
 	if (!before || before.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
+	// #203: a new payload can retarget a wake, so the target is validated exactly as on create.
+	const nextKind = hasValue(input.kind) ? scheduleKind(input.kind) : before.kind;
+	if (nextKind === "wake" && typeof input.payload === "object" && input.payload !== null) {
+		await wakeTarget(runtime, caller, (input.payload as Record<string, unknown>).session);
+	}
 	const view = await runtime.db.write(async (tx) => {
 		const existing = await scheduleRow(tx, id);
 		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
@@ -498,10 +518,11 @@ export async function updateSchedule(runtime: Runtime, id: string, value: unknow
 }
 
 /** SCH-07: a deleted schedule never fires, because its state and `next_at` change in one write. */
-export async function deleteSchedule(runtime: Runtime, id: string): Promise<void> {
+export async function deleteSchedule(runtime: Runtime, caller: Caller, id: string): Promise<void> {
 	const now = runtime.clock.now();
+	const scope = callerScope(caller);
 	const deleted = await runtime.db.write(async (tx) => {
-		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
+		const row = await tx.get<ScheduleRow>(`SELECT s.* FROM schedules s WHERE s.id = ?${scope.clause}`, id, ...scope.params);
 		if (!row || row.state === "deleted") return undefined;
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
 		return row;
