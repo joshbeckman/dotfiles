@@ -86,7 +86,13 @@ export function appendTrailerToMessage(segment: string, trailer: string): string
 	const flag = match[1];
 	const quote = match[2];
 	const message = match[3];
-	const escapedTrailer = quote === '"' ? trailer.replace(/\\/g, "\\\\").replace(/"/g, '\\"') : trailer.replace(/'/g, "'\\''");
+	// Inside either quote, `$(...)` and backticks still expand, so the trailer has
+	// to be escaped for the quoting it lands in, not just for the characters that
+	// would end that quoting.
+	const escapedTrailer =
+		quote === '"'
+			? trailer.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, "\\$").replace(/`/g, "\\`")
+			: trailer.replace(/'/g, "'\\''");
 	return segment.replace(re, `${flag} ${quote}${message}\n\n${escapedTrailer}${quote}`);
 }
 
@@ -177,6 +183,8 @@ export function containsUnquoted(text: string, re: RegExp): boolean {
 	return false;
 }
 
-function shellQuote(value: string): string {
-	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+// Single quotes stop every expansion in the shell; a literal `'` is closed,
+// escaped, and reopened. Double quotes would still run `$(...)` and backticks.
+export function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
