@@ -7,7 +7,7 @@
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiError } from "../api/errors.ts";
@@ -15,6 +15,7 @@ import { realPath } from "../extension/checkouts.ts";
 import { checkoutCommon, owners, saveOwner } from "./ownership.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { generatedBranch } from "./branch.ts";
+import { gitIn, scrubbedEnv } from "./git.ts";
 
 const run = promisify(execFile);
 
@@ -43,9 +44,26 @@ function safeName(value: string): string {
 	return name;
 }
 
+/**
+ * A branch name git accepts as a ref (git's own refname rules), and one git cannot read as an
+ * option: the caller's string is only ever passed as a single argv element, but a leading `-`
+ * would still be taken for one.
+ */
+function safeBranch(value: string): string {
+	const branch = value.trim();
+	if (branch === "" || branch === "@" || branch.length > 255 || branch.startsWith("-") || branch.startsWith("/") || branch.endsWith("/") ||
+		branch.endsWith(".") || branch.includes("//") || branch.includes("..") || branch.includes("@{") ||
+		/[\x00-\x20\x7f~^:?*[\\]/.test(branch) ||
+		branch.split("/").some((part) => part.startsWith(".") || part.endsWith(".lock"))) {
+		throw ApiError.badRequest("invalid_branch",
+			"branch must be a name git accepts: no leading '-', no space, '~', '^', ':', '?', '*', '[', '\\', '..', '@{', or '.lock' part");
+	}
+	return branch;
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
 	try {
-		const { stdout } = await run("git", ["-C", cwd, ...args]);
+		const { stdout } = await gitIn(cwd, args);
 		return stdout.trim();
 	} catch (error) {
 		const stderr = (error as { stderr?: string }).stderr?.trim();
@@ -59,7 +77,7 @@ async function repoRoot(repo: string): Promise<string> {
 	if (!existsSync(path)) throw ApiError.badRequest("invalid_repo", `not a directory: ${repo}`);
 	const top = await git(path, ["rev-parse", "--show-toplevel"]);
 	if (top === "") throw ApiError.badRequest("invalid_repo", `not a git repository: ${repo}`);
-	return top;
+	return realPath(top);
 }
 
 // Serialize a destination through validation, creation and receipt publication.
@@ -67,6 +85,7 @@ const pending = new Map<string, Promise<unknown>>();
 
 /** GUARD-03: a worktree of `input.repo` for `sessionId`, made or reused. */
 export async function addWorktree(runtime: Runtime, sessionId: string, input: AddWorktreeInput): Promise<WorktreeResult> {
+	const requested = input.branch === undefined ? undefined : safeBranch(input.branch);
 	const repo = await repoRoot(input.repo);
 	const common = realPath(await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
 	const name = safeName(input.name ?? basename(repo));
@@ -91,7 +110,7 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 		}
 		if (existsSync(path) && !owner && adapter) throw ApiError.badRequest("worktree_collision", `unowned destination already exists: ${path}`);
 		let created = false;
-		let branch = input.branch;
+		let branch = requested;
 		if (!existsSync(path)) {
 			try {
 				branch ??= await generatedBranch(repo, [sessionId, name]);
@@ -102,15 +121,34 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 				const substitutions: Record<string, string> = { name: treeName, branch, path, repo };
 				const argv = adapter.create.map((arg) => arg.replace(/\{(name|branch|path|repo)\}/g, (_, key: string) => substitutions[key]!));
 				try {
-					await run(argv[0]!, argv.slice(1), { cwd: repo, timeout: 600_000 });
+					await run(argv[0]!, argv.slice(1), { cwd: repo, env: scrubbedEnv(), timeout: 600_000 });
 				} catch (error) {
 					throw ApiError.badRequest("worktree_adapter_failed", (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
 				}
 			} else {
 				mkdirSync(join(runtime.paths.dir, "worktrees", sessionId), { recursive: true });
+				// The caller's path may be swapped after validation: re-resolve both the repository and
+				// the destination immediately before git touches either.
+				if (realPath(repo) !== repo || await repoRoot(repo) !== repo) {
+					throw ApiError.badRequest("invalid_repo", "repository changed while its worktree was created");
+				}
+				// `mkdir` never follows a symlink, so a destination planted since the check above fails
+				// here instead of being populated by git.
+				try {
+					mkdirSync(path);
+				} catch {
+					throw ApiError.badRequest("worktree_collision", `destination appeared while creating it: ${path}`);
+				}
+				if (realPath(path) !== resolve(path)) throw ApiError.badRequest("invalid_worktree", "worktree destination contains a symlink");
 				// A generated-name race must fail rather than join another writer's branch.
-				const exists = input.branch === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
-				await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
+				const exists = requested === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
+				try {
+					await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
+				} catch (error) {
+					// Leave no empty directory behind for the retry to trip over.
+					try { rmdirSync(path); } catch { /* git may have populated it; keep it for inspection */ }
+					throw error;
+				}
 			}
 			created = true;
 		}
