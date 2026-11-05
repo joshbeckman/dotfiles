@@ -533,6 +533,22 @@ export const MIGRATIONS: readonly Migration[] = [
 		// primary key or reads by thread.
 		sql: `CREATE INDEX IF NOT EXISTS messages_sender_created ON messages(sender_id, created_at);`,
 	},
+	{
+		version: 16,
+		name: "worktree ownership",
+		// GUARD-07: which session owns which managed tree was a JSON file under
+		// `<state>/worktree-owners`, and `exec()` re-read ownership before every `bash` call. The
+		// session's own shell could write that directory, so it could forge ownership of a peer's
+		// tree and have the file tools, and the read-only mounts, treat it as its own. One row per
+		// checkout, written only by panad; `src/worktrees/ownership.ts` is its only reader and writer.
+		sql: `
+			CREATE TABLE IF NOT EXISTS worktree_owners (
+				path    TEXT PRIMARY KEY,
+				session TEXT NOT NULL,
+				common  TEXT NOT NULL
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

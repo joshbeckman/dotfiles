@@ -3,7 +3,7 @@
 // The primary checkout is the user's own working copy: its branch, its index, its unpushed work.
 // A session that edits it leaves changes the user never asked for, tests the wrong build (panad
 // runs from it), and can commit to the user's branch by accident. Linked worktrees need ownership
-// checks too; env.ts combines discovery here with receipts and legacy session namespaces.
+// checks too; env.ts combines discovery here with ownership rows and legacy session namespaces.
 //
 // `primaryCheckoutOf` answers "which primary checkout is this path in" for one path, which is the
 // guard for the file tools. `primaryCheckouts` lists the checkouts under a root, which is what

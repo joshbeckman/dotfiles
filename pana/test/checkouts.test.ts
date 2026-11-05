@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PanaExecutionEnv } from "../src/extension/env.ts";
+import { PanaExecutionEnv, sandboxSupported } from "../src/extension/env.ts";
 import {
 	blockedCheckout,
 	primaryCheckoutOf,
@@ -17,16 +17,29 @@ import {
 	realPath,
 	resetCheckoutScan,
 } from "../src/extension/checkouts.ts";
+import { openNodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
+import { migrate, PanaDatabase } from "../src/db/index.ts";
 import { addWorktree } from "../src/worktrees/index.ts";
 import type { Runtime } from "../src/server/runtime.ts";
 import type { RequestContext } from "../src/api/types.ts";
 import { handlers } from "../src/worktrees/handlers.ts";
 
 const dirs: string[] = [];
-afterEach(() => {
+const dbs: PanaDatabase[] = [];
+afterEach(async () => {
+	for (const db of dbs.splice(0)) await db.close().catch(() => {});
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	resetCheckoutScan();
 });
+
+/** A state directory with a migrated database, as panad has: ownership is a row (GUARD-07). */
+async function stateRuntime(): Promise<Runtime> {
+	const dir = tmp("pana-state-");
+	const db = new PanaDatabase(await openNodeSqliteDatabase(join(dir, "pana.sqlite")));
+	await migrate(db);
+	dbs.push(db);
+	return { paths: { dir }, db } as unknown as Runtime;
+}
 
 function tmp(prefix = "pana-guard-"): string {
 	const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -68,13 +81,9 @@ function env(options: { home: string; cwd: string; roots?: string[]; protect?: "
 	});
 }
 
+/** GUARD-02: the wrapper needs a mount namespace and the capability drop that follows it. */
 function canNamespace(): boolean {
-	try {
-		execFileSync("unshare", ["--map-root-user", "--mount", "true"], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
-	}
+	return sandboxSupported();
 }
 
 describe("GUARD-01 the file tools refuse the user's checkout", () => {
@@ -135,6 +144,29 @@ describe("GUARD-02 sandbox mode cannot write to the checkout", () => {
 		if (!allowed.ok) throw new Error(allowed.error.message);
 		expect(allowed.value.exitCode).toBe(0);
 		expect(existsSync(join(wt, "from-bash.txt"))).toBe(true);
+	});
+
+	it.skipIf(!canNamespace())("a confined command cannot undo the read-only mount", async () => {
+		const t = setup();
+		const e = env({ home: t.home, cwd: t.scratch, protect: "sandbox" });
+		// The mounts are made by the namespace's own root, and the command does not inherit the
+		// capability it would take to remount one writable.
+		const remount = await e.exec(["mount", "-o", "remount,bind,rw", t.repo], undefined, ctx);
+		expect(remount.ok).toBe(true);
+		if (!remount.ok) throw new Error(remount.error.message);
+		expect(remount.value.exitCode).not.toBe(0);
+		// Binding an ancestor over the checkout would be a writable view of the same directory.
+		const holder = join(t.scratch, "holder");
+		mkdirSync(holder);
+		const bind = await e.exec(["mount", "--bind", t.home, holder], undefined, ctx);
+		expect(bind.ok).toBe(true);
+		if (!bind.ok) throw new Error(bind.error.message);
+		expect(bind.value.exitCode).not.toBe(0);
+		const nested = await e.exec(["unshare", "--map-root-user", "--mount", "mount", "-o", "remount,bind,rw", t.repo], undefined, ctx);
+		expect(nested.ok).toBe(true);
+		if (!nested.ok) throw new Error(nested.error.message);
+		expect(nested.value.exitCode).not.toBe(0);
+		expect(existsSync(join(t.repo, "from-bash.txt"))).toBe(false);
 	});
 });
 
@@ -199,8 +231,8 @@ describe("GUARD-04 the scan finds checkouts, not worktrees", () => {
 describe("GUARD-03 pana worktree add", () => {
 	it("creates a worktree of a repository for a session, and reuses it", async () => {
 		const t = setup();
-		const state = tmp("pana-state-");
-		const runtime = { paths: { dir: state } } as unknown as Runtime;
+		const runtime = await stateRuntime();
+		const state = runtime.paths.dir;
 		const first = await addWorktree(runtime, "01HZZZZZZZZZZZZZZZZZZZZZZZ", { repo: join(t.home, "pana") });
 		expect(first.created).toBe(true);
 		expect(first.path).toBe(join(realPath(state), "worktrees", "01HZZZZZZZZZZZZZZZZZZZZZZZ", "dotfiles"));
@@ -215,7 +247,7 @@ describe("GUARD-03 pana worktree add", () => {
 	it("creates and reuses the fallback branch when a cached remote prefix conflicts", async () => {
 		const t = setup();
 		t.git(t.repo, ["update-ref", "refs/remotes/origin/pana", "HEAD"]);
-		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const runtime = await stateRuntime();
 		const first = await addWorktree(runtime, "session", { repo: t.repo });
 		expect(first.branch).toBe("pana-session-dotfiles");
 		expect(t.git(first.path, ["branch", "--show-current"]).trim()).toBe(first.branch);
@@ -226,14 +258,14 @@ describe("GUARD-03 pana worktree add", () => {
 	it("does not reuse a colliding generated branch without an existing worktree", async () => {
 		const t = setup();
 		t.git(t.repo, ["branch", "pana/session/dotfiles"]);
-		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const runtime = await stateRuntime();
 		expect((await addWorktree(runtime, "session", { repo: t.repo })).branch).toBe("pana-session-dotfiles");
 	});
 
 	it("preserves explicit branch reuse and refuses explicit prefix collisions without renaming", async () => {
 		const t = setup();
 		t.git(t.repo, ["branch", "existing"]);
-		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const runtime = await stateRuntime();
 		expect((await addWorktree(runtime, "session", { repo: t.repo, branch: "existing" })).branch).toBe("existing");
 		t.git(t.repo, ["branch", "pana"]);
 		await expect(addWorktree(runtime, "other", { repo: t.repo, branch: "pana/explicit" })).rejects.toThrow(/cannot lock ref/);
@@ -242,9 +274,9 @@ describe("GUARD-03 pana worktree add", () => {
 
 	it("is for a session, not the user", async () => {
 		const t = setup();
-		const state = tmp("pana-state-");
+		const runtime = await stateRuntime();
 		const context = {
-			runtime: { paths: { dir: state } },
+			runtime,
 			caller: { kind: "user", id: "joshbeckman" },
 			body: { repo: t.repo },
 		} as unknown as RequestContext;
