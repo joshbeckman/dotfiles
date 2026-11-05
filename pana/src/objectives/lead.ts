@@ -8,6 +8,11 @@
 // objective's thread. Two regenerates that read the same lead produce one lead and one
 // 409 `lead_changed`; a launch racing an active objective is already 409 `wrong_phase`.
 //
+// Everything that can refuse the swap is checked before `createConversation`. Its pi-durable commit
+// joins this transaction, and `PanaDatabase` commits rather than rolls back once that has joined, so
+// a refusal after it would persist half a swap; the one such refusal a reader can reach is STA-07's
+// read-only thread, which the handoff would hit.
+//
 // The old lead's conversation is aborted and its scratch swept after the commit, through the same
 // `SessionRuntime.archive` path REF-02 uses, so a failure there leaves a stopped lead rather than
 // two live ones.
@@ -17,7 +22,7 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import { isUlid, parseRef } from "../ids/index.ts";
 import type { Runtime } from "../server/runtime.ts";
-import { sessionRuntime } from "../sessions/index.ts";
+import { assertThreadWritable, sessionRuntime } from "../sessions/index.ts";
 import { setSessionState } from "../sessions/state.ts";
 import { ensureScratch } from "../scratch/index.ts";
 import { announce, respondIn, type ThreadResult } from "../threads/index.ts";
@@ -88,6 +93,13 @@ export async function regenerateLead(runtime: Runtime, caller: Caller, value: st
 			});
 		}
 		const now = runtime.clock.now();
+
+		// STA-07 refuses every delivery to a thread holding an archived session, and the handoff below
+		// is a delivery. Checked here, before `createConversation`, because that pi-durable commit joins
+		// this transaction and `PanaDatabase` then commits what it has rather than rolling back: a
+		// refusal after it would leave the old lead stopped and out of its threads, a successor created
+		// and named `lead_id`, and no briefing delivered to it.
+		await assertThreadWritable(tx, objective.thread_id);
 
 		// OBJ-35: the old lead stops as the objective's act, keeps its transcript, and wakes nothing.
 		await setSessionState(tx, runtime, { sessionId: previousLead, state: "stopped", from: ["idle", "running", "waiting", "failed"] });
