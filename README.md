@@ -10,11 +10,21 @@ git clone git@github.com:joshbeckman/dotfiles.git .dotfiles
 ./.dotfiles/setup
 ```
 
-The [`setup`](setup) script handles everything: symlinking dotfiles via `dfm install`, installing Homebrew formulae from `Brewfile`, and cloning plugins for zsh, tmux, and Neovim. It detects macOS vs. Linux and adjusts accordingly.
+The [`setup`](setup) script handles everything: symlinking dotfiles via `dfm install`, installing Homebrew formulae from `Brewfile`, and cloning plugins for zsh, tmux, and Neovim at the commits recorded in [`plugins.lock`](plugins.lock). It detects macOS vs. Linux and adjusts accordingly.
 
-Refreshes are noninteractive: plugin updates must fast-forward, Homebrew upgrades do not ask for confirmation or quit running apps, and privileged Homebrew installers are refused. Required-step failures stop the run; optional completion-keyword failures are reported and skipped. Perform any required privileged installation manually, then retry.
+Refreshes are noninteractive: plugin checkouts stay on their pinned commits, Homebrew upgrades do not ask for confirmation or quit running apps, and privileged Homebrew installers are refused. Required-step failures stop the run; optional completion-keyword failures are reported and skipped. Perform any required privileged installation manually, then retry.
 
-[`bin/dotfiles-refresh`](bin/dotfiles-refresh) runs `setup` every two hours. On macOS that is `Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist`, which `dfm install` links into `~/Library/LaunchAgents`; on Linux it is `.config/systemd/user/dotfiles-refresh.timer`, which `setup` links into `~/.config/systemd/user` and enables. Intervals missed while the machine was off are skipped, and a lock prevents overlapping runs. The job uses the login shell's PATH, so machine-specific toolchains resolve. It appends to `~/Library/Logs/dotfiles-refresh.log` on macOS and `~/.local/state/dotfiles-refresh/refresh.log` elsewhere, and notifies only when a run fails. Load the macOS job once after the first install; the Linux timer is enabled by `setup`:
+Plugins and the two `curl`-installed tools are pinned. `setup` clones a plugin with `--no-checkout` and checks it out at the commit `plugins.lock` names, so neither a new upstream release nor a rewritten branch is activated by a refresh; a checkout found off its pin, or a pin that moved, is printed as `plugin changed: <name> <old> -> <new>` and becomes a notification. Move the pins deliberately and read the diff:
+
+```sh
+grep -v '^#' plugins.lock | while read -r sha url; do
+  printf '%s  %s\n' "$(git ls-remote "$url" HEAD | cut -f1)" "$url"
+done > plugins.lock.new && mv plugins.lock.new plugins.lock
+```
+
+`s` and Deno work the same way: one release of each is pinned in `setup` together with its published SHA256 for every supported architecture, and a download that does not match is never unpacked.
+
+[`bin/dotfiles-refresh`](bin/dotfiles-refresh) runs `setup` every two hours. On macOS that is `Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist`, which `dfm install` links into `~/Library/LaunchAgents`; on Linux it is `.config/systemd/user/dotfiles-refresh.timer`, which `setup` links into `~/.config/systemd/user` and enables. Intervals missed while the machine was off are skipped, and a lock prevents overlapping runs. The job uses the login shell's PATH, so machine-specific toolchains resolve. It appends to `~/Library/Logs/dotfiles-refresh.log` on macOS and `~/.local/state/dotfiles-refresh/refresh.log` elsewhere, and notifies when a run fails or when a plugin checkout moves to a new pinned commit. Load the macOS job once after the first install; the Linux timer is enabled by `setup`:
 
 ```sh
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist

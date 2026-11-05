@@ -8,13 +8,75 @@ export GIT_TERMINAL_PROMPT=0 GH_PROMPT_DISABLED=1
 DOTFILES_DIR="${0:A:h}"
 
 # utility functions
+
+# The pinned commit for a plugin repository, from plugins.lock. An empty answer is
+# an error at the call site: activating a plugin checkout that has no recorded
+# commit is exactly the unpinned install this file exists to prevent.
+function plugin_pin() {
+        [ -f "$DOTFILES_DIR/plugins.lock" ] || return 0
+        awk -v url="$1" '$1 !~ /^#/ && $2 == url { print $1; exit }' "$DOTFILES_DIR/plugins.lock"
+}
+
+# A shallow clone carries only the default branch, so a pin on any other commit has
+# to be fetched by id; if the host will not serve that, fall back to a full fetch of
+# the branches and tags, which reaches any published commit.
+function fetch_pinned_commit() {
+        local dest="$1" pin="$2"
+        if ! git -C "$dest" fetch --quiet --depth 1 origin "$pin" 2>/dev/null; then
+                git -C "$dest" fetch --quiet --tags origin '+refs/heads/*:refs/remotes/origin/*'
+        fi
+}
+
+# A plugin is installed at the commit plugins.lock records, never at whatever a
+# branch points to. Upstream plugin code runs in every shell, editor, and tmux here,
+# so it is activated by a reviewed pin change rather than by the two-hour refresh.
 function git_clone_or_update() {
-        if [ -d "$2" ]; then
-                echo "  ======  updating $2"
-                git -C "$2" pull --ff-only
+        local url="$1" dest="$2" name pin current
+        name=$(basename "$dest")
+        pin=$(plugin_pin "$url")
+        if [ -z "$pin" ]; then
+                echo "  ======  no pinned commit for $url in plugins.lock; refusing to install it unpinned" >&2
+                return 1
+        fi
+        if [ ! -d "$dest/.git" ]; then
+                echo "  ======  cloning $name at $pin"
+                # --no-checkout because a plain clone writes the default branch's
+                # working tree first, which is upstream code nobody reviewed.
+                git clone --quiet --depth 1 --no-checkout "$url" "$dest"
+                if ! git -C "$dest" checkout --quiet --detach "$pin" 2>/dev/null; then
+                        fetch_pinned_commit "$dest" "$pin"
+                        git -C "$dest" checkout --quiet --detach "$pin"
+                fi
+                return 0
+        fi
+        current=$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)
+        if [ "$current" = "$pin" ]; then
+                echo "  ======  $name is at its pinned commit"
+                return 0
+        fi
+        # Said before the checkout happens, and in a shape bin/dotfiles-refresh
+        # recognises, so a moved plugin commit is reported rather than replaced quietly.
+        echo "  ======  plugin changed: $name ${current:-unknown} -> $pin"
+        fetch_pinned_commit "$dest" "$pin"
+        git -C "$dest" checkout --quiet --detach "$pin"
+}
+
+# macOS ships shasum, most Linuxes sha256sum. The expected digest is written in this
+# file rather than fetched beside the artifact: a substituted download can then only
+# be accepted by a commit that also changes the pin.
+function verify_sha256() {
+        local file="$1" expected="$2" actual
+        if command -v sha256sum > /dev/null 2>&1; then
+                actual=$(sha256sum "$file" | awk '{ print $1 }')
+        elif command -v shasum > /dev/null 2>&1; then
+                actual=$(shasum -a 256 "$file" | awk '{ print $1 }')
         else
-                echo "  ======  cloning $1 into $2"
-                git clone --depth 1 "$1" "$2"
+                echo "no sha256sum or shasum to verify $file" >&2
+                return 1
+        fi
+        if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+                echo "checksum mismatch for $file: expected ${expected:-none}, got ${actual:-nothing}" >&2
+                return 1
         fi
 }
 
@@ -70,8 +132,8 @@ if [ -d "$HOME/.agents" ]; then
 fi
 
 # Val Town plugin — the platform skills for building on Val Town, loaded by Pi from
-# the skills path in .agents/pi/settings.json. Cloned rather than vendored so the
-# skills track upstream.
+# the skills path in .agents/pi/settings.json. Cloned rather than vendored because
+# the skills are upstream code, and pinned in plugins.lock like every other plugin.
 echo '  ======  installing the Val Town plugin skills'
 git_clone_or_update https://github.com/val-town/plugins "$HOME/.local/share/val-town-plugins"
 echo '  ======  installed the Val Town plugin skills'
@@ -144,8 +206,9 @@ __setup_ubuntu(){
                                 ctags_package=exuberant-ctags
                         fi
                         # git-delta backs the `delta` pager in .gitconfig; the
-                        # Brewfile covers it on macOS.
-                        sudo -n apt-get install -y ripgrep fzf "$ctags_package" xsel bat git-delta
+                        # Brewfile covers it on macOS. unzip unpacks the pinned Deno
+                        # release, which is a zip and cannot be read by tar.
+                        sudo -n apt-get install -y ripgrep fzf "$ctags_package" xsel bat git-delta unzip
                         ;;
                 *)
                         echo "Ubuntu detected, but not a checked architecture ($arch)"
@@ -276,29 +339,61 @@ case "$OSTYPE" in
 esac
 
 # s — encrypted env store (github.com/tobi/s); prebuilt binary, no toolchain.
-# Fetched here rather than Brewfile because it is not in homebrew.
+# Fetched here rather than Brewfile because it is not in homebrew. The release and
+# the per-architecture digest are pinned below, in this file, and the download is
+# checked before anything is unpacked: this is the binary that unwraps every secret,
+# so it is the last one that should be installed from a floating "latest".
+S_VERSION="v0.9.5"
 if [ ! -x "$DOTFILES_DIR/bin/s" ]; then
         echo '  ======  installing s (encrypted env store)'
-        s_tag=$(curl -s https://api.github.com/repos/tobi/s/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
         case "$(uname -sm)" in
-                "Darwin arm64") s_target="aarch64-apple-darwin" ;;
-                "Darwin x86_64") s_target="x86_64-apple-darwin" ;;
-                "Linux x86_64") s_target="x86_64-unknown-linux-musl" ;;
-                "Linux aarch64") s_target="aarch64-unknown-linux-musl" ;;
-                *) s_target="" ;;
+                "Darwin arm64") s_target="aarch64-apple-darwin"; s_sha256="3db3e28f9b98663fb944f6861ddd02c241b62a04cf2ce774e07aa208c3b067ee" ;;
+                "Darwin x86_64") s_target="x86_64-apple-darwin"; s_sha256="609c10f48d7311dee6c36628595022f58403bca74b044bddcc3a2e88ed20baf9" ;;
+                "Linux x86_64") s_target="x86_64-unknown-linux-musl"; s_sha256="e876a19d40437fae473560b2b90b196f7120864daa65208048c29e1da15f110a" ;;
+                "Linux aarch64") s_target="aarch64-unknown-linux-musl"; s_sha256="35ee54c8ce160305a0fb5a98184946384aa1e693b32fab21a0c3680fe067b9a2" ;;
+                *) s_target=""; s_sha256="" ;;
         esac
-        if [ -n "$s_tag" ] && [ -n "$s_target" ]; then
-                curl -sL "https://github.com/tobi/s/releases/download/$s_tag/s-$s_tag-$s_target.tar.gz" | tar xz -C "$DOTFILES_DIR/bin" s && chmod +x "$DOTFILES_DIR/bin/s"
+        if [ -n "$s_target" ]; then
+                s_tmp=$(mktemp -d)
+                curl -fsSL -o "$s_tmp/s.tar.gz" "https://github.com/tobi/s/releases/download/$S_VERSION/s-$S_VERSION-$s_target.tar.gz"
+                verify_sha256 "$s_tmp/s.tar.gz" "$s_sha256"
+                tar -xzf "$s_tmp/s.tar.gz" -C "$DOTFILES_DIR/bin" s
+                chmod +x "$DOTFILES_DIR/bin/s"
+                rm -rf "$s_tmp"
         else
-                echo 'could not determine s release; install manually from github.com/tobi/s'
+                echo "could not determine an s release for $(uname -sm); install manually from github.com/tobi/s"
         fi
 fi
 
 # deno + vt — the Val Town CLI. vt runs on Deno; both install into ~/.deno/bin,
-# which .zshrc puts on PATH. User-local, so no sudo and no Brewfile entry.
+# which .zshrc puts on PATH. User-local, so no sudo and no Brewfile entry. Deno's
+# own installer is a `curl | sh` of a script that resolves "latest" when it runs,
+# so the release zip is fetched at the pinned version and checked against the
+# published digest from the same release instead.
+DENO_VERSION="v2.9.8"
 if [ ! -x "$HOME/.deno/bin/deno" ]; then
         echo '  ======  installing Deno'
-        curl -fsSL https://deno.land/install.sh | sh || echo 'Deno install failed; continuing'
+        case "$(uname -sm)" in
+                "Darwin arm64") deno_target="aarch64-apple-darwin"; deno_sha256="9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e" ;;
+                "Darwin x86_64") deno_target="x86_64-apple-darwin"; deno_sha256="4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c" ;;
+                "Linux x86_64") deno_target="x86_64-unknown-linux-gnu"; deno_sha256="e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609" ;;
+                "Linux aarch64") deno_target="aarch64-unknown-linux-gnu"; deno_sha256="d49596c20b9788cf8f5d8ddf644103d4bde56ed239753f0bdb92ba9361d51905" ;;
+                *) deno_target=""; deno_sha256="" ;;
+        esac
+        if [ -n "$deno_target" ]; then
+                deno_tmp=$(mktemp -d)
+                if curl -fsSL -o "$deno_tmp/deno.zip" "https://github.com/denoland/deno/releases/download/$DENO_VERSION/deno-$deno_target.zip" \
+                        && verify_sha256 "$deno_tmp/deno.zip" "$deno_sha256" \
+                        && mkdir -p "$HOME/.deno/bin" \
+                        && unzip -oq "$deno_tmp/deno.zip" -d "$HOME/.deno/bin"; then
+                        chmod +x "$HOME/.deno/bin/deno"
+                else
+                        echo 'Deno install failed; continuing'
+                fi
+                rm -rf "$deno_tmp"
+        else
+                echo "could not determine a Deno release for $(uname -sm); install manually from deno.land"
+        fi
 fi
 if [ -x "$HOME/.deno/bin/deno" ] && [ ! -x "$HOME/.deno/bin/vt" ]; then
         echo '  ======  installing vt (Val Town CLI)'
