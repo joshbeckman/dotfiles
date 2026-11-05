@@ -77,6 +77,21 @@ async function listed(client: Client, query = ""): Promise<Schedule[]> {
 	return res.body.schedules;
 }
 
+/** A session that exists (and can act as a caller) without running anything. */
+async function session(harness: TestPanad): Promise<string> {
+	const id = harness.runtime.newId();
+	await harness.runtime.db.write(async (tx) => {
+		await tx.run(
+			"INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)",
+			id,
+			harness.runtime.url({ kind: "session", id }),
+			harness.clock.now(),
+		);
+		await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", id, harness.clock.now(), harness.clock.now());
+	});
+	return id;
+}
+
 async function inbox(client: Client): Promise<string[]> {
 	const res = await client.get<{ deliveries: Array<{ body?: string; display?: string }> }>("/inbox");
 	expect(res.status).toBe(200);
@@ -417,5 +432,71 @@ describe("scheduling", () => {
 		await t.clock.advanceTo(updated.nextAt!);
 		await t.clock.settle();
 		expect(created.map((session) => session.prompt)).toEqual(["second"]);
+	});
+
+	// #203: every session may read every schedule, but a schedule is its creator's to change: a
+	// session is refused another's (or the user's) and must ask the owner. The user changes any.
+	it("a session reads every schedule and changes only its own (#203)", async () => {
+		t = await startTestPanad();
+		const mine = await session(t);
+		const other = await session(t);
+		const madeBy = async (caller: string | undefined, body: Record<string, unknown>): Promise<Schedule> => {
+			const res = await t!.client.post<{ schedule: Schedule }>("/schedules", body, caller ? { caller } : {});
+			expect(res.status).toBe(201);
+			return res.body.schedule;
+		};
+		const userSchedule = await madeBy(undefined, { kind: "session", cron: "0 9 * * *", payload: { prompt: "the user's" } });
+		const neighbour = await madeBy(other, { kind: "session", cron: "0 10 * * *", payload: { prompt: "another session's" } });
+		const own = await madeBy(mine, { kind: "session", cron: "0 11 * * *", payload: { prompt: "mine" } });
+
+		// Read: a session sees the user's schedules and its neighbours', prompts included.
+		const seenByMine = await t.client.get<{ schedules: Schedule[] }>("/schedules", { caller: mine });
+		expect(seenByMine.status).toBe(200);
+		expect(seenByMine.body.schedules.map((schedule) => schedule.id).sort()).toEqual([own.id, neighbour.id, userSchedule.id].sort());
+		const neighbourShown = await t.client.get<{ schedule: Schedule }>(`/schedules/${neighbour.id}`, { caller: mine });
+		expect(neighbourShown.status).toBe(200);
+		expect(neighbourShown.body.schedule.payload).toEqual({ prompt: "another session's" });
+
+		// Update: refused for another's (403 naming the owner), allowed for its own.
+		const tookNeighbour = await t.client.post(`/schedules/${neighbour.id}`, { payload: { prompt: "hijacked" } }, { caller: mine });
+		expect(tookNeighbour.status).toBe(403);
+		expect(tookNeighbour.body).toMatchObject({ error: { code: "forbidden", creator: other } });
+		expect((await t.client.post(`/schedules/${userSchedule.id}`, { payload: { prompt: "hijacked" } }, { caller: mine })).status).toBe(403);
+		const edited = await t.client.post<{ schedule: Schedule }>(`/schedules/${own.id}`, { payload: { prompt: "mine, edited" } }, { caller: mine });
+		expect(edited.status).toBe(200);
+		expect(edited.body.schedule.payload).toEqual({ prompt: "mine, edited" });
+		expect((await show(t.client, neighbour.id)).payload).toEqual({ prompt: "another session's" });
+
+		// Delete: refused for another's, allowed for its own.
+		const removedNeighbour = await t.client.delete(`/schedules/${neighbour.id}`, { caller: mine });
+		expect(removedNeighbour.status).toBe(403);
+		expect((await t.client.delete(`/schedules/${userSchedule.id}`, { caller: mine })).status).toBe(403);
+		expect((await show(t.client, neighbour.id)).state).toBe("active");
+		expect((await t.client.delete(`/schedules/${own.id}`, { caller: mine })).status).toBe(204);
+		expect((await t.client.get(`/schedules/${own.id}`)).status).toBe(404);
+
+		// The user still changes every schedule.
+		expect((await listed(t.client)).map((schedule) => schedule.id).sort()).toEqual([neighbour.id, userSchedule.id].sort());
+		const byUser = await t.client.post<{ schedule: Schedule }>(`/schedules/${neighbour.id}`, { payload: { prompt: "the user edited this" } });
+		expect(byUser.status).toBe(200);
+		expect(byUser.body.schedule.payload).toEqual({ prompt: "the user edited this" });
+		expect((await t.client.delete(`/schedules/${userSchedule.id}`)).status).toBe(204);
+	});
+
+	it("a session's edit cannot retarget a wake at another session (#203)", async () => {
+		t = await startTestPanad();
+		const mine = await session(t);
+		const other = await session(t);
+		const made = await t.client.post<{ schedule: Schedule }>("/schedules", { kind: "wake", in: "10m", note: "Check CI.", session: mine }, { caller: mine });
+		expect(made.status).toBe(201);
+
+		const retargeted = await t.client.post<{ schedule: Schedule }>(
+			`/schedules/${made.body.schedule.id}`,
+			{ payload: { session: other, note: "Check CI." } },
+			{ caller: mine },
+		);
+		expect(retargeted.status).toBe(403);
+		expect(retargeted.body).toMatchObject({ error: { code: "forbidden" } });
+		expect((await show(t.client, made.body.schedule.id)).payload).toMatchObject({ session: mine });
 	});
 });

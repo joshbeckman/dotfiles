@@ -346,6 +346,19 @@ function kindFilter(value: string | null | undefined): ScheduleKind | undefined 
 	throw ApiError.badRequest("invalid_kind", `schedule kind must be session, thread, or wake, got ${value}`);
 }
 
+/**
+ * #203: every session may read every schedule (and say so), but a schedule is its creator's to
+ * change: a session that did not create one is refused and must message the owner instead. The
+ * user changes any schedule. Reads stay open, so this is 403 rather than a 404 that hides the row.
+ */
+function requireOwner(row: { id: string; creator_id: string }, caller: Caller): void {
+	if (caller.kind === "user" || row.creator_id === caller.id) return;
+	throw ApiError.forbidden(`schedule ${row.id} belongs to ${row.creator_id}; ask its owner to change it`, {
+		schedule: row.id,
+		creator: row.creator_id,
+	});
+}
+
 export async function showSchedule(runtime: Runtime, id: string): Promise<ScheduleView> {
 	const row = await runtime.db.get<ScheduleJoinRow>(`${SELECT_SCHEDULE} WHERE s.id = ?`, id);
 	if (!row || row.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
@@ -467,6 +480,12 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 	// UX-09: an edit can retarget a wake, so both the old and the new session get the news.
 	const before = await runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
 	if (!before || before.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
+	requireOwner({ id, creator_id: before.creator_id }, caller);
+	// #203: a new payload can retarget a wake, so the target is validated exactly as on create.
+	const nextKind = hasValue(input.kind) ? scheduleKind(input.kind) : before.kind;
+	if (nextKind === "wake" && typeof input.payload === "object" && input.payload !== null) {
+		await wakeTarget(runtime, caller, (input.payload as Record<string, unknown>).session);
+	}
 	const view = await runtime.db.write(async (tx) => {
 		const existing = await scheduleRow(tx, id);
 		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
@@ -511,11 +530,12 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 }
 
 /** SCH-07: a deleted schedule never fires, because its state and `next_at` change in one write. */
-export async function deleteSchedule(runtime: Runtime, id: string): Promise<void> {
+export async function deleteSchedule(runtime: Runtime, caller: Caller, id: string): Promise<void> {
 	const now = runtime.clock.now();
 	const deleted = await runtime.db.write(async (tx) => {
 		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
 		if (!row || row.state === "deleted") return undefined;
+		requireOwner(row, caller);
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
 		return row;
 	});

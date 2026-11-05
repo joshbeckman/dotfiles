@@ -31,8 +31,9 @@ export const handlers: Handlers = {
 		body: { schedule: await updateSchedule(ctx.runtime, ctx.caller, ctx.params.id!, ctx.body) },
 	}),
 
+	// #203: any session may read any schedule; only its creator (or the user) may change it.
 	"schedules.delete": async (ctx) => {
-		await deleteSchedule(ctx.runtime, ctx.params.id!);
+		await deleteSchedule(ctx.runtime, ctx.caller, ctx.params.id!);
 		return { status: 204 };
 	},
 };
