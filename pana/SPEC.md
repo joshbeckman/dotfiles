@@ -113,7 +113,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/worktrees` | a session makes a worktree of a repository (GUARD-03) |
 | GET, POST | `/settings` | user-only configuration and source/runtime status; save with `configRevision` |
 | POST | `/settings/restart` | user-only graceful daemon restart |
-| GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake` |
+| GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake`; a session caller receives `session.entry` and `session.live` only for its own session |
 
 - [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`.
 - [x] **API-02** Status codes map to CLI exit codes: 400 → 2, 404 → 4, 409 → 3, 402 → 5, any other non-2xx → 1.

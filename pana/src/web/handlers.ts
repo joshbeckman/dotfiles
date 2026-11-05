@@ -30,7 +30,7 @@ export const handlers: Handlers = {
 			"x-accel-buffering": "no",
 		},
 		stream: (res) => {
-			subscribeEvents(ctx.runtime, res);
+			subscribeEvents(ctx.runtime, res, ctx.caller);
 		},
 	}),
 };

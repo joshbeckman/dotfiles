@@ -95,6 +95,7 @@ describe("SUB subjects", () => {
 		const ask = vi.spyOn(t.runtime.models, "completeSimple");
 		const frames: Array<{ kind: string; threadId?: string; subject?: string }> = [];
 		const committed: Array<Promise<string | null | undefined>> = [];
+		// The user's own window: it sees every session, and this test only watches thread subjects.
 		const stop = subscribeEvents(t.runtime, {
 			write(chunk: string) {
 				const line = chunk.split("\n").find((line) => line.startsWith("data:"));
@@ -108,7 +109,7 @@ describe("SUB subjects", () => {
 				return true;
 			},
 			on() { return this; },
-		} as unknown as ServerResponse);
+		} as unknown as ServerResponse, { kind: "user", id: t.runtime.config.user, url: t.runtime.userUrl });
 		try {
 			scheduleSubject(t.runtime, seeded.threadId);
 			await awaitSubjectJobs(t.runtime);

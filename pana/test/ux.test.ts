@@ -768,7 +768,8 @@ function eventsOfKind<T>(t: TestPanad, kind: string): T[] {
 			return this;
 		},
 	} as unknown as ServerResponse;
-	subscribeEvents(t.runtime, res);
+	// These assertions are the user's own windows, which see every session.
+	subscribeEvents(t.runtime, res, { kind: "user", id: t.runtime.config.user, url: t.runtime.userUrl });
 	return seen;
 }
 
