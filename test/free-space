@@ -83,6 +83,69 @@ check "temp dir with other files kept" \
 check "chrome code sign clone cleared" \
   "$(ls "$TEST_TEMP/X/com.google.Chrome.code_sign_clone" | wc -l | tr -d ' ')" "0"
 
+# The brew cache path is resolved once and validated. A `brew --cache` that
+# answers the gate and then fails used to expand the delete into `rm -rf /*`.
+cat > "$tmp/bin/brew" <<'SH'
+#!/bin/sh
+# Stub brew. $BREW_MODE picks the failure being exercised; $BREW_CALLS counts
+# calls so a "flap" brew can answer the first one and fail every later one.
+[ "$1" = "--cache" ] || exit 0
+calls=$(($(cat "$BREW_CALLS" 2>/dev/null || echo 0) + 1))
+echo "$calls" > "$BREW_CALLS"
+case "$BREW_MODE" in
+  ok)     printf '%s\n' "$BREW_CACHE" ;;
+  empty)  ;;
+  failing) exit 1 ;;
+  flap)   [ "$calls" -eq 1 ] && printf '%s\n' "$BREW_CACHE" ;;
+esac
+SH
+chmod +x "$tmp/bin/brew"
+
+export BREW_CACHE="$tmp/brew-cache"
+export BREW_CALLS="$tmp/brew-calls"
+mkdir -p "$BREW_CACHE/some-formula--1.0"
+echo bottle > "$BREW_CACHE/some-formula--1.0/bottle.tar.gz"
+echo keep > "$HOME/sentinel"
+
+for mode in empty failing; do
+  export BREW_MODE="$mode"
+  rm -f "$BREW_CALLS"
+  status=0
+  "$repo/bin/free-space" --apply --yes brew >/dev/null 2>&1 || status=$?
+  check "$mode brew --cache run succeeds" "$status" "0"
+  check "$mode brew --cache deletes no cache" \
+    "$([ -f "$BREW_CACHE/some-formula--1.0/bottle.tar.gz" ] && echo present)" "present"
+  check "$mode brew --cache keeps \$HOME" \
+    "$([ -f "$HOME/sentinel" ] && echo present)" "present"
+done
+
+# A recording rm lets the flapping case assert the delete target without a real
+# `rm -rf /*` if the guard ever regresses.
+mkdir -p "$tmp/rmguard"
+cat > "$tmp/rmguard/rm" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$tmp/rm.log"
+SH
+chmod +x "$tmp/rmguard/rm"
+
+# One resolution also means the delete still works when only the first call
+# answers, and that --apply really cleans a healthy cache.
+export BREW_MODE=flap
+rm -f "$BREW_CALLS" "$tmp/rm.log"
+PATH="$tmp/rmguard:$PATH" "$repo/bin/free-space" --apply --yes brew >/dev/null 2>&1
+check "flap brew --cache is resolved once" "$(cat "$BREW_CALLS")" "1"
+check "flap deletes just the cache entry" "$(wc -l < "$tmp/rm.log" | tr -d ' ')" "1"
+check "flap delete stays inside the cache" \
+  "$(grep -F -c -- "-rf $BREW_CACHE/" "$tmp/rm.log")" "1"
+
+export BREW_MODE=ok
+rm -f "$BREW_CALLS"
+"$repo/bin/free-space" --apply --yes brew >/dev/null 2>&1
+check "brew cache cleared on --apply" \
+  "$([ -f "$BREW_CACHE/some-formula--1.0/bottle.tar.gz" ] && echo present || echo gone)" "gone"
+check "brew cache directory kept" \
+  "$([ -d "$BREW_CACHE" ] && echo present)" "present"
+
 # Target selection must still narrow the run.
 mkdir -p "$wallpaper_cache/extension-com.apple.wallpaper.extension.image"
 echo bmp > "$wallpaper_cache/extension-com.apple.wallpaper.extension.image/render.bmp"

@@ -208,12 +208,30 @@ fi
 
 if selected brew && command -v brew >/dev/null 2>&1; then
   # brew has its own safe cleanup; report its estimate, run it on --apply.
-  brew_kb=$(dir_kb "$(brew --cache 2>/dev/null)")
+  #
+  # Resolve the cache path exactly once, and refuse it unless it is an absolute
+  # directory that is not `/`. Asking brew a second time for the delete used to
+  # be a data-loss bug: when that call failed or printed nothing, the trailing
+  # glob expanded to `/*` and `--apply` wiped whatever the user could delete.
+  brew_cache=$(brew --cache 2>/dev/null || true)
+  case "$brew_cache" in
+    /?*) ;;                 # absolute path of at least one character
+    *) brew_cache="" ;;
+  esac
+  if [ -n "$brew_cache" ] && [ -d "$brew_cache" ] && [ "$brew_cache" != "/" ]; then
+    brew_kb=$(dir_kb "$brew_cache")
+  else
+    brew_cache=""
+    brew_kb=0
+    printf '  %-14s %10s  skipped    brew --cache reported no usable cache directory\n' \
+      "brew" "-" >&2
+  fi
   if [ "${brew_kb:-0}" -gt 0 ]; then
     TOTAL_KB=$((TOTAL_KB + brew_kb))
     if [ "$APPLY" -eq 1 ]; then
       brew cleanup -s >/dev/null 2>&1 || true
-      rm -rf "$(brew --cache 2>/dev/null)"/* 2>/dev/null || true
+      # No glob on the delete path: find cannot widen the target.
+      find "$brew_cache" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
       printf '  %-14s %10s  freed      %s\n' "brew" "$(human "$brew_kb")" "$(describe brew)"
     else
       printf '  %-14s %10s  would free  %s\n' "brew" "$(human "$brew_kb")" "$(describe brew)"
