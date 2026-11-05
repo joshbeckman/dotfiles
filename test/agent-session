@@ -506,6 +506,15 @@ class LifecycleTest(unittest.TestCase):
         self.park()
         self.run_cli('exited', SID, '--pid', str(self.live))
 
+    def test_session_ids_that_are_paths_are_refused_before_any_file_is_opened(self):
+        # `locked()` builds state file names from the id, so traversal has to stop
+        # there; the state root should not even be created.
+        for command in ('started', 'exited'):
+            with self.subTest(command=command):
+                error = self.run_cli(command, '../../x', '--pid', str(self.live), expected=2)
+                self.assertIn('complete session UUID', error)
+        self.assertFalse(self.state.exists())
+
     def test_lease_conflicts_with_a_live_process_but_replaces_a_dead_one(self):
         self.assertEqual(self.run_cli('started', SID, '--pid', str(self.dead))['status'], 'leased')
         self.assertEqual(self.run_cli('started', SID, '--pid', str(self.live))['status'], 'leased')
