@@ -4,7 +4,27 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const DEFAULT_URL = process.env.PI_JOSH_STATUS_MCP_URL ?? "https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/mcp";
+// The requests carry a long-lived Authorization header (sometimes the token from
+// ~/.claude.json), so the destination is pinned: an environment value may redirect
+// them only to this machine, and redirects are never followed.
+const STATUS_ORIGIN = "https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run";
+const DEFAULT_URL = `${STATUS_ORIGIN}/mcp`;
+// A test affordance, not a security judgement: the extension tests stand a stub in
+// for the real endpoint on 127.0.0.1, and that is the only reason an override is
+// allowed. A process running on this machine can therefore still be served the
+// Authorization header; nothing off this machine can.
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function pinnedUrl(): string {
+  const override = process.env.PI_JOSH_STATUS_MCP_URL?.trim();
+  if (!override) return DEFAULT_URL;
+  try {
+    const url = new URL(override);
+    if ((url.protocol === "http:" || url.protocol === "https:") && LOOPBACK.has(url.hostname)) return override;
+  } catch {}
+  console.error(`josh-status-mcp: ignoring PI_JOSH_STATUS_MCP_URL=${override}: not a loopback URL, and these requests carry an Authorization header. Using ${DEFAULT_URL}`);
+  return DEFAULT_URL;
+}
 
 const TOOL_DEFINITIONS = [
   {
@@ -112,7 +132,10 @@ class HttpMcpClient {
   private async post(payload: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcResponse> {
     const headers: Record<string, string> = { "content-type": "application/json", "accept": "application/json, text/event-stream" };
     if (this.authorization) headers.authorization = this.authorization;
-    const response = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(payload), signal });
+    const response = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(payload), signal, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error(`Josh Status MCP refused to follow a redirect (HTTP ${response.status}) to ${response.headers.get("location") ?? "an unstated location"}`);
+    }
     const text = await response.text();
     if (!response.ok) throw new Error(`Josh Status MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
     if (!text.trim()) return { jsonrpc: "2.0" };
@@ -168,7 +191,7 @@ function mcpResultToText(result: unknown): string {
 }
 
 export default function joshStatusMcpExtension(pi: ExtensionAPI) {
-  const client = new HttpMcpClient(DEFAULT_URL, authorizationHeader());
+  const client = new HttpMcpClient(pinnedUrl(), authorizationHeader());
   const allowed = allowedToolNames();
   const tools = TOOL_DEFINITIONS.filter((tool) => !allowed || allowed.has(tool.name));
 

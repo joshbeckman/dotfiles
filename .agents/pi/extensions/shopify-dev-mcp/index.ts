@@ -2,8 +2,34 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-const DEFAULT_COMMAND = process.env.PI_SHOPIFY_DEV_MCP_COMMAND ?? "pnpx";
-const DEFAULT_ARGS = (process.env.PI_SHOPIFY_DEV_MCP_ARGS ?? "@shopify/dev-mcp@latest").split(" ").filter(Boolean);
+const SHOPIFY_DEV_MCP_COMMAND = "pnpx";
+// Pinned: the server is third-party code from npm, and a moving "latest" is a
+// dependency nobody reviewed.
+const SHOPIFY_DEV_MCP_ARGS = ["@shopify/dev-mcp@1.18.0"];
+
+// The child gets an allowlist, not a copy of this process's environment: a
+// docs-and-validation server has no business reading provider keys.
+const CHILD_ENV_NAMES = new Set([
+  "PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP",
+  "LANG", "LANGUAGE", "LC_ALL", "TERM",
+  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+  "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+  "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+]);
+const CHILD_ENV_PREFIXES = ["npm_config_", "npm_lifecycle_", "PNPM_"];
+const SECRET_NAMES = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIAL|_AUTH)/i;
+
+function childEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (!CHILD_ENV_NAMES.has(name) && !CHILD_ENV_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+    if (SECRET_NAMES.test(name)) continue;
+    environment[name] = value;
+  }
+  return environment;
+}
 
 const TOOL_DEFINITIONS = [
   {
@@ -51,7 +77,7 @@ class StdioMcpClient {
     if (this.ready) return this.ready;
 
     this.ready = new Promise<void>((resolve, reject) => {
-      const child = spawn(this.command, this.args, { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+      const child = spawn(this.command, this.args, { stdio: ["pipe", "pipe", "pipe"], env: childEnvironment() });
       this.child = child;
       child.once("error", reject);
       child.once("spawn", () => resolve());
@@ -163,7 +189,7 @@ function mcpResultToText(result: unknown): string {
 }
 
 export default function shopifyDevMcpExtension(pi: ExtensionAPI) {
-  const client = new StdioMcpClient(DEFAULT_COMMAND, DEFAULT_ARGS);
+  const client = new StdioMcpClient(SHOPIFY_DEV_MCP_COMMAND, SHOPIFY_DEV_MCP_ARGS);
   const allowed = allowedToolNames();
   const tools = TOOL_DEFINITIONS.filter((tool) => !allowed || allowed.has(tool.name));
 
