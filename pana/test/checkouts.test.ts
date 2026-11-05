@@ -5,7 +5,7 @@
 
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -249,5 +249,72 @@ describe("GUARD-03 pana worktree add", () => {
 			body: { repo: t.repo },
 		} as unknown as RequestContext;
 		await expect(handlers["worktrees.add"]!(context)).rejects.toThrow(/only a session/);
+	});
+
+	it("runs no code the repository's own config names", async () => {
+		const t = setup();
+		const marker = join(t.home, "ran");
+		const hook = join(t.repo, ".git", "hooks", "post-checkout");
+		writeFileSync(hook, `#!/bin/sh\necho hook >> '${marker}'\n`);
+		chmodSync(hook, 0o755);
+		const fsmonitor = join(t.home, "fsmonitor.sh");
+		writeFileSync(fsmonitor, `#!/bin/sh\necho fsmonitor >> '${marker}'\nexit 1\n`);
+		chmodSync(fsmonitor, 0o755);
+		t.git(t.repo, ["config", "core.fsmonitor", fsmonitor]);
+
+		// The payload is real: git runs an executable hook and fsmonitor when nothing scrubs the call.
+		t.git(t.repo, ["worktree", "add", "-q", "-b", "unscrubbed", join(t.home, "unscrubbed"), "HEAD"]);
+		expect(readFileSync(marker, "utf8")).toContain("hook");
+		rmSync(marker);
+
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(result.created).toBe(true);
+		expect(existsSync(join(result.path, "tracked.txt"))).toBe(true);
+		expect(existsSync(marker)).toBe(false);
+	});
+
+	it("ignores GIT_* variables inherited from the shell that started panad", async () => {
+		const t = setup();
+		const other = join(t.home, "other");
+		mkdirSync(other);
+		t.git(other, ["init", "-q"]);
+		writeFileSync(join(other, "other.txt"), "other\n");
+		t.git(other, ["add", "other.txt"]);
+		t.git(other, ["-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", "commit", "-qm", "other"]);
+		process.env.GIT_DIR = join(other, ".git");
+		process.env.GIT_WORK_TREE = other;
+		try {
+			const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+			const result = await addWorktree(runtime, "session", { repo: t.repo });
+			expect(result.repo).toBe(realPath(t.repo));
+			expect(existsSync(join(result.path, "tracked.txt"))).toBe(true);
+			expect(existsSync(join(result.path, "other.txt"))).toBe(false);
+		} finally {
+			delete process.env.GIT_DIR;
+			delete process.env.GIT_WORK_TREE;
+		}
+	});
+
+	it("refuses a branch name git would read as an option or a ref it cannot hold", async () => {
+		const t = setup();
+		const state = tmp("pana-state-");
+		const runtime = { paths: { dir: state } } as unknown as Runtime;
+		for (const branch of ["--force", "-b", "a..b", "HEAD^1", "a b", ".hidden", "x.lock", "pana/../../escape", "a//b", "a/", "/a", "a."]) {
+			await expect(addWorktree(runtime, "session", { repo: t.repo, branch })).rejects.toThrow(/branch must be a name git accepts/);
+		}
+		expect(existsSync(join(realPath(state), "worktrees", "session"))).toBe(false);
+	});
+
+	it("refuses a symlinked destination instead of populating the directory behind it", async () => {
+		const t = setup();
+		const state = tmp("pana-state-");
+		const runtime = { paths: { dir: state } } as unknown as Runtime;
+		const victim = join(t.home, "victim");
+		mkdirSync(victim);
+		mkdirSync(join(state, "worktrees", "session"), { recursive: true });
+		symlinkSync(victim, join(state, "worktrees", "session", "dotfiles"));
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/symlink/);
+		expect(readdirSync(victim)).toEqual([]);
 	});
 });
