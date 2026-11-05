@@ -1,7 +1,7 @@
 // Config and state layout (CFG-01..05).
 
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, closeSync, openSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, closeSync, openSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -130,9 +130,10 @@ function systemTimezone(): string {
 /**
  * Read and validate `config.json` from the state directory (CFG-01..03).
  * Missing `domain` or `user` raises a ConfigError with exit code 2 naming the key.
+ * A restart sets `PANA_CONFIG` to the configuration it validated, and reads exactly that file.
  */
 export function loadConfig(dir = stateDir()): Config {
-	const path = join(dir, "config.json");
+	const path = configSnapshotPath() ?? join(dir, "config.json");
 	if (!existsSync(path)) {
 		throw new ConfigError(`config.json not found at ${path}`, 2);
 	}
@@ -324,9 +325,9 @@ export function ensureStateLayout(dir = stateDir()): StatePaths {
 	if (!existsSync(paths.defaultProfile)) {
 		writeFileSync(paths.defaultProfile, `${JSON.stringify({}, null, "\t")}\n`, { mode: 0o644 });
 	}
-	if (!existsSync(paths.webToken)) {
-		writeFileSync(paths.webToken, randomBytes(32).toString("base64url"), { mode: 0o600 });
-	}
+	// CFG-04: install the web token if there is none, and replace a corrupt one, so a bad write
+	// can never lock every TCP client out (API-04).
+	readWebToken(dir);
 	if (!existsSync(paths.sqlite)) {
 		// Touch the file so the layout is complete before the database adapter opens it.
 		closeSync(openSync(paths.sqlite, "a"));
@@ -334,7 +335,54 @@ export function ensureStateLayout(dir = stateDir()): StatePaths {
 	return paths;
 }
 
-/** Read the web token used to authenticate the TCP listener (API-04). */
+/**
+ * Read the token that authenticates the TCP listener (API-04). A missing, empty, or malformed
+ * token is regenerated instead of locking every client out; the replacement is written to a
+ * sibling and renamed, so a crash or a full disk cannot leave a partial token behind.
+ */
 export function readWebToken(dir = stateDir()): string {
-	return readFileSync(statePaths(dir).webToken, "utf8").trim();
+	const paths = statePaths(dir);
+	try {
+		const token = readFileSync(paths.webToken, "utf8").trim();
+		if (isWebToken(token)) return token;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return writeWebToken(paths.webToken);
+}
+
+/** A generated token: 32 random bytes in base64url. 32 characters is the floor we accept. */
+export function isWebToken(value: string): boolean {
+	return /^[A-Za-z0-9_-]{32,}$/.test(value);
+}
+
+function writeWebToken(path: string): string {
+	const token = randomBytes(32).toString("base64url");
+	if (!isWebToken(token)) throw new Error(`generated web token is not valid: ${JSON.stringify(token)}`);
+	const temporary = `${path}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(temporary, token, { mode: 0o600, flag: "wx" });
+		renameSync(temporary, path);
+	} finally {
+		try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+	}
+	return token;
+}
+
+/**
+ * The configuration snapshot a `settings.restart` validated and handed on through `PANA_CONFIG`.
+ * Only that start reads it: the path is dropped and the file removed as soon as it is loaded, so
+ * a later start, and a service manager's restart, read `config.json` again.
+ */
+function configSnapshotPath(): string | undefined {
+	const override = process.env.PANA_CONFIG;
+	return override && override.length > 0 ? override : undefined;
+}
+
+/** Consume a restart snapshot after it loaded: forget the path and remove the file. */
+export function consumeConfigSnapshot(): void {
+	const path = configSnapshotPath();
+	if (!path) return;
+	delete process.env.PANA_CONFIG;
+	try { unlinkSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }

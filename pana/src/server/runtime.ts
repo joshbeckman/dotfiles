@@ -27,7 +27,12 @@ export const systemClock: Clock = {
 };
 
 export interface Runtime {
-	processInfo?: { startedAt: number; running: import("../config/source.ts").SourceRevision | null; requestRestart?: () => void };
+	processInfo?: {
+		startedAt: number;
+		running: import("../config/source.ts").SourceRevision | null;
+		/** Re-exec panad (SET-03) with the exact configuration file this daemon validated. */
+		requestRestart?: (configSnapshot?: string) => void;
+	};
 	config: Config;
 	paths: StatePaths;
 	db: PanaDatabase;

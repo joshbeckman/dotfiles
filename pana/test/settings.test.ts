@@ -1,11 +1,18 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
 import { isUserColor, loadConfig } from "../src/config/index.ts";
-import { readSourceRevision } from "../src/config/source.ts";
+import {
+	cachedSourceRevision,
+	readSourceRevision,
+	runningRevision,
+	SOURCE_REFRESH_MS,
+	UNTRACKED_FILE_CAP,
+} from "../src/config/source.ts";
 import { makeStateDir, startTestPanad, type TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
@@ -119,6 +126,129 @@ it("SET-04 saves the user's arbitrary hex color immediately, persists it, and ke
 	expect(saved.body.configRequiresRestart).toBe(true);
 	expect(t.runtime.config.ui?.userColor).toBe("green");
 	expect(t.runtime.config.spawnDepth).toBe(3);
+});
+
+/** Poll a cheap predicate on the real clock; a test may wait, a daemon may not. */
+async function until(check: () => boolean, timeoutMs = 8000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	throw new Error("timed out waiting for the source snapshot to refresh");
+}
+
+/**
+ * A `git` ahead of the real one on PATH that logs each call and then stalls. Anything that waits
+ * on git synchronously therefore shows up as a slow request, not as a fast one.
+ */
+function slowGit(): { calls: () => number; restore: () => void } {
+	const dir = mkdtempSync(join(tmpdir(), "pana-slow-git-")); dirs.push(dir);
+	const log = join(dir, "calls.log");
+	const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+	const shim = join(dir, "git");
+	writeFileSync(shim, `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nsleep 2\nexec ${JSON.stringify(real)} "$@"\n`, { mode: 0o755 });
+	const saved = process.env.PATH;
+	process.env.PATH = `${dir}:${saved ?? ""}`;
+	return {
+		calls: () => (readdirSync(dir).includes("calls.log") ? readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0),
+		restore: () => { process.env.PATH = saved; },
+	};
+}
+
+it("SET-02 a settings read never waits on git, and counts no local file beyond the cap", async () => {
+	const git = slowGit();
+	try {
+		t = await startTestPanad();
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const started = performance.now();
+			const read = await t.client.get<any>("/settings");
+			expect(read.status).toBe(200);
+			expect(performance.now() - started).toBeLessThan(1500);
+			// The read reports the snapshot captured at startup, never a fresh subprocess.
+			expect(read.body.source).toEqual(t.runtime.processInfo!.running);
+		}
+	} finally { git.restore(); }
+});
+
+it("SET-02 a stale source snapshot refreshes behind the response, off the event loop", async () => {
+	const git = slowGit();
+	try {
+		const before = runningRevision;
+		const started = performance.now();
+		// An aged cache: the read still answers from it and refreshes in the background.
+		const stale = cachedSourceRevision(Date.now() + SOURCE_REFRESH_MS + 1);
+		expect(performance.now() - started).toBeLessThan(100);
+		expect(stale).toEqual(before);
+		await until(() => git.calls() > 0);
+		await until(() => cachedSourceRevision() !== stale);
+		expect(cachedSourceRevision()).toEqual(before);
+	} finally { git.restore(); }
+});
+
+it("SET-02 an untracked file enters the fingerprint by size, and by content only up to the cap", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pana-source-cap-")); dirs.push(dir);
+	const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
+	git("init"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
+	writeFileSync(join(dir, "tracked.ts"), "export const tracked = 1;\n");
+	git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-m", "cap source");
+	const small = join(dir, "small.txt");
+	const big = join(dir, "big.bin");
+	writeFileSync(small, "a".repeat(UNTRACKED_FILE_CAP));
+	writeFileSync(big, Buffer.alloc(UNTRACKED_FILE_CAP + 1, 0x61));
+	const first = readSourceRevision(dir)!.fingerprint;
+
+	patched(small, "z");
+	const editedSmall = readSourceRevision(dir)!.fingerprint;
+	expect(editedSmall).not.toBe(first);
+
+	// The oversized file's content is never read, so editing inside it cannot move the fingerprint.
+	patched(big, 0x7a);
+	expect(readSourceRevision(dir)!.fingerprint).toBe(editedSmall);
+	// Its size still counts.
+	writeFileSync(big, Buffer.alloc(UNTRACKED_FILE_CAP + 2, 0x61));
+	expect(readSourceRevision(dir)!.fingerprint).not.toBe(editedSmall);
+});
+
+/** Overwrite the first byte, leaving the file's size alone. */
+function patched(path: string, byte: string | number): void {
+	const fd = openSync(path, "r+");
+	const buffer = typeof byte === "number" ? Buffer.from([byte]) : Buffer.from(byte);
+	try { writeSync(fd, buffer, 0, buffer.length, 0); } finally { closeSync(fd); }
+}
+
+it("SET-03 a restart validates one snapshot and runs exactly it, and does not wait on the client", async () => {
+	t = await startTestPanad();
+	const dir = t.dir;
+	const snapshots: Array<string | undefined> = [];
+	t.runtime.processInfo!.requestRestart = (snapshot) => { snapshots.push(snapshot); };
+	const validated = readFileSync(join(dir, "config.json"), "utf8");
+	const accepted = await t.client.post<any>("/settings/restart");
+	expect(accepted.status).toBe(202);
+	expect(accepted.body.restarting).toBe(true);
+	// A swap after the acknowledgement cannot change what the restarted process reads.
+	writeFileSync(join(dir, "config.json"), JSON.stringify({ ...JSON.parse(validated), spawnDepth: 9 }));
+	await until(() => snapshots.length > 0, 5000);
+	expect(snapshots).toHaveLength(1);
+	const snapshot = snapshots[0]!;
+	expect(readFileSync(snapshot, "utf8")).toBe(validated);
+	expect(snapshot).not.toBe(join(dir, "config.json"));
+});
+
+it("SET-03 a client that disconnects before reading the acknowledgement still gets its restart", async () => {
+	t = await startTestPanad();
+	const snapshots: Array<string | undefined> = [];
+	t.runtime.processInfo!.requestRestart = (snapshot) => { snapshots.push(snapshot); };
+	// Write the request then hang up without reading the 202: the daemon must restart anyway.
+	const socket = connect(t.runtime.paths.socket);
+	await new Promise<void>((resolve, reject) => {
+		socket.once("connect", resolve); socket.once("error", reject);
+	});
+	const body = "";
+	socket.write(`POST /settings/restart HTTP/1.1\r\nHost: panad\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`);
+	socket.destroy();
+	await until(() => snapshots.length > 0, 5000);
+	expect(snapshots).toHaveLength(1);
 });
 
 /** Wait on the child's readiness event, never probe a live daemon. */

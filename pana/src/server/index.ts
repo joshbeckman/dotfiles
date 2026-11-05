@@ -11,7 +11,7 @@ import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Handlers } from "../api/types.ts";
-import { ConfigError, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
+import { ConfigError, consumeConfigSnapshot, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
 import { sweepWakes, type WakeSubmitter } from "../db/outbox.ts";
 import { createPanaEnv, createPanaRegistry } from "../extension/index.ts";
@@ -36,8 +36,11 @@ import { startScratchSweeper } from "../scratch/index.ts";
 import { startBrowserSweeper, type SweepBrowsersOptions } from "../extension/browser.ts";
 
 export interface StartOptions {
-	/** Entrypoint-owned lifecycle callback; absent for embedded/test servers. */
-	onRestart?: () => void;
+	/**
+	 * Entrypoint-owned lifecycle callback; absent for embedded/test servers. It receives the
+	 * configuration snapshot the restart validated, which the re-exec must run.
+	 */
+	onRestart?: (configSnapshot?: string) => void;
 	/** State directory; default `PANA_STATE` or `~/.local/state/pana` (CFG-01). */
 	stateDir?: string;
 	clock?: Clock;
@@ -81,6 +84,8 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 	const startedAt = clock.now();
 	const dir = options.stateDir ?? defaultStateDir();
 	const config = loadConfig(dir);
+	// A restart validated exactly one configuration file: run that one, then drop it.
+	consumeConfigSnapshot();
 	const paths = ensureStateLayout(dir);
 	const releaseLock = acquirePidLock(paths.pidFile);
 	const cleanup: Array<() => Promise<void> | void> = [releaseLock];
@@ -300,13 +305,20 @@ export function exitCodeWithoutStop(stopping: boolean, code: number): number {
 export async function main(_argv: string[], options: StartOptions = {}): Promise<number> {
 	let panad: Panad;
 	let restart: (() => void) | undefined;
+	/** The configuration file this restart validated, for the execve below. */
+	let configSnapshot: string | undefined;
 	const canRestart = (process.platform === "darwin" || process.platform === "linux") && typeof process.execve === "function";
 	// API-05: answer to the tailnet name Tailscale Serve forwards. Only the entry point asks
 	// tailscale; tests that call startPanad pass names explicitly.
 	const tailscaleNames = options.tailscaleNames ?? (await detectTailscaleNames());
 	try {
 		panad = await startPanad({ ...options, tailscaleNames,
-			onRestart: canRestart ? () => restart?.() : undefined,
+			onRestart: canRestart
+				? (snapshot) => {
+					configSnapshot = snapshot;
+					restart?.();
+				}
+				: undefined,
 		});
 	} catch (error) {
 		if (error instanceof ConfigError) {
@@ -354,8 +366,10 @@ export async function main(_argv: string[], options: StartOptions = {}): Promise
 					if (restarting) {
 						try {
 							// execve replaces this process, retaining its service-manager identity and credentials.
-							process.execve!(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
-								Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)));
+							const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+							// The snapshot, not config.json, is what makes the restart run the configuration it validated.
+							if (configSnapshot) env.PANA_CONFIG = configSnapshot;
+							process.execve!(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)], env);
 						} catch (error) {
 							console.error("panad: restart failed:", error);
 							resolve(1);
