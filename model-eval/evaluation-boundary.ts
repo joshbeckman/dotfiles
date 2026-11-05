@@ -1,4 +1,4 @@
-import {existsSync, lstatSync, realpathSync} from "node:fs";
+import {lstatSync, realpathSync} from "node:fs";
 import {dirname, isAbsolute, relative, resolve, sep} from "node:path";
 import type {ExtensionAPI} from "@earendil-works/pi-coding-agent";
 
@@ -30,8 +30,11 @@ function insideConfiguredSkill(path: string): boolean {
 function insideRoot(path: string, writing = false): boolean {
   try {
     const candidate = resolve(root, path.replace(/^@/, ""));
-    if (existsSync(candidate) && lstatSync(candidate).isSymbolicLink()) return false;
-    const checked = realpathSync(existsSync(candidate) ? candidate : writing ? dirname(candidate) : candidate);
+    // lstat sees the final component without following it, so a dangling symlink is still a
+    // symlink here; existsSync followed the link and let a write through it.
+    const entry = lstatSync(candidate, {throwIfNoEntry: false});
+    if (entry?.isSymbolicLink()) return false;
+    const checked = realpathSync(entry ? candidate : writing ? dirname(candidate) : candidate);
     if (checked !== root && !checked.startsWith(root + sep)) return false;
     return true;
   } catch {
