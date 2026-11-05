@@ -233,11 +233,11 @@ sub my_symlink {
 sub get_changes {
     my $what = shift;
 
-    return `git log --pretty='format:%h: %s' $what`;
+    return _capture_output( 'git', 'log', '--pretty=format:%h: %s', $what );
 }
 
 sub get_current_branch {
-    my $current_branch = `git symbolic-ref HEAD`;
+    my $current_branch = _capture_output( 'git', 'symbolic-ref', 'HEAD' );
     chomp $current_branch;
 
     # convert 'refs/heads/personal' to 'personal'
@@ -250,7 +250,7 @@ sub get_current_branch {
 
 sub check_remote_branch {
     my $branch        = shift;
-    my $branch_remote = `git config branch.$branch.remote`;
+    my $branch_remote = _capture_output( 'git', 'config', "branch.$branch.remote" );
     chomp $branch_remote;
 
     DEBUG("remote for branch $branch: $branch_remote");
@@ -318,7 +318,7 @@ sub merge_and_install {
         }
 
         INFO("using $sync_command to bring in changes");
-        system("git $sync_command $current_branch\@{u}")
+        system( 'git', $sync_command, $current_branch . '@{u}' )
             if !$opts->{'dry-run'};
 
         INFO("re-installing dotfiles");
@@ -766,6 +766,24 @@ sub _read_shellrc_contents {
         }
     }
     return $shellrc_contents;
+}
+
+# Run a command in argv form and capture its output. No shell is involved, so
+# branch names and paths read out of the repository are never parsed as shell
+# syntax.
+sub _capture_output {
+    my @command = @_;
+
+    open( my $command_output, '-|', @command ) or do {
+        WARN( 'could not run ' . join( ' ', @command ) . ": $OS_ERROR" );
+        return '';
+    };
+
+    local $INPUT_RECORD_SEPARATOR = undef;
+    my $output = <$command_output>;
+    close($command_output);
+
+    return defined $output ? $output : '';
 }
 
 sub _run_git {
