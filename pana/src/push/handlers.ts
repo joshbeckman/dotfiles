@@ -3,17 +3,22 @@
 
 import { ApiError } from "../api/errors.ts";
 import type { Handlers, RequestContext } from "../api/types.ts";
-import { vapidKeys } from "./index.ts";
+import { MAX_SUBSCRIPTIONS, endpointProblem, vapidKeys } from "./index.ts";
 
 interface SubscriptionBody {
 	endpoint?: unknown;
 	keys?: { p256dh?: unknown; auth?: unknown };
 }
 
-function stringField(value: unknown, name: string): string {
+/** A browser's endpoint is a few hundred characters; keys are 22 and 88. Cap far above both. */
+const MAX_ENDPOINT_LENGTH = 2048;
+const MAX_KEY_LENGTH = 256;
+
+function stringField(value: unknown, name: string, limit = MAX_KEY_LENGTH): string {
 	if (typeof value !== "string" || value.length === 0) {
 		throw ApiError.badRequest("invalid_subscription", `subscription is missing ${name}`);
 	}
+	if (value.length > limit) throw ApiError.badRequest("invalid_subscription", `subscription ${name} is too long`);
 	return value;
 }
 
@@ -56,10 +61,21 @@ export const handlers: Handlers = {
 	"push.subscriptions.create": async (ctx) => {
 		await ensureParticipant(ctx);
 		const body = (ctx.body ?? {}) as SubscriptionBody;
-		const endpoint = stringField(body.endpoint, "endpoint");
+		const endpoint = stringField(body.endpoint, "endpoint", MAX_ENDPOINT_LENGTH);
+		const problem = endpointProblem(endpoint);
+		if (problem) throw ApiError.badRequest("invalid_subscription", `push endpoint ${problem}`);
 		const keys = (body.keys ?? {}) as { p256dh?: unknown; auth?: unknown };
 		const p256dh = stringField(keys.p256dh, "keys.p256dh");
 		const auth = stringField(keys.auth, "keys.auth");
+		// Re-posting an endpoint updates it; only a new one can exceed the cap.
+		const held = await ctx.runtime.db.get<{ n: number }>(
+			"SELECT COUNT(*) AS n FROM push_subscriptions WHERE participant_id = ?",
+			ctx.caller.id,
+		);
+		const known = await ctx.runtime.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint = ?", endpoint);
+		if ((known?.n ?? 0) === 0 && (held?.n ?? 0) >= MAX_SUBSCRIPTIONS) {
+			throw new ApiError(409, "too_many_subscriptions", `a participant may hold ${MAX_SUBSCRIPTIONS} push subscriptions`);
+		}
 		const now = ctx.runtime.clock.now();
 		const id = ctx.runtime.newId();
 		await ctx.runtime.db.write((tx) =>
