@@ -61,14 +61,23 @@ export function objectiveUrl(runtime: Runtime, id: string): string {
 }
 
 /**
- * OBJ-07/OBJ-10: a session caller reaches an objective only through a relationship with it — it
- * leads it or belongs to it — so the charter's `autonomy: auto` and its `Notes` are the objective's
- * own sessions' to use, not any session on the domain. The user keeps their broad permission.
+ * OBJ-10: the charter's `Notes` are a session's to write on an objective it leads or belongs to —
+ * they reach that objective's next lead briefing, so any other session writing them is an injection.
+ * A lead writing another section is still refused above, and the user keeps every section.
  */
 export async function requireOnObjective(db: SqliteExecutor, row: ObjectiveRow, caller: Caller): Promise<void> {
 	if (caller.kind !== "session" || row.lead_id === caller.id) return;
 	const member = await db.get<{ id: string }>("SELECT id FROM sessions WHERE id = ? AND objective_id = ?", caller.id, row.id);
 	if (member === undefined) throw ApiError.forbidden(`session ${caller.id} neither leads nor belongs to objective ${row.id}`, { objective: row.id });
+}
+
+/**
+ * OBJ-07/OBJ-17: `done` is the lead's delegated authority, so a session caller finishes an objective
+ * only when it leads it; the user confirms as always, and a member finishes nothing.
+ */
+export function requireObjectiveLead(row: ObjectiveRow, caller: Caller): void {
+	if (caller.kind !== "session" || row.lead_id === caller.id) return;
+	throw ApiError.forbidden(`session ${caller.id} does not lead objective ${row.id}; only its lead may finish it`, { objective: row.id });
 }
 
 /** The lead and every member: the sessions carrying this objective's `id` (OBJ-15). */

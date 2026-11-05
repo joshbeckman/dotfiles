@@ -17,7 +17,7 @@ import { deleteSchedule } from "../schedules/store.ts";
 import { sessionRuntime } from "../sessions/index.ts";
 import type { Runtime } from "../server/runtime.ts";
 import type { ObjectivePhase, ObjectiveRow } from "./schema.ts";
-import { loadObjective, objectiveId, objectiveMembers, recordObjectiveEvent, requireOnObjective } from "./state.ts";
+import { loadObjective, objectiveId, objectiveMembers, recordObjectiveEvent, requireObjectiveLead } from "./state.ts";
 import { showObjective, type ObjectiveView } from "./view.ts";
 
 const ARCHIVABLE_PHASES: readonly ObjectivePhase[] = ["drafting", "stopped", "done"];
@@ -135,15 +135,16 @@ async function metricsBehind(runtime: Runtime, objectiveId: string): Promise<Arr
 /**
  * `pana objective done` (OBJ-07, OBJ-17): every metric with a target must be at that target, and
  * the user confirms — or the charter says `autonomy: auto`, which lets the lead finish by itself.
- * An objective with no members and no targets needs nothing else. `auto` is the objective's own
- * sessions' grant: a session that neither leads nor belongs to it cannot finish it either.
+ * An objective with no members and no targets needs nothing else. `auto` is the lead's delegated
+ * authority (OBJ-17), not the domain's and not every member's: a session that does not lead the
+ * objective — a member included — cannot finish it.
  */
 export async function finishObjective(runtime: Runtime, caller: Caller, value: string | null | undefined): Promise<ObjectiveView> {
 	const id = objectiveId(value, runtime.config.domain);
 	const row = await loadObjective(runtime.db, id);
 	if (row.phase !== "active" && row.phase !== "stopped") throw wrongPhase(row, "only an active or stopped objective can be done");
 	if (row.autonomy !== "auto") userOnly(caller, "finish");
-	await requireOnObjective(runtime.db, row, caller);
+	requireObjectiveLead(row, caller);
 	const behind = await metricsBehind(runtime, id);
 	if (behind.length > 0) {
 		throw new ApiError(409, "metric_behind", `objective ${id} has metrics short of their target`, { objective: id, metrics: behind });

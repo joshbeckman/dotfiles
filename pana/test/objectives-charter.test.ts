@@ -156,7 +156,9 @@ it("OBJ-10 a session writes Notes only on an objective it leads or belongs to", 
 	expect(await t!.runtime.db.all("SELECT id FROM objective_charter_revisions WHERE objective_id = ?", objective.id)).toEqual([]);
 	expect((await view(t!, objective.id)).charterRev).toBe(0);
 
-	// The lead, a member, and the user still write Notes.
+	// The lead, a member, and the user still write Notes: OBJ-10 limits a session to the `notes`
+	// section, and this is the objective's own session writing its own objective — not `done`, which
+	// is the lead's alone (OBJ-07/OBJ-17).
 	expect((await t!.client.post(`/objectives/${objective.id}/charter`, { section: "Notes", body: "lead note" }, { caller: lead })).status).toBe(200);
 	expect((await t!.client.post(`/objectives/${objective.id}/charter`, { section: "Notes", body: "member note" }, { caller: member })).status).toBe(200);
 	expect((await t!.client.post(`/objectives/${objective.id}/charter`, { section: "Notes", body: "user note" })).status).toBe(200);
