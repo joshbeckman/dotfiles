@@ -118,7 +118,10 @@ nnoremap <Leader>h :sf
 nnoremap <Leader>f :tabnew<CR>:FZF<CR>
 " Build a shell argument from buffer text. :grep and :! re-expand % and #
 " in the command line, inserting the raw buffer name quotes and all, so
-" escape those before shell-quoting.
+" escape those before shell-quoting. They also expand <cword>, <cfile> and
+" friends, so text containing one of those tokens is still Ex-expanded;
+" escaping < blindly is unsafe (the backslash survives when the token is not
+" special), so that needs its own mechanism and is not covered here.
 function! ShellArg(text)
   return shellescape(escape(a:text, '%#'))
 endfunction
