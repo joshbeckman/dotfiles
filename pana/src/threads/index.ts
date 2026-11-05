@@ -70,17 +70,20 @@ export {
 } from "./delivery.ts";
 export {
 	appendAttachmentMarkdown,
+	attachmentDisposition,
 	attachmentMarkdown,
+	INLINE_MEDIA_TYPES,
+	inlineDisposition,
 	loadFile,
-	mediaTypeFor,
 	safeName,
+	sniffMediaType,
 	uploadFile,
 	type FileUploader,
 	type FileView,
 	type LoadedFile,
 	type UploadInput,
 } from "./files.ts";
-export { FILES_CACHE_CONTROL } from "./handlers.ts";
+export { ATTACHMENT_CACHE_CONTROL, FILES_CACHE_CONTROL } from "./handlers.ts";
 export {
 	findBackend,
 	imageSize,

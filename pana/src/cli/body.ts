@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { ApiResponse } from "../api/client.ts";
-import { mediaTypeFor, type FileView } from "../threads/files.ts";
+import type { FileView } from "../threads/files.ts";
 import { UsageError, type Flags } from "./args.ts";
 
 /** A non-2xx reply from a call made on the way to the command's own call. */
@@ -67,8 +67,8 @@ export interface ApiCall {
 
 /**
  * Upload one `--attach PATH` to WP2's `POST /files?name=<basename>` with the bytes as the body
- * (FIL-01). The media type is the request's content type; the route infers it from the name when
- * the caller sends opaque bytes.
+ * (FIL-01). The route reads the media type from the bytes and answers with it, so the caller
+ * sends nothing a server would have to trust.
  */
 export async function uploadAttachment(call: ApiCall, path: string): Promise<FileAttachment> {
 	const name = basename(path);
@@ -78,12 +78,7 @@ export async function uploadAttachment(call: ApiCall, path: string): Promise<Fil
 	} catch (error) {
 		throw new UsageError(`cannot read ${path}: ${(error as Error).message}`);
 	}
-	// WP2 infers the type from the extension; send it so the record and the response agree.
-	const response = await call("POST", "/files", {
-		bytes,
-		query: { name },
-		headers: { "content-type": mediaTypeFor(name, null) },
-	});
+	const response = await call("POST", "/files", { bytes, query: { name } });
 	if (response.status < 200 || response.status >= 300) throw new ApiResponseError(response);
 	const file = (response.body as { file?: FileAttachment } | undefined)?.file;
 	if (!file?.url) throw new Error(`upload of ${name} returned no file url`);

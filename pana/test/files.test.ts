@@ -6,6 +6,8 @@ import { inlineDisposition } from "../src/threads/files.ts";
 import { statusToExitCode } from "../src/api/errors.ts";
 import {
 	appendAttachmentMarkdown,
+	ATTACHMENT_CACHE_CONTROL,
+	attachmentDisposition,
 	attachmentMarkdown,
 	FILES_CACHE_CONTROL,
 	findBackend,
@@ -15,6 +17,7 @@ import {
 	MIN_WIDTH,
 	parseWidth,
 	resizedImage,
+	sniffMediaType,
 } from "../src/threads/index.ts";
 import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harness/index.ts";
 
@@ -42,7 +45,8 @@ async function start(options: Parameters<typeof startTestPanad>[0] = {}): Promis
 	return t;
 }
 
-const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02, 0x03]);
+/** Bytes that open with the PNG signature (FIL-04 reads it), then a few more to copy verbatim. */
+const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03]);
 
 /** A 4x2 baseline JPEG, small enough to keep inline, for the header reader (FIL-07). */
 const TINY_JPEG = Buffer.from(
@@ -183,7 +187,7 @@ describe("files", () => {
 		expect(await t.runtime.db.get("SELECT id FROM files")).toBeUndefined();
 	});
 
-	it("FIL-04 downloads the bytes with the recorded media type, and a wrong name is 404", async () => {
+	it("FIL-04 downloads the bytes of a picture as a picture, and a wrong name is 404", async () => {
 		const t = await start();
 		const file = await upload(t, "cat.png", BYTES);
 
@@ -198,6 +202,58 @@ describe("files", () => {
 
 		const missing = await t.client.get(`/files/${t.runtime.newId()}/cat.png`);
 		expect(missing.status).toBe(404);
+	});
+
+	it("FIL-04 a .png-named HTML upload is stored and served as an opaque download", async () => {
+		const t = await start();
+		const html = Buffer.from("<html><script>alert(document.cookie)</script></html>");
+		// The uploader claims HTML and names the file like a picture: neither decides anything.
+		const file = await upload(t, "cat.png", html, "text/html");
+		expect(file.mediaType).toBe("application/octet-stream");
+		// A row an older pana wrote from the header is no liability either: the route reads the
+		// bytes every time, so the type never outlives the fix.
+		await t.runtime.db.write((tx) => tx.run("UPDATE files SET media_type = 'text/html' WHERE id = ?", file.id));
+
+		for (const query of ["", "?w=1024"]) {
+			const res = await t.client.get(`/files/${file.id}/cat.png${query}`);
+			expect(res.status, query).toBe(200);
+			expect(res.raw, query).toEqual(html);
+			expect(String(res.headers["content-type"]), query).toBe("application/octet-stream");
+			expect(String(res.headers["content-disposition"]), query).toBe(attachmentDisposition("cat.png"));
+			expect(String(res.headers["x-content-type-options"]), query).toBe("nosniff");
+			expect(String(res.headers["cache-control"]), query).toBe(ATTACHMENT_CACHE_CONTROL);
+		}
+	});
+
+	it("FIL-04 an SVG is a document, so it downloads even when the uploader calls it an image", async () => {
+		const t = await start();
+		const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+		const file = await upload(t, "drawing.svg", svg, "image/svg+xml");
+		expect(file.mediaType).toBe("application/octet-stream");
+		const res = await t.client.get(`/files/${file.id}/drawing.svg`);
+		expect(String(res.headers["content-type"])).toBe("application/octet-stream");
+		expect(String(res.headers["content-disposition"])).toBe(attachmentDisposition("drawing.svg"));
+	});
+
+	it("FIL-04 the bytes decide the type, so a real picture previews inline whatever the header says", async () => {
+		const t = await start();
+		const file = await upload(t, "cat.png", png(4, 2), "text/html");
+		expect(file.mediaType).toBe("image/png");
+		const res = await t.client.get(`/files/${file.id}/cat.png`);
+		expect(String(res.headers["content-type"])).toBe("image/png");
+		expect(String(res.headers["content-disposition"])).toBe(inlineDisposition("cat.png"));
+		expect(String(res.headers["x-content-type-options"])).toBe("nosniff");
+		expect(String(res.headers["cache-control"])).toBe(FILES_CACHE_CONTROL);
+	});
+
+	it("FIL-04 sniffing reads magic numbers, never the name or the header", () => {
+		expect(sniffMediaType(png(3, 2))).toBe("image/png");
+		expect(sniffMediaType(TINY_JPEG)).toBe("image/jpeg");
+		expect(sniffMediaType(Buffer.from("GIF89a......"))).toBe("image/gif");
+		expect(sniffMediaType(Buffer.from("RIFF\0\0\0\0WEBPVP8 "))).toBe("image/webp");
+		expect(sniffMediaType(Buffer.concat([Buffer.from([0, 0, 0, 0x1c]), Buffer.from("ftypavif")]))).toBe("image/avif");
+		expect(sniffMediaType(Buffer.from("<html><script>alert(1)</script></html>"))).toBeNull();
+		expect(sniffMediaType(Buffer.alloc(0))).toBeNull();
 	});
 
 	it("FIL-07 a width the picture already fits, a bad width, and a non-image serve the original", async () => {
