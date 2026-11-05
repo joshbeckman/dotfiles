@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +12,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get('SETUP_UNDER_TEST', ROOT / 'setup'))
+# Every plugin is pinned, so the fixture records one commit for all of them and the
+# fake git reports it as the checkout's HEAD. A test that wants a moved pin runs
+# setup with a different FAKE_GIT_HEAD.
+PIN = '1' * 40
+MOVED = '2' * 40
 FAKE_COMMAND = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
@@ -28,9 +35,18 @@ if name == 'dfm':
 with open(os.environ['COMMAND_LOG'], 'a') as f:
     f.write(json.dumps(record) + '\\n')
 if name == 'git' and args[0] == 'clone':
-    pathlib.Path(args[-1]).mkdir(parents=True, exist_ok=True)
+    destination = pathlib.Path(args[-1])
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / '.git').mkdir(exist_ok=True)
+elif name == 'git' and args[-1] == 'HEAD':
+    print(os.environ.get('FAKE_GIT_HEAD', ''))
 elif name == 'uname':
-    print('Linux fixture')
+    print(os.environ.get('FAKE_UNAME_SM', 'Linux x86_64'))
+elif name == 'curl':
+    # -o is where the pinned download would land; nothing real is fetched, so the
+    # file either stays empty or holds FAKE_CURL_BODY and cannot match a pin.
+    if '-o' in args:
+        pathlib.Path(args[args.index('-o') + 1]).write_text(os.environ.get('FAKE_CURL_BODY', ''))
 elif name == 'lsb_release':
     print('Distributor ID: ubuntu')
 elif name == 'dpkg':
@@ -95,9 +111,18 @@ class SetupTest(unittest.TestCase):
             self.executable(self.repo / 'bin' / name)
         self.log = self.root / 'commands.jsonl'
         self.gem_bindir = self.root / 'gem-bin'
+        (self.root / 'tmp').mkdir()
         self.env = {'HOME': str(self.home), 'ZDOTDIR': str(self.home),
                     'PATH': os.pathsep.join([str(self.bin), '/usr/bin', '/bin']),
+                    'TMPDIR': str(self.root / 'tmp'),
+                    'FAKE_GIT_HEAD': PIN,
                     'COMMAND_LOG': str(self.log), 'FAKE_GEM_BINDIR': str(self.gem_bindir)}
+        self.write_lock(re.findall(r'^\s*git_clone_or_update (\S+)', self.script.read_text(), re.M))
+
+    def write_lock(self, urls):
+        """Write the fixture's plugins.lock: one pinned commit per repository."""
+        lines = ['# fixture pins'] + ['%s  %s' % (PIN, url) for url in urls]
+        (self.repo / 'plugins.lock').write_text('\n'.join(lines) + '\n')
 
     def executable(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +134,7 @@ class SetupTest(unittest.TestCase):
                                'OSTYPE=$1; source "$2"', 'setup-test', platform, str(self.script)],
                               cwd=self.repo, env={**self.env, **environment},
                               input='this must not reach a child prompt\n', capture_output=True,
-                              text=True, timeout=20)
+                              text=True, timeout=120)
 
     def records(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -130,17 +155,90 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(commands[-1]['command'], 'pi')
         self.assertIsNone(commands[-1]['no_sudo'])
 
-    def test_refresh_uses_fast_forward_only_without_changing_cwd(self):
-        self.assertEqual(self.run_setup().returncode, 0)
-        self.log.write_text('')
+    def test_plugins_are_checked_out_at_their_pins_and_never_pulled(self):
+        # A pull would fast-forward the checkout to upstream HEAD, which is how
+        # unreviewed plugin code used to arrive every two hours.
         result = self.run_setup()
         self.assertEqual(result.returncode, 0, result.stderr)
         git = [c for c in self.records() if c['command'] == 'git']
         self.assertGreater(len(git), 0)
+        clones = [c for c in git if c['args'][0] == 'clone']
+        self.assertTrue(clones, result.stdout)
+        for call in clones:
+            self.assertIn('--no-checkout', call['args'])
         for call in git:
+            if call['args'][0] == 'clone':
+                continue
             self.assertEqual(call['args'][0], '-C')
-            self.assertEqual(call['args'][2:], ['pull', '--ff-only'])
+            self.assertIn(call['args'][2], ('fetch', 'checkout', 'rev-parse'))
             self.assertEqual(call['cwd'], str(self.repo))
+        checkouts = [c['args'] for c in git if c['args'][2:3] == ['checkout']]
+        self.assertTrue(checkouts)
+        for args in checkouts:
+            self.assertEqual(args[-1], PIN)
+            self.assertIn('--detach', args)
+
+    def test_a_pinned_checkout_is_left_alone_on_the_next_run(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        self.log.write_text('')
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse([c for c in self.records()
+                          if c['command'] == 'git' and any(
+                              word in c['args'] for word in ('clone', 'checkout', 'fetch'))])
+
+    def test_a_moved_checkout_is_reported_then_pinned_again(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        self.log.write_text('')
+        result = self.run_setup(FAKE_GIT_HEAD=MOVED)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('plugin changed: zsh-syntax-highlighting %s -> %s' % (MOVED, PIN),
+                      result.stdout)
+        checkouts = [c['args'] for c in self.records()
+                     if c['command'] == 'git' and c['args'][2:3] == ['checkout']]
+        self.assertTrue(checkouts)
+        self.assertTrue(all(args[-1] == PIN for args in checkouts), checkouts)
+
+    def test_a_repository_without_a_pin_stops_setup(self):
+        (self.repo / 'plugins.lock').write_text('')
+        result = self.run_setup()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('no pinned commit for https://github.com/val-town/plugins', result.stderr)
+        self.assertFalse([c for c in self.records()
+                          if c['command'] == 'git' and c['args'][0] == 'clone'])
+        self.assertFalse(any(c['command'] == 'brew' for c in self.records()))
+
+    def test_the_checksum_guard_accepts_a_match_and_rejects_anything_else(self):
+        # Both installers lean on this, and the fixture cannot produce a download
+        # that matches a pinned digest, so the guard is checked directly.
+        artifact = self.root / 'artifact.tar.gz'
+        artifact.write_text('pinned\n')
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        self.assertEqual(self.verify_sha256(artifact, digest).returncode, 0)
+        wrong = self.verify_sha256(artifact, '0' * 64)
+        self.assertNotEqual(wrong.returncode, 0)
+        self.assertIn('checksum mismatch', wrong.stderr)
+
+    def verify_sha256(self, artifact, expected):
+        text = (self.repo / 'setup').read_text()
+        start = text.index('function verify_sha256()')
+        function = text[start:text.index('\n}\n', start) + 3]
+        script = self.root / 'verify.zsh'
+        script.write_text(function + '\nverify_sha256 "$1" "$2"\n')
+        return subprocess.run([shutil.which('zsh'), '-f', str(script), str(artifact), expected],
+                              capture_output=True, text=True, timeout=120)
+
+    def test_s_comes_from_a_pinned_checksummed_release(self):
+        (self.repo / 'bin/s').unlink()
+        result = self.run_setup(platform='linux-gnu')
+        # The download cannot match the pinned digest, so setup stops instead of
+        # installing the binary that unwraps every secret.
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        curls = [' '.join(c['args']) for c in self.records() if c['command'] == 'curl']
+        self.assertTrue(any('tobi/s/releases/download/v0.9.5/s-v0.9.5-x86_64-unknown-linux-musl.tar.gz'
+                            in line for line in curls), curls)
+        self.assertIn('checksum mismatch', result.stderr)
+        self.assertFalse((self.repo / 'bin/s').exists())
 
     def test_failed_upgrade_stops_setup(self):
         result = self.run_setup(FAIL_COMMAND='brew', FAIL_ARG='upgrade')
@@ -155,10 +253,10 @@ class SetupTest(unittest.TestCase):
         self.assertIn('free-space', result.stderr)
         self.assertFalse(any(c['command'] == 'brew' for c in self.records()))
 
-    def test_failed_plugin_update_does_not_continue_to_package_updates(self):
-        self.assertEqual(self.run_setup().returncode, 0)
-        self.log.write_text('')
-        result = self.run_setup(FAIL_COMMAND='git', FAIL_ARG='pull')
+    def test_failed_plugin_checkout_does_not_continue_to_package_updates(self):
+        # A plugin that cannot be put on its pinned commit stops the run, so a
+        # package upgrade never happens on top of a half-installed editor.
+        result = self.run_setup(FAIL_COMMAND='git', FAIL_ARG='checkout')
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertFalse(any(c['command'] == 'brew' for c in self.records()))
 
@@ -235,13 +333,19 @@ class SetupTest(unittest.TestCase):
         clones = [c for c in self.records() if c['command'] == 'git' and c['args'][:1] == ['clone']]
         self.assertTrue(any('val-town/plugins' in ' '.join(c['args']) for c in clones), result.stdout)
 
-    def test_deno_install_is_attempted_without_network(self):
-        # The curl stub prints nothing, so Deno is not created and the vt step
-        # stays skipped; this only proves the attempt happens without a real fetch.
-        result = self.run_setup(platform='linux', FAKE_ARCH='arm64')
+    def test_deno_comes_from_a_pinned_checksummed_release(self):
+        # Deno's own installer is a curl | sh of a script that resolves "latest"
+        # when it runs, so the release zip is fetched at a pinned version instead,
+        # and the empty fixture download proves the checksum stops it.
+        result = self.run_setup(platform='linux-gnu')
         self.assertEqual(result.returncode, 0, result.stderr)
-        curls = [c for c in self.records() if c['command'] == 'curl']
-        self.assertTrue(any('deno.land' in ' '.join(c['args']) for c in curls), result.stdout)
+        curls = [' '.join(c['args']) for c in self.records() if c['command'] == 'curl']
+        self.assertTrue(any('denoland/deno/releases/download/v2.9.8/deno-x86_64-unknown-linux-gnu.zip'
+                            in line for line in curls), curls)
+        self.assertFalse([line for line in curls if 'deno.land/install.sh' in line], curls)
+        self.assertIn('checksum mismatch', result.stderr)
+        self.assertIn('Deno install failed; continuing', result.stdout)
+        self.assertFalse((self.home / '.deno/bin/deno').exists())
         self.assertEqual([c for c in self.records() if c['command'] == 'deno'], [])
 
     def test_try_is_installed_and_linked_into_local_bin(self):

@@ -1,0 +1,35 @@
+# Pinned plugin checkouts, in the order setup installs them.
+#
+# setup only ever checks a plugin out at the commit named here; nothing follows a
+# branch, so upstream is not auto-activated between reviews. The two-hour refresh
+# reports (and notifies about) every checkout that moves, whether because this file
+# changed or because the checkout had drifted.
+#
+#   <commit>  <repository url>
+#
+# Moving a pin is a deliberate act: take whatever each repository publishes now,
+# then read the diff before committing it. That diff is the review.
+#
+#   grep -v '^#' plugins.lock | while read -r sha url; do
+#     printf '%s  %s\n' "$(git ls-remote "$url" HEAD | cut -f1)" "$url"
+#   done > plugins.lock.new && mv plugins.lock.new plugins.lock
+#
+# Comments and blank lines are ignored, and a repository that is cloned without an
+# entry here is an error rather than an unpinned install.
+90b75207bd9b55d8ac4af15f72b4e935462014d0  https://github.com/airblade/vim-gitgutter.git
+422c0e8ef42e2315a5b58dc281fccc59b816c37a  https://github.com/dense-analysis/ale.git
+39f06b873a8449af8ff6a3eee716d3da14d63a76  https://github.com/jiangmiao/auto-pairs.git
+023de3c0e158ff9c2b0992175af10be97c2f2158  https://github.com/junegunn/fzf.vim.git
+41a675ddbeefd6a93664a4dc52f302fe3086a933  https://github.com/kana/vim-textobj-user.git
+d1af77988081dae496fa4a1f5e5e6bc9ef66767f  https://github.com/laktak/extrakto
+a8085e29883ddcfb39bd46197eb32ef00df05368  https://github.com/maxmx03/solarized.nvim.git
+731751fdfa4f64a061dbc7088cb7b2f12e0828ad  https://github.com/ruanyl/vim-gh-line.git
+e955714b2e8cd581a4945b5ac5428c4c18de1657  https://github.com/tek/vim-textobj-ruby.git
+0698e8f4b17d6454c71bf5212895ec055c578da0  https://github.com/tmux-plugins/tmux-continuum
+cff343cf9e81983d3da0c8562b01616f12e8d548  https://github.com/tmux-plugins/tmux-resurrect
+3b753cf8c6a4dcde6edee8827d464ba9b8c4a6f0  https://github.com/tpope/vim-fugitive.git
+65846025c15494983dafe5e3b46c8f88ab2e9635  https://github.com/tpope/vim-repeat.git
+5496d7c94581c4c9ad7430357449bb57fc59f501  https://github.com/tpope/vim-rhubarb.git
+3d188ed2113431cf8dac77be61b842acb64433d9  https://github.com/tpope/vim-surround.git
+555ff7492c9c70ada2c4e9b66d7dea9367d7ce71  https://github.com/val-town/plugins
+e6683f20e5c38d3e5447f45845d04ddda75d0f23  https://github.com/zsh-users/zsh-syntax-highlighting.git
