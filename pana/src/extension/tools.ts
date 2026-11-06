@@ -94,6 +94,14 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 		),
 		tool(
 			getRuntime,
+			"pana_thread_join",
+			"Join a thread you are not a participant in. The thread receives one message saying you joined; you receive its later messages, not its earlier ones. Joining again is a no-op.",
+			Type.Object({
+				thread: Type.String({ description: "Thread URL or ULID" }),
+			}),
+		),
+		tool(
+			getRuntime,
 			"pana_thread_create",
 			"Start a new thread with one or more participants.",
 			Type.Object({

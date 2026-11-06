@@ -629,6 +629,62 @@ export async function respondIn(
 	return { thread: await threadView(tx, runtime, threadId), message };
 }
 
+export interface JoinResult {
+	thread: ThreadView;
+	/** The announcement the join appended; absent when the caller was already a participant. */
+	message?: MessageView;
+	/** False when the caller was already in the thread, and nothing was written. */
+	joined: boolean;
+}
+
+/** THR-12: the join announcement is server-written, so a join can carry no caller text. */
+export const JOIN_BODY = "joined the thread";
+
+/**
+ * THR-12: join a thread from outside it. The caller becomes a participant, and one server-written
+ * message tells the participants already there, because a membership anyone can grant themselves
+ * has to be visible to the conversation it joined. Membership is forward-only, as `--cc` is
+ * (THR-08): the participant row exists before `appendMessage` reads its recipients, so the joiner
+ * receives none of the earlier messages and only what comes after the announcement.
+ */
+export async function joinThread(runtime: Runtime, caller: Caller, threadId: string): Promise<JoinResult> {
+	const recipients: string[] = [];
+	const result = await runtime.db.atomically(async (tx): Promise<JoinResult> => {
+		const now = runtime.clock.now();
+		const thread = await tx.get<ThreadRecord>("SELECT * FROM threads WHERE id = ?", threadId);
+		if (!thread) throw ApiError.notFound(`thread ${threadId}`);
+		const sender = await ensureCaller(tx, runtime, now, caller);
+		const member = await tx.get(
+			"SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?",
+			threadId,
+			sender.id,
+		);
+		// Joining twice is the same request twice: no second announcement, no error.
+		if (member) return { thread: await threadView(tx, runtime, threadId), joined: false };
+		// STA-07 refuses every delivery in a thread that holds an archived session, so the join's own
+		// announcement would roll the insert back. Refuse before anything is written.
+		const archived = await tx.get<{ id: string }>(
+			`SELECT s.id FROM thread_participants tp JOIN sessions s ON s.id = tp.participant_id
+			  WHERE tp.thread_id = ? AND s.state = 'archived' LIMIT 1`,
+			threadId,
+		);
+		if (archived) throw ApiError.stale(`session ${archived.id} is archived`, { session: archived.id });
+
+		const messageId = runtime.newId();
+		await tx.run(
+			"INSERT INTO thread_participants (thread_id, participant_id, joined_at, joined_message_id) VALUES (?, ?, ?, ?)",
+			threadId,
+			sender.id,
+			now,
+			messageId,
+		);
+		const message = await appendMessage(tx, runtime, { messageId, threadId, sender, body: JOIN_BODY, now, recipients });
+		return { thread: await threadView(tx, runtime, threadId), message, joined: true };
+	});
+	if (result.message) announce(runtime, "delivery", { thread: result.thread, message: result.message }, recipients);
+	return result;
+}
+
 /** Resolve who is reading: the caller, or a named participant the user is allowed to act for. */
 async function readerFor(tx: SqliteExecutor, runtime: Runtime, caller: Caller, participant: string | undefined, now: number): Promise<ParticipantRecord> {
 	if (participant === undefined || participant === "") {

@@ -87,6 +87,7 @@ export interface CommandSpec {
 export type PanaToolName =
 	| "pana_reply"
 	| "pana_thread_read"
+	| "pana_thread_join"
 	| "pana_thread_create"
 	| "pana_session_create"
 	| "pana_memory_search"
@@ -97,6 +98,7 @@ export type PanaToolName =
 export type PanaCommandName =
 	| "thread respond"
 	| "thread read"
+	| "thread join"
 	| "thread create"
 	| "session create"
 	| "memory search"
@@ -431,6 +433,15 @@ export const COMMANDS: readonly CommandSpec[] = [
 			text(params, "message")?.trim()
 				? { method: "GET", path: `/messages/${segment(text(params, "message"), "message")}` }
 				: { method: "GET", path: `/threads/${segment(text(params, "thread"), "thread")}` },
+	},
+	{
+		path: ["thread", "join"],
+		tool: "pana_thread_join",
+		usage: "pana thread join THREAD",
+		summary: "Join a thread you are not in, announcing the join",
+		flags: [],
+		positionals: [{ name: "THREAD", param: "thread", required: true }],
+		request: (params) => ({ method: "POST", path: `/threads/${segment(text(params, "thread"), "thread")}/join` }),
 	},
 	{
 		path: ["thread", "subject"],

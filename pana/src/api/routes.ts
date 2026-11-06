@@ -24,6 +24,7 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/threads/:id/subject", name: "threads.subject", wp: "WP7" },
 	{ method: "POST", pattern: "/threads/:id/archive", name: "threads.archive", wp: "WP2" },
 	{ method: "POST", pattern: "/threads/:id/unarchive", name: "threads.unarchive", wp: "WP2" },
+	{ method: "POST", pattern: "/threads/:id/join", name: "threads.join", wp: "WP2" },
 	{ method: "GET", pattern: "/messages/:id", name: "messages.show", wp: "WP2" },
 	{ method: "POST", pattern: "/messages/:id/read", name: "messages.markRead", wp: "WP2" },
 	{ method: "POST", pattern: "/messages/:id/revisions", name: "messages.revise", wp: "WP2" },

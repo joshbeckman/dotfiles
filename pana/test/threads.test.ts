@@ -50,6 +50,12 @@ interface ReadBody {
 	messages: MessageBody[];
 }
 
+interface JoinBody {
+	thread: ThreadBody["thread"];
+	message?: MessageBody;
+	joined: boolean;
+}
+
 interface SearchBody {
 	threads: Array<{
 		threadId: string;
@@ -422,6 +428,73 @@ describe("threads", () => {
 		expect(outsiderInbox.body.deliveries).toEqual([]);
 		expect((await t.client.get("/threads/" + t.runtime.newId(), { caller: outsider })).status).toBe(404);
 		expect((await t.client.get("/messages/" + t.runtime.newId(), { caller: outsider })).status).toBe(404);
+	});
+
+	it("THR-12 join adds a nonmember with one server-written announcement, forward-only, and lets it reply", async () => {
+		const t = await start();
+		const member = await seedSession(t);
+		const outsider = await seedSession(t);
+		const created = await createThread(t, [member], "original");
+		const threadPath = "/threads/" + created.thread.id;
+
+		// A nonmember reads but cannot reply (THR-11, THR-09), which is what join exists for.
+		const before = await t.client.get<ReadBody>(threadPath, { caller: outsider });
+		expect(before.body.thread.participants.map((p) => p.id)).not.toContain(outsider);
+		expect((await t.client.post(threadPath + "/messages", { after: created.message.id, body: "intruder" }, { caller: outsider })).status).toBe(403);
+
+		// The join writes one announcement and nothing else: no caller text can ride along.
+		const join = await t.client.post<JoinBody>(threadPath + "/join", {}, { caller: outsider });
+		expect(join.status).toBe(200);
+		expect(join.body.joined).toBe(true);
+		expect(join.body.message).toMatchObject({ body: "joined the thread", seq: 2, sender: { id: outsider } });
+		const announcement = join.body.message!.id;
+		expect(join.body.thread.participants.find((p) => p.id === outsider)?.joinedMessageId).toBe(announcement);
+		const stored = await t.runtime.db.get<{ body: string }>("SELECT body FROM messages WHERE id = ?", announcement);
+		expect(stored!.body).toBe("joined the thread");
+
+		// Everyone already there is told; the joiner is not delivered what it announced.
+		const recipients = await t.runtime.db.all<{ recipient_id: string }>(
+			"SELECT recipient_id FROM deliveries WHERE message_id = ? ORDER BY recipient_id",
+			announcement,
+		);
+		expect(recipients.map((row) => row.recipient_id)).toEqual([member, TEST_USER].sort());
+		expect(await t.runtime.db.all("SELECT * FROM deliveries WHERE recipient_id = ?", outsider)).toEqual([]);
+
+		// Forward-only: the joiner gets what comes after, not the history (THR-08's shape).
+		const reply = await t.client.post<ThreadBody>(threadPath + "/messages", { after: announcement, body: "the context I had" }, { caller: outsider });
+		expect(reply.status).toBe(200);
+		const later = await t.client.post<ThreadBody>(threadPath + "/messages", { after: reply.body.message.id, body: "welcome" }, { caller: member });
+		expect(later.status).toBe(200);
+		expect((await t.runtime.db.all<{ message_id: string }>("SELECT message_id FROM deliveries WHERE recipient_id = ?", outsider)).map((row) => row.message_id)).toEqual([later.body.message.id]);
+
+		// Joining twice is the same request twice: 200, nothing written, nothing announced.
+		const again = await t.client.post<JoinBody>(threadPath + "/join", {}, { caller: outsider });
+		expect(again.status).toBe(200);
+		expect(again.body.joined).toBe(false);
+		expect(again.body.message).toBeUndefined();
+		expect(await count(t, "messages")).toBe(4);
+
+		// A participant may archive the thread now that it is in it (REF-03).
+		expect((await t.client.post(threadPath + "/archive", {}, { caller: outsider })).status).toBe(200);
+	});
+
+	it("THR-12 join into a thread holding an archived session is refused and writes nothing", async () => {
+		const t = await start();
+		const member = await seedSession(t);
+		const outsider = await seedSession(t);
+		const created = await createThread(t, [member], "original");
+		const threadPath = "/threads/" + created.thread.id;
+		await t.client.post("/sessions/" + member + "/archive", {});
+
+		const refused = await t.client.post<JoinBody>(threadPath + "/join", {}, { caller: outsider });
+		expect(refused.status).toBe(409);
+		expect(statusToExitCode(refused.status)).toBe(3);
+		expect(await t.runtime.db.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", created.thread.id, outsider)).toBeUndefined();
+		expect(await count(t, "messages")).toBe(1);
+		expect(await t.runtime.db.all("SELECT * FROM deliveries WHERE recipient_id = ?", outsider)).toEqual([]);
+
+		// An unknown thread is 404, as every thread write is.
+		expect((await t.client.post("/threads/" + t.runtime.newId() + "/join", {}, { caller: outsider })).status).toBe(404);
 	});
 
 	it("SRC-01 a created thread gets a first-line subject, its messages search, and revisions and redactions follow", async () => {

@@ -47,6 +47,9 @@ rejects the reply with exit code 3. Read the new messages, revise, and retry. Ne
 `after`.
 
 - `pana_thread_read` reads a thread, or one message. CLI: `pana thread read THREAD`.
+- `pana_thread_join` joins a thread you can read but are not in, and tells the participants
+  already there. CLI: `pana thread join THREAD`. Replying to a thread you are not a participant
+  of is refused, so join before you reply to one you found by search.
 - `pana_reply` posts a message. CLI: `pana thread respond --thread T --after M --body B`.
 - `pana_thread_create` starts a thread. CLI: `pana thread create --to ADDRS --body B`.
 - `pana_session_create` starts a child session. CLI: `pana session create --prompt TEXT`.

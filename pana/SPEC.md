@@ -157,7 +157,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **THR-08** `--cc C` adds C as a participant. C receives this message and later ones, not earlier ones.
 - [x] **THR-09** A caller who is not a participant cannot respond (403), except the user, who may respond to any thread and becomes a participant.
 - [x] **THR-10** `thread read` returns messages in order with sender URLs, timestamps, and current revisions, and marks them read for the caller.
-- [x] **THR-11** A session may read any same-domain thread or message by reference without being a participant. Reads show current revisions and redactions, do not add participation or deliveries (including for future messages), and only mark the reader's own deliveries read. Nonmember replies remain forbidden (THR-09), and sessions cannot read another session's inbox or mark its deliveries read (INB-03). Unknown references return 404.
+- [x] **THR-11** A session may read any same-domain thread or message by reference without being a participant. Reads show current revisions and redactions, do not add participation or deliveries (including for future messages), and only mark the reader's own deliveries read. Nonmember replies remain forbidden (THR-09) until the reader joins the thread explicitly (THR-12); reading never joins. Sessions cannot read another session's inbox or mark its deliveries read (INB-03). Unknown references return 404.
+- [x] **THR-12** `thread join THREAD` (`POST /threads/:id/join`, `pana_thread_join`) adds a caller that can read the thread (THR-11) but is not a participant. The join appends exactly one message whose body is exactly `joined the thread` and takes no caller text, so a join cannot carry content into a thread the caller was not in; every participant already there receives it as an ordinary delivery (THR-02), the joiner receives none of the earlier messages, and later messages reach it, so membership is forward-only as `--cc` is (THR-08). The participant row records that message as its `joined_message_id`. A caller already in the thread gets 200 with `joined: false` and no new message. A thread holding an archived session refuses the join with 409 and writes nothing (STA-07). After joining, the caller is a participant: it may respond (THR-09 bars only non-participants), archive the thread, and is delivered and woken by later messages like any participant.
 
 ### Edits and redactions
 
@@ -262,7 +263,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Tools
 
-- [x] **TOL-01** Tools: `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake` (WAK-01).
+- [x] **TOL-01** Tools: `pana_reply`, `pana_thread_read`, `pana_thread_join`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake` (WAK-01).
 - [x] **TOL-02** Each tool calls the same API route as its CLI command, with the session as caller. For every tool, a test runs the tool and the CLI command with equal inputs and compares results.
 - [x] **TOL-03** A tool error carries the CLI exit code in `structuredOutput.exitCode`.
 - [x] **TOL-04** `pana_reply` requires `after`, as THR-03 does.

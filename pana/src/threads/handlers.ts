@@ -5,7 +5,7 @@ import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { inlineDisposition, loadFile, uploadFile } from "./files.ts";
 import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
-import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
+import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, joinThread, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
 /** FIL-07: a file's bytes never change for one id and width, so a browser may keep them. */
 export const FILES_CACHE_CONTROL = "private, max-age=604800";
@@ -83,6 +83,12 @@ export const handlers: Handlers = {
 			}),
 		};
 	},
+
+	// THR-12: joining takes no body, so a join cannot carry text into a thread the caller is not in.
+	"threads.join": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await joinThread(ctx.runtime, ctx.caller, ctx.params.id!),
+	}),
 
 	"messages.show": async (ctx): Promise<HandlerResult> => ({
 		status: 200,

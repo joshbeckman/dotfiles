@@ -23,6 +23,7 @@ import { captureExtension, contextOf, conversationOf, fakeApi, promptSections, p
 const PANA_TOOLS = [
 	"pana_reply",
 	"pana_thread_read",
+	"pana_thread_join",
 	"pana_thread_create",
 	"pana_session_create",
 	"pana_memory_search",
@@ -882,6 +883,12 @@ describe("pana tools", () => {
 				args: { message: "01MESSAGE00000000000000AAA" },
 				cli: ["thread", "read", "--message", "01MESSAGE00000000000000AAA"],
 				route: "messages.show",
+			},
+			{
+				tool: "pana_thread_join",
+				args: { thread: "01THREAD0000000000000000AA" },
+				cli: ["thread", "join", "01THREAD0000000000000000AA"],
+				route: "threads.join",
 			},
 			{
 				tool: "pana_thread_create",

@@ -43,6 +43,7 @@ export interface FakeApi {
 const ROUTES: readonly RouteName[] = [
 	"threads.respond",
 	"threads.read",
+	"threads.join",
 	"messages.show",
 	"threads.create",
 	"sessions.create",
@@ -50,7 +51,7 @@ const ROUTES: readonly RouteName[] = [
 	"memory.commit",
 ];
 
-/** A handler set for the seven routes the pana tools call, recording every request. */
+/** A handler set for the eight routes the pana tools call, recording every request. */
 export function fakeApi(responses: Record<string, { status: number; body: unknown }> = {}): FakeApi {
 	const calls: ApiCall[] = [];
 	const handlers: Handlers = {};
