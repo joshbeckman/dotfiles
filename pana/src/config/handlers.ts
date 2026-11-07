@@ -6,7 +6,13 @@ import { ApiError } from "../api/errors.ts";
 import type { Handlers, RequestContext } from "../api/types.ts";
 import { ConfigError, parseConfig } from "./index.ts";
 import { publish } from "../web/events.ts";
-import { readSourceRevision } from "./source.ts";
+import { cachedSourceRevision } from "./source.ts";
+
+/** How long a restart acknowledgement has to leave the socket before the daemon re-execs. */
+const RESTART_DELAY_MS = 250;
+
+/** The file a restart hands the process it starts: the validated configuration it will run. */
+const RESTART_SNAPSHOT = "config.restart.json";
 
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 function userOnly(ctx: RequestContext) {
@@ -26,7 +32,7 @@ function snapshot(ctx: RequestContext) {
 	return {
 		config, configText: text, configValidationError, configPath, configRevision: digest(text),
 		configRequiresRestart,
-		source: readSourceRevision(),
+		source: cachedSourceRevision(),
 		processes: [{ role: "panad", pid: process.pid, startedAt: ctx.runtime.processInfo?.startedAt ?? null,
 			running: ctx.runtime.processInfo?.running ?? null }],
 		restartAvailable: !!ctx.runtime.processInfo?.requestRestart,
@@ -77,12 +83,29 @@ export const handlers: Handlers = {
 		userOnly(ctx);
 		const restart = ctx.runtime.processInfo?.requestRestart;
 		if (!restart) throw ApiError.notImplemented("this panad cannot restart itself; use its service manager");
-		// Validate the on-disk config first: do not stop a healthy process for invalid config.
-		try { parseConfig(JSON.parse(readFileSync(join(ctx.runtime.paths.dir, "config.json"), "utf8"))); }
+		// Validate the exact text the restarted process will read, then hand it that file: validating
+		// config.json and re-reading it at execve would let a swapped file defeat the check and loop
+		// restarts.
+		const path = join(ctx.runtime.paths.dir, "config.json");
+		const text = readFileSync(path, "utf8");
+		try { parseConfig(JSON.parse(text)); }
 		catch (error) { throw ApiError.badRequest("invalid_config", `Cannot restart: ${(error as Error).message}`); }
-		return { status: 202, headers: { "content-type": "application/json" }, stream: (res) => {
-			res.once("finish", restart);
-			res.end(JSON.stringify({ restarting: true }));
-		} };
+		const snapshot = join(ctx.runtime.paths.dir, RESTART_SNAPSHOT);
+		writeSnapshot(snapshot, text);
+		// Answer first, then restart whether or not the caller stays to read the acknowledgement:
+		// a client that disconnects must not leave the old configuration running.
+		setTimeout(() => restart(snapshot), RESTART_DELAY_MS);
+		return { status: 202, headers: { "content-type": "application/json" }, body: { restarting: true } };
 	},
 };
+
+/** Write a sibling then rename, so the re-exec never sees a partial snapshot. */
+function writeSnapshot(path: string, text: string): void {
+	const temporary = `${path}.${randomUUID()}.tmp`;
+	try {
+		writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+		renameSync(temporary, path);
+	} finally {
+		try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+	}
+}
