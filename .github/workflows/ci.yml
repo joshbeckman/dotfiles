@@ -8,6 +8,9 @@ on:
     - cron: '17 8 * * 1'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,13 +25,38 @@ jobs:
       skills: ${{ steps.select.outputs.skills }}
       pana: ${{ steps.select.outputs.pana }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       # Route before allocating macOS runners. Missing history fails open to full
       # coverage; scheduled/manual runs deliberately exercise every suite.
+      # The three outputs decide whether every other job runs, so run the router
+      # from the base commit, never from the pull request's own checkout: a PR
+      # could otherwise rewrite the router (or the manifest it reads) to skip
+      # every suite and go green. `-I` keeps the PR's tree off sys.path.
       - id: select
-        run: python3 .github/scripts/select-ci.py
+        env:
+          ROUTER_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        run: |
+          set -euo pipefail
+          router="${RUNNER_TEMP}/select-ci.py"
+          git show "${ROUTER_REF}:.github/scripts/select-ci.py" > "${router}"
+          python3 -I "${router}"
+      # Fail closed: outputs that never arrived would skip every suite and pass.
+      - name: Require every selection output
+        env:
+          REPO: ${{ steps.select.outputs.repo }}
+          SKILLS: ${{ steps.select.outputs.skills }}
+          PANA: ${{ steps.select.outputs.pana }}
+        run: |
+          set -euo pipefail
+          for name in REPO SKILLS PANA; do
+            case "${!name}" in
+              true|false) ;;
+              *) echo "::error::${name} was not a boolean; refusing to skip every suite" >&2; exit 1 ;;
+            esac
+          done
 
   skills:
     name: skill checks
@@ -37,7 +65,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - run: bin/run-tests agent-skills pana-skills
 
   repo-tests:
@@ -51,8 +81,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Install tools (macOS)
@@ -70,7 +102,7 @@ jobs:
           RUN_TESTS_LOGS: ${{ runner.temp }}/test-logs
       - name: Keep test logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-logs-${{ matrix.os }}
           path: ${{ runner.temp }}/test-logs
@@ -86,8 +118,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
