@@ -21,6 +21,9 @@ async function shot(name: string, open: boolean): Promise<void> {
 	await evaluatePage(`
 		location.hash = "#/threads/${seeded.group.threadId}";
 		await until(() => document.querySelectorAll("#thread-messages [data-testid=message] time.when").length >= 3);
+		// A reading left open by the previous shot would make this click close it instead.
+		if (document.querySelector("[data-testid=when-detail]")) document.getElementById("thread-subject").click();
+		await sleep(100);
 		const time = document.querySelector("#thread-messages [data-testid=message] time.when");
 		// A run against the old app.js has no reading to open, so it shows the time as it was.
 		if (${open}) time.click();
