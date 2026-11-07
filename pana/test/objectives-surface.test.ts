@@ -207,7 +207,8 @@ it("OBJ-31 an artifact is an uploaded file plus a link, and unlinking never dele
 	const added = await runCli(["objective", "artifact", "add", url, source]);
 	expect(added.code, added.stderr).toBe(0);
 	const artifact = (JSON.parse(added.stdout) as { artifact: ObjectiveArtifactView }).artifact;
-	expect(artifact).toMatchObject({ name: "audit.csv", mediaType: "text/csv", size: Buffer.byteLength(bytes) });
+	// FIL-04: a type comes from the bytes, so a CSV is an opaque attachment.
+	expect(artifact).toMatchObject({ name: "audit.csv", mediaType: "application/octet-stream", size: Buffer.byteLength(bytes) });
 	expect(artifact.url).toBe(`pana://test.example/files/${artifact.id}/audit.csv`);
 	// FIL-01..FIL-07 unchanged: the bytes are an ordinary uploaded file.
 	const file = await t!.runtime.db.get<{ name: string; path: string; size: number }>("SELECT name, path, size FROM files WHERE id = ?", artifact.id);

@@ -21,8 +21,6 @@ export interface FileUploader {
 
 export interface UploadInput {
 	name?: unknown;
-	/** The request's content-type, or null. */
-	mediaType?: string | null;
 	bytes: Uint8Array;
 	uploader: FileUploader;
 }
@@ -38,30 +36,39 @@ export interface FileView {
 	createdAt: number;
 }
 
-const EXTENSION_TYPES: Record<string, string> = {
-	png: "image/png",
-	jpg: "image/jpeg",
-	jpeg: "image/jpeg",
-	gif: "image/gif",
-	webp: "image/webp",
-	avif: "image/avif",
-	svg: "image/svg+xml",
-	pdf: "application/pdf",
-	txt: "text/plain",
-	md: "text/markdown",
-	json: "application/json",
-	csv: "text/csv",
-	mp4: "video/mp4",
-	webm: "video/webm",
-	mp3: "audio/mpeg",
-};
+/**
+ * The types a browser decodes into pixels and never into a document, so each may be served
+ * inline. `image/svg+xml` is deliberately absent: it is an XML document, and a browser that
+ * opens one runs the script inside it, exactly as it would for HTML.
+ */
+export const INLINE_MEDIA_TYPES: ReadonlySet<string> = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+	"image/avif",
+]);
 
-/** A media type from the client, or from the extension, or the generic binary type. */
-export function mediaTypeFor(name: string, header?: string | null): string {
-	const fromHeader = header?.split(";")[0]?.trim().toLowerCase();
-	if (fromHeader && fromHeader !== "application/octet-stream") return fromHeader;
-	const extension = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-	return EXTENSION_TYPES[extension] ?? "application/octet-stream";
+function hasSignature(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
+	if (bytes.length < offset + signature.length) return false;
+	return signature.every((byte, index) => bytes[offset + index] === byte);
+}
+
+/**
+ * The media type the bytes themselves declare, or null. Only magic numbers, never the upload's
+ * `content-type` header or the file name: a name is a claim, and a caller that controls the
+ * header could otherwise store an HTML document as a picture.
+ */
+export function sniffMediaType(bytes: Uint8Array): string | null {
+	if (hasSignature(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+	if (hasSignature(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg";
+	// `GIF87a` and `GIF89a`.
+	if (hasSignature(bytes, [0x47, 0x49, 0x46, 0x38])) return "image/gif";
+	// `RIFF....WEBP`.
+	if (hasSignature(bytes, [0x52, 0x49, 0x46, 0x46]) && hasSignature(bytes, [0x57, 0x45, 0x42, 0x50], 8)) return "image/webp";
+	// ISO-BMFF: a length, then `ftyp`, then the brand (`avif`, or `avis` for a sequence).
+	if (hasSignature(bytes, [0x66, 0x74, 0x79, 0x70], 4) && (hasSignature(bytes, [0x61, 0x76, 0x69, 0x66], 8) || hasSignature(bytes, [0x61, 0x76, 0x69, 0x73], 8))) return "image/avif";
+	return null;
 }
 
 /** A bare file name: no directories, no `..`, never empty. */
@@ -117,7 +124,7 @@ export async function uploadFile(runtime: Runtime, input: UploadInput): Promise<
 		name,
 		path: join("files", id, name),
 		size: input.bytes.byteLength,
-		media_type: mediaTypeFor(name, input.mediaType),
+		media_type: sniffMediaType(input.bytes) ?? "application/octet-stream",
 		uploader_id: input.uploader.id,
 		created_at: runtime.clock.now(),
 	};
@@ -163,7 +170,11 @@ export interface LoadedFile {
 	mediaType: string;
 }
 
-/** FIL-04: recorded bytes and media type. A wrong or unusable name is a 404. */
+/**
+ * FIL-04: recorded bytes and media type. A wrong or unusable name is a 404. The type that comes
+ * back is the one the bytes declared at upload; the route sniffs the bytes again before it says
+ * how a browser may treat them, so a record written by an older pana is no liability.
+ */
 export async function loadFile(runtime: Runtime, id: string, requestedName: string): Promise<LoadedFile> {
 	let name: string;
 	try {
@@ -204,10 +215,20 @@ export function appendAttachmentMarkdown(
 }
 
 /** RFC 6266/8187: HTTP headers need ASCII; filename* preserves the UTF-8 name. */
-export function inlineDisposition(name: string): string {
+function disposition(kind: "inline" | "attachment", name: string): string {
 	const fallback = name.replace(/[^\x20-\x7e]|["\\%]/g, "_");
 	const encoded = encodeURIComponent(name).replace(/[!'()*]/g, (character) =>
 		`%${character.charCodeAt(0).toString(16).toUpperCase()}`,
 	);
-	return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+	return `${kind}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+/** FIL-04: a browser may show the bytes in the tab, as for a picture in a thread. */
+export function inlineDisposition(name: string): string {
+	return disposition("inline", name);
+}
+
+/** FIL-04: anything pana will not render itself is a download, never a page on its origin. */
+export function attachmentDisposition(name: string): string {
+	return disposition("attachment", name);
 }
