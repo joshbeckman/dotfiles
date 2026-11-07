@@ -190,8 +190,12 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 
 function parseJsonBody(req: IncomingMessage, raw: Buffer): unknown {
 	if (raw.length === 0) return undefined;
+	// Only a body the caller labels JSON is parsed as JSON. A missing `content-type` is not a
+	// claim of one: the PWA uploads a file as raw bytes through `fetch`, which sends no header,
+	// and parsing those bytes as JSON would reject every browser attachment before its route
+	// ran (400 `invalid_json`, `route: null` in the log).
 	const type = String(req.headers["content-type"] ?? "");
-	if (type && !type.includes("application/json")) return undefined;
+	if (!type.includes("application/json")) return undefined;
 	try {
 		return JSON.parse(raw.toString("utf8"));
 	} catch {
