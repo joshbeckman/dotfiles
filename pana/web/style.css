@@ -605,6 +605,58 @@ a.button.quiet:hover,
 	text-decoration-color: currentColor;
 }
 
+/* UX-21: a time is a control — a click reveals the exact timestamp and how long ago it was. It
+   keeps the quiet look of metadata until it is hovered or focused, and the reading is a bubble
+   anchored to it, so a narrow column keeps its width (UX-20) and the row never reflows. */
+.when {
+	position: relative;
+	cursor: pointer;
+	text-decoration: underline dotted transparent;
+	text-underline-offset: 0.2em;
+}
+.when:hover,
+.when:focus-visible,
+.when.revealed {
+	text-decoration-color: currentColor;
+}
+.when:focus-visible {
+	outline: 2px solid var(--c-link);
+	outline-offset: 2px;
+	border-radius: 2px;
+}
+.when-detail {
+	position: absolute;
+	top: calc(100% + var(--s1));
+	left: 0;
+	z-index: 5;
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	width: max-content;
+	max-width: min(22rem, calc(100vw - 1rem));
+	padding: var(--s2) var(--s3);
+	border: 1px solid var(--c-text);
+	border-radius: var(--radius);
+	background: var(--c-bg);
+	box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+	font-family: var(--font-sans);
+	font-size: 0.8rem;
+	font-weight: 400;
+	line-height: 1.35;
+	letter-spacing: normal;
+	text-align: left;
+	text-transform: none;
+	white-space: normal;
+	cursor: auto;
+}
+.when-detail .when-exact {
+	color: var(--c-text);
+	font-variant-numeric: tabular-nums;
+}
+.when-detail .when-relative {
+	color: var(--c-text-alt);
+}
+
 /* ---- Lists ------------------------------------------------------------------------------- */
 .list {
 	display: flex;

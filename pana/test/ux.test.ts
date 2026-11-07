@@ -16,7 +16,7 @@ import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 import { createKeyReader, helpRows, INPUT_KEYMAP, isApplePlatform, isSubmitChord, isTextInput, KEYMAP, moveSelection, sequenceLabel } from "../web/keys.js";
 import { COMMANDS, fuzzyScore, HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits, rankBy } from "../web/palette.js";
 import { browserEnv, explainPush, isIpHost, subscribeToPush, urlBase64ToUint8Array } from "../web/push.js";
-import { inboxThreadRow, isWorking, PALETTE, participantColor, participantPattern, SESSION_PATTERNS, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE, SESSION_COLOR_ORDERS, threadRow, untilLabel, workingOf } from "../web/views.js";
+import { exactTime, inboxThreadRow, isWorking, PALETTE, participantColor, participantPattern, relativeTime, SESSION_PATTERNS, refLabel, scheduledOf, SESSION_COLORS, SESSION_PALETTE, SESSION_DARK_PALETTE, SESSION_TEXT_PALETTE, SESSION_COLOR_ORDERS, threadRow, untilLabel, workingOf } from "../web/views.js";
 
 it("enables inherited font disambiguation throughout the UI", () => {
 	const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
@@ -1018,5 +1018,53 @@ describe("UX-09 working indicators", () => {
 		const css = readFileSync(new URL("../web/style.css", import.meta.url), "utf8");
 		expect(css).toMatch(/\.list-header\.thread-columns \{[^}]*justify-content: end/);
 		expect(css).toMatch(/@media \(max-width: 40rem\) \{[\s\S]*?\.list-header\.thread-columns \{[^}]*display: none[\s\S]*?content: " " attr\(data-unit\)[\s\S]*?content: attr\(data-label\) " "/);
+	});
+});
+
+describe("UX-21 a time reveals its exact timestamp and how long ago it was", () => {
+	const now = Date.UTC(2026, 0, 5, 12, 0, 0);
+
+	it("UX-21 relativeTime names one rounded unit in words, either side of now", () => {
+		expect(relativeTime(now - 5_000, now)).toBe("just now");
+		expect(relativeTime(now + 5_000, now)).toBe("in a moment");
+		// Each unit is chosen from the distance, so a fresh time never reads as "0 minutes ago".
+		expect(relativeTime(now - 60_000, now)).toBe("a minute ago");
+		expect(relativeTime(now + 60_000, now)).toBe("in a minute");
+		expect(relativeTime(now - 5 * 60_000, now)).toBe("5 minutes ago");
+		expect(relativeTime(now - 61 * 60_000, now)).toBe("an hour ago");
+		expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3 hours ago");
+		expect(relativeTime(now + 3 * 3_600_000, now)).toBe("in 3 hours");
+		expect(relativeTime(now - 3 * 86_400_000, now)).toBe("3 days ago");
+		expect(relativeTime(now + 30 * 86_400_000, now)).toBe("in a month");
+		expect(relativeTime(now - 45 * 86_400_000, now)).toBe("2 months ago");
+		expect(relativeTime(now - 400 * 86_400_000, now)).toBe("a year ago");
+		expect(relativeTime(now - 900 * 86_400_000, now)).toBe("2 years ago");
+		expect(relativeTime(Number.NaN, now)).toBe("");
+		expect(relativeTime(now, Number.NaN)).toBe("");
+	});
+
+	it("UX-21 exactTime carries the seconds and the zone, so two times in one minute differ", () => {
+		const first = exactTime(now);
+		const second = exactTime(now + 7_000);
+		// Seconds, which the short form drops, are what tells two nearby times apart.
+		expect(first).not.toBe(second);
+		expect(first).toContain(":00:00");
+		expect(second).toContain(":00:07");
+		expect(first).toMatch(/2026/);
+		// The text the browser parses back is the same second the server sent.
+		expect(Math.abs(Date.parse(first) - now)).toBeLessThan(1000);
+		expect(exactTime("nonsense")).toBe("nonsense");
+	});
+
+	it("UX-21 every time the PWA draws is the one control that reveals it", () => {
+		const app = readFileSync(new URL("../web/app.js", import.meta.url), "utf8");
+		// One implementation: a hand-built `<time>` would quietly lose the reveal.
+		expect(app.match(/document\.createElement\("time"\)/g)).toHaveLength(1);
+		expect(app).toContain('node.setAttribute("role", "button")');
+		expect(app).toContain('bubble.dataset.testid = "when-detail"');
+		// The reading counts against panad's clock, like every other time in the app (UX-09).
+		expect(app).toContain("relativeTime(at, serverNow())");
+		// A time inside a clickable row is a control, not the row's own action.
+		expect(app).toContain('closest?.("a, button, [role=\'button\']")');
 	});
 });

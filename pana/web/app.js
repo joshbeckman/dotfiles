@@ -40,6 +40,7 @@ import {
 	elapsedLabel,
 	entryRaw,
 	entryView,
+	exactTime,
 	inboxThreadRow,
 	isWorking,
 	liveActivityLabel,
@@ -57,6 +58,7 @@ import {
 	participantColor,
 	participantPattern,
 	refLabel,
+	relativeTime,
 	scheduleBody,
 	scheduleCheckView,
 	scheduleWhen,
@@ -745,8 +747,8 @@ function item(title, meta, onClick, extra = {}) {
 		row.append(actions);
 	}
 	row.addEventListener("click", (event) => {
-		// A link or an action inside the row does its own thing.
-		if (event.target?.closest?.("a, button")) return;
+		// A link, an action, or a control that declares itself one inside the row does its own thing.
+		if (event.target?.closest?.("a, button, [role='button']")) return;
 		onClick(event);
 	});
 	return row;
@@ -849,14 +851,103 @@ function when(value) {
 	return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
-function timeEl(value) {
+/**
+ * UX-21: a time shows its short form, and a click reveals the exact timestamp and how long ago it
+ * was in a small bubble anchored to it. The reading is measured against panad's clock and keeps
+ * counting while the bubble is open, and the bubble is built when opened and removed when closed,
+ * so a page of times carries no hidden readings and a thread left open holds no stale age. It is
+ * anchored rather than swapped in place because a time is also a narrow list column (UX-20),
+ * where the exact reading would otherwise push its neighbours off the row. `label` names the time
+ * for a reader who listens, where a column header would otherwise do it.
+ */
+function timeEl(value, { label = "" } = {}) {
 	const node = document.createElement("time");
 	node.className = "when";
-	node.textContent = shortTime(value);
-	node.title = when(value);
-	const date = new Date(Number(value));
+	const at = Number(value);
+	const date = new Date(at);
+	const short = shortTime(value);
+	const exact = Number.isNaN(date.getTime()) ? String(value ?? "") : exactTime(at);
+	const name = (text) => (label ? `${label}: ${text}` : text);
+	node.textContent = short;
+	node.title = exact;
 	if (!Number.isNaN(date.getTime())) node.dateTime = date.toISOString();
+	if (label) node.setAttribute("aria-label", name(short));
+	// Only a reading this browser could place is worth revealing.
+	if (Number.isNaN(date.getTime())) return node;
+
+	let bubble;
+	function close() {
+		bubble?.remove();
+		bubble = undefined;
+		node.setAttribute("aria-expanded", "false");
+		node.classList.remove("revealed");
+		if (label) node.setAttribute("aria-label", name(short));
+		if (openTime?.node === node) openTime = undefined;
+	}
+	function open() {
+		closeTime(node);
+		bubble = span("", "when-detail");
+		bubble.dataset.testid = "when-detail";
+		const age = span("", "when-relative");
+		bubble.append(span(exact, "when-exact"), age);
+		// The shared ticker keeps the age counting; it stops when the bubble leaves the page.
+		bubble.dataset.ticking = "true";
+		bubble.__render = () => {
+			age.textContent = relativeTime(at, serverNow());
+		};
+		bubble.__render();
+		// Reading or selecting the bubble is not a click on the time that opened it.
+		bubble.addEventListener("click", (event) => event.stopPropagation());
+		node.append(bubble);
+		placeDetail(node, bubble);
+		node.setAttribute("aria-expanded", "true");
+		node.classList.add("revealed");
+		if (label) node.setAttribute("aria-label", name(`${exact}, ${age.textContent}`));
+		openTime = { node, close };
+	}
+
+	node.tabIndex = 0;
+	node.setAttribute("role", "button");
+	node.setAttribute("aria-expanded", "false");
+	// A click on the time is the reveal, not the row's own action (inbox and thread lists).
+	node.addEventListener("click", (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		if (bubble) close();
+		else open();
+	});
+	node.addEventListener("keydown", (event) => {
+		if (event.key !== "Enter" && event.key !== " ") return;
+		event.preventDefault();
+		node.click();
+	});
 	return node;
+}
+
+/** UX-21: the time whose reading is showing, with the way to put it away. */
+let openTime;
+
+/** Close the open reading unless it belongs to `except`, so one reading shows at a time. */
+function closeTime(except) {
+	if (!openTime || openTime.node === except) return;
+	const { close } = openTime;
+	close();
+}
+
+/**
+ * UX-21: keep a reading on screen. A time at the right edge opens leftward, a time near the foot
+ * of a phone opens upward, and neither ever widens the page (MOB-01).
+ */
+function placeDetail(node, bubble) {
+	const margin = 8;
+	const anchor = node.getBoundingClientRect();
+	const box = bubble.getBoundingClientRect();
+	const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - margin - box.width));
+	bubble.style.left = `${left - anchor.left}px`;
+	if (anchor.bottom + box.height + margin > window.innerHeight && anchor.top - box.height - margin > 0) {
+		bubble.style.top = "auto";
+		bubble.style.bottom = "calc(100% + var(--s1))";
+	}
 }
 
 function empty(container, text) {
@@ -1438,11 +1529,10 @@ function threadColumns(thread) {
 			cells.push(span("", "column-when"));
 			continue;
 		}
-		const when = timeEl(at);
-		when.dataset.testid = `thread-${label}`;
-		when.dataset.label = label;
-		when.setAttribute("aria-label", name);
-		cells.push(when);
+		const cell = timeEl(at, { label: name });
+		cell.dataset.testid = `thread-${label}`;
+		cell.dataset.label = label;
+		cells.push(cell);
 	}
 	return cells;
 }
@@ -1960,10 +2050,7 @@ function renderSessionWakes() {
 	for (const wake of wakes) {
 		const row = document.createElement("li");
 		row.append(refLink(wake.url, "schedule", wake.subject || "Untitled wake"), " · ");
-		const time = document.createElement("time");
-		time.dateTime = new Date(wake.nextAt).toISOString();
-		time.textContent = when(wake.nextAt);
-		row.append(time);
+		row.append(timeEl(wake.nextAt, { label: "next wake" }));
 		if (wake.cron) row.append(span(` · recurring (${wake.cron})`, "hint"));
 		list.append(row);
 	}
@@ -3374,11 +3461,7 @@ function renderObjectiveWakes() {
 		row.dataset.testid = "objective-wake";
 		row.append(refLink(wake.url, "schedule", wake.subject || "Untitled wake"), " · ");
 		row.append(refLink(wake.sessionUrl, "session", `wakes ${wake.sessionId.slice(-6)}`), " · ");
-		const time = document.createElement("time");
-		time.dateTime = new Date(wake.at).toISOString();
-		time.textContent = when(wake.at);
-		time.title = untilLabel(wake.at, serverNow());
-		row.append(time);
+		row.append(timeEl(wake.at, { label: "next wake" }));
 		if (wake.cron) row.append(span(` · recurring (${wake.cron})`, "hint"));
 		list.append(row);
 	}
@@ -4158,11 +4241,18 @@ function runKey(action, { target, form }) {
 
 function onKeydown(event) {
 	if (event.defaultPrevented || event.isComposing) return;
+	// UX-21: Escape puts an open reading away, rather than leaving the page behind it.
+	if (event.key === "Escape" && openTime) {
+		event.preventDefault();
+		openTime.node.focus();
+		closeTime();
+		return;
+	}
 	const target = event.target instanceof Element ? event.target : document.activeElement;
 	const inInput = isTextInput(target);
 	const form = target?.closest?.("form") ?? null;
-	// A focused button, link, or summary keeps its own Enter.
-	if (!inInput && event.key === "Enter" && !isSubmitChord(event, APPLE) && target?.closest?.("button, a, summary")) return;
+	// A focused button, link, summary, or control that declares itself a button keeps its own Enter.
+	if (!inInput && event.key === "Enter" && !isSubmitChord(event, APPLE) && target?.closest?.("button, a, summary, [role='button']")) return;
 	const action = keys.press(event, { inInput, inForm: Boolean(form), apple: APPLE });
 	if (!action) return;
 	event.preventDefault();
@@ -4467,6 +4557,8 @@ document.addEventListener("focusin", (event) => {
 document.addEventListener("click", (event) => {
 	// A click that is not on a message's actions closes whichever one is open.
 	if (!event.target?.closest?.(".message-menu")) closeMessageMenus();
+	// A time's reading closes with a click anywhere else, or on another time.
+	if (!event.target?.closest?.(".when")) closeTime();
 	// A view header's folded controls work the same way: open one, click anywhere else, it closes.
 	if (!event.target?.closest?.(".header-menu")) closeHeaderMenus();
 	const action = event.target?.closest?.("[data-action]")?.dataset.action;

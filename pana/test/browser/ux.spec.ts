@@ -8,7 +8,7 @@ import { sessionRuntime } from "../../src/sessions/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { INPUT_KEYMAP, KEYMAP } from "../../web/keys.js";
-import { PALETTE, SESSION_PALETTE, SESSION_TEXT_PALETTE, participantColor, participantPattern, refLabel } from "../../web/views.js";
+import { exactTime, PALETTE, relativeTime, SESSION_PALETTE, SESSION_TEXT_PALETTE, participantColor, participantPattern, refLabel, shortTime } from "../../web/views.js";
 import type { TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, emulateColorScheme, screenshot, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
@@ -733,8 +733,9 @@ describeBrowser("pana usability in a browser", () => {
 			expect(row.counts).toEqual([api.messageCount, api.participantCount]);
 			// The words a row does not draw are still there for a reader who hovers or listens.
 			expect(row.countLabels).toEqual([plural(api.messageCount, "message"), plural(api.participantCount, "participant")]);
-			// Each time is the value the server sent under that column, not one field drawn twice.
-			expect(row.titles).toEqual([new Date(api.createdAt).toLocaleString(), new Date(api.lastMessageAt).toLocaleString()]);
+			// Each time is the value the server sent under that column, not one field drawn twice, and
+			// its hover carries the exact reading a click reveals (UX-21).
+			expect(row.titles).toEqual([exactTime(api.createdAt), exactTime(api.lastMessageAt)]);
 			// No row repeats a column label or a unit word: that is the whole point of the header.
 			for (const word of ["message", "participant", "created", "last"]) expect(row.text.toLowerCase(), word).not.toContain(word);
 		}
@@ -1144,5 +1145,145 @@ describeBrowser("pana usability in a browser", () => {
 		// Deleting the wake clears the footer again, live.
 		await t.client.delete(`/schedules/${made.body.schedule.id}`);
 		await settle(t, () => evaluatePage<boolean>(`return document.getElementById("thread-working").hidden;`), "the chip to clear");
+	});
+});
+
+describe("UX-21 a time reveals its exact timestamp and how long ago it was", () => {
+	it("UX-21 clicking a time opens its exact timestamp and age, one at a time, and closes it again", async () => {
+		seeded = await seedDomain();
+		const { t } = seeded;
+		const origin = loopbackOrigin(t.panad.tcpPort!);
+		page = await newPage(`${origin}/#${t.panad.webToken}`);
+		const threadId = seeded.capital.threadId;
+		const thread = await t.client.get<{ messages: Array<{ id: string; createdAt: number }> }>(`/threads/${threadId}`);
+		const [first, second] = thread.body.messages;
+		if (!first || !second) throw new Error("the seeded thread needs two messages");
+
+		// Every age is measured against panad's clock, which the window learns from a live event's
+		// `at` (UX-09); a notice is the cheapest way to say now. The test clock is January and this
+		// machine's is not, so a reading taken from the browser's own clock would be months out.
+		const before = await evaluatePage<string>(`return document.getElementById("nav-inbox-count")?.getAttribute("aria-label") ?? "";`);
+		await postNotice(t.runtime, { body: "A notice that sets the clock" });
+		await evaluatePage<boolean>(`
+			await until(() => (document.getElementById("nav-inbox-count")?.getAttribute("aria-label") ?? "") !== ${JSON.stringify(before)});
+			return true;
+		`);
+		const now = t.clock.now();
+
+		interface Shown {
+			short: string;
+			exact: string;
+			relative: string;
+			expanded: string;
+			ticking: boolean;
+			overflow: number;
+			open: number;
+		}
+		const opened = await evaluatePage<Shown>(`
+			location.hash = "#/threads/${threadId}";
+			await until(() => document.querySelectorAll("[data-testid=message] time.when").length >= 2);
+			const time = document.querySelector("[data-testid=message] time.when");
+			const short = time.textContent;
+			time.click();
+			await until(() => time.querySelector("[data-testid=when-detail]"));
+			const detail = time.querySelector("[data-testid=when-detail]");
+			return {
+				short,
+				exact: detail.querySelector(".when-exact").textContent,
+				relative: detail.querySelector(".when-relative").textContent,
+				expanded: time.getAttribute("aria-expanded"),
+				ticking: detail.dataset.ticking === "true",
+				overflow: Math.max(...[...document.querySelectorAll("body *")].map((el) => el.getBoundingClientRect().right)) - innerWidth,
+				open: document.querySelectorAll("[data-testid=when-detail]").length,
+			};
+		`);
+		// The short form is what the row showed before the click, and the reading says both things.
+		expect(opened.short).toBe(shortTime(first.createdAt));
+		expect(Math.abs(Date.parse(opened.exact) - first.createdAt)).toBeLessThan(1000);
+		// The age is panad's, to the minute the ladder rounds to, not this device's clock.
+		expect([relativeTime(first.createdAt, now), relativeTime(first.createdAt, now + 60_000)]).toContain(opened.relative);
+		expect(opened.relative).toMatch(/ ago$/);
+		expect(opened.expanded).toBe("true");
+		expect(opened.ticking).toBe(true);
+		expect(opened.open).toBe(1);
+		// The reading floats over the page; it never widens it (MOB-01).
+		expect(opened.overflow).toBeLessThan(1);
+
+		// One at a time: another time's click closes the first and opens its own.
+		const second_ = await evaluatePage<{ open: number; secondAge: string; firstExpanded: string }>(`
+			const times = [...document.querySelectorAll("[data-testid=message] time.when")];
+			times[1].click();
+			await until(() => times[1].querySelector("[data-testid=when-detail]"));
+			return {
+				open: document.querySelectorAll("[data-testid=when-detail]").length,
+				secondAge: times[1].querySelector(".when-relative").textContent,
+				firstExpanded: times[0].getAttribute("aria-expanded"),
+			};
+		`);
+		expect(second_).toMatchObject({ open: 1, firstExpanded: "false" });
+		expect(second_.secondAge).toMatch(/ago$/);
+
+		// A click elsewhere closes it; a click on the time again puts the short form back.
+		const closed = await evaluatePage<{ outside: number; again: number; expanded: string; text: string }>(`
+			const time = document.querySelector("[data-testid=message] time.when");
+			document.getElementById("thread-subject").click();
+			await until(() => document.querySelectorAll("[data-testid=when-detail]").length === 0);
+			const outside = document.querySelectorAll("[data-testid=when-detail]").length;
+			time.click();
+			await until(() => time.querySelector("[data-testid=when-detail]"));
+			time.click();
+			await until(() => !time.querySelector("[data-testid=when-detail]"));
+			return {
+				outside,
+				again: document.querySelectorAll("[data-testid=when-detail]").length,
+				expanded: time.getAttribute("aria-expanded"),
+				text: time.textContent,
+			};
+		`);
+		expect(closed).toMatchObject({ outside: 0, again: 0, expanded: "false", text: shortTime(first.createdAt) });
+
+		// Escape puts the reading away instead of leaving the thread.
+		const escaped = await evaluatePage<{ hash: string; open: number }>(`
+			const time = document.querySelector("[data-testid=message] time.when");
+			time.focus();
+			time.click();
+			await until(() => time.querySelector("[data-testid=when-detail]"));
+			document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+			await until(() => !time.querySelector("[data-testid=when-detail]"));
+			return { hash: location.hash, open: document.querySelectorAll("[data-testid=when-detail]").length };
+		`);
+		expect(escaped).toEqual({ hash: `#/threads/${threadId}`, open: 0 });
+
+		// An inbox row opens its thread, but its own time is a control, not the row's action.
+		const inbox = await evaluatePage<{ hash: string; open: number; label: string }>(`
+			location.hash = "#/inbox";
+			await until(() => document.querySelectorAll("#inbox-list .item time.when").length >= 1);
+			const hash = location.hash;
+			const time = document.querySelector("#inbox-list .item time.when");
+			time.click();
+			await until(() => time.querySelector("[data-testid=when-detail]"));
+			return { hash: location.hash, open: document.querySelectorAll("[data-testid=when-detail]").length, label: time.textContent };
+		`);
+		expect(inbox.hash).toBe("#/inbox");
+		expect(inbox.open).toBe(1);
+
+		// The threads list's created and last-message columns reveal in place, without reflowing.
+		const columns = await evaluatePage<{ widths: string[]; open: number; label: string }>(`
+			location.hash = "#/threads";
+			await until(() => document.querySelectorAll("#threads-list .item time.when").length >= 2);
+			const row = document.querySelector("#threads-list .item");
+			const before = [...row.querySelectorAll("time.when")].map((time) => time.getBoundingClientRect().width);
+			row.querySelector("[data-testid=thread-created]").click();
+			await until(() => row.querySelector("[data-testid=when-detail]"));
+			return {
+				widths: [...row.querySelectorAll("time.when")].map((time) => time.getBoundingClientRect().width).map((w, i) => String(w === before[i])),
+				open: document.querySelectorAll("[data-testid=when-detail]").length,
+				label: row.querySelector("[data-testid=thread-created]").getAttribute("aria-label"),
+			};
+		`);
+		expect(columns.widths).toEqual(["true", "true"]);
+		expect(columns.open).toBe(1);
+		// The reading is named for the column it stands under, because there the header is far away.
+		expect(columns.label).toMatch(/^created: /);
 	});
 });

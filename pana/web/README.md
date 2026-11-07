@@ -137,6 +137,31 @@ npm run test:web -- test/browser/objectives.spec.ts
 node test/browser/objective-shots.ts DIR LABEL   # list and view, desktop and phone, light and dark
 ```
 
+### Times
+
+Every time the app draws — a message's, an inbox row's, a thread's created and last-message cells,
+a session's, a memory commit's, a scheduled wake's — is one `<time class="when">` built by `timeEl()`
+in `app.js`, so all of them behave the same way (UX-21). It shows the short form `shortTime()` picks
+(the clock today, the month and day this year, the full date before) and a click reveals the exact
+timestamp from `exactTime()` — seconds and zone included, which is what tells two times in one
+minute apart — with `relativeTime()`'s words under it ("3 hours ago", "in 2 days"). An invalid time
+stays plain text rather than offering a reading it cannot give.
+
+The reading is a bubble anchored to the time, not a swap in place: a time is also a narrow fixed
+column in the threads list, where a longer string would push its neighbours off the row. It opens
+leftward near the right edge and upward near the foot of a phone, so it never widens the page, and
+one `openTime` at a time: another time, a click elsewhere, or Escape closes it. It is measured
+against panad's clock (`serverNow()`, from the last event's `at`, as scheduled times are) and keeps
+counting on the shared one-second ticker while it is open, so a thread left open holds no stale age.
+A click on a time stops where it is: a time inside an inbox or threads row is the control, not the
+row's own action. `label` names the time for a reader who listens ("created: Jan 5, 9:02 AM") where
+a column header is far away; `title` carries the exact timestamp for a hover.
+
+```sh
+npm run test:web -- test/browser/ux.spec.ts -t 'UX-21'
+node test/browser/when-shots.ts DIR   # PANA_WHEN_SHOTS_LABEL=before for the old app.js
+```
+
 ### Selection indicators
 
 Active navigation, j/k-selected rows and messages, and the command palette's active
