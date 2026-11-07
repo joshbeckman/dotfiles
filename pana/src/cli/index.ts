@@ -25,6 +25,7 @@ import {
 } from "./commands.ts";
 import { renderHelp } from "./help.ts";
 import { renderJson, renderText } from "./output.ts";
+import { sanitizeTerminalText } from "./sanitize.ts";
 
 export interface CliIo {
 	env: Record<string, string | undefined>;
@@ -70,6 +71,15 @@ function usageLine(argv: readonly string[]): string {
 	return "usage: Usage: pana <noun> <command> [options]";
 }
 
+/**
+ * Write a line a person reads (CLI-08). Its text can come from the daemon — an error message can
+ * quote a rejected value — so it is stripped of the controls a terminal obeys before it is
+ * written. `renderText` and `renderJson` do the same for command output.
+ */
+function writeMessage(stream: { write(chunk: string): unknown }, text: string): void {
+	stream.write(sanitizeTerminalText(text));
+}
+
 /** The CLI entry point. Returns the process exit code. */
 export async function main(argv: readonly string[], overrides: Partial<CliIo> = {}): Promise<number> {
 	const io: CliIo = { ...defaultIo(), ...overrides };
@@ -100,7 +110,7 @@ export async function main(argv: readonly string[], overrides: Partial<CliIo> = 
 		} catch (error) {
 			if (error instanceof ApiResponseError) {
 				if (json) io.stderr.write(renderJson(error.response.body));
-				else io.stderr.write(`pana: ${apiMessage(error.response.body) ?? `request failed with status ${error.response.status}`}\n`);
+				else writeMessage(io.stderr, `pana: ${apiMessage(error.response.body) ?? `request failed with status ${error.response.status}`}\n`);
 				return statusToExitCode(error.response.status);
 			}
 			throw error;
@@ -111,7 +121,7 @@ export async function main(argv: readonly string[], overrides: Partial<CliIo> = 
 			return 0;
 		}
 		if (outcome.usage) {
-			io.stderr.write(`pana: ${outcome.message}\n${usageLine(argv)}\n`);
+			writeMessage(io.stderr, `pana: ${outcome.message}\n${usageLine(argv)}\n`);
 			return 2;
 		}
 		if (outcome.status === 0) {
@@ -119,15 +129,15 @@ export async function main(argv: readonly string[], overrides: Partial<CliIo> = 
 			return 1;
 		}
 		if (json) io.stderr.write(renderJson(outcome.body ?? { error: { code: "http_error", message: outcome.message } }));
-		else io.stderr.write(`pana: ${outcome.message}\n`);
+		else writeMessage(io.stderr, `pana: ${outcome.message}\n`);
 		return outcome.exitCode;
 	} catch (error) {
 		if (error instanceof UsageError) {
-			io.stderr.write(`pana: ${error.message}\n${usageLine(argv)}\n`);
+			writeMessage(io.stderr, `pana: ${error.message}\n${usageLine(argv)}\n`);
 			return 2;
 		}
 		const message = error instanceof Error ? error.message : String(error);
-		io.stderr.write(`pana: ${message}\n`);
+		writeMessage(io.stderr, `pana: ${message}\n`);
 		return 1;
 	}
 }
