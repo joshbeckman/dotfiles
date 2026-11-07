@@ -86,6 +86,8 @@ export function participantColor(participant: string | { url?: string; kind?: st
 export function participantPattern(participant: string | { url?: string; kind?: string }, participants?: Array<string | { url?: string; kind?: string }>): string;
 export function refLabel(url: string): string;
 export function shortTime(at: number, now?: number, locale?: string): string;
+export function exactTime(at: unknown, locale?: string): string;
+export function relativeTime(at: number, now?: number): string;
 export function threadRow(thread: any): {
 	id: string;
 	url: string;

@@ -177,6 +177,55 @@ export function shortTime(at, now = Date.now(), locale = undefined) {
 	return date.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/**
+ * UX-21: a time with its seconds and zone — the reading a revealed time shows, so two times in
+ * the same minute are distinguishable and a reader in another zone can place it.
+ */
+export function exactTime(at, locale = undefined) {
+	const date = new Date(Number(at));
+	if (Number.isNaN(date.getTime())) return String(at ?? "");
+	// `timeZoneName` may not be combined with `dateStyle`/`timeStyle`, so every field is spelled out.
+	return date.toLocaleString(locale, {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		second: "2-digit",
+		timeZoneName: "short",
+	});
+}
+
+/**
+ * UX-21: how far a time is from now, in words — "just now", "3 hours ago", "in 2 days". One
+ * rounded unit, widened as the distance grows, so a fresh time never reads as "0 minutes ago"
+ * and an old one never counts in days.
+ */
+export function relativeTime(at, now = Date.now()) {
+	const stamp = Number(at);
+	const base = Number(now);
+	if (!Number.isFinite(stamp) || !Number.isFinite(base)) return "";
+	const delta = base - stamp;
+	const future = delta < 0;
+	const seconds = Math.abs(delta) / 1000;
+	const say = (count, unit) => {
+		const size = `${count} ${unit}${count === 1 ? "" : "s"}`;
+		return future ? `in ${size}` : `${size} ago`;
+	};
+	const single = (article, unit) => (future ? `in ${article} ${unit}` : `${article} ${unit} ago`);
+	if (seconds < 45) return future ? "in a moment" : "just now";
+	if (seconds < 90) return single("a", "minute");
+	if (seconds < 45 * 60) return say(Math.round(seconds / 60), "minute");
+	if (seconds < 90 * 60) return single("an", "hour");
+	if (seconds < 22 * 3600) return say(Math.round(seconds / 3600), "hour");
+	if (seconds < 36 * 3600) return single("a", "day");
+	if (seconds < 26 * 86400) return say(Math.round(seconds / 86400), "day");
+	if (seconds < 45 * 86400) return single("a", "month");
+	if (seconds < 320 * 86400) return say(Math.round(seconds / (30 * 86400)), "month");
+	if (seconds < 548 * 86400) return single("a", "year");
+	return say(Math.round(seconds / (365 * 86400)), "year");
+}
+
 /** One row of `GET /threads`: a listing (`ThreadSummary`) or a search hit (`ThreadHit`). */
 export function threadRow(thread) {
 	return {
