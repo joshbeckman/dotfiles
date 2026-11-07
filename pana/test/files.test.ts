@@ -174,6 +174,23 @@ describe("files", () => {
 		expect(appendAttachmentMarkdown("only text", [])).toBe("only text");
 	});
 
+	it("FIL-01 an upload with no content-type is bytes, not a JSON body", async () => {
+		const t = await start();
+		// The PWA posts a file's bytes as a TypedArray through `fetch`, which sends no
+		// `content-type` header. The route must take them as an upload, not parse them as JSON
+		// and reject every browser attachment before its route runs.
+		const response = await fetch(`http://127.0.0.1:${t.panad.tcpPort}/files?name=shot.png`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${t.panad.webToken}` },
+			body: BYTES,
+		});
+		const text = await response.text();
+		expect(response.status, text).toBe(201);
+		const file = (JSON.parse(text) as FileBody).file;
+		expect(file.size).toBe(BYTES.byteLength);
+		expect(file.mediaType).toBe("image/png");
+	});
+
 	it("FIL-03 a file over files.maxBytes returns 400 and copies nothing", async () => {
 		const t = await start({ config: { files: { maxBytes: 10 } } });
 		const res = await t.client.request("POST", "/files?name=big.bin", {
