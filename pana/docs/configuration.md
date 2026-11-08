@@ -113,6 +113,21 @@ for the workflow.
 The sweeper runs on daemon startup and every 24 hours. These are scratch policies, not
 project-worktree retention policies; useful work belongs in its canonical home.
 
+### Log rotation
+
+`panad` appends one JSONL line per request to `<state>/panad.log`, and the PWA's samples to
+`<state>/client.log`. Both rotate at a size limit, keeping a small number of previous files,
+so a daemon that runs for months leaves a bounded set of files.
+
+| Key | Default | Validation and meaning |
+| --- | --- | --- |
+| `logs.maxBytes` | `4194304` (4 MiB) | Whole number of bytes, `0` or more. A log rotates when the next line would pass this size: the file is renamed to `<name>.1`, older files shift up, and a new file starts. `0` turns rotation off and keeps one growing file. |
+| `logs.keep` | `2` | Whole number, at least `1`. Previous files kept alongside the active one, so the files hold at most `(keep + 1) × maxBytes` of log. |
+
+Rotation happens at a line boundary, so every file is valid JSONL on its own, and the reader
+behind `pana stats requests` reads the active file and the renamed ones as one continuous
+history. An operational key: a change takes effect on the next `panad` restart.
+
 ### Objective defaults
 
 These values configure objective gates/defaults, not the optional fields of an objective
@@ -195,6 +210,7 @@ omitted rather than set to `null`.
   "http": { "port": 8766 },
   "tools": { "bashTimeoutSec": 600, "protectCheckouts": "guard" },
   "scratch": { "ttlDays": 8 },
+  "logs": { "maxBytes": 4194304, "keep": 2 },
   "objectives": { "maxMembersPerRun": 8, "maxDailyUserMessages": 10, "wakeMinMinutes": 5 },
   "worktreeAdapters": []
 }

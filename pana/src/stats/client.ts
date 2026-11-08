@@ -6,8 +6,8 @@
 // a duration, and an optional status. Anything else in the body is rejected rather than stored,
 // so no message text and no token can reach the file.
 
-import { appendFile } from "node:fs/promises";
 import { ApiError } from "../api/errors.ts";
+import { RotatingLog } from "../logs/index.ts";
 import { CLIENT_KINDS, type ClientKind } from "./summary.ts";
 
 /** Samples one request may carry. A batch is a flush, not a history. */
@@ -70,16 +70,31 @@ export function clientLine(sample: ClientSample, now: number): string {
 	return `${JSON.stringify({ ts: new Date(now).toISOString(), kind: sample.kind, name: sample.name, durationMs: sample.durationMs, ...(sample.status === undefined ? {} : { status: sample.status }) })}\n`;
 }
 
-/** Append the batch. Returns how many lines were written; a write failure is reported, not thrown. */
-export async function appendClientSamples(path: string, samples: readonly ClientSample[], now: number, onError?: (error: unknown) => void): Promise<number> {
+export interface ClientLogOptions {
+	/** Rotate when the file would pass this size. `0` keeps one growing file (OBS-06). */
+	maxBytes?: number;
+	/** Previous files to keep. */
+	keep?: number;
+	onError?: (error: unknown) => void;
+}
+
+/**
+ * Append the batch. Returns how many lines were written; a write failure is reported, not
+ * thrown, because a page must not fail because a measurement could not be written.
+ */
+export async function appendClientSamples(
+	path: string,
+	samples: readonly ClientSample[],
+	now: number,
+	options: ClientLogOptions = {},
+): Promise<number> {
 	if (samples.length === 0) return 0;
-	const text = samples.map((sample) => clientLine(sample, now)).join("");
-	try {
-		await appendFile(path, text);
-		return samples.length;
-	} catch (error) {
-		// A page must not fail because a measurement could not be written.
-		onError?.(error);
-		return 0;
-	}
+	const log = new RotatingLog({
+		path,
+		maxBytes: options.maxBytes ?? 0,
+		keep: options.keep ?? 1,
+		...(options.onError ? { onError: options.onError } : {}),
+	});
+	for (const sample of samples) log.append(clientLine(sample, now));
+	return samples.length;
 }

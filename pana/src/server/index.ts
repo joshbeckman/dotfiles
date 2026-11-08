@@ -165,7 +165,12 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		const logger =
 			options.requestLog === false
 				? undefined
-				: createRequestLogger(paths.log, { now: () => clock.now(), onError: (error) => report(error, "request log") });
+				: createRequestLogger(paths.log, {
+						now: () => clock.now(),
+						maxBytes: config.logs.maxBytes,
+						keep: config.logs.keep,
+						onError: (error) => report(error, "request log"),
+					});
 		const appOptions = {
 			runtime,
 			handlers: { ...defaultHandlers, ...options.handlers },

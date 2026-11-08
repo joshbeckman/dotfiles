@@ -1,8 +1,11 @@
 // The request log (SRV-01): one JSONL line per request in `<state>/panad.log`, written after
 // the response is sent. Only routing metadata goes to the file; a body, a header, or a query
 // value could carry content or a credential, so none of them are logged.
+//
+// The file rotates at `logs.maxBytes` and keeps `logs.keep` previous files (OBS-06), so an
+// instance that runs for months leaves a bounded set of files rather than one unbounded one.
 
-import { appendFileSync } from "node:fs";
+import { RotatingLog } from "../logs/index.ts";
 import type { RequestLogEntry } from "./app.ts";
 
 export interface LoggedRequest {
@@ -30,20 +33,27 @@ export function logLine(entry: RequestLogEntry, ts: number): LoggedRequest {
 	};
 }
 
+export interface RequestLoggerOptions {
+	now: () => number;
+	onError?: (error: unknown) => void;
+	/** Rotate when the file would pass this size. `0` keeps one growing file (OBS-06). */
+	maxBytes?: number;
+	/** Previous files to keep. */
+	keep?: number;
+}
+
 /**
  * Append one JSONL line per request to `path`. A failed write is reported and dropped: a full
  * disk must not fail a request that already answered.
  */
-export function createRequestLogger(
-	path: string,
-	options: { now: () => number; onError?: (error: unknown) => void },
-): (entry: RequestLogEntry) => void {
+export function createRequestLogger(path: string, options: RequestLoggerOptions): (entry: RequestLogEntry) => void {
+	const log = new RotatingLog({
+		path,
+		maxBytes: options.maxBytes ?? 0,
+		keep: options.keep ?? 1,
+		...(options.onError ? { onError: options.onError } : {}),
+	});
 	return (entry) => {
-		try {
-			// 0600: the request log names sessions and the paths they opened (CFG-04).
-			appendFileSync(path, `${JSON.stringify(logLine(entry, options.now()))}\n`, { mode: 0o600 });
-		} catch (error) {
-			options.onError?.(error);
-		}
+		log.append(`${JSON.stringify(logLine(entry, options.now()))}\n`);
 	};
 }

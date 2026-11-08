@@ -44,7 +44,10 @@ export const handlers: Handlers = {
 	},
 	"stats.client": async (ctx) => {
 		const samples = clientSamples(ctx.body);
-		const written = await appendClientSamples(ctx.runtime.paths.clientLog, samples, ctx.runtime.clock.now());
+		const written = await appendClientSamples(ctx.runtime.paths.clientLog, samples, ctx.runtime.clock.now(), {
+			maxBytes: ctx.runtime.config.logs.maxBytes,
+			keep: ctx.runtime.config.logs.keep,
+		});
 		return { status: 202, body: { accepted: written, samples: samples.length } };
 	},
 };

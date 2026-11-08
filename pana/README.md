@@ -536,7 +536,9 @@ pana stats requests [--since SPAN] [--route ROUTE] [--name NAME]
 
 It reads the newest 8 MB of both logs and prints a count, an error count, and p50/p95/p99 per route, worst p99 first, then the browser's samples and the slowest requests. `--since` takes an ISO time or a span such as `90s`, `30m`, `24h`, `7d`. `GET /stats/requests` answers the same JSON, with `client` beside the server's numbers.
 
-Percentiles are nearest-rank over the window, so a route with three calls reports its three and every reading carries its count. Nothing prunes either file yet: they are append-only, and the reader never reads more than the newest 8 MB.
+Percentiles are nearest-rank over the window, so a route with three calls reports its three and every reading carries its count.
+
+Both logs rotate at `logs.maxBytes` (4 MiB by default) and keep `logs.keep` previous files (2), so the state directory holds a bounded set of files instead of one that grows forever. Rotation renames a whole file, never cuts one mid-line, and the reader reads across the renamed files as one history: a window that spans a rotation still counts every request in it. `logs.maxBytes: 0` turns rotation off.
 
 ## UI
 
