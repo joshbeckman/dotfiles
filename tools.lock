@@ -1,0 +1,19 @@
+# Pinned installer releases, with the published SHA256 of each architecture's
+# archive. setup never asks for a "latest": it reads the version and digest here,
+# downloads that exact release, and refuses anything that does not match. The
+# expected digest lives in this repo rather than beside the artifact, so a
+# substituted download can only be accepted by a commit that also moves the pin.
+#
+#   <tool>  <version>  <release target>  <sha256>
+#
+# `bin/pins update` rewrites this file from upstream's published metadata and
+# `bin/pins check` says when a pin here or in plugins.lock is behind. Both are
+# deliberate: the diff is the review, and nothing moves a pin on its own.
+s  v0.9.5  aarch64-apple-darwin  3db3e28f9b98663fb944f6861ddd02c241b62a04cf2ce774e07aa208c3b067ee
+s  v0.9.5  x86_64-apple-darwin  609c10f48d7311dee6c36628595022f58403bca74b044bddcc3a2e88ed20baf9
+s  v0.9.5  x86_64-unknown-linux-musl  e876a19d40437fae473560b2b90b196f7120864daa65208048c29e1da15f110a
+s  v0.9.5  aarch64-unknown-linux-musl  35ee54c8ce160305a0fb5a98184946384aa1e693b32fab21a0c3680fe067b9a2
+deno  v2.9.8  aarch64-apple-darwin  9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e
+deno  v2.9.8  x86_64-apple-darwin  4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c
+deno  v2.9.8  x86_64-unknown-linux-gnu  e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609
+deno  v2.9.8  aarch64-unknown-linux-gnu  d49596c20b9788cf8f5d8ddf644103d4bde56ed239753f0bdb92ba9361d51905

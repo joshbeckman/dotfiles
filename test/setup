@@ -118,6 +118,9 @@ class SetupTest(unittest.TestCase):
                     'FAKE_GIT_HEAD': PIN,
                     'COMMAND_LOG': str(self.log), 'FAKE_GEM_BINDIR': str(self.gem_bindir)}
         self.write_lock(re.findall(r'^\s*git_clone_or_update (\S+)', self.script.read_text(), re.M))
+        # The real tools.lock, so the installers are asked for the release and digest
+        # they will actually be asked for on this architecture.
+        shutil.copyfile(ROOT / 'tools.lock', self.repo / 'tools.lock')
 
     def write_lock(self, urls):
         """Write the fixture's plugins.lock: one pinned commit per repository."""
@@ -240,6 +243,15 @@ class SetupTest(unittest.TestCase):
         self.assertIn('checksum mismatch', result.stderr)
         self.assertFalse((self.repo / 'bin/s').exists())
 
+    def test_s_without_a_pin_is_never_installed(self):
+        (self.repo / 'bin/s').unlink()
+        (self.repo / 'tools.lock').write_text('')
+        result = self.run_setup(platform='linux-gnu')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('no s pin for x86_64-unknown-linux-musl in tools.lock', result.stderr)
+        self.assertFalse([c for c in self.records() if c['command'] == 'curl'])
+        self.assertFalse((self.repo / 'bin/s').exists())
+
     def test_failed_upgrade_stops_setup(self):
         result = self.run_setup(FAIL_COMMAND='brew', FAIL_ARG='upgrade')
         self.assertEqual(result.returncode, 7, result.stderr)
@@ -347,6 +359,13 @@ class SetupTest(unittest.TestCase):
         self.assertIn('Deno install failed; continuing', result.stdout)
         self.assertFalse((self.home / '.deno/bin/deno').exists())
         self.assertEqual([c for c in self.records() if c['command'] == 'deno'], [])
+
+    def test_deno_without_a_pin_is_reported_and_skipped(self):
+        (self.repo / 'tools.lock').write_text('')
+        result = self.run_setup(platform='linux-gnu')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('no Deno pin for x86_64-unknown-linux-gnu in tools.lock', result.stdout)
+        self.assertFalse([c for c in self.records() if c['command'] == 'curl'])
 
     def test_try_is_installed_and_linked_into_local_bin(self):
         result = self.run_setup(platform='linux', FAKE_ARCH='arm64')

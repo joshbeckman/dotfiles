@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Keep the pinned plugin commits and installer releases current, deliberately.
+
+setup never follows a branch or a "latest" release: plugins.lock names one commit
+per plugin and tools.lock names one release plus its published SHA256 per
+architecture. That lockdown is only as useful as the path back out of it, so there
+are two commands here and both are meant to be run by a person:
+
+  bin/pins check    say which pins are behind upstream; exit 1 if any are
+  bin/pins update   move every pin to what upstream publishes now, in place
+
+`update` never commits. The diff is the review: a plugin pin moving is new code
+that will run in every shell and editor, and a tool pin moving is a new binary
+that will unwrap secrets, so both want a reader before they reach a machine.
+
+`dotfiles-refresh` runs `check` at most once a day and notifies when it fails, so
+"we forgot to re-pin" arrives as a message instead of as silence.
+"""
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(os.environ.get('PINS_ROOT', Path(__file__).resolve().parents[1]))
+PLUGINS = ROOT / 'plugins.lock'
+TOOLS = ROOT / 'tools.lock'
+
+# Where each tool's releases live and how its published digests are named. Adding a
+# tool means teaching this table about its release metadata, which is exactly the
+# point at which a human should be reading.
+TOOL_SOURCES = {
+    's': {
+        'repo': 'tobi/s',
+        'archive': 's-{version}-{target}.tar.gz',
+        'digests': 'https://github.com/tobi/s/releases/download/{version}/SHA256SUMS',
+        'one_sums_file': True,
+    },
+    'deno': {
+        'repo': 'denoland/deno',
+        'archive': 'deno-{target}.zip',
+        'digests': 'https://github.com/denoland/deno/releases/download/{version}/{archive}.sha256sum',
+        'one_sums_file': False,
+    },
+}
+
+# One update touches four rows of one tool, so release metadata is fetched once per
+# tool and once per release rather than once per architecture.
+_LATEST = {}
+_SUMS = {}
+
+
+def run(*args):
+    """Run a command and return its stdout, or raise with its stderr."""
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError('%s failed: %s' % (' '.join(args), result.stderr.strip()))
+    return result.stdout
+
+
+def curl(url):
+    return run('curl', '-fsSL', url)
+
+
+def latest_version(tool):
+    """The newest release tag upstream publishes, from GitHub's API."""
+    if tool not in _LATEST:
+        body = curl('https://api.github.com/repos/%s/releases/latest' % TOOL_SOURCES[tool]['repo'])
+        try:
+            tag = json.loads(body)['tag_name']
+        except (ValueError, KeyError):
+            raise RuntimeError('%s: could not read a release tag from the GitHub API' % tool)
+        if not tag:
+            raise RuntimeError('%s: the GitHub API returned an empty release tag' % tool)
+        _LATEST[tool] = tag
+    return _LATEST[tool]
+
+
+def archive_name(tool, version, target):
+    return TOOL_SOURCES[tool]['archive'].format(version=version, target=target)
+
+
+def one_sums_file(tool, version):
+    """{archive name: sha256} from a release's single sums file, or None if it has none."""
+    if not TOOL_SOURCES[tool]['one_sums_file']:
+        return None
+    if (tool, version) not in _SUMS:
+        body = curl(TOOL_SOURCES[tool]['digests'].format(version=version))
+        digests = {}
+        for line in body.splitlines():
+            fields = line.split()
+            if len(fields) == 2:
+                digests[fields[1]] = fields[0]
+        _SUMS[(tool, version)] = digests
+    return _SUMS[(tool, version)]
+
+
+def digest_for(tool, version, target):
+    """The sha256 upstream publishes for one tool, release, and architecture."""
+    archive = archive_name(tool, version, target)
+    sums = one_sums_file(tool, version)
+    if sums is None:
+        body = curl(TOOL_SOURCES[tool]['digests'].format(version=version, archive=archive))
+        fields = body.split()
+        if not fields:
+            raise RuntimeError('%s: empty checksum for %s' % (tool, archive))
+        return fields[0]
+    if archive not in sums:
+        raise RuntimeError('%s: %s is not in the published SHA256SUMS' % (tool, archive))
+    return sums[archive]
+
+
+def rows(path):
+    """A lockfile's data rows as (line number, fields), so updates keep its layout."""
+    data = []
+    for number, line in enumerate(path.read_text().splitlines()):
+        fields = line.split()
+        if fields and not fields[0].startswith('#'):
+            data.append((number, fields))
+    return data
+
+
+def plugin_name(url):
+    name = url.rstrip('/').rsplit('/', 1)[-1]
+    return name[:-4] if name.endswith('.git') else name
+
+
+def upstream_head(url):
+    for line in run('git', 'ls-remote', url, 'HEAD').splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == 'HEAD':
+            return fields[0]
+    raise RuntimeError('%s: no HEAD advertised upstream' % url)
+
+
+def plugin_behind():
+    """[(name, pinned, upstream)] for every plugin whose pin is behind its branch tip."""
+    behind = []
+    for _, fields in rows(PLUGINS):
+        pinned, url = fields[0], fields[1]
+        head = upstream_head(url)
+        if head != pinned:
+            behind.append((plugin_name(url), pinned, head))
+    return behind
+
+
+def tool_behind():
+    """[(tool, pinned versions, latest)] for every tool whose pin is behind its release."""
+    versions = {}
+    for _, fields in rows(TOOLS):
+        versions.setdefault(fields[0], set()).add(fields[1])
+    behind = []
+    for tool in sorted(versions):
+        newest = latest_version(tool)
+        if versions[tool] != {newest}:
+            behind.append((tool, sorted(versions[tool]), newest))
+    return behind
+
+
+def check():
+    behind = plugin_behind()
+    tools = tool_behind()
+    for name, pinned, head in behind:
+        print('%s: pinned %s, upstream %s' % (name, pinned[:10], head[:10]))
+    for tool, pinned, newest in tools:
+        print('%s: pinned %s, latest %s' % (tool, ', '.join(pinned), newest))
+    if not behind and not tools:
+        print('every pin matches upstream')
+        return 0
+    print('\nrun bin/pins update to move them, then read the diff', file=sys.stderr)
+    return 1
+
+
+def update():
+    """Rewrite both lockfiles in place, keeping every comment and the line order."""
+    moved = []
+
+    plugin_lines = PLUGINS.read_text().splitlines()
+    for number, fields in rows(PLUGINS):
+        pinned, url = fields[0], fields[1]
+        head = upstream_head(url)
+        if head != pinned:
+            plugin_lines[number] = '%s  %s' % (head, url)
+            moved.append('%s: %s -> %s' % (plugin_name(url), pinned[:10], head[:10]))
+    if moved:
+        PLUGINS.write_text('\n'.join(plugin_lines) + '\n')
+
+    tool_lines = TOOLS.read_text().splitlines()
+    for number, fields in rows(TOOLS):
+        tool, pinned, target = fields[0], fields[1], fields[2]
+        newest = latest_version(tool)
+        digest = digest_for(tool, newest, target)
+        if (pinned, fields[3]) != (newest, digest):
+            tool_lines[number] = '%s  %s  %s  %s' % (tool, newest, target, digest)
+            if pinned == newest:
+                # A digest that disagrees with the release it names would block every
+                # install on that architecture, so it is corrected rather than reported
+                # as a version move.
+                moved.append('%s (%s): digest set to what %s publishes' % (tool, target, newest))
+            else:
+                moved.append('%s (%s): %s -> %s' % (tool, target, pinned, newest))
+    if moved:
+        TOOLS.write_text('\n'.join(tool_lines) + '\n')
+
+    for line in moved:
+        print(line)
+    if not moved:
+        print('every pin already matches upstream')
+    return 0
+
+
+def main(argv):
+    if argv == ['check']:
+        return check()
+    if argv == ['update']:
+        return update()
+    print('usage: bin/pins check|update', file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except RuntimeError as error:
+        print('pins: %s' % error, file=sys.stderr)
+        sys.exit(1)

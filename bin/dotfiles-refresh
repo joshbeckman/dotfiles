@@ -105,6 +105,21 @@ if [ "$status" -eq 0 ]; then
     "$NOTIFIER" --from dotfiles-refresh --execute "open '$LOG'" \
       "dotfiles plugin commits changed" "$message" || true
   fi
+  # A lockdown nobody re-pins is a stale lockdown. The check costs one round trip
+  # per plugin, so it runs at most once a day, and it only speaks when a pin is
+  # behind: forgetting to re-pin should arrive as a message, not as silence. Moving
+  # the pins is left to bin/pins update, because that diff is the review.
+  if [ -x "$DOTFILES/bin/pins" ]; then
+    today="$(date -u +%F)"
+    if [ "$(cat "$STATE/pins-checked" 2>/dev/null || true)" != "$today" ]; then
+      printf '%s\n' "$today" > "$STATE/pins-checked"
+      behind="$("$DOTFILES/bin/pins" check 2>&1)" || {
+        printf '%s  pins behind upstream:\n%s\n' "$(date -u +%FT%TZ)" "$behind" >> "$LOG"
+        "$NOTIFIER" --from dotfiles-refresh --execute "open '$LOG'" \
+          "dotfiles pins are behind (bin/pins update)" "$behind" || true
+      }
+    fi
+  fi
   exit 0
 fi
 

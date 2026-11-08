@@ -61,9 +61,17 @@ function git_clone_or_update() {
         git -C "$dest" checkout --quiet --detach "$pin"
 }
 
-# macOS ships shasum, most Linuxes sha256sum. The expected digest is written in this
-# file rather than fetched beside the artifact: a substituted download can then only
-# be accepted by a commit that also changes the pin.
+# The pinned release for one tool and release target, as "version sha256", from
+# tools.lock. Both installers below refuse to run without an answer rather than
+# falling back to whatever upstream calls latest.
+function tool_pin() {
+        [ -f "$DOTFILES_DIR/tools.lock" ] || return 0
+        awk -v tool="$1" -v target="$2" '$1 !~ /^#/ && $1 == tool && $3 == target { print $2 " " $4; exit }' "$DOTFILES_DIR/tools.lock"
+}
+
+# macOS ships shasum, most Linuxes sha256sum. The expected digest comes from
+# tools.lock rather than from beside the artifact: a substituted download can then
+# only be accepted by a commit that also moves the pin.
 function verify_sha256() {
         local file="$1" expected="$2" actual
         if command -v sha256sum > /dev/null 2>&1; then
@@ -340,49 +348,65 @@ esac
 
 # s — encrypted env store (github.com/tobi/s); prebuilt binary, no toolchain.
 # Fetched here rather than Brewfile because it is not in homebrew. The release and
-# the per-architecture digest are pinned below, in this file, and the download is
-# checked before anything is unpacked: this is the binary that unwraps every secret,
-# so it is the last one that should be installed from a floating "latest".
-S_VERSION="v0.9.5"
+# the per-architecture digest come from tools.lock and the download is checked before
+# anything is unpacked: this is the binary that unwraps every secret, so it is the
+# last one that should be installed from a floating "latest".
 if [ ! -x "$DOTFILES_DIR/bin/s" ]; then
         echo '  ======  installing s (encrypted env store)'
         case "$(uname -sm)" in
-                "Darwin arm64") s_target="aarch64-apple-darwin"; s_sha256="3db3e28f9b98663fb944f6861ddd02c241b62a04cf2ce774e07aa208c3b067ee" ;;
-                "Darwin x86_64") s_target="x86_64-apple-darwin"; s_sha256="609c10f48d7311dee6c36628595022f58403bca74b044bddcc3a2e88ed20baf9" ;;
-                "Linux x86_64") s_target="x86_64-unknown-linux-musl"; s_sha256="e876a19d40437fae473560b2b90b196f7120864daa65208048c29e1da15f110a" ;;
-                "Linux aarch64") s_target="aarch64-unknown-linux-musl"; s_sha256="35ee54c8ce160305a0fb5a98184946384aa1e693b32fab21a0c3680fe067b9a2" ;;
-                *) s_target=""; s_sha256="" ;;
+                "Darwin arm64") s_target="aarch64-apple-darwin" ;;
+                "Darwin x86_64") s_target="x86_64-apple-darwin" ;;
+                "Linux x86_64") s_target="x86_64-unknown-linux-musl" ;;
+                "Linux aarch64") s_target="aarch64-unknown-linux-musl" ;;
+                *) s_target="" ;;
         esac
+        s_pin=""
         if [ -n "$s_target" ]; then
+                s_pin=$(tool_pin s "$s_target")
+        fi
+        if [ -z "$s_target" ]; then
+                echo "could not determine an s release for $(uname -sm); install manually from github.com/tobi/s"
+        elif [ -z "$s_pin" ]; then
+                echo "no s pin for $s_target in tools.lock; refusing to install an unverified binary" >&2
+                exit 1
+        else
+                s_version=${s_pin%% *}
+                s_sha256=${s_pin##* }
                 s_tmp=$(mktemp -d)
-                curl -fsSL -o "$s_tmp/s.tar.gz" "https://github.com/tobi/s/releases/download/$S_VERSION/s-$S_VERSION-$s_target.tar.gz"
+                curl -fsSL -o "$s_tmp/s.tar.gz" "https://github.com/tobi/s/releases/download/$s_version/s-$s_version-$s_target.tar.gz"
                 verify_sha256 "$s_tmp/s.tar.gz" "$s_sha256"
                 tar -xzf "$s_tmp/s.tar.gz" -C "$DOTFILES_DIR/bin" s
                 chmod +x "$DOTFILES_DIR/bin/s"
                 rm -rf "$s_tmp"
-        else
-                echo "could not determine an s release for $(uname -sm); install manually from github.com/tobi/s"
         fi
 fi
 
 # deno + vt — the Val Town CLI. vt runs on Deno; both install into ~/.deno/bin,
 # which .zshrc puts on PATH. User-local, so no sudo and no Brewfile entry. Deno's
 # own installer is a `curl | sh` of a script that resolves "latest" when it runs,
-# so the release zip is fetched at the pinned version and checked against the
-# published digest from the same release instead.
-DENO_VERSION="v2.9.8"
+# so the release zip named in tools.lock is fetched and checked instead.
 if [ ! -x "$HOME/.deno/bin/deno" ]; then
         echo '  ======  installing Deno'
         case "$(uname -sm)" in
-                "Darwin arm64") deno_target="aarch64-apple-darwin"; deno_sha256="9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e" ;;
-                "Darwin x86_64") deno_target="x86_64-apple-darwin"; deno_sha256="4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c" ;;
-                "Linux x86_64") deno_target="x86_64-unknown-linux-gnu"; deno_sha256="e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609" ;;
-                "Linux aarch64") deno_target="aarch64-unknown-linux-gnu"; deno_sha256="d49596c20b9788cf8f5d8ddf644103d4bde56ed239753f0bdb92ba9361d51905" ;;
-                *) deno_target=""; deno_sha256="" ;;
+                "Darwin arm64") deno_target="aarch64-apple-darwin" ;;
+                "Darwin x86_64") deno_target="x86_64-apple-darwin" ;;
+                "Linux x86_64") deno_target="x86_64-unknown-linux-gnu" ;;
+                "Linux aarch64") deno_target="aarch64-unknown-linux-gnu" ;;
+                *) deno_target="" ;;
         esac
+        deno_pin=""
         if [ -n "$deno_target" ]; then
+                deno_pin=$(tool_pin deno "$deno_target")
+        fi
+        if [ -z "$deno_target" ]; then
+                echo "could not determine a Deno release for $(uname -sm); install manually from deno.land"
+        elif [ -z "$deno_pin" ]; then
+                echo "no Deno pin for $deno_target in tools.lock; install manually from deno.land"
+        else
+                deno_version=${deno_pin%% *}
+                deno_sha256=${deno_pin##* }
                 deno_tmp=$(mktemp -d)
-                if curl -fsSL -o "$deno_tmp/deno.zip" "https://github.com/denoland/deno/releases/download/$DENO_VERSION/deno-$deno_target.zip" \
+                if curl -fsSL -o "$deno_tmp/deno.zip" "https://github.com/denoland/deno/releases/download/$deno_version/deno-$deno_target.zip" \
                         && verify_sha256 "$deno_tmp/deno.zip" "$deno_sha256" \
                         && mkdir -p "$HOME/.deno/bin" \
                         && unzip -oq "$deno_tmp/deno.zip" -d "$HOME/.deno/bin"; then
@@ -391,8 +415,6 @@ if [ ! -x "$HOME/.deno/bin/deno" ]; then
                         echo 'Deno install failed; continuing'
                 fi
                 rm -rf "$deno_tmp"
-        else
-                echo "could not determine a Deno release for $(uname -sm); install manually from deno.land"
         fi
 fi
 if [ -x "$HOME/.deno/bin/deno" ] && [ ! -x "$HOME/.deno/bin/vt" ]; then

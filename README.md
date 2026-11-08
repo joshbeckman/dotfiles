@@ -14,15 +14,16 @@ The [`setup`](setup) script handles everything: symlinking dotfiles via `dfm ins
 
 Refreshes are noninteractive: plugin checkouts stay on their pinned commits, Homebrew upgrades do not ask for confirmation or quit running apps, and privileged Homebrew installers are refused. Required-step failures stop the run; optional completion-keyword failures are reported and skipped. Perform any required privileged installation manually, then retry.
 
-Plugins and the two `curl`-installed tools are pinned. `setup` clones a plugin with `--no-checkout` and checks it out at the commit `plugins.lock` names, so neither a new upstream release nor a rewritten branch is activated by a refresh; a checkout found off its pin, or a pin that moved, is printed as `plugin changed: <name> <old> -> <new>` and becomes a notification. Move the pins deliberately and read the diff:
+Plugins and the two `curl`-installed tools are pinned, in [`plugins.lock`](plugins.lock) and [`tools.lock`](tools.lock). `setup` clones a plugin with `--no-checkout` and checks it out at the commit `plugins.lock` names, so neither a new upstream release nor a rewritten branch is activated by a refresh; a checkout found off its pin, or a pin that moved, is printed as `plugin changed: <name> <old> -> <new>` and becomes a notification. `s` and Deno are read from `tools.lock` as one release plus the published SHA256 of each architecture, and a download that does not match is never unpacked.
+
+Moving the pins is a person's job, so it takes one command and produces a diff to read:
 
 ```sh
-grep -v '^#' plugins.lock | while read -r sha url; do
-  printf '%s  %s\n' "$(git ls-remote "$url" HEAD | cut -f1)" "$url"
-done > plugins.lock.new && mv plugins.lock.new plugins.lock
+bin/pins check    # which pins are behind upstream; exits 1 if any are
+bin/pins update   # move them all to what upstream publishes now
 ```
 
-`s` and Deno work the same way: one release of each is pinned in `setup` together with its published SHA256 for every supported architecture, and a download that does not match is never unpacked.
+`bin/pins update` never commits: a plugin pin moving is new code in every shell and editor, and a tool pin moving is a new binary that unwraps secrets, so both want a reader. To keep that from relying on memory, [`bin/dotfiles-refresh`](bin/dotfiles-refresh) runs `bin/pins check` at most once a day and notifies when any pin has fallen behind.
 
 [`bin/dotfiles-refresh`](bin/dotfiles-refresh) runs `setup` every two hours. On macOS that is `Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist`, which `dfm install` links into `~/Library/LaunchAgents`; on Linux it is `.config/systemd/user/dotfiles-refresh.timer`, which `setup` links into `~/.config/systemd/user` and enables. Intervals missed while the machine was off are skipped, and a lock prevents overlapping runs. The job uses the login shell's PATH, so machine-specific toolchains resolve. It appends to `~/Library/Logs/dotfiles-refresh.log` on macOS and `~/.local/state/dotfiles-refresh/refresh.log` elsewhere, and notifies when a run fails or when a plugin checkout moves to a new pinned commit. Load the macOS job once after the first install; the Linux timer is enabled by `setup`:
 
