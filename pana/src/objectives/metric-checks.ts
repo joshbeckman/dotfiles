@@ -2,9 +2,9 @@
 //
 // The check belongs to the metric definition, not to a reading, and it runs on `runtime.clock`
 // with no agent awake: a daily measurement costs nothing and adds no schedule kind. Everything
-// about how it runs is SCH-09 through SCH-12 unchanged — `bash --noprofile --norc -c`, the
-// recorded check cwd, a 30-second timeout, 8 KiB retained per stream, a killed process group —
-// because it uses the same runner (`src/schedules/check.ts`).
+// about how it runs is SCH-09 through SCH-12 unchanged — the recorded check cwd, a 30-second
+// timeout, 8 KiB retained per stream, a killed process group, and a child that sees only
+// `PANA_ENV_NAMES` — because it uses the same runner (`src/schedules/check.ts`).
 //
 //   exit 0 + a number on stdout  -> append one reading with `source: "check"` (OBJ-25)
 //   exit 1                       -> append nothing, record `not_ready`, post no notice
@@ -18,7 +18,7 @@
 // by moving that time forward inside one write (so a restart or a second timer cannot run the
 // same occurrence twice), then runs it.
 
-import { runCheck, type CheckResult } from "../schedules/check.ts";
+import { checkHost, runCheck, type CheckResult } from "../schedules/check.ts";
 import { nextCronAt, parseDuration } from "../schedules/store.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { postNotice } from "../threads/index.ts";
@@ -250,6 +250,7 @@ class CheckLoop implements MetricChecks {
 			claimed.check_cwd ?? process.cwd(),
 			this.#runtime.clock,
 			this.#abort.signal,
+			checkHost(this.#runtime),
 		);
 		const measured = evaluated(result);
 		await record(this.#runtime, claimed, measured.result, measured.value);

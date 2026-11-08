@@ -266,6 +266,17 @@ async function wakeTarget(runtime: Runtime, caller: Caller, value: unknown): Pro
 	return id;
 }
 
+/**
+ * SCH-09: a check is the user's to define. It runs on cron in panad's own service, out of reach of
+ * the session that wrote it, so a session that could plant one would get code execution there.
+ */
+function userOnlyCheck(input: ScheduleInput, caller: Caller): void {
+	if (caller.kind === "user") return;
+	if (["check", "checkCwd"].some((field) => input[field as keyof ScheduleInput] !== undefined)) {
+		throw ApiError.forbidden("only the user may set a check on a schedule");
+	}
+}
+
 /** Conditions belong to the schedule, never the action payload. */
 function conditions(input: ScheduleInput, cron: string | null) {
 	const check = input.check ?? null;
@@ -401,6 +412,7 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 	const now = runtime.clock.now();
 	const kind = scheduleKind(input.kind);
 	const timing = scheduleTiming(input, runtime.config.timezone, now);
+	userOnlyCheck(input, caller);
 	const condition = conditions(input, timing.cron);
 	const payload = schedulePayload(input, kind);
 	if (kind === "wake") payload.session = await wakeTarget(runtime, caller, payload.session);
@@ -443,8 +455,9 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
  * with neither `cron` nor `at` keeps the stored time and state, so editing only the prompt of an
  * `--at` schedule never moves or reactivates it.
  */
-export async function updateSchedule(runtime: Runtime, id: string, value: unknown): Promise<ScheduleView> {
+export async function updateSchedule(runtime: Runtime, caller: Caller, id: string, value: unknown): Promise<ScheduleView> {
 	const input = inputObject(value);
+	userOnlyCheck(input, caller);
 	const suppliedSubject = input.subject === undefined ? undefined : parseScheduleSubject(input.subject);
 	let saved!: ScheduleJoinRow;
 	let regenerate = false;

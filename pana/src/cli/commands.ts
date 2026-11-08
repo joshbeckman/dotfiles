@@ -190,8 +190,8 @@ const bool = (name: string, syntax: string, description: string) => flag(name, s
 
 const RECURRING_FLAGS = [
 	string("cron", "--cron CRON", "Cron expression in the domain timezone"),
-	string("check", "--check COMMAND", "Bash readiness check before each cron dispatch: 0 ready, 1 not ready"),
-	string("checkCwd", "--check-cwd DIR", "Absolute check directory; defaults to the daemon's cwd at creation"),
+	string("check", "--check COMMAND", "Bash readiness check before each cron dispatch: 0 ready, 1 not ready (user only)"),
+	string("checkCwd", "--check-cwd DIR", "Absolute check directory; defaults to the daemon's cwd at creation (user only)"),
 	bool("stopAfterSuccess", "--stop-after-success", "Finish a cron schedule after its first successful dispatch"),
 ];
 

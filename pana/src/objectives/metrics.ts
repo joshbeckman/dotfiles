@@ -414,6 +414,16 @@ function userOnly(caller: Caller, what: string): void {
 	if (caller.kind !== "user") throw ApiError.forbidden(`only the user may ${what} a metric`);
 }
 
+/**
+ * OBJ-26: a check is the user's to define. It runs on a timer in panad's own service, out of reach
+ * of the session that declared it, so a session that could plant one would get code execution
+ * there. Clearing one (`check: null`) is a definition edit too, and is refused for the same reason.
+ */
+function userOnlyCheck(caller: Caller, input: Record<string, unknown>): void {
+	if (caller.kind === "user") return;
+	if (["check", ...CHECK_FIELDS].some((field) => input[field] !== undefined)) userOnly(caller, "define a check on");
+}
+
 // --- Writes --------------------------------------------------------------------
 
 /**
@@ -426,6 +436,7 @@ export async function addMetric(runtime: Runtime, caller: Caller, value: string 
 	const row = await loadObjective(runtime.db, id);
 	assertDeclarable(row);
 	if (present(input, "target")) userOnly(caller, "set a target on");
+	userOnlyCheck(caller, input);
 	assertNoTypedBaseline(caller, input);
 
 	const name = slug(input.name);
@@ -582,6 +593,7 @@ export async function setMetric(
 
 	const targetTouched = input.target !== undefined;
 	if (targetTouched) userOnly(caller, "set a target on");
+	userOnlyCheck(caller, input);
 	assertNoTypedBaseline(caller, input);
 
 	const definitionTouched = ["unit", "direction", "aggregation", "window", "check", ...CHECK_FIELDS].some((field) => input[field] !== undefined);
