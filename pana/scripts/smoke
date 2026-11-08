@@ -148,7 +148,10 @@ done
 printf '\n--- thread %s ---\n' "$thread"
 "$pana" thread read "$thread" | field 'v.messages.map((m) => `${m.sender.url}:\n${m.body ?? m.display ?? ""}\n`).join("\n")'
 printf -- '---\n\n'
-grep '^panad: open ' "$log" | sed 's/^panad: open /PWA: /' || true
+# panad writes the launch URL, token included, to a 0600 file rather than to its log.
+if [ -s "$state/launch-url" ]; then
+  sed 's/^/PWA: /' "$state/launch-url"
+fi
 
 case "$outcome" in
   answered)

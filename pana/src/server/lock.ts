@@ -30,7 +30,8 @@ function readPid(path: string): number | undefined {
 export function acquirePidLock(path: string): () => void {
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
-			const fd = openSync(path, "wx", 0o644);
+			// 0600: the state directory is private (CFG-04), and the PID file is state too.
+			const fd = openSync(path, "wx", 0o600);
 			writeSync(fd, `${process.pid}\n`);
 			closeSync(fd);
 			let released = false;

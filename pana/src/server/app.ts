@@ -21,6 +21,11 @@ export interface AppOptions {
 	tailscaleNames?: readonly string[];
 	/** Called once per request after the response is sent. WP1 logs it (SRV-01). */
 	onRequest?: (entry: RequestLogEntry) => void;
+	/**
+	 * What a failed request really threw, for the local log. A 500 body carries none of it: a
+	 * message can name a path, a query, or a subprocess's diagnostics (API-01).
+	 */
+	onError?: (error: unknown, what: string) => void;
 }
 
 export interface RequestLogEntry {
@@ -94,6 +99,8 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 	} catch (error) {
 		const apiError = toApiError(error);
 		status = apiError.status;
+		// The detail stays here, in panad's own log, and the caller gets the generic body.
+		if (apiError.status === 500) options.onError?.(error, `${method} ${url?.pathname ?? target}`);
 		if (!res.headersSent) {
 			await send(res, { status: apiError.status, body: apiError.toBody() });
 		} else {
@@ -234,11 +241,17 @@ function parseJsonBody(req: IncomingMessage, raw: Buffer): unknown {
 	}
 }
 
+/** The body of every 500: a caller learns that panad failed, not what it was doing. */
+const INTERNAL_MESSAGE = "internal error";
+
 function toApiError(error: unknown): ApiError {
-	if (error instanceof ApiError) return error;
+	if (error instanceof ApiError) {
+		// 502 and 501 name what the caller asked for and stay as they are; a 500 is panad's own
+		// failure, and its message is the fastest way to leak the inside of the process.
+		return error.status === 500 ? new ApiError(500, error.code, INTERNAL_MESSAGE) : error;
+	}
 	if (error instanceof RefError) return ApiError.badRequest(error.code, error.message);
-	const message = error instanceof Error ? error.message : String(error);
-	return new ApiError(500, "internal", message);
+	return new ApiError(500, "internal", INTERNAL_MESSAGE);
 }
 
 async function send(res: ServerResponse, result: HandlerResult): Promise<void> {

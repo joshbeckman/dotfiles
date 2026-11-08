@@ -95,7 +95,10 @@ describe("API contract", () => {
 
 		const internal = await t.client.get("/threads/X");
 		expect(internal.status).toBe(500);
-		expect(internal.body).toEqual({ error: { code: "internal", message: "boom" } });
+		// A 500 says that panad failed, never what it was doing: a message can name a path, a
+		// query, or a subprocess's diagnostics (API-01). The detail goes to the local log.
+		expect(internal.body).toEqual({ error: { code: "internal", message: "internal error" } });
+		expect(t.reports).toContainEqual({ error: expect.objectContaining({ message: "boom" }), what: "request GET /threads/X" });
 
 		const badJson = await request({ socketPath: t.panad.socketPath }, "POST", "/threads", {
 			bytes: Buffer.from("{nope"),

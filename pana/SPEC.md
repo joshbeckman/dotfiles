@@ -39,7 +39,7 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 - [x] **CFG-01** `panad` reads `~/.local/state/pana/config.json`. `PANA_STATE` overrides the state directory.
 - [x] **CFG-02** `config.json` requires `domain` and `user`. `panad` exits with code 2 and names the missing key if either is absent.
 - [x] **CFG-03** Optional keys and defaults: `timezone` (system zone), `subjectModel` (none), `defaultModel`, `spawnDepth` (3), `budget.sessionUsd` (100), `budget.domainDailyUsd` (500), `files.maxBytes` (26214400), `http.port` (8766), `tools.bashTimeoutSec` (600), `tools.protectCheckouts` (`"guard"`), `scratch.ttlDays` (8), `scratch.maxTotalMB` (none), `objectives.maxMembersPerRun` (8), `objectives.maxDailyUserMessages` (10), `objectives.wakeMinMinutes` (5), `ui.userColor` (blue), `worktreeAdapters` (empty array). See the [configuration reference](docs/configuration.md) for validation and semantics.
-- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `web-token`. `web-token` has mode 0600.
+- [x] **CFG-04** `panad` creates the state layout on first start: `pana.sqlite`, `files/`, `memory.git/`, `memory/worktrees/`, `scratch/`, `profiles/default.json`, `web-token`. The state directories are mode 0700 and the state files (`web-token`, `pana.sqlite`, `panad.log`, attachments, `launch-url`) are 0600, so another user can read none of them.
 - [x] **CFG-05** A second `panad` on the same state directory exits with code 1 and a message naming the running PID.
 
 ### Settings
@@ -115,7 +115,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/settings/restart` | user-only graceful daemon restart |
 | GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake` |
 
-- [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`.
+- [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`. A 500 carries a generic message only; the failure's detail goes to panad's own log.
 - [x] **API-02** Status codes map to CLI exit codes: 400 → 2, 404 → 4, 409 → 3, 402 → 5, any other non-2xx → 1.
 - [x] **API-03** On the socket, the caller is the session named by the `Pana-Caller` header, or the configured user when the header is absent. An unknown session in `Pana-Caller` returns 400.
 - [x] **API-04** On TCP, every request needs `Authorization: Bearer <web-token>`. A missing or wrong token returns 403. The caller is always the configured user.
@@ -342,7 +342,7 @@ provenance is carried on PR descriptions/comments/reviews and discovered through
 
 ## WP8: PWA and Web Push
 
-- [x] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` prints a launch URL with the token in the fragment.
+- [x] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` writes the launch URL, with the token in the fragment, to `<state>/launch-url` at mode 0600 and prints the URL without it, so no durable log holds the token.
 - [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as the retired agent-mail-web app did.
 - [x] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
 - [x] **WEB-04** Messages render Markdown, images, and Mermaid from the vendored bundles. `apps/agent-mail-web` is their build source and nothing else: no service, no server, no UI of its own. The prose is in place before any image or diagram bytes arrive; images share one queue of a few requests, load only within 800 px of the viewport, and a file is read once however many messages show it.
