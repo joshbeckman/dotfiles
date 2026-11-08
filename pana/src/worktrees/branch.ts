@@ -1,13 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const run = promisify(execFile);
+import { gitIn } from "./git.ts";
 
 /** Choose a new branch without changing refs or requiring network access. */
 export async function generatedBranch(repo: string, parts: string[]): Promise<string> {
 	const [{ stdout: refs }, { stdout: remotes }] = await Promise.all([
-		run("git", ["-C", repo, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]),
-		run("git", ["-C", repo, "remote"]),
+		gitIn(repo, ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]),
+		gitIn(repo, ["remote"]),
 	]);
 	const prefixes = remotes.trim().split("\n").filter(Boolean)
 		.map((remote) => `refs/remotes/${remote}/`).sort((a, b) => b.length - a.length);
