@@ -21,6 +21,14 @@ tmpfile="/tmp/preview-patch-${timestamp}-$$.html"
 
 remote_url=$(git remote get-url origin 2>/dev/null | sed -E 's/\.git$//; s#git@([^:]+):#https://\1/#')
 
+# This URL becomes an href below, so allowlist the scheme and shape instead of
+# trusting git config: a crafted `javascript:` origin would otherwise make every
+# commit link executable. Anything else falls back to unlinked commit text.
+remote_shape='^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?(/[^"<>[:space:]]*)?$'
+if [[ ! "$remote_url" =~ $remote_shape ]]; then
+    remote_url=""
+fi
+
 # Identity is stamped by the tool, not remembered by the model: an agent that
 # renders a preview marks it, a human gets identical output to before.
 agent_footer=""
@@ -48,6 +56,13 @@ function esc(s) {
     gsub(/>/, "\\&gt;", s)
     return s
 }
+function attr(s) {
+    gsub(/&/, "\\&amp;", s)
+    gsub(/"/, "\\&quot;", s)
+    gsub(/</, "\\&lt;", s)
+    gsub(/>/, "\\&gt;", s)
+    return s
+}
 BEGIN { in_diff = 0; header_done = 0 }
 /^diff --git/ { in_diff = 1; if (!header_done) { print "</pre><pre>"; header_done = 1 } }
 {
@@ -56,7 +71,7 @@ BEGIN { in_diff = 0; header_done = 0 }
         if ($0 ~ /^commit /) {
             sha = $2
             if (remote != "" && sha != "") {
-                printf "<span class=\"commit\">commit <a href=\"%s/commit/%s\">%s</a></span>\n", remote, sha, sha
+                printf "<span class=\"commit\">commit <a href=\"%s/commit/%s\">%s</a></span>\n", attr(remote), attr(sha), esc(sha)
             } else {
                 printf "<span class=\"commit\">%s</span>\n", esc($0)
             }

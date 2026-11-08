@@ -98,8 +98,25 @@ main() {
     return 1
   fi
 
+  # The selection is appended to $TRIAL_DIR, so it must be exactly one name: a
+  # `../x` (or a slash from elsewhere) would otherwise create a directory outside
+  # the trials root.
+  case "$selected_trial" in
+    */* | . | ..)
+      echo -e "${RED}Invalid trial name:${NC} $selected_trial" >&2
+      return 1
+      ;;
+  esac
+
   # Create the selected directory
   FULL_PATH="$TRIAL_DIR/$selected_trial"
+  case "$FULL_PATH" in
+    "$TRIAL_DIR"/*) ;;
+    *)
+      echo -e "${RED}Refusing path outside ${TRIAL_DIR}:${NC} $FULL_PATH" >&2
+      return 1
+      ;;
+  esac
   mkdir -p "$FULL_PATH"
 
   echo -e "${GREEN}Created/selected:${NC} $FULL_PATH" >&2
