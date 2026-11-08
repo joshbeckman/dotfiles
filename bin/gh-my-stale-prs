@@ -20,7 +20,10 @@ prs.reverse.each do |pr|
   puts "PR #{pr["repository"]["nameWithOwner"]}##{pr["number"]}: #{pr["title"]}"
   puts "  #{pr["url"]}"
   puts "  #{staleness} commits stale"
-  %x(terminal-notifier -title "PR #{pr["repository"]["nameWithOwner"]}##{pr["number"]} is #{staleness} commits stale" -message "#{pr["title"]}" -open "#{pr["url"]}")
+  system("terminal-notifier",
+         "-title", "PR #{pr["repository"]["nameWithOwner"]}##{pr["number"]} is #{staleness} commits stale",
+         "-message", pr["title"],
+         "-open", pr["url"])
   sleep(0.5)
 end
 if stale_count.zero?

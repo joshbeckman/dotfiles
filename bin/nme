@@ -7,4 +7,12 @@
 #       display notification "message" with title "title" subtitle "subtitle" sound name "Pop"
 #       available sounds in /System/Library/Sounds/
 #
-/usr/bin/osascript -e "display notification \"${*/\"/\\\"}\" with title \"Computer Says\" sound name \"Sosumi\""
+# The message is handed to AppleScript as an argument and read back with `item N of
+# argv`, never pasted into the script source. Quoting it into the source cannot be made
+# safe: `\"` inside the double-quoted -e argument is just `"` again to AppleScript, so a
+# message containing `x" & (do shell script "...") & "` used to run.
+/usr/bin/osascript \
+  -e 'on run argv' \
+  -e 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Sosumi"' \
+  -e 'end run' \
+  "Computer Says" "$*"
