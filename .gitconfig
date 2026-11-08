@@ -29,7 +29,7 @@
     diffu = "!f() { idx=$(mktemp -t git-diffu-index.XXXXXX) || exit; trap 'rm -f \"$idx\"' EXIT; git_index=$(git rev-parse --git-path index) || exit; test -f \"$git_index\" && cp \"$git_index\" \"$idx\" || : >\"$idx\"; GIT_INDEX_FILE=\"$idx\" git add -N . >/dev/null 2>&1; GIT_INDEX_FILE=\"$idx\" git diff \"$@\"; }; f"
     diffup = "!f() { git diffu \"$@\" | preview-patch; }; f"
     fc = log --all --grep
-    fix = "!f() { nvim -p `git diff --name-only | uniq`; }; f" # via https://gist.github.com/jacobvosmaer/3187346
+    fix = "!git diff --name-only -z | xargs -0 nvim -p --" # via https://gist.github.com/jacobvosmaer/3187346; -z/-- keep odd filenames out of nvim's Ex args
     fup = push --set-upstream origin HEAD
     get = fetch --all
     lg = log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit

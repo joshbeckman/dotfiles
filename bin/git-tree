@@ -190,7 +190,7 @@ def create_new_branch
   exit 0 if branch_name.empty?
 
   # Check if branch already exists
-  branch_exists = system("git show-ref --verify --quiet refs/heads/#{branch_name}")
+  branch_exists = system('git', 'show-ref', '--verify', '--quiet', "refs/heads/#{branch_name}")
   if branch_exists
     puts "Error: Branch '#{branch_name}' already exists"
     exit 1
@@ -203,7 +203,7 @@ def create_new_branch
 
   # Create the new branch (without checking out)
   puts "Creating new branch '#{branch_name}' based on '#{base_branch}'..."
-  unless system("git branch '#{branch_name}' '#{base_branch}'")
+  unless system('git', 'branch', branch_name, base_branch)
     puts "Failed to create branch '#{branch_name}'"
     exit 1
   end
@@ -255,15 +255,15 @@ def cmd_add(args)
     FileUtils.mkdir_p(worktree_path)
 
     # Check if branch exists
-    branch_exists = system("git show-ref --verify --quiet refs/heads/#{branch}")
+    branch_exists = system('git', 'show-ref', '--verify', '--quiet', "refs/heads/#{branch}")
 
     if branch_exists
       # Add the worktree for existing branch
-      system("git worktree add '#{worktree_path}' '#{branch}'")
+      system('git', 'worktree', 'add', worktree_path, branch)
     else
       # Create new branch and add worktree
       puts "Branch '#{branch}' does not exist. Creating new branch..."
-      system("git worktree add -b '#{branch}' '#{worktree_path}' HEAD")
+      system('git', 'worktree', 'add', '-b', branch, worktree_path, 'HEAD')
     end
 
     # Check if the command succeeded
