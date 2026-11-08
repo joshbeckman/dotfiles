@@ -1162,10 +1162,12 @@ describe("UX-21 a time reveals its exact timestamp and how long ago it was", () 
 		// Every age is measured against panad's clock, which the window learns from a live event's
 		// `at` (UX-09); a notice is the cheapest way to say now. The test clock is January and this
 		// machine's is not, so a reading taken from the browser's own clock would be months out.
-		const before = await evaluatePage<string>(`return document.getElementById("nav-inbox-count")?.getAttribute("aria-label") ?? "";`);
+		// The notice's own row is the signal: the count above can land on the same number again
+		// when this read of the thread and the notice move it by one each way.
+		const rowsBefore = await evaluatePage<number>(`return document.querySelectorAll("#inbox-list [data-testid=inbox-item]").length;`);
 		await postNotice(t.runtime, { body: "A notice that sets the clock" });
 		await evaluatePage<boolean>(`
-			await until(() => (document.getElementById("nav-inbox-count")?.getAttribute("aria-label") ?? "") !== ${JSON.stringify(before)});
+			await until(() => document.querySelectorAll("#inbox-list [data-testid=inbox-item]").length > ${rowsBefore});
 			return true;
 		`);
 		const now = t.clock.now();

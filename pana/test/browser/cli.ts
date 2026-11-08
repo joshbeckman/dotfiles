@@ -65,13 +65,24 @@ interface PageList {
 	pages?: Array<{ id: number; selected?: boolean; url?: string }>;
 }
 
-export async function newPage(url: string): Promise<number> {
-	const result = (await command(["new_page", url])) as PageList;
-	const pages = result?.pages ?? [];
-	const selected = pages.find((page) => page.selected) ?? pages[pages.length - 1];
-	if (!selected) throw new Error(`could not open ${url}`);
-	current = selected.id;
-	return selected.id;
+export async function newPage(url: string, initScript?: string): Promise<number> {
+	if (initScript === undefined) {
+		const result = (await command(["new_page", url])) as PageList;
+		const pages = result?.pages ?? [];
+		const selected = pages.find((page) => page.selected) ?? pages[pages.length - 1];
+		if (!selected) throw new Error(`could not open ${url}`);
+		current = selected.id;
+		return selected.id;
+	}
+	// An init script runs before the page's own code, which a measurement of the boot needs: a
+	// page that has already loaded cannot be instrumented. So open a blank tab and navigate it.
+	const opened = (await command(["new_page", "about:blank"])) as PageList;
+	const pages = opened?.pages ?? [];
+	const blank = pages.find((page) => page.selected) ?? pages[pages.length - 1];
+	if (!blank) throw new Error(`could not open ${url}`);
+	current = blank.id;
+	await command(["navigate_page", String(blank.id), "--type", "url", "--url", url, "--initScript", initScript]);
+	return blank.id;
 }
 
 export async function closePage(id: number): Promise<void> {

@@ -10,6 +10,13 @@ import { loopbackOrigin } from "../../src/web/static.ts";
 import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage } from "./cli.ts";
 import { seedDomain, type Seeded } from "./seed.ts";
 
+interface ClientSample {
+	kind: string;
+	name: string;
+	durationMs: number;
+	status?: number;
+}
+
 let seeded: Seeded | undefined;
 let page: number | undefined;
 afterEach(async () => {
@@ -26,6 +33,20 @@ async function waitForSamples(dir: string, count = 1): Promise<string[]> {
 		if (lines.length >= count) return lines;
 		if (Date.now() > end) throw new Error(`timed out waiting for ${count} client samples; have ${lines.length}`);
 		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+/** Flush the page until the sample asked for reaches `client.log`, or give up. */
+async function sampleNamed(dir: string, match: (sample: ClientSample) => boolean): Promise<ClientSample> {
+	const path = `${dir}/client.log`;
+	const end = Date.now() + 20_000;
+	for (;;) {
+		await evaluatePage(`window.__pana.telemetry.flush(); return true;`);
+		const lines = existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [];
+		const found = lines.map((line) => JSON.parse(line) as ClientSample).find(match);
+		if (found) return found;
+		if (Date.now() > end) throw new Error(`timed out waiting for a sample; have ${lines.length}`);
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 }
 
@@ -56,7 +77,7 @@ async function waitForSamples(dir: string, count = 1): Promise<string[]> {
 		expect(pending).toBe(0);
 
 		const lines = await waitForSamples(t.dir, 2);
-		const samples = lines.map((line) => JSON.parse(line) as { kind: string; name: string; durationMs: number; status?: number });
+		const samples = lines.map((line) => JSON.parse(line) as ClientSample);
 		const kinds = new Set(samples.map((sample) => sample.kind));
 		expect(kinds.has("api")).toBe(true);
 		expect(kinds.has("view")).toBe(true);
@@ -70,11 +91,34 @@ async function waitForSamples(dir: string, count = 1): Promise<string[]> {
 		const threadRead = samples.find((sample) => sample.kind === "api" && sample.name.includes("/threads/:id"));
 		expect(threadRead, "the thread read is named by its pattern").toBeDefined();
 		expect(samples.some((sample) => sample.kind === "view" && sample.name === "#/inbox")).toBe(true);
+		// The load's own sample is what separates a cold view sample from the boot before it.
+		const pageLoad = samples.find((sample) => sample.kind === "view" && sample.name === "page-load");
+		expect(pageLoad, "the page load itself is measured").toBeDefined();
+		expect(pageLoad!.durationMs).toBeGreaterThan(0);
 
 		// The daemon reads the same file back.
 		const summary = await t.client.get<{ client: { window: { count: number }; groups: Array<{ kind: string; name: string }> } }>("/stats/requests");
 		expect(summary.status).toBe(200);
 		expect(summary.body.client.window.count).toBeGreaterThanOrEqual(samples.length);
 		expect(summary.body.client.groups.some((group) => group.kind === "api" && group.name === "GET /threads/:id")).toBe(true);
+	});
+
+	// A cold load opens the events stream before the first route reads its click target out of
+	// Cache Storage, so `hello` brings the domain first. A route that waited on its one-second
+	// timer anyway spent a second of the first inbox draw on a value the page already had.
+	it("draws the first inbox without waiting for a domain the page already has", async () => {
+		seeded = await seedDomain();
+		const { t } = seeded;
+		page = await newPage(
+			`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`,
+			`const open = caches.open.bind(caches);
+			caches.open = (...args) => new Promise((resolve) => setTimeout(() => resolve(open(...args)), 300));`,
+		);
+		await evaluatePage(`
+			await until(() => !document.getElementById('view-inbox').hidden && document.querySelectorAll('#inbox-list [data-testid="inbox-item"]').length > 0);
+			return true;
+		`);
+		const inbox = await sampleNamed(t.dir, (sample) => sample.kind === "view" && sample.name === "#/inbox");
+		expect(inbox.durationMs, "the cold inbox draw").toBeLessThan(500);
 	});
 });
