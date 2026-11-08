@@ -5,6 +5,8 @@
 // recognizes (404 or 410) deletes that subscription row (PSH-04).
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import webpush, { type PushSubscription, type VapidKeys } from "web-push";
 import type { Runtime } from "../server/runtime.ts";
@@ -44,6 +46,119 @@ export function initPush(runtime: Runtime): VapidKeys {
 
 export function vapidKeys(runtime: Runtime): VapidKeys {
 	return keysByRuntime.get(runtime) ?? initPush(runtime);
+}
+
+// ---- Endpoint validation ------------------------------------------------------------------
+//
+// The endpoint is a URL a participant stores and panad fetches later, carrying the message body,
+// so an unvalidated endpoint is a fetch primitive that survives a restart: it reaches internal
+// ports and cloud metadata, and it exfiltrates message content to whoever named it. Storing a
+// subscription is already user-only (`src/push/handlers.ts`), and these checks hold either way:
+// what may be stored is decided once, and what may be fetched is decided again at send time.
+
+/** The most subscriptions one participant may hold, so a fan-out stays bounded. */
+export const MAX_SUBSCRIPTIONS = 5;
+
+/** How long one push service gets before its send is abandoned. */
+export const PUSH_TIMEOUT_MS = 10_000;
+
+/** How many subscriptions a fan-out sends to at once, so a hung endpoint holds only its own slot. */
+export const PUSH_CONCURRENCY = 4;
+
+/**
+ * Names that can only resolve inside a machine or a private network: loopback aliases, mDNS,
+ * cloud metadata, and Tailscale's MagicDNS. A push service is a public HTTPS host, so none of
+ * these can be a browser's push endpoint.
+ */
+const INTERNAL_SUFFIXES = [
+	"localhost",
+	"local",
+	"localdomain",
+	"internal",
+	"home.arpa",
+	"ts.net",
+	"metadata.google.internal",
+	"instance-data",
+	"ec2.internal",
+	"compute.internal",
+];
+
+/** Why a stored endpoint may not be fetched, or `undefined` when it is acceptable. */
+export function endpointProblem(endpoint: string): string | undefined {
+	let url: URL;
+	try {
+		url = new URL(endpoint);
+	} catch {
+		return "is not a URL";
+	}
+	if (url.protocol !== "https:") return "must use https";
+	if (url.username !== "" || url.password !== "") return "must not carry credentials";
+	// `URL` drops an explicit `:443`, so a port here is always a non-default one.
+	if (url.port !== "") return "must use the default https port";
+	const host = url.hostname.startsWith("[") && url.hostname.endsWith("]") ? url.hostname.slice(1, -1) : url.hostname;
+	if (isIP(host) !== 0) return "must not name an IP address";
+	if (!host.includes(".")) return "must name a public host";
+	const lower = host.toLowerCase();
+	if (INTERNAL_SUFFIXES.some((suffix) => lower === suffix || lower.endsWith(`.${suffix}`))) {
+		return "must name a public host";
+	}
+	return undefined;
+}
+
+/** Whether an address a hostname resolved to is routable on the public internet. */
+export function isPublicAddress(address: string): boolean {
+	const bare = address.toLowerCase().split("%")[0]!;
+	if (isIP(bare) === 4) {
+		const octets = bare.split(".").map(Number);
+		const [a, b] = octets as [number, number, number, number];
+		if (a === 0 || a === 10 || a === 127) return false;
+		if (a === 169 && b === 254) return false;
+		if (a === 172 && b >= 16 && b <= 31) return false;
+		if (a === 192 && (b === 0 || b === 168)) return false;
+		if (a === 100 && b >= 64 && b <= 127) return false;
+		if (a === 198 && (b === 18 || b === 19)) return false;
+		if (a >= 224) return false;
+		return true;
+	}
+	if (isIP(bare) === 6) {
+		// An IPv4-mapped address is the same reachability question as the IPv4 address inside it.
+		const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(bare);
+		if (mapped) return isPublicAddress(mapped[1]!);
+		if (bare === "::" || bare === "::1") return false;
+		const first = Number.parseInt(bare.split(":")[0] || "0", 16);
+		if ((first & 0xfe00) === 0xfc00) return false; // unique-local fc00::/7
+		if ((first & 0xffc0) === 0xfe80) return false; // link-local fe80::/10
+		if ((first & 0xff00) === 0xff00) return false; // multicast ff00::/8
+		return true;
+	}
+	return false;
+}
+
+/**
+ * Refuse to hand a host to the sender that resolves somewhere private. Checking the name is not
+ * enough on its own: a public-looking name can point at 169.254.169.254. Called at fetch time,
+ * so a subscription stored before these rules existed is caught too.
+ */
+async function assertPublicHost(endpoint: string): Promise<void> {
+	const url = new URL(endpoint);
+	const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+	if (addresses.length === 0) throw new Error(`${url.hostname} does not resolve`);
+	const blocked = addresses.find((entry) => !isPublicAddress(entry.address));
+	if (blocked) throw new Error(`${url.hostname} resolves to a non-public address (${blocked.address})`);
+}
+
+/** Reject a send that outlives its budget, so one hung endpoint cannot hold a fan-out open. */
+async function withTimeout<T>(runtime: Runtime, work: Promise<T>, ms: number = PUSH_TIMEOUT_MS): Promise<T> {
+	let cancel: (() => void) | undefined;
+	const expired = new Promise<never>((_, reject) => {
+		// A deadline the send must observe is work, not bookkeeping, so it is not a background timer.
+		cancel = runtime.clock.setTimer(() => reject(new Error(`push send timed out after ${ms} ms`)), ms, { background: false });
+	});
+	try {
+		return await Promise.race([work, expired]);
+	} finally {
+		cancel?.();
+	}
 }
 
 /** The subscription payload the browser gets from `PushSubscription.toJSON()`. */
@@ -89,6 +204,8 @@ function transportFor(runtime: Runtime): PushTransport {
 	const custom = transports.get(runtime);
 	if (custom) return custom;
 	return async (subscription, message, vapid) => {
+		// Only the network path fetches, so only it resolves names: tests inject a transport.
+		await assertPublicHost(subscription.endpoint);
 		await webpush.sendNotification(subscription, JSON.stringify(message), {
 			vapidDetails: {
 				subject: vapidSubject(runtime),
@@ -120,11 +237,22 @@ export async function sendToSubscription(
 	message: PushMessage,
 	onError: (error: unknown, subscription: StoredSubscription) => void = () => {},
 ): Promise<PushOutcome> {
+	const problem = endpointProblem(subscription.endpoint);
+	if (problem) {
+		// A row that would never be fetched is dropped: it cannot deliver, and left in place it
+		// would hold a slot in the cap and keep asking panad to reach an address it refuses.
+		await runtime.db.write((tx) => tx.run("DELETE FROM push_subscriptions WHERE endpoint = ?", subscription.endpoint));
+		onError(new Error(`push endpoint ${subscription.endpoint} ${problem}`), subscription);
+		return "gone";
+	}
 	try {
-		await transportFor(runtime)(
-			{ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
-			message,
-			vapidKeys(runtime),
+		await withTimeout(
+			runtime,
+			transportFor(runtime)(
+				{ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+				message,
+				vapidKeys(runtime),
+			),
 		);
 		return "sent";
 	} catch (error) {
@@ -144,7 +272,7 @@ export interface SendSummary {
 	failed: number;
 }
 
-/** Send to every subscription a participant holds. */
+/** Send to every subscription a participant holds, a bounded few at a time. */
 export async function pushToParticipant(
 	runtime: Runtime,
 	participantId: string,
@@ -156,10 +284,14 @@ export async function pushToParticipant(
 		participantId,
 	);
 	const summary: SendSummary = { sent: 0, gone: 0, failed: 0 };
-	for (const row of rows) {
-		const outcome = await sendToSubscription(runtime, row, message, onError);
-		summary[outcome]++;
-	}
+	const queue = [...rows];
+	const worker = async () => {
+		for (let row = queue.shift(); row; row = queue.shift()) {
+			const outcome = await sendToSubscription(runtime, row, message, onError);
+			summary[outcome]++;
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(PUSH_CONCURRENCY, rows.length) }, worker));
 	return summary;
 }
 
