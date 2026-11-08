@@ -525,6 +525,18 @@ pana objective limits set OBJECTIVE --max-total-usd N   # `--max-total-usd defau
 
 A failed lead leaves the objective stranded, and the user regenerates it: the next lead starts from the same briefing. [SPEC.md](SPEC.md) has the behaviours.
 
+## Observability
+
+`panad` writes one JSONL line per request to `<state>/panad.log`: route, caller, status, and duration, never a body or a query string. The PWA writes its own samples to `<state>/client.log`: each API call's round trip, each view's render, and every long task.
+
+```sh
+pana stats requests [--since SPAN] [--route ROUTE] [--name NAME]
+```
+
+It reads the newest 8 MB of both logs and prints a count, an error count, and p50/p95/p99 per route, worst p99 first, then the browser's samples and the slowest requests. `--since` takes an ISO time or a span such as `90s`, `30m`, `24h`, `7d`. `GET /stats/requests` answers the same JSON, with `client` beside the server's numbers.
+
+Percentiles are nearest-rank over the window, so a route with three calls reports its three and every reading carries its count. Nothing prunes either file yet: they are append-only, and the reader never reads more than the newest 8 MB.
+
 ## UI
 
 The PWA has these sections:
@@ -538,6 +550,8 @@ The PWA has these sections:
 A reply draft records the thread head when it opens. If the thread moves before send, the PWA shows the new messages and keeps the draft.
 
 Both composers attach files: an Attach button, a file dropped anywhere on the composer, or a screenshot pasted into the message box. The bytes upload to `panad` before the message is sent, and the body gets the same Markdown reference `--attach` writes, so the message reads the same either way.
+
+The app measures itself: every API round trip, every view's render, and every long task it runs is posted to `panad` and read back with `pana stats requests` (see [Observability](#observability)).
 
 The user keeps their chosen hex color across threads (blue by default), and domain notices remain black. Session identities are allocated within each thread from its append-ordered participant roster, using twelve generated colors and four overflow patterns; they do not change when the user changes their color. Opening a thread shows its newest message; a message link shows that message.
 

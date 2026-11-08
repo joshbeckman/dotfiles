@@ -43,6 +43,7 @@ const README_COMMANDS = [
 	'pana schedule wake --cron "*/5 * * * *" --note TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 	"pana schedule list [--kind session|thread|wake]",
 	"pana schedule delete SCHEDULE",
+	"pana stats requests [--since SPAN] [--route ROUTE] [--name NAME]",
 ];
 
 const opened: TestPanad[] = [];
@@ -304,7 +305,7 @@ describe("pana CLI", () => {
 		expect(root.code).toBe(0);
 		for (const command of README_COMMANDS) expect(root.stdout, command).toContain(command);
 
-		for (const noun of ["session", "thread", "memory", "schedule"]) {
+		for (const noun of ["session", "thread", "memory", "schedule", "stats"]) {
 			const help = await run([noun, "--help"], undefined);
 			expect(help.code).toBe(0);
 			for (const command of README_COMMANDS.filter((line) => line.startsWith(`pana ${noun} `) || line === `pana ${noun}`)) {

@@ -23,6 +23,7 @@ import {
 } from "./links.js";
 import { browserEnv, explainPush, subscribeToPush } from "./push.js";
 import { nextCursor, pagePath, showMore } from "./pages.js";
+import { apiName, clientBody, startClientTelemetry, viewName } from "./perf.js";
 import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
@@ -83,6 +84,10 @@ if (launchToken) {
 let token = launchToken || localStorage.getItem(TOKEN_KEY) || "";
 
 const APPLE = isApplePlatform(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+
+// OBS-03: the PWA measures itself. Samples batch in `perf.js` and post here, through the same
+// token-bearing wrapper every other call uses. A failure is dropped inside the recorder.
+const telemetry = startClientTelemetry({ post: (samples) => sendClientSamples(samples) });
 
 const state = {
 	domain: "",
@@ -332,7 +337,24 @@ async function api(method, path, body) {
 		options.body = JSON.stringify(body);
 		options.headers = { "content-type": "application/json" };
 	}
-	return decode(await raw(path, options), method, path);
+	// OBS-03: one sample per call, from the request to the parsed body, so a slow reply is a
+	// measured reply rather than a guess. The name is the route pattern, never the id.
+	const started = telemetry?.now();
+	let status;
+	try {
+		const response = await raw(path, options);
+		status = response.status;
+		return await decode(response, method, path);
+	} finally {
+		if (started !== undefined) telemetry?.api(apiName(method, path), telemetry.now() - started, status);
+	}
+}
+
+/** Post one batch of measurements. Best effort: the caller never sees a failure (OBS-03). */
+function sendClientSamples(samples) {
+	const body = JSON.stringify(clientBody(samples));
+	// `keepalive` lets the last batch outlive the page it was measured on.
+	return raw("/stats/client", { method: "POST", body, headers: { "content-type": "application/json" }, keepalive: true });
 }
 
 /** Parse a response the way `api` does, error body and all. */
@@ -4303,7 +4325,22 @@ function resetScroll() {
 	if (root.scrollTop !== 0) root.scrollTop = 0;
 }
 
+/** Draw the current hash, and measure how long the draw took to reach a painted frame (OBS-03). */
 async function route() {
+	const started = telemetry?.now();
+	const name = viewName(location.hash);
+	try {
+		await drawRoute();
+	} finally {
+		if (started !== undefined) {
+			const elapsed = () => telemetry?.view(name, telemetry.now() - started);
+			if (typeof requestAnimationFrame === "function") requestAnimationFrame(elapsed);
+			else elapsed();
+		}
+	}
+}
+
+async function drawRoute() {
 	const { section, id, rest, query } = routeFromHash(location.hash);
 	showSection(section);
 	resetScroll();
@@ -4633,6 +4670,10 @@ window.__pana = {
 	/** The CodeMirror instance while a memory file is open in the editor, for tests and debugging. */
 	get memoryEditor() {
 		return memoryEditor;
+	},
+	/** The recorder from `perf.js` (OBS-03), so a test can flush without waiting for the timer. */
+	get telemetry() {
+		return telemetry;
 	},
 	enablePush,
 	showPushButton,

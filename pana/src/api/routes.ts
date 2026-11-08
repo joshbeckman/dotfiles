@@ -83,6 +83,9 @@ export const ROUTES = [
 	{ method: "GET", pattern: "/settings", name: "settings.read", wp: "WP0" },
 	{ method: "POST", pattern: "/settings", name: "settings.update", wp: "WP0" },
 	{ method: "POST", pattern: "/settings/restart", name: "settings.restart", wp: "WP0" },
+	// WP20: what the request log and the client log add up to, and the PWA's own samples.
+	{ method: "GET", pattern: "/stats/requests", name: "stats.requests", wp: "WP20" },
+	{ method: "POST", pattern: "/stats/client", name: "stats.client", wp: "WP20" },
 	// The PWA shell. `web.index` and `web.static` are the only routes that answer without the
 	// bearer token (see `src/web/static.ts`); the catch-all must stay last so it never shadows
 	// an API route.
