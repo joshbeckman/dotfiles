@@ -27,6 +27,7 @@ The README says what pana is. This file says how to check that it works. If they
 | WP8 | PWA and Web Push | WP1 |
 | WP9 | Service units, install, `gw` attribution | WP1 |
 | WP10 | Integration: providers, push, the PWA on real handlers, end-to-end and smoke tests | WP0–WP9 |
+| WP20 | Observability: the request log, the PWA's own samples, and what they add up to | WP1, WP8 |
 
 WP0 goes first, built by one agent. It fixes every shared contract: schema, API routes, error shapes, and test helpers. After WP0 merges, WP1, WP2, WP4, WP5, and WP7 can run in parallel. Each builds against the WP0 contracts and fakes what it needs from the others.
 
@@ -554,3 +555,18 @@ own worktree or in its scratch is doing what it was told; a session in the user'
 - [x] **GUARD-06** The default `guard` mode checks file-tool write paths and the actual execution cwd, not shell-command text. There is no checkout command denylist/allowlist or Git/sed/shell parser. A session normally starts in scratch and explicitly creates/reuses an owned worktree before repository changes. Arbitrary Bash writes from scratch are not prevented without a supported filesystem sandbox; policy and docs state this limit. File-tool ownership checks, symlink resolution, explicit-cwd rules and peer protection remain independent of Bash syntax.
 
 - [x] **GUARD-07** Machine-local `worktreeAdapters` match a repository's canonical shared git directory and specify an absolute managed root, optional relative checkout subdirectory, and executable argv with `{name}`, `{branch}`, `{path}`, `{repo}` placeholders. `name` includes the session ID and is lowercase for external adapters; branch spelling and ordinary state-layout names remain unchanged. Both GUARD-03 and SES-04 use the adapter without a shell or fallback; failures report `worktree_adapter_failed`. Creation verifies the exact checkout root, shared repository, worktree-specific metadata back-pointer and branch before publishing a retained ownership receipt outside scratch. External pre-existing unowned destinations, repository collisions and symlinked destinations fail closed. Concurrent requests for one destination serialize; owned retries reuse it. Receipts permit file-tool writes and actual execution cwd only for that session and checkout; peer file-tool writes and implicit-cwd execution stay refused. Guard mode does not classify explicit Bash paths or fast-forward commands. Each shell invocation reads one ownership snapshot, reused for cwd checks and optional sandbox mounts. Ordinary state-layout trees remain compatible without receipts. No project tree is automatically deleted or swept with scratch.
+
+---
+
+## WP20: Observability
+
+panad has written one JSONL line per request since WP1 (SRV-01), and nothing read it: the numbers
+that said whether operations and the client were getting slower lived in a bench run, not in the
+daemon that was serving traffic. This package reads the log back as counts, errors, and
+percentiles, and gives the browser a way to report what it measured.
+
+- [x] **OBS-01** `GET /stats/requests` summarizes `<state>/panad.log`: per route and overall, a count, an error count (status 400 and above), p50, p95, p99, max, and mean, plus the statuses seen and the ten slowest requests. `since` takes an ISO timestamp or a span (`90s`, `10m`, `2h`, `7d`) and a value that is neither is 400 `invalid_since`; `route` narrows to one route. The reader takes the newest 8 MB of the file, drops the line the byte window cut in half, and reports `window.truncated` so a reading never claims to be the whole file when it is not.
+- [x] **OBS-02** `pana stats requests [--since SPAN] [--route ROUTE] [--name NAME]` calls that route and prints the window, the error line, one table for the server's routes (worst p99 first), one for the browser's samples, and the slowest requests. `--json` answers the route's body. Route names and sample names are terminal-sanitized like any other daemon text (CLI-08).
+- [x] **OBS-03** The PWA measures its own API round trips (request to parsed body, named by route pattern such as `GET /threads/:id`, with the status), each view's render (hash change to the frame after the draw), and every long task the browser reports. Samples batch in the page, at most 200, and post to `POST /stats/client`, which appends one line per sample to `<state>/client.log` with panad's clock. A batch over 200, a name with a control character, a duration outside 0 to 600000 ms, or a status that is not an HTTP status is a 400 that stores nothing. A failed post, or a page that closes, drops its batch rather than retrying: measuring never breaks the app.
+- [x] **OBS-04** Nothing but a sample reaches `client.log`: a kind (`api`, `view`, `longtask`), a name, a duration, and an optional status. The route pattern is built in the browser, so an id and a query string stay there; no message text, no URL, no token can be stored even if a caller sends it.
+- [x] **OBS-05** Percentiles are nearest-rank over the window's own samples on that operation: with two API calls the median is the lower one, and a route with three calls reports its three. Every reading carries its `count`, and an empty window reports zero requests and no routes rather than a latency of zero.

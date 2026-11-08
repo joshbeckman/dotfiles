@@ -17,6 +17,7 @@ import { CommandUsageError, parseArgv, resolveFlags, resolvePositionals, type Fl
 
 export { CommandUsageError, UsageError } from "./args.ts";
 import { OBJECTIVE_COMMANDS } from "../objectives/cli.ts";
+import { STATS_COMMANDS } from "../stats/cli.ts";
 import { readBody, readStdinSync, uploadAttachments, type ApiCall, type FileAttachment } from "./body.ts";
 import { renderText } from "./output.ts";
 
@@ -553,6 +554,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 	// WP18: `src/objectives/cli.ts` holds the `pana objective` table, so a WP18 package adds its
 	// commands there and not here.
 	...OBJECTIVE_COMMANDS,
+	...STATS_COMMANDS,
 	{
 		path: ["worktree", "add"],
 		usage: "pana worktree add REPO [--branch NAME] [--name NAME]",

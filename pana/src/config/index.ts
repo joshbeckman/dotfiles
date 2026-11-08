@@ -308,6 +308,7 @@ export interface StatePaths {
 	socket: string;
 	pidFile: string;
 	log: string;
+	clientLog: string;
 }
 
 /** Resolve every path pana keeps under the state directory. */
@@ -326,6 +327,7 @@ export function statePaths(dir = stateDir()): StatePaths {
 		socket: join(dir, "panad.sock"),
 		pidFile: join(dir, "panad.pid"),
 		log: join(dir, "panad.log"),
+		clientLog: join(dir, "client.log"),
 	};
 }
 
