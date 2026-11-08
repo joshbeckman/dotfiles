@@ -6,7 +6,19 @@
 // update-ref refuses and the writer rebases again. Nothing is locked, so two writers of different
 // files both land.
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { ApiError } from "../api/errors.ts";
 import { formatUrl } from "../ids/index.ts";
@@ -245,10 +257,21 @@ export class Memory {
 		const branch = `writer/${writer.id}`;
 		const base = { caller: writer.id, path, branch, repo: gitDir };
 
-		if (existsSync(join(path, ".git"))) return { ...base, created: false };
+		// A `.git` on disk proves nothing: a planted directory (or a symlink to somebody's checkout)
+		// would redirect every memory git command below. Trust it only once it is proven to be a
+		// worktree of memory.git on this writer's branch.
+		if (existsSync(join(path, ".git"))) {
+			await this.assertRegisteredWorktree(writer.id, branch);
+			return { ...base, created: false };
+		}
 
 		mkdirSync(worktreesDir, { recursive: true });
-		if (existsSync(path) && isDirectoryEmpty(path)) rmSync(path, { recursive: true, force: true });
+		if (existsSync(path)) {
+			// A symlink here is never a worktree we made, and an empty leftover directory blocks
+			// `git worktree add`. Removing the link removes nothing but the link itself.
+			if (lstatSync(path).isSymbolicLink()) unlinkSync(path);
+			else if (isDirectoryEmpty(path)) rmSync(path, { recursive: true, force: true });
+		}
 
 		// The branch is checked on every attempt: a failed `worktree add -b` can still have created it,
 		// and the retry must then check it out instead of creating it again.
@@ -270,6 +293,42 @@ export class Memory {
 		await gitOrThrow(["config", "--worktree", "user.name", writer.url], { cwd: path });
 		await gitOrThrow(["config", "--worktree", "user.email", emailFor(writer.id, this.options.domain)], { cwd: path });
 		return { ...base, created: true };
+	}
+
+	/**
+	 * Prove that `<worktreesDir>/<id>` is a worktree of `memory.git` on `writer/<id>` before any
+	 * git command runs there. `existsSync(join(path, ".git"))` accepts anything, including a
+	 * directory whose `.git` file names the user's primary checkout; every later `git -C <path>`
+	 * would then stage, commit, and rebase in that checkout. So resolve the path for real, prove
+	 * it is exactly the directory we expect under the worktrees root, and require `git worktree list`
+	 * to register it on the writer's branch. A path that fails is refused, not repaired: we
+	 * cannot tell a hostile plant from a valuable directory a user put there.
+	 */
+	private async assertRegisteredWorktree(id: string, branch: string): Promise<void> {
+		const { gitDir, worktreesDir } = this.options;
+		const path = join(worktreesDir, id);
+		const expected = join(realpathOrSelf(worktreesDir), id);
+		const real = realpathOrSelf(path);
+		if (real !== expected) {
+			throw untrustedWorktree(path, `it resolves to ${real}, not ${expected}`);
+		}
+
+		const list = await gitOrThrow(["-C", gitDir, "worktree", "list", "--porcelain"]);
+		const entries: Array<{ path: string; branch?: string }> = [];
+		for (const line of list.stdout.split("\n")) {
+			if (line.startsWith("worktree ")) entries.push({ path: line.slice("worktree ".length) });
+			else if (line.startsWith("branch ") && entries.length > 0) {
+				const entry = entries[entries.length - 1];
+				if (entry !== undefined) entry.branch = line.slice("branch ".length);
+			}
+		}
+		const registered = entries.find((entry) => realpathOrSelf(entry.path) === real);
+		if (registered === undefined) {
+			throw untrustedWorktree(path, `${gitDir} does not register it as a worktree`);
+		}
+		if (registered.branch !== `refs/heads/${branch}`) {
+			throw untrustedWorktree(path, `it is checked out at ${registered.branch ?? "a detached HEAD"}, not ${branch}`);
+		}
 	}
 
 	/**
@@ -606,23 +665,43 @@ export class Memory {
 					throw new ApiError(409, "stale_file", "This memory file changed since you opened it. Copy your edits, reload the file, and try again.", { paths: [path] });
 				}
 			}
-			const target = resolve(worktree.path, path);
-			if (!target.startsWith(worktree.path + sep)) {
+			const root = resolve(worktree.path);
+			const target = resolve(root, path);
+			if (!target.startsWith(root + sep)) {
 				throw ApiError.badRequest("invalid_path", `invalid memory path: ${relativePath}`);
 			}
 			// Reject symlink parents too: a UI path must never write outside its worktree.
-			let parent = worktree.path;
+			let parent = root;
 			for (const part of path.split("/")) {
 				parent = join(parent, part);
 				if (lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) {
 					throw ApiError.badRequest("invalid_path", `memory path contains a symbolic link: ${path}`);
 				}
 			}
-			if (existsSync(target) && !isFile(target)) {
+			const existing = lstatSync(target, { throwIfNoEntry: false });
+			if (existing !== undefined && (existing.isSymbolicLink() || !existing.isFile())) {
 				throw ApiError.badRequest("invalid_path", `memory path is not a file: ${path}`);
 			}
 			mkdirSync(dirname(target), { recursive: true });
-			writeFileSync(target, content);
+			// A hardlink is a second name for an inode we do not own, so writing through it would
+			// truncate the file outside the worktree (a provider config is one `link` away). Land the
+			// bytes on a fresh inode and rename it into place instead: rename replaces this directory
+			// entry, never the other name. That also closes the window between the checks above and
+			// the write, and fails closed if a parent was swapped for a symlink in the meantime.
+			const directory = dirname(target);
+			const realRoot = realpathOrSelf(root);
+			const realDirectory = realpathOrSelf(directory);
+			if (realDirectory !== realRoot && !realDirectory.startsWith(realRoot + sep)) {
+				throw ApiError.badRequest("invalid_path", `memory path escapes its worktree: ${path}`);
+			}
+			const temporary = join(directory, `.pana-write-${randomBytes(8).toString("hex")}`);
+			try {
+				writeFileSync(temporary, content, { flag: "wx" });
+				renameSync(temporary, target);
+			} catch (error) {
+				rmSync(temporary, { force: true });
+				throw error;
+			}
 			return this.commitSerialized(writer, message.length > 0 ? message : `Update ${path}`, worktree);
 		});
 	}
@@ -715,6 +794,20 @@ function isFile(path: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/** `realpath`, or the path unchanged when it cannot be resolved (a missing or looping path). */
+function realpathOrSelf(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
+/** A worktree path that is not the directory memory.git created; refuse rather than repair it. */
+function untrustedWorktree(path: string, reason: string): ApiError {
+	return new ApiError(500, "untrusted_worktree", `memory worktree ${path} is not one memory.git created: ${reason}`, { path });
 }
 
 /** Chain work per key, so two commits from one writer never race for the same branch. */
