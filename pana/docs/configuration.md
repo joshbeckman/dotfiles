@@ -88,7 +88,7 @@ message mark difficult to see.
 | --- | --- | --- |
 | `budget.sessionUsd` | `100` | Nonnegative number of US dollars. A session whose recorded cost passes this amount is stopped and its creator receives a notice. `0` is a zero budget, not an unlimited budget. |
 | `budget.domainDailyUsd` | `500` | Nonnegative number of US dollars. When domain spend passes this amount for the local day, new runs are refused until the next local day. This is the domain-wide backstop, including objective spend. `0` is not unlimited. |
-| `files.maxBytes` | `26214400` (25 MiB) | Positive number of bytes. Maximum size of an uploaded file. |
+| `files.maxBytes` | `26214400` (25 MiB) | Positive number of bytes. Maximum size of an uploaded file, and of any other request body: a body over it is refused with 413 rather than buffered (an upload over it keeps FIL-03's 400). |
 
 ### HTTP and tool safety
 
