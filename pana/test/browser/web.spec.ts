@@ -195,6 +195,28 @@ describeBrowser("pana in a browser", () => {
 		expect(after.title).toBe("A rendered thread");
 	});
 
+	// WEB-02: the launch URL is a fragment. Opened in a window that already runs the app, the browser
+	// changes the hash without loading the document, so the token has to be adopted here too.
+	it("WEB-02 a launch URL opened in a running window adopts the token and leaves the URL clean", async () => {
+		await start();
+		await postNotice(t!.runtime, { body: "A rendered thread" });
+		await open();
+		const rotated = "another-token-that-is-long-enough";
+		const adopted = await evaluatePage<{ sameDocument: boolean; hash: string; stored: string | null; panel: boolean }>(`
+			window.__noReload = 1;
+			location.hash = "#${rotated}";
+			await until(() => location.hash === "#/inbox");
+			const stored = localStorage.getItem("pana-token");
+			// The app re-boots with the token it was handed, and panad refuses this one.
+			const panel = await until(() => !document.getElementById("authorize").hidden);
+			return { sameDocument: (window.__noReload ?? 0) === 1, hash: location.hash, stored, panel };
+		`);
+		expect(adopted.sameDocument, "the window never reloaded").toBe(true);
+		expect(adopted.hash, "the token is out of the URL").toBe("#/inbox");
+		expect(adopted.stored).toBe(rotated);
+		expect(adopted.panel, "the adopted token was used").toBe(true);
+	});
+
 	it("WEB-03 INT-02 inbox, compose, threads, sessions, memory, and schedules work end to end", async () => {
 		await start([{ text: "Paris." }, { text: "Composed reply." }]);
 		const seeded = await seedSession("What is the capital of France?");

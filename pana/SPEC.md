@@ -346,7 +346,7 @@ provenance is carried on PR descriptions/comments/reviews and discovered through
 ## WP8: PWA and Web Push
 
 - [x] **WEB-01** `panad` serves the PWA at `/` on TCP. `panad` writes the launch URL, with the token in the fragment, to `<state>/launch-url` at mode 0600 and prints the URL without it, so no durable log holds the token.
-- [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as the retired agent-mail-web app did.
+- [x] **WEB-02** The app stores the token. A 403 shows an "Authorize this app" panel, as the retired agent-mail-web app did. The launch URL carries the token in the fragment, so opening it in a window that already runs the app is a fragment change rather than a load: the app takes that token, clears it out of the URL, and reconnects, so a rotated token is never left out of use. A fragment that is not a route names no view, so the token cannot reach `client.log` as a sample name (OBS-04).
 - [x] **WEB-03** Sections: Inbox, Compose, Threads, Sessions, Memory, Schedules. Each works end to end in a browser test against a test `panad`.
 - [x] **WEB-04** Messages render Markdown, images, and Mermaid from the vendored bundles. Their build source went with the retired Agent Mail app (#231), so the bundles are artifacts now, rebuilt from that tree in `git log` and committed by hand. The prose is in place before any image or diagram bytes arrive; images share one queue of a few requests, load only within 800 px of the viewport, and a file is read once however many messages show it.
 - [x] **WEB-05** `pana://` links render as links to the matching app routes or `/files/` URLs.

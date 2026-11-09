@@ -30,9 +30,15 @@ export function apiName(method, path) {
 	return `${String(method ?? "GET").toUpperCase()} /${words.join("/")}`.replace(/\/$/, "");
 }
 
-/** The view a hash names (OBS-03): `#/threads/01M6…` becomes `#/threads/:id`. */
+/**
+ * The view a hash names (OBS-03): `#/threads/01M6…` becomes `#/threads/:id`. A fragment that is not
+ * a route names no view; the launch URL carries the token in one, and a sample named after it would
+ * put the token in `client.log` (OBS-04).
+ */
 export function viewName(hash) {
-	const clean = String(hash ?? "").replace(/^#\/?/, "").split("?")[0];
+	const raw = String(hash ?? "");
+	if (raw !== "" && !raw.startsWith("#/")) return "#/";
+	const clean = raw.replace(/^#\/?/, "").split("?")[0];
 	const parts = clean.split("/").filter((part) => part.length > 0);
 	if (parts.length === 0) return "#/";
 	const words = parts.map((part) => (ULID.test(part) || HEX_ID.test(part) ? ":id" : part));

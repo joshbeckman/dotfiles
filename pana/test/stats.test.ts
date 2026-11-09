@@ -361,6 +361,13 @@ describe("the PWA's own names", () => {
 		expect(viewName("")).toBe("#/");
 	});
 
+	// OBS-04: the launch URL carries the token in the fragment. A fragment that is not a route names
+	// no view, so the sample cannot carry the token into client.log.
+	it("never names a view after the launch fragment", () => {
+		expect(viewName("#Loaht6C-_wtcKAk2q9xBpfZqg9PJhwA7pFLwgLvrHH0")).toBe("#/");
+		expect(viewName("#")).toBe("#/");
+	});
+
 	it("caps a batch at what the daemon accepts", () => {
 		expect(clientBody(Array.from({ length: 5 }, () => ({}))).samples).toHaveLength(5);
 		expect(clientBody(Array.from({ length: CLIENT_BATCH_MAX + 50 }, () => ({}))).samples).toHaveLength(CLIENT_BATCH_MAX);
