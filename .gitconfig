@@ -87,16 +87,12 @@
         PI_ERR=$(mktemp); \
         trap 'rm -f \"$PROMPT_FILE\" \"$PI_ERR\"' EXIT; \
         printf '%s' \"$PROMPT\" > \"$PROMPT_FILE\"; \
-        PI_PROVIDER_EXT=${PI_COMMIT_PROVIDER_EXT:-$HOME/.pi/agent/extensions/shopify-proxy-provider/index.ts}; \
+        PI_PROVIDER_EXT=${PI_COMMIT_PROVIDER_EXT:-}; \
+        PI_MODEL=${PI_COMMIT_MODEL:-anthropic/claude-haiku-4-5}; \
         PI_USE_PROXY=0; \
-        if [ -n \"${PI_COMMIT_MODEL:-}\" ]; then \
-            PI_MODEL=\"$PI_COMMIT_MODEL\"; \
-        elif [ -f \"$PI_PROVIDER_EXT\" ] && command -v devx >/dev/null 2>&1; then \
+        if [ -n \"$PI_PROVIDER_EXT\" ] && [ -f \"$PI_PROVIDER_EXT\" ] && command -v devx >/dev/null 2>&1; then \
             PI_CMD='devx pi'; \
-            PI_MODEL='shopify-proxy/anthropic:claude-haiku-4-5'; \
             PI_USE_PROXY=1; \
-        else \
-            PI_MODEL='anthropic/claude-haiku-4-5'; \
         fi; \
         TRAILER=$(agent-trailer --email) && [ -n \"$TRAILER\" ] || { echo 'Failed to generate agent attribution' >&2; exit 1; }; \
         if [ \"$PI_USE_PROXY\" = 1 ]; then \
