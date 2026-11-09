@@ -76,7 +76,10 @@ const $ = (id) => document.getElementById(id);
 
 // The launch URL carries the token in the fragment. Store it, then clear the hash so a reload
 // starts at a normal route. An installed app has its own storage, so a 403 opens the panel.
-const launchToken = location.hash && !location.hash.startsWith("#/") ? location.hash.slice(1) : "";
+// A fragment that is not a route is a launch fragment, never a view: naming a sample after it
+// would write the token into `client.log` (OBS-04).
+const launchFragment = (hash) => (hash && !hash.startsWith("#/") ? hash.slice(1) : "");
+const launchToken = launchFragment(location.hash);
 if (launchToken) {
 	localStorage.setItem(TOKEN_KEY, launchToken);
 	history.replaceState(null, "", "/#/inbox");
@@ -4616,7 +4619,23 @@ document.addEventListener("click", (event) => {
 	}
 	if (action === "create-worktree") void createWorktree();
 });
-window.addEventListener("hashchange", () => void route());
+window.addEventListener("hashchange", () => {
+	// A launch URL opened in a window that already runs the app is a fragment change, not a load, so
+	// the block at the top of this module never runs again. Adopt the token the same way there: leave
+	// it in the URL and a rotated token is never taken, every request keeps the old one, and the
+	// route measures a view named after the token.
+	const launch = launchFragment(location.hash);
+	if (!launch) {
+		void route();
+		return;
+	}
+	history.replaceState(null, "", "/#/inbox");
+	const changed = launch !== token;
+	token = launch;
+	localStorage.setItem(TOKEN_KEY, launch);
+	if (changed) void boot();
+	else void route();
+});
 window.addEventListener("online", () => void startEvents());
 // Coming back into view, by any of the ways a browser says so (WEB-11, PSH-05).
 window.addEventListener("focus", () => void resumeApp().catch(() => {}));
