@@ -132,7 +132,11 @@ describe("config and state", () => {
 	});
 
 	it("CFG-04 panad creates the state layout on first start, with web-token at mode 0600", async () => {
-		t = await startTestPanad();
+		// OBS-06: the client log was once created by a writer that set no mode, and a rotation
+		// brings a renamed file's mode along. Both, and the rotated sibling, are repaired at start.
+		const dir = makeStateDir();
+		for (const name of ["client.log", "panad.log.1"]) writeFileSync(join(dir, name), "", { mode: 0o644 });
+		t = await startTestPanad({ stateDir: dir });
 		for (const path of ["pana.sqlite", "files", "memory.git", "memory/worktrees", "scratch", "profiles/default.json", "web-token"]) {
 			expect(existsSync(join(t.dir, path)), path).toBe(true);
 		}
@@ -147,6 +151,9 @@ describe("config and state", () => {
 		// The request log is written on the first request, and it is private too.
 		expect((await t.client.get("/inbox")).status).toBe(200);
 		expect(statSync(join(t.dir, "panad.log")).mode & 0o777).toBe(0o600);
+		for (const name of ["client.log", "panad.log.1"]) {
+			expect(statSync(join(t.dir, name)).mode & 0o777, name).toBe(0o600);
+		}
 		expect(readFileSync(join(t.dir, "web-token"), "utf8").length).toBeGreaterThanOrEqual(32);
 		expect(JSON.parse(readFileSync(join(t.dir, "profiles/default.json"), "utf8"))).toEqual({});
 
