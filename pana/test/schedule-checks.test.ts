@@ -168,25 +168,28 @@ describe("schedule conditions", () => {
 		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(schedule.id))).toBeFalsy();
 	});
 
-	// SCH-09/#203: the box is the author's, never the schedule creator's. #203's ownership gate is
-	// PR #257 and is not in master yet; this holds either way, because the author is the caller.
-	it("SCH-09 a session's check runs in the caller's box, not the schedule creator's", async () => {
-		t = await startTestPanad();
+	// SCH-09/#203: a check belongs to its schedule, so only that schedule's creator (or the user)
+	// may set one, and the box is the author's: a check never runs under another session's identity.
+	it("SCH-09 a session sets a check only on its own schedule, and it runs as that session", async () => {
+		t = await startTestPanad({ handlers: { "sessions.create": () => ({ status: 201 }) } });
 		const other = await session(t);
 		const mine = await session(t);
 		const theirs = await t.client.post<{ schedule: ScheduleView }>("/schedules", { ...base }, { caller: other });
 		expect(theirs.status).toBe(201);
-		const edited = await t.client.post<{ schedule: ScheduleView }>(
-			`/schedules/${theirs.body.schedule.id}`,
-			{ check: 'printf "%s:%s" "${PANA_SESSION}" "${PANA_SCRATCH}"' },
-			{ caller: mine },
-		);
-		expect(edited.status).toBe(200);
-		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(theirs.body.schedule.id))).toEqual({ session_id: mine });
-		await t.clock.advanceTo(theirs.body.schedule.nextAt!);
-		await vi.waitFor(async () => expect((await show(theirs.body.schedule.id)).lastCheck).not.toBeNull());
-		// The creator's id never reaches the check: it runs as the caller that wrote the check.
-		expect((await show(theirs.body.schedule.id)).lastCheck!.stdout).toBe(`${mine}:${join(t.runtime.paths.scratch, mine)}`);
+		// #203: the neighbour's schedule is not the caller's to change, so it cannot carry its check.
+		const refused = await t.client.post(`/schedules/${theirs.body.schedule.id}`, { check: 'printf "%s" "$PANA_SESSION"' }, { caller: mine });
+		expect(refused.status).toBe(403);
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(theirs.body.schedule.id))).toBeFalsy();
+
+		// On its own schedule the caller is the author, so the check runs with the caller's identity.
+		const own = await t.client.post<{ schedule: ScheduleView }>("/schedules", { ...base }, { caller: mine });
+		expect(own.status).toBe(201);
+		const set = await t.client.post(`/schedules/${own.body.schedule.id}`, { check: 'printf "%s:%s" "${PANA_SESSION}" "${PANA_SCRATCH}"' }, { caller: mine });
+		expect(set.status).toBe(200);
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(own.body.schedule.id))).toEqual({ session_id: mine });
+		await t.clock.advanceTo(own.body.schedule.nextAt!);
+		await vi.waitFor(async () => expect((await show(own.body.schedule.id)).lastCheck).not.toBeNull());
+		expect((await show(own.body.schedule.id)).lastCheck!.stdout).toBe(`${mine}:${join(t.runtime.paths.scratch, mine)}`);
 	});
 
 	// SCH-09/GUARD: a session's check cannot leave its box even when the stored row says it should,
