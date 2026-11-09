@@ -855,10 +855,14 @@ describe("system prompt", () => {
 		// Reading is not joining, and the session cannot add itself.
 		expect(pana).toContain("Reading never joins");
 		expect(pana).toContain("refused");
-		// The way in: a participant's --cc, asked for out of band, forward-only.
+		// The way in: a participant's --cc, asked of a participant out of band, forward-only.
+		expect(pana).toContain("ask a participant");
+		expect(pana).toContain("start a thread with one");
 		expect(pana).toContain("--cc");
 		expect(pana).toContain("never what came before");
 		expect(pana).toContain("Do not send the refused reply as a way of asking");
+		// The discovery sentence names the commands and stops there; --help carries the output shape.
+		expect(pana).not.toContain("newest-created first");
 	});
 
 	it("PRM-03 the pana section includes the session URL, the memory worktree, and the memory commands", async () => {

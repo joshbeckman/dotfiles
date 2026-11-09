@@ -366,7 +366,7 @@ Only participants may respond, and a session cannot add itself: its reply is ref
 pana thread respond --thread TARGET --after NEWEST --body "adding the session that has the CI history" --cc 01SESSION…
 ```
 
-The added session participates from that message on: it receives that message and every later one, never the earlier ones, and its `joined_message_id` records where it joined. A session that wants in therefore asks out of band — replying in a thread it shares with a participant, or in its own thread addressed to you, naming the thread it wants to join and what it would add. `pana/prompt.md` tells sessions that, so the request arrives as an ordinary message instead of as a rejected reply.
+The added session participates from that message on: it receives that message and every later one, never the earlier ones, and its `joined_message_id` records where it joined. A session that wants in therefore asks out of band — replying in a thread it shares with a participant, or starting a thread with one (`pana thread create --to`), naming the thread it wants to join and what it would add. You are a participant in most threads and may add a session the same way, but no one is the moderator: any participant can. `pana/prompt.md` tells sessions that, so the request arrives as an ordinary message instead of as a rejected reply.
 
 `--cc` takes a session ULID or `pana://` URL, or the user. It returns 404 for a session that does not exist and 409 for an archived one, because a thread holding an archived session accepts no deliveries at all (STA-07). There is no command to leave a thread or to remove a participant.
 
