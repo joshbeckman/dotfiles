@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PanaExecutionEnv } from "../src/extension/env.ts";
+import { PanaExecutionEnv, sandboxSupported } from "../src/extension/env.ts";
 import {
 	blockedCheckout,
 	primaryCheckoutOf,
@@ -68,13 +68,9 @@ function env(options: { home: string; cwd: string; roots?: string[]; protect?: "
 	});
 }
 
+/** GUARD-02: the wrapper needs a mount namespace and the capability drop that follows it. */
 function canNamespace(): boolean {
-	try {
-		execFileSync("unshare", ["--map-root-user", "--mount", "true"], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
-	}
+	return sandboxSupported();
 }
 
 describe("GUARD-01 the file tools refuse the user's checkout", () => {
@@ -135,6 +131,30 @@ describe("GUARD-02 sandbox mode cannot write to the checkout", () => {
 		if (!allowed.ok) throw new Error(allowed.error.message);
 		expect(allowed.value.exitCode).toBe(0);
 		expect(existsSync(join(wt, "from-bash.txt"))).toBe(true);
+	});
+
+	it.skipIf(!canNamespace())("a confined command cannot undo the read-only mount", async () => {
+		const t = setup();
+		const e = env({ home: t.home, cwd: t.scratch, protect: "sandbox" });
+		// The mounts are made by the namespace's own root, and the command does not inherit the
+		// capability it would take to remount one writable.
+		const remount = await e.exec(["mount", "-o", "remount,bind,rw", t.repo], undefined, ctx);
+		expect(remount.ok).toBe(true);
+		if (!remount.ok) throw new Error(remount.error.message);
+		expect(remount.value.exitCode).not.toBe(0);
+		// Binding an ancestor over the checkout would be a writable view of the same directory.
+		const holder = join(t.scratch, "holder");
+		mkdirSync(holder);
+		const bind = await e.exec(["mount", "--bind", t.home, holder], undefined, ctx);
+		expect(bind.ok).toBe(true);
+		if (!bind.ok) throw new Error(bind.error.message);
+		expect(bind.value.exitCode).not.toBe(0);
+		// A nested user namespace does not give the capability back: the mount belongs to the parent.
+		const nested = await e.exec(["unshare", "--map-root-user", "--mount", "mount", "-o", "remount,bind,rw", t.repo], undefined, ctx);
+		expect(nested.ok).toBe(true);
+		if (!nested.ok) throw new Error(nested.error.message);
+		expect(nested.value.exitCode).not.toBe(0);
+		expect(existsSync(join(t.repo, "from-bash.txt"))).toBe(false);
 	});
 });
 

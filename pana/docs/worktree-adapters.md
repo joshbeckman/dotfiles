@@ -34,15 +34,20 @@ their original paths, including case-preserving IDs. Always use the returned pat
 A command exit of zero is not enough: Pana checks the path, shared repository,
 branch, and worktree-specific git registration/back-pointer before publishing ownership.
 Ownership records under `<state>/worktree-owners`
-are retained across restart and archive. No external existing tree is auto-adopted,
+are retained across restart and archive. A record is provenance, not authority on its
+own: it is a file the session's shell can write, so it counts only for a tree named
+for that session under a managed root (`pana-<session>-<name>`), which is the only
+place panad creates trees. No external existing tree is auto-adopted,
 and another session's linked tree is not writable merely because `.git` is a file.
 Known peer ownership overrides even an explicit cwd, and implicit-cwd shell execution
 in an unowned checkout is refused. These are accidental-write guards, not a security
 boundary against arbitrary code. `guard` mode checks file-tool write paths and the
 actual execution cwd, never Bash command text. Commands launched from scratch may
 name or enter unowned checkouts; the session instructions still require owned trees
-for changes. `sandbox` adds read-only mounts on hosts supporting user mount namespaces;
-macOS falls back to file-tool/cwd checks without Bash write enforcement.
+for changes. `sandbox` adds read-only mounts on hosts supporting user mount namespaces, and runs
+the command without `CAP_SYS_ADMIN` so it cannot remount them writable or bind an
+ancestor over them; macOS falls back to file-tool/cwd checks without Bash write
+enforcement.
 
 ## Failure and cleanup
 

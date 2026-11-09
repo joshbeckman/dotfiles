@@ -1,7 +1,12 @@
 // Ownership receipts live outside scratch and are retained across archive/restart. A receipt
 // permits only its checkout, not the surrounding managed tree (caches may belong to other tools).
+//
+// A receipt is a file in the session's own state directory, so a session's shell can write one and
+// `exec()` re-reads them before every call. It therefore records provenance and must not carry
+// authority on its own: `namedForSession` is the other half, scoping a receipt to the trees panad
+// creates for that session (GUARD-07).
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { realPath } from "../extension/checkouts.ts";
 
 export interface WorktreeOwner { session: string; path: string; common: string }
@@ -32,6 +37,18 @@ export function owners(state: string): WorktreeOwner[] {
 			return typeof value.session === "string" && typeof value.path === "string" && typeof value.common === "string" ? [value as WorktreeOwner] : [];
 		} catch { return []; }
 	});
+}
+
+/**
+ * GUARD-07: whether `path` is in the name space panad gives `session`. Every tree panad creates is
+ * `<managed root>/pana-<session>-<name>/[subdir]`, so a path component names the owner, and the
+ * session ID is case-folded because external adapters lowercase it. The test deliberately does not
+ * read the configured adapters: removing one from config must not hand its trees to the first
+ * session that writes a receipt, or take them from the session that owns them.
+ */
+export function namedForSession(path: string, session: string): boolean {
+	const prefix = `pana-${session.toLowerCase()}-`;
+	return path.split(sep).some((part) => part.toLowerCase().startsWith(prefix));
 }
 
 export function ownedPaths(state: string, session: string): string[] {

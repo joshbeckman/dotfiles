@@ -201,8 +201,9 @@ Pana runs beside the current pi setup and shares nothing with it.
   a command launched from scratch can name or enter a checkout. Instructions require
   changes in owned worktrees, but guard mode does not prevent arbitrary Bash writes.
 - `"sandbox"` additionally mounts unowned checkouts read-only for Bash on hosts with
-  working Linux user namespaces. If namespaces are unavailable (including macOS), it
-  falls back to file-tool/cwd protection, not equivalent Bash write enforcement.
+  working Linux user namespaces and a way to drop `CAP_SYS_ADMIN`. If those are
+  unavailable (including macOS), it falls back to file-tool/cwd protection, not
+  equivalent Bash write enforcement.
   `"off"` disables checkout protection entirely. Stronger cross-platform filesystem
   isolation is separate from the worktree workflow.
 - Worktree receipts persist across archive/restart and are not scratch. Sessions must

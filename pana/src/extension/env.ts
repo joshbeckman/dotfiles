@@ -8,6 +8,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { err, ExecutionError, FileError } from "@earendil-works/pi-durable/env";
 import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result } from "@earendil-works/pi-durable/env";
 import type { Context } from "@earendil-works/chord";
+import { spawnSync } from "node:child_process";
 import { homedir, userInfo } from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { memoryFor } from "../memory/handlers.ts";
 import { ensureScratch } from "../scratch/index.ts";
 import type { Runtime } from "../server/runtime.ts";
-import { checkoutCommon, owners, type WorktreeOwner } from "../worktrees/ownership.ts";
+import { checkoutCommon, namedForSession, owners, type WorktreeOwner } from "../worktrees/ownership.ts";
 import { browserScope } from "./browser.ts";
 import type { CheckoutGuard } from "../config/index.ts";
 import {
@@ -113,20 +114,45 @@ function quote(path: string): string {
 }
 
 /**
+ * GUARD-02: what removes CAP_SYS_ADMIN from the command. `--map-root-user` maps the caller to uid 0
+ * inside the namespace, which also grants it CAP_SYS_ADMIN over the mounts that are supposed to
+ * confine it: it could `mount -o remount,bind,rw` one back to writable, or `mount --bind` an
+ * ancestor directory over it and write through that. Dropping the capability takes both away, and
+ * a nested user namespace cannot regain it over a mount that belongs to this one.
+ */
+const DROP_SYS_ADMIN = ["setpriv", "--bounding-set=-sys_admin", "--inh-caps=-sys_admin", "--"] as const;
+
+/**
  * GUARD-02: the command, run in a mount namespace of its own with every primary checkout bound
  * read-only. A command cannot write to a read-only mount, so no pattern of `bash` defeats this.
  *
- * The mounts are set up inside the same shell that runs the command, before it: `unshare` needs
- * no root (`--map-root-user` maps the caller to uid 0 inside the namespace), and the bind of a
- * mount point onto itself followed by a read-only remount is the classic way to make an existing
- * directory read-only without moving it.
+ * The mounts are set up in the namespace's shell, before the command: `unshare` needs no root
+ * (`--map-root-user` maps the caller to uid 0 inside the namespace), and the bind of a mount point
+ * onto itself followed by a read-only remount is the classic way to make an existing directory
+ * read-only without moving it. Only then does the command's own shell start, one capability
+ * poorer, so the mounts it inherited are not its to undo.
  */
 export function namespaced(mounts: readonly string[], command: string | readonly string[]): string[] {
 	const prologue = mounts
 		.map((path) => `mount --bind ${quote(path)} ${quote(path)} && mount -o remount,bind,ro ${quote(path)} || true`)
 		.join("; ");
-	if (typeof command === "string") return ["unshare", "--map-root-user", "--mount", SHELL, "-c", `${prologue}\n${command}`];
-	return ["unshare", "--map-root-user", "--mount", SHELL, "-c", `${prologue}\nexec "$@"`, "pana", ...command];
+	const argv = typeof command === "string" ? [SHELL, "-c", command] : command;
+	return ["unshare", "--map-root-user", "--mount", SHELL, "-c", `${prologue}\nexec ${DROP_SYS_ADMIN.join(" ")} "$@"`, "pana", ...argv];
+}
+
+/**
+ * Whether this host can build the wrapper at all: user namespaces to make the mounts in, and a
+ * working capability drop for the command that follows. Probed once per process; a host with
+ * `unshare` but no usable `setpriv` falls back exactly as macOS does, rather than running the
+ * command with the capability that undoes its own mounts.
+ */
+let canSandbox: boolean | undefined;
+export function sandboxSupported(): boolean {
+	if (canSandbox === undefined) {
+		const probe = spawnSync("unshare", ["--map-root-user", "--mount", ...DROP_SYS_ADMIN, "true"], { stdio: "ignore" });
+		canSandbox = probe.status === 0;
+	}
+	return canSandbox;
 }
 
 /**
@@ -232,8 +258,15 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 				// A symlink must not turn Alice's legacy ownership boundary into Bob's.
 				return realPath(namespace) === namespace && under(namespace, root) && checkoutCommon(root) !== undefined;
 			}
-			const matching = (receipts ?? owners(this.stateDir)).filter((o) => under(o.path, root));
-			if (matching.length) return matching.every((o) => o.session === this.sessionId && checkoutCommon(o.path) === o.common);
+			// GUARD-07: a receipt is provenance, not authority. It is a file the session's own shell
+			// can write, so a claim counts only when the tree is in the name space panad gives the
+			// session making it, and git still points that tree at the recorded repository. A claim
+			// that fails that test is ignored rather than denied: forging one must not cost its
+			// owner the tree either.
+			const claims = (receipts ?? owners(this.stateDir))
+				.filter((o) => under(o.path, root))
+				.filter((o) => namedForSession(o.path, o.session) && checkoutCommon(o.path) === o.common);
+			if (claims.length) return claims.every((o) => o.session === this.sessionId);
 		}
 		// A cwd inside this checkout is explicit authority; an ancestor of many checkouts is not.
 		return under(root, this.sessionCwd);
@@ -274,7 +307,8 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 		};
 		// Ownership is checked against actual paths, never inferred from shell command text.
 		// In guard mode Bash isolation relies on the worktree workflow; sandbox additionally
-		// mounts unowned checkouts read-only where the host supports user namespaces.
+		// mounts unowned checkouts read-only where the host supports user namespaces and a
+		// capability drop, so the confined command cannot undo those mounts.
 		let checkouts: string[] = [];
 		if (this.protectCheckouts !== "off") {
 			const receipts = this.stateDir ? owners(this.stateDir) : [];
@@ -284,7 +318,7 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 			}
 			if (this.protectCheckouts === "sandbox" && this.namespace !== false) checkouts = this.checkouts(receipts);
 		}
-		const mounts = this.protectCheckouts === "sandbox" && this.namespace !== false ? checkouts : [];
+		const mounts = this.protectCheckouts === "sandbox" && this.namespace !== false && sandboxSupported() ? checkouts : [];
 		if (mounts.length === 0) return super.exec(command, execOptions, context);
 		const result = await super.exec(namespaced(mounts, command), execOptions, context);
 		if (result.ok || !namespaceUnavailable(result.error)) {

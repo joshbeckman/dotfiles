@@ -112,6 +112,23 @@ describe("GUARD-07 managed worktrees", () => {
 		expect((await e.writeFile(join(a.path, "peer-write"), "no", ctx)).ok).toBe(false);
 	});
 
+	it("a receipt file alone grants nothing: it must name the session's own tree", async () => {
+		const t = await fixture();
+		const b = await addWorktree(t.runtime, "bob", { repo: t.repo });
+		// `$PANA_STATE` is the session's own shell's to write, so it can write a receipt in exactly
+		// the shape panad writes one. It reaches nothing: the tree is not named for the session.
+		saveOwner(t.state, "forged", { session: "alice", path: b.path, common: join(t.repo, ".git") });
+		expect((await t.guarded("alice").writeFile(join(b.path, "forged"), "no", ctx)).ok).toBe(false);
+		expect((await t.guarded("alice").remove(join(b.path, "tracked"), undefined, ctx)).ok).toBe(false);
+		expect((await t.guarded("bob").writeFile(join(b.path, "mine"), "yes", ctx)).ok).toBe(true);
+		// Both halves are needed: a tree named for the session with no receipt is not its own either.
+		const named = join(t.root, "pana-alice-hand", "src");
+		t.git(t.repo, ["worktree", "add", "-qb", "hand", named]);
+		expect((await t.guarded("alice").writeFile(join(named, "no"), "no", ctx)).ok).toBe(false);
+		const a = await addWorktree(t.runtime, "alice", { repo: t.repo });
+		expect((await t.guarded("alice").writeFile(join(a.path, "own"), "yes", ctx)).ok).toBe(true);
+	});
+
 	it("does not grant ownership when the adapter checks out the wrong branch", async () => {
 		const t = fixture(); t.adapter.create[t.adapter.create.length - 1] = "wrong-branch";
 		await expect(addWorktree(t.runtime, "alice", { repo: t.repo })).rejects.toThrow("wrong branch");
