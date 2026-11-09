@@ -79,7 +79,8 @@ export async function stopObjective(runtime: Runtime, caller: Caller, value: str
 		// so a member the user stopped keeps `user` and stays inert.
 		await sessionRuntime(runtime).stop(member.id, "objective");
 	}
-	for (const wake of wakes) await deleteSchedule(runtime, wake);
+	// The caller is the user (`userOnly` above), so it may cancel a member's wake (#203).
+	for (const wake of wakes) await deleteSchedule(runtime, caller, wake);
 	return showObjective(runtime, id);
 }
 
