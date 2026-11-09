@@ -448,8 +448,8 @@ export S_KEY='!security find-generic-password -s s-secrets -w'
 
 source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-# cloudplatform: add Shopify clusters to your local kubernetes config
-export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}/Users/joshbeckman/.kube/config:/Users/joshbeckman/.kube/config.shopify.cloudplatform
+# Keep the default kube config in the list when KUBECONFIG is set elsewhere
+export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}$HOME/.kube/config
 
 # Added by tec agent. Only present on the work machine, so the block is guarded
 # rather than adding two dead directories to PATH elsewhere.
