@@ -15,6 +15,10 @@ export const CHOICES_LANGUAGE = "choices";
 // and they are rewritten to app routes before the HTML reaches the DOM.
 const ALLOWED_URI = /^(?:(?:https?|mailto|pana):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i;
 
+// A message may carry raw HTML, and a `<style>` element survives DOMPurify's html profile and
+// applies to the whole document, so one message could restyle or hide the app for its reader.
+const FORBIDDEN_HTML_TAGS = ["style"];
+
 /** FIL-07: the widest copy an inline image asks for, so a photo does not arrive at full size. */
 export const INLINE_WIDTH = 1024;
 
@@ -22,7 +26,11 @@ export function markdownToHtml(text, { marked, DOMPurify }) {
 	const source = String(text ?? "");
 	if (!marked || !DOMPurify) return escapeHtml(source);
 	const html = marked.parse(source, { gfm: true, breaks: false });
-	return DOMPurify.sanitize(html, { USE_PROFILES: { html: true, svg: true }, ALLOWED_URI_REGEXP: ALLOWED_URI });
+	return DOMPurify.sanitize(html, {
+		USE_PROFILES: { html: true, svg: true },
+		ALLOWED_URI_REGEXP: ALLOWED_URI,
+		FORBID_TAGS: FORBIDDEN_HTML_TAGS,
+	});
 }
 
 export function escapeHtml(value) {
