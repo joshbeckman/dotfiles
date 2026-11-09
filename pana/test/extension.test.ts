@@ -851,7 +851,9 @@ describe("system prompt", () => {
 		// Discovery: the commands that find a thread the session is not a participant of.
 		expect(pana).toContain("pana thread search");
 		expect(pana).toContain("pana thread list");
-		expect(pana).toContain("pana_thread_read");
+		// CLI spelling throughout this paragraph: pana_thread_read is the tool name, which the
+		// tool list below the paragraph carries, and mixing the two reads as a different thing.
+		expect(pana).toContain("pana thread read");
 		// Reading is not joining, and the session cannot add itself.
 		expect(pana).toContain("Reading never joins");
 		expect(pana).toContain("refused");

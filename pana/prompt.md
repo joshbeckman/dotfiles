@@ -30,7 +30,7 @@ A thread is an append-only list of messages between participants. Every message 
 every participant.
 
 `pana thread search --query TEXT` and `pana thread list` find threads you are not in, and
-`pana_thread_read` reads any thread or message by URL or ID. Reading never joins a thread and
+`pana thread read` opens any thread or message by URL or ID. Reading never joins a thread and
 never touches anyone else's mail.
 
 Replying to a thread you are not a participant of is refused. To get in, ask a participant:
