@@ -5,17 +5,23 @@
 // `PanaExecutionEnv`: the child sees only `PANA_ENV_NAMES` and the checkout guard, never panad's
 // own `process.env`. That matters because a check is defined once and then runs on cron with
 // panad's identity; `bin/panad-service` injects the provider keys there, and no command pana runs
-// on its own initiative may read them. Definition is the user's alone (see `store.ts` and
-// `objectives/metrics.ts`); running it is this file's business.
+// on its own initiative may read them.
 //
-// The constraints are unchanged: the recorded cwd, a 30-second timeout on the runtime clock,
-// 8 KiB retained per stream, and a killed process group.
+// A session may define a check, so a session's check runs in that session's box
+// (`check-box.ts`): the same allowlisted environment with `PANA_SESSION` and `PANA_SCRATCH` set,
+// the same guard, and a cwd inside the session's own roots. The user's check keeps the user's
+// recorded cwd.
+//
+// The constraints are unchanged: a 30-second timeout on the runtime clock, 8 KiB retained per
+// stream, and a killed process group.
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+import { existsSync } from "node:fs";
 import { constants } from "node:os";
 import type { Clock, Runtime } from "../server/runtime.ts";
 import type { CheckoutGuard } from "../config/index.ts";
 import { PanaExecutionEnv } from "../extension/env.ts";
+import { boxRefusal, sessionBox, type SessionBox } from "./check-box.ts";
 
 export const CHECK_TIMEOUT_MS = 30_000;
 export const CHECK_OUTPUT_BYTES = 8192;
@@ -38,6 +44,10 @@ export interface CheckHost {
 	protectCheckouts?: CheckoutGuard;
 	/** Adapter layouts the guard also protects, as `createPanaEnv` passes them. */
 	managedLayouts?: readonly { root: string; subdir?: string }[];
+	/** Where to scan for primary checkouts (GUARD-04). HOME by default; a test names its own root. */
+	checkoutRoots?: readonly string[];
+	/** The authoring session's box, when a session defined the check (SCH-09). */
+	box?: SessionBox;
 }
 
 /** The host a check runs on, taken from the running panad. */
@@ -47,6 +57,29 @@ export function checkHost(runtime: Runtime): CheckHost {
 		protectCheckouts: runtime.config.tools.protectCheckouts,
 		managedLayouts: runtime.config.worktreeAdapters,
 	};
+}
+
+/** A stored check: its command, the cwd recorded with it, and the session that authored it. */
+export interface StoredCheck {
+	command: string;
+	cwd: string | null;
+	/** The session whose box it runs in; null is the user's own check. */
+	author: string | null;
+}
+
+/**
+ * SCH-09: run a stored check on the host panad is. A session's check runs inside that session's
+ * box; the user's check runs at its recorded cwd, or panad's own when none was recorded.
+ */
+export async function runStoredCheck(
+	runtime: Runtime,
+	stored: StoredCheck,
+	clock: Clock,
+	abort: AbortSignal,
+): Promise<CheckResult> {
+	const box = stored.author === null ? undefined : sessionBox(runtime, stored.author);
+	const cwd = stored.cwd ?? box?.scratchDir ?? process.cwd();
+	return runCheck(stored.command, cwd, clock, abort, { ...checkHost(runtime), box });
 }
 
 /** The name of the signal behind an exit status the executor reported as `128 + n`. */
@@ -89,6 +122,15 @@ export async function runCheck(
 ): Promise<CheckResult> {
 	let stdout = "";
 	let stderr = "";
+	// A run pana stopped has pana's reason for it; one that never started has the executor's.
+	const failure = (error: string): CheckResult => ({
+		checkedAt: clock.now(), status: "failed", exitCode: null, signal: null, stdout, stderr, error,
+	});
+	// SCH-09: a session's check may not leave its box, even if the stored row says otherwise.
+	const refusal = host.box === undefined ? undefined : boxRefusal(host.box, cwd);
+	if (refusal !== undefined) return failure(refusal);
+	// A swept scratch is a box that is gone: say so instead of reporting a spawn error.
+	if (host.box !== undefined && !existsSync(cwd)) return failure(`the check's cwd ${cwd} does not exist; the session's box may have been removed`);
 	// Set when pana stops the run rather than the command ending it; that reason is the error.
 	let stopped: string | null = null;
 	const control = new AbortController();
@@ -104,8 +146,11 @@ export async function runCheck(
 	if (abort.aborted) cancel();
 	const env = new PanaExecutionEnv({
 		cwd,
+		sessionId: host.box?.id,
+		scratchDir: host.box?.scratchDir,
 		stateDir: host.stateDir,
 		protectCheckouts: host.protectCheckouts,
+		checkoutRoots: host.checkoutRoots,
 		managedLayouts: host.managedLayouts,
 	});
 	const execution = await env
@@ -126,10 +171,6 @@ export async function runCheck(
 			cancelTimer?.();
 			abort.removeEventListener("abort", cancel);
 		});
-	// A run pana stopped has pana's reason for it; one that never started has the executor's.
-	const failure = (error: string): CheckResult => ({
-		checkedAt: clock.now(), status: "failed", exitCode: null, signal: null, stdout, stderr, error,
-	});
 	if (stopped !== null) return failure(stopped);
 	if (!execution.ok) return failure(execution.error.message);
 	// A child the kernel killed has no exit status of its own; the executor reports the shell's

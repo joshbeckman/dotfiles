@@ -1,14 +1,47 @@
-import { mkdtempSync, rmSync, writeFileSync, existsSync, realpathSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCheck, CHECK_OUTPUT_BYTES, CHECK_TIMEOUT_MS } from "../src/schedules/check.ts";
+import { scheduleScope, sessionBox } from "../src/schedules/check-box.ts";
 import type { ScheduleView } from "../src/schedules/store.ts";
+import type { Runtime } from "../src/server/runtime.ts";
 import { createFakeClock, startTestPanad, type TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
 let dir: string | undefined;
-afterEach(async () => { await t?.close(); t = undefined; if (dir) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
+afterEach(async () => {
+	await t?.close();
+	t = undefined;
+	if (dir) rmSync(dir, { recursive: true, force: true });
+	dir = undefined;
+	delete process.env.PANA_TEST_SECRET;
+});
+
+/** A session that exists (and can act as a caller) without running anything. */
+async function session(harness: TestPanad): Promise<string> {
+	const id = harness.runtime.newId();
+	await harness.runtime.db.write(async (tx) => {
+		await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, harness.runtime.url({ kind: "session", id }), harness.clock.now());
+		await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", id, harness.clock.now(), harness.clock.now());
+	});
+	return id;
+}
+
+/** A runtime with only the paths a session's box reads, for unit tests of the runner. */
+function pathsOnly(state: string): Runtime {
+	return { paths: { dir: state, scratch: join(state, "scratch"), memoryWorktrees: join(state, "memory", "worktrees") } } as unknown as Runtime;
+}
+
+function canNamespace(): boolean {
+	try {
+		execFileSync("unshare", ["--map-root-user", "--mount", "true"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
 const cron = "* * * * *";
 const base = { kind: "session", cron, payload: { prompt: "only when ready" } };
 async function create(extra: Record<string, unknown> = {}) {
@@ -88,26 +121,125 @@ describe("schedule conditions", () => {
 		expect((await show(schedule.id)).state).toBe("active");
 	});
 
-	it("SCH-09 a check is the user's to define: a session's create and update are both refused", async () => {
-		t = await startTestPanad();
-		const session = t.runtime.newId();
-		const now = t.clock.now();
-		await t.runtime.db.write(async (tx) => {
-			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", session, t!.runtime.url({ kind: "session", id: session }), now);
-			await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", session, now, now);
-		});
-		const asSession = (extra: Record<string, unknown>) => t!.client.post("/schedules", { ...base, ...extra }, { caller: session });
+	// SCH-09: a session defines its own check again, and the check runs inside that session's box.
+	it("SCH-09 a session defines a check that runs in its own box, with its own env and cwd", async () => {
+		let calls = 0;
+		t = await startTestPanad({ handlers: { "sessions.create": () => { calls++; return { status: 201 }; } } });
+		process.env.PANA_TEST_SECRET = "panad-only";
+		const mine = await session(t);
+		const scratch = join(t.runtime.paths.scratch, mine);
+		mkdirSync(scratch, { recursive: true });
+		const asSession = (extra: Record<string, unknown>) => t!.client.post<{ schedule: ScheduleView }>("/schedules", { ...base, ...extra }, { caller: mine });
 
-		expect((await asSession({ check: "touch planted" })).status).toBe(403);
-		expect((await asSession({ checkCwd: tmpdir() })).status).toBe(403);
-		// A session may still schedule its own work and change it; only the check is the user's.
-		const own = await asSession({ payload: { prompt: "my own work" } });
-		expect(own.status).toBe(201);
-		const id = (own.body as { schedule: ScheduleView }).schedule.id;
-		expect((await t.client.post(`/schedules/${id}`, { check: "touch planted" }, { caller: session })).status).toBe(403);
-		expect((await t.client.post(`/schedules/${id}`, { check: null }, { caller: session })).status).toBe(403);
-		expect((await t.client.post(`/schedules/${id}`, { payload: { prompt: "edited" } }, { caller: session })).status).toBe(200);
-		expect((await show(id)).check).toBeNull();
+		// The command proves the box: the session's own identity, its scratch, its PWD, and no
+		// variable panad holds. Any miss prints the environment and fails with exit 2.
+		// `PWD` is the physical path the kernel starts the child in; on macOS `/tmp` and `/var` are
+		// symlinks, so compare it with the resolved scratch while `PANA_SCRATCH` keeps its own spelling.
+		const command = `[[ "$PANA_SESSION" == "${mine}" && "$PANA_SCRATCH" == "${scratch}" && "$(pwd -P)" == "${realpathSync(scratch)}" && -z "\${PANA_TEST_SECRET:-}" ]] || { env; exit 2; }`;
+		const made = await asSession({ check: command });
+		expect(made.status).toBe(201);
+		const schedule = made.body.schedule;
+		// A session's check defaults to its scratch, never panad's cwd.
+		expect(schedule).toMatchObject({ check: command, checkCwd: scratch });
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(schedule.id))).toEqual({ session_id: mine });
+
+		await t.clock.advanceTo(schedule.nextAt!);
+		expect(await checked(schedule.id)).toMatchObject({ status: "passed", exitCode: 0, stderr: "" });
+		await vi.waitFor(() => expect(calls).toBe(1));
+
+		// An edit that leaves the cwd alone keeps it; a cwd outside the box is refused, and names it.
+		const kept = await t.client.post<{ schedule: ScheduleView }>(`/schedules/${schedule.id}`, { check: "exit 0" }, { caller: mine });
+		expect(kept.status).toBe(200);
+		expect(kept.body.schedule.checkCwd).toBe(scratch);
+		// An edit that does not name the check keeps its command, cwd, and author.
+		expect((await t.client.post(`/schedules/${schedule.id}`, { payload: { prompt: "edited" } }, { caller: mine })).status).toBe(200);
+		expect(await show(schedule.id)).toMatchObject({ check: "exit 0", checkCwd: scratch });
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(schedule.id))).toEqual({ session_id: mine });
+		const outside = await t.client.post(`/schedules/${schedule.id}`, { checkCwd: tmpdir() }, { caller: mine });
+		expect(outside.status).toBe(400);
+		expect((outside.body as { error: { code: string; message: string } }).error).toMatchObject({ code: "invalid_check_cwd" });
+		expect((outside.body as { error: { message: string } }).error.message).toContain(scratch);
+		// A peer session's worktree is outside it too.
+		const peer = join(t.runtime.paths.dir, "worktrees", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+		expect((await t.client.post(`/schedules/${schedule.id}`, { checkCwd: peer }, { caller: mine })).status).toBe(400);
+		// Clearing the check clears its author with it.
+		expect((await t.client.post(`/schedules/${schedule.id}`, { check: null }, { caller: mine })).status).toBe(200);
+		expect(await show(schedule.id)).toMatchObject({ check: null, checkCwd: null });
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(schedule.id))).toBeFalsy();
+	});
+
+	// SCH-09/#203: the box is the author's, never the schedule creator's. #203's ownership gate is
+	// PR #257 and is not in master yet; this holds either way, because the author is the caller.
+	it("SCH-09 a session's check runs in the caller's box, not the schedule creator's", async () => {
+		t = await startTestPanad();
+		const other = await session(t);
+		const mine = await session(t);
+		const theirs = await t.client.post<{ schedule: ScheduleView }>("/schedules", { ...base }, { caller: other });
+		expect(theirs.status).toBe(201);
+		const edited = await t.client.post<{ schedule: ScheduleView }>(
+			`/schedules/${theirs.body.schedule.id}`,
+			{ check: 'printf "%s:%s" "${PANA_SESSION}" "${PANA_SCRATCH}"' },
+			{ caller: mine },
+		);
+		expect(edited.status).toBe(200);
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(theirs.body.schedule.id))).toEqual({ session_id: mine });
+		await t.clock.advanceTo(theirs.body.schedule.nextAt!);
+		await vi.waitFor(async () => expect((await show(theirs.body.schedule.id)).lastCheck).not.toBeNull());
+		// The creator's id never reaches the check: it runs as the caller that wrote the check.
+		expect((await show(theirs.body.schedule.id)).lastCheck!.stdout).toBe(`${mine}:${join(t.runtime.paths.scratch, mine)}`);
+	});
+
+	// SCH-09/GUARD: a session's check cannot leave its box even when the stored row says it should,
+	// and the guard refuses the user's primary checkout either way.
+	it("SCH-09 a session check is refused outside its box, and the guard keeps it out of a checkout", async () => {
+		const home = mkdtempSync(join(tmpdir(), "pana-box-home-"));
+		const state = mkdtempSync(join(tmpdir(), "pana-box-state-"));
+		dir = home;
+		try {
+			const repo = join(home, "dotfiles");
+			mkdirSync(join(repo, ".git"), { recursive: true });
+			const box = sessionBox(pathsOnly(state), "01M6YZ5VCHZEZ6HKNF1KXFG08C");
+			mkdirSync(box.scratchDir, { recursive: true });
+			const clock = createFakeClock();
+			const host = { stateDir: state, box, checkoutRoots: [home] };
+
+			// A stored cwd inside the user's checkout is a failure, not a run.
+			const outside = await runCheck(`printf nope > ${join(repo, "from-check.txt")}`, repo, clock, new AbortController().signal, host);
+			expect(outside).toMatchObject({ status: "failed", exitCode: null });
+			expect(outside.error).toContain("box");
+			expect(existsSync(join(repo, "from-check.txt"))).toBe(false);
+
+			// The same command runs inside the box.
+			const inside = await runCheck(`printf ok > ${join(box.scratchDir, "done.txt")}; printf ok`, box.scratchDir, clock, new AbortController().signal, host);
+			expect(inside).toMatchObject({ status: "passed", stdout: "ok" });
+			expect(readFileSync(join(box.scratchDir, "done.txt"), "utf8")).toBe("ok");
+		} finally {
+			rmSync(state, { recursive: true, force: true });
+		}
+	});
+
+	it.skipIf(!canNamespace())("SCH-09/GUARD-02 sandbox mode mounts the user's checkout read-only for a session check", async () => {
+		const home = mkdtempSync(join(tmpdir(), "pana-box-home-"));
+		const state = mkdtempSync(join(tmpdir(), "pana-box-state-"));
+		dir = home;
+		try {
+			const repo = join(home, "dotfiles");
+			mkdirSync(join(repo, ".git"), { recursive: true });
+			const box = sessionBox(pathsOnly(state), "01M6YZ5VCHZEZ6HKNF1KXFG08C");
+			mkdirSync(box.scratchDir, { recursive: true });
+			const result = await runCheck(
+				`printf nope > ${join(repo, "from-check.txt")}`,
+				box.scratchDir,
+				createFakeClock(),
+				new AbortController().signal,
+				{ stateDir: state, box, checkoutRoots: [home], protectCheckouts: "sandbox" },
+			);
+			// Bash reports the read-only mount as a failed write; the file never appears.
+			expect(result.exitCode).not.toBe(0);
+			expect(existsSync(join(repo, "from-check.txt"))).toBe(false);
+		} finally {
+			rmSync(state, { recursive: true, force: true });
+		}
 	});
 
 	it("SCH-12 a check sees only PANA_ENV_NAMES, never panad's own environment", async () => {

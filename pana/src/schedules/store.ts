@@ -10,8 +10,8 @@
 // one `db.write`.
 
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
-import { isAbsolute } from "node:path";
 import type { CheckResult } from "./check.ts";
+import { checkAuthor, planCheck, saveCheckAuthor, scheduleScope, type CheckPlan } from "./check-box.ts";
 import { Cron } from "croner";
 import { ApiError } from "../api/errors.ts";
 import { isUlid, parseRef } from "../ids/index.ts";
@@ -267,32 +267,26 @@ async function wakeTarget(runtime: Runtime, caller: Caller, value: unknown): Pro
 }
 
 /**
- * SCH-09: a check is the user's to define. It runs on cron in panad's own service, out of reach of
- * the session that wrote it, so a session that could plant one would get code execution there.
+ * SCH-09: conditions belong to the schedule, never the action payload. The command, its cwd, and
+ * the session whose box it runs in come from `planCheck` (`check-box.ts`), the one place the
+ * user's cwd rule and a session's differ. `stored` is what the schedule already has, so an edit
+ * that leaves the check alone keeps its cwd and author.
  */
-function userOnlyCheck(input: ScheduleInput, caller: Caller): void {
-	if (caller.kind === "user") return;
-	if (["check", "checkCwd"].some((field) => input[field as keyof ScheduleInput] !== undefined)) {
-		throw ApiError.forbidden("only the user may set a check on a schedule");
-	}
-}
-
-/** Conditions belong to the schedule, never the action payload. */
-function conditions(input: ScheduleInput, cron: string | null) {
-	const check = input.check ?? null;
-	if (check !== null && (typeof check !== "string" || !check.trim())) {
-		throw ApiError.badRequest("invalid_check", "--check must be a nonempty bash command");
-	}
-	const stop = input.stopAfterSuccess ?? false;
+function conditions(
+	runtime: Runtime,
+	caller: Caller,
+	input: ScheduleInput,
+	cron: string | null,
+	stored: CheckPlan,
+	storedStop: boolean,
+) {
+	const plan = planCheck(runtime, caller, input, stored);
+	const stop = input.stopAfterSuccess === undefined ? storedStop : input.stopAfterSuccess;
 	if (typeof stop !== "boolean") throw ApiError.badRequest("invalid_stop_after_success", "stopAfterSuccess must be boolean");
-	if ((check !== null || stop) && !cron) {
+	if ((plan.command !== null || stop) && !cron) {
 		throw ApiError.badRequest("requires_cron", "--check and --stop-after-success require a recurring --cron schedule");
 	}
-	const cwd = input.checkCwd ?? (check === null ? null : process.cwd());
-	if (cwd !== null && (check === null || typeof cwd !== "string" || !isAbsolute(cwd))) {
-		throw ApiError.badRequest("invalid_check_cwd", "--check-cwd requires --check and an absolute directory path");
-	}
-	return { check: check as string | null, cwd: cwd as string | null, stop };
+	return { check: plan.command, cwd: plan.cwd, author: plan.author, stop };
 }
 
 // --- Reads ---------------------------------------------------------------------
@@ -412,8 +406,7 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 	const now = runtime.clock.now();
 	const kind = scheduleKind(input.kind);
 	const timing = scheduleTiming(input, runtime.config.timezone, now);
-	userOnlyCheck(input, caller);
-	const condition = conditions(input, timing.cron);
+	const condition = conditions(runtime, caller, input, timing.cron, { command: null, cwd: null, author: null }, false);
 	const payload = schedulePayload(input, kind);
 	if (kind === "wake") payload.session = await wakeTarget(runtime, caller, payload.session);
 	const subject = parseScheduleSubject(input.subject);
@@ -440,6 +433,8 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 			subject ?? fallbackScheduleSubject(kind, payload),
 			subject === null ? "first-line" : "manual",
 		);
+		// SCH-09: the author is stored beside the check; a session's check runs in its box.
+		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now);
 		saved = await scheduleRow(tx, id);
 		return scheduleView(saved, runtime);
 	});
@@ -457,7 +452,6 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
  */
 export async function updateSchedule(runtime: Runtime, caller: Caller, id: string, value: unknown): Promise<ScheduleView> {
 	const input = inputObject(value);
-	userOnlyCheck(input, caller);
 	const suppliedSubject = input.subject === undefined ? undefined : parseScheduleSubject(input.subject);
 	let saved!: ScheduleJoinRow;
 	let regenerate = false;
@@ -476,11 +470,14 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 		const subject = suppliedSubject ?? (regenerate ? fallbackScheduleSubject(kind, payload) : existing.subject);
 		const source = suppliedSubject != null ? "manual" : regenerate ? "first-line" : existing.subject_source;
 		const next = timing ?? { cron: existing.cron, at: existing.at, timezone: existing.timezone, nextAt: existing.next_at };
-		const condition = conditions({
-			check: input.check === undefined ? existing.check_command : input.check,
-			checkCwd: input.checkCwd === undefined ? (input.check === null ? null : existing.check_cwd) : input.checkCwd,
-			stopAfterSuccess: input.stopAfterSuccess === undefined ? existing.stop_after_success === 1 : input.stopAfterSuccess,
-		}, next.cron);
+		const condition = conditions(
+			runtime,
+			caller,
+			input,
+			next.cron,
+			{ command: existing.check_command, cwd: existing.check_cwd, author: await checkAuthor(tx, scheduleScope(id)) },
+			existing.stop_after_success === 1,
+		);
 		await tx.run(
 			`UPDATE schedules SET revision = revision + 1, kind = ?, state = ?, cron = ?, at = ?, timezone = ?, payload = ?, next_at = ?, updated_at = ?, check_command = ?, check_cwd = ?, stop_after_success = ?, subject = ?, subject_source = ?
 			  WHERE id = ?`,
@@ -499,6 +496,7 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 			source,
 			id,
 		);
+		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now);
 		saved = await scheduleRow(tx, id);
 		return scheduleView(saved, runtime);
 	});
@@ -517,6 +515,7 @@ export async function deleteSchedule(runtime: Runtime, id: string): Promise<void
 		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
 		if (!row || row.state === "deleted") return undefined;
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
+		await saveCheckAuthor(tx, scheduleScope(id), null, now);
 		return row;
 	});
 	if (!deleted) throw ApiError.notFound(`schedule ${id}`);
@@ -574,6 +573,7 @@ export async function finishSchedule(runtime: Runtime, id: string, revision: num
 			id,
 			revision,
 		);
+		await saveCheckAuthor(tx, scheduleScope(id), null, now);
 	});
 	notifySchedulesChanged(runtime);
 }

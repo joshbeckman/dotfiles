@@ -18,7 +18,8 @@
 // by moving that time forward inside one write (so a restart or a second timer cannot run the
 // same occurrence twice), then runs it.
 
-import { checkHost, runCheck, type CheckResult } from "../schedules/check.ts";
+import { runStoredCheck, type CheckResult } from "../schedules/check.ts";
+import { checkAuthor, metricScope } from "../schedules/check-box.ts";
 import { nextCronAt, parseDuration } from "../schedules/store.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { postNotice } from "../threads/index.ts";
@@ -245,12 +246,15 @@ class CheckLoop implements MetricChecks {
 		// OBJ-04: a draft has no readings, and a closed objective stops measuring. The occurrence
 		// is skipped, not replayed, so the next check is a full interval later.
 		if (claimed.phase !== "active") return;
-		const result = await runCheck(
-			claimed.check_command!,
-			claimed.check_cwd ?? process.cwd(),
+		const result = await runStoredCheck(
+			this.#runtime,
+			{
+				command: claimed.check_command!,
+				cwd: claimed.check_cwd,
+				author: await checkAuthor(this.#runtime.db, metricScope(claimed.objective_id, claimed.name)),
+			},
 			this.#runtime.clock,
 			this.#abort.signal,
-			checkHost(this.#runtime),
 		);
 		const measured = evaluated(result);
 		await record(this.#runtime, claimed, measured.result, measured.value);

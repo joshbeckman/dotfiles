@@ -533,6 +533,24 @@ export const MIGRATIONS: readonly Migration[] = [
 		// primary key or reads by thread.
 		sql: `CREATE INDEX IF NOT EXISTS messages_sender_created ON messages(sender_id, created_at);`,
 	},
+	{
+		version: 16,
+		name: "check authors",
+		// SCH-09: a session may define a check again, and it runs in that session's own box. The
+		// author is the session whose box it is; a missing row is the user's own check, which keeps
+		// the user's choice of cwd. A separate table rather than a column on `schedules` and
+		// `objective_metrics` because `ALTER TABLE ... ADD COLUMN` cannot be written idempotently in
+		// SQLite, and DB-03 requires every migration to re-run cleanly; `scope` names its owner:
+		// `schedule:<id>` or `metric:<objective>/<name>`. Rows are deleted with the schedule, and a
+		// spent wake's row goes with it, so this table tracks live checks rather than history.
+		sql: `
+			CREATE TABLE IF NOT EXISTS check_authors (
+				scope       TEXT PRIMARY KEY,
+				session_id  TEXT NOT NULL,
+				updated_at  INTEGER NOT NULL
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

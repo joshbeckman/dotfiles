@@ -39,6 +39,8 @@ const PANA_TABLES = [
 	"objective_costs",
 	// Migration 14: the unread counter (REF-06).
 	"unread_counts",
+	// Migration 16: which session's box a check runs in (SCH-09).
+	"check_authors",
 ];
 
 const opened: TestPanad[] = [];

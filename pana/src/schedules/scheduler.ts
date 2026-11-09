@@ -13,7 +13,8 @@ import type { Runtime } from "../server/runtime.ts";
 import { admitScheduledWake, releaseLeadHold } from "../objectives/hold.ts";
 import { wakeScheduled } from "../sessions/wake.ts";
 import { createThread, postNotice } from "../threads/index.ts";
-import { checkHost, runCheck } from "./check.ts";
+import { runStoredCheck } from "./check.ts";
+import { checkAuthor, scheduleScope } from "./check-box.ts";
 import { announceWakes, wakeSessionOf } from "./live.ts";
 import { registerScheduler, unregisterScheduler } from "./registry.ts";
 import {
@@ -160,12 +161,15 @@ class ScheduleLoop implements Scheduler {
 		let delivered = false;
 		try {
 			if (row.check_command !== null) {
-				const result = await runCheck(
-					row.check_command,
-					row.check_cwd!,
+				const result = await runStoredCheck(
+					this.#runtime,
+					{
+						command: row.check_command,
+						cwd: row.check_cwd,
+						author: await checkAuthor(this.#runtime.db, scheduleScope(row.id)),
+					},
 					this.#runtime.clock,
 					this.#abort.signal,
-					checkHost(this.#runtime),
 				);
 				await recordCheck(this.#runtime, row.id, result);
 				if (this.#closed) return;

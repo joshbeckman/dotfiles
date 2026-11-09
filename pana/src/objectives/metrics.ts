@@ -26,6 +26,7 @@ import { isAbsolute } from "node:path";
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import { nextCronAt, parseDuration } from "../schedules/store.ts";
+import { checkAuthor, metricScope, planCheck, saveCheckAuthor, type CheckPlan } from "../schedules/check-box.ts";
 import type { CheckResult } from "../schedules/check.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { CLOSED_PHASES, objectBody, type ObjectivePhase, type ObjectiveRow } from "./schema.ts";
@@ -354,6 +355,8 @@ function windowFor(value: unknown, aggregate: MetricAggregation): string | null 
 interface CheckDefinition {
 	command: string;
 	cwd: string;
+	/** The session whose box the check runs in; null is the user's own check. */
+	author: string | null;
 	every: string | null;
 	cron: string | null;
 	nextAt: number;
@@ -364,7 +367,7 @@ interface CheckDefinition {
  * schedule kind is added). Its first run is one interval after it is declared, so declaring a
  * metric never runs a command inside a request.
  */
-function checkFor(runtime: Runtime, input: Record<string, unknown>, now: number): CheckDefinition | null {
+function checkFor(runtime: Runtime, caller: Caller, input: Record<string, unknown>, now: number, stored: CheckPlan): CheckDefinition | null {
 	const command = input.check;
 	// `null` clears a check; an absent key leaves it alone. A check that is given must be a command.
 	if (command === undefined || command === null) {
@@ -380,10 +383,10 @@ function checkFor(runtime: Runtime, input: Record<string, unknown>, now: number)
 	const cron = present(input, "checkCron") ? String(input.checkCron).trim() : null;
 	if (every !== null && cron !== null) throw ApiError.badRequest("both_times", "a check takes --check-every or --check-cron, not both");
 	if (every === null && cron === null) throw ApiError.badRequest("missing_time", "a check needs --check-every or --check-cron");
-	const cwd = present(input, "checkCwd") ? String(input.checkCwd).trim() : process.cwd();
-	if (!isAbsolute(cwd)) throw ApiError.badRequest("invalid_check_cwd", "checkCwd must be an absolute directory path");
+	// SCH-09's cwd rule applies here too: a session's metric check runs in the session's own box.
+	const plan = planCheck(runtime, caller, input, stored);
 	const nextAt = cron === null ? now + parseDuration(every!) : cronNext(runtime, cron, now);
-	return { command, cwd, every, cron, nextAt };
+	return { command, cwd: plan.cwd!, author: plan.author, every, cron, nextAt };
 }
 
 // --- Authority and phase --------------------------------------------------------
@@ -414,16 +417,6 @@ function userOnly(caller: Caller, what: string): void {
 	if (caller.kind !== "user") throw ApiError.forbidden(`only the user may ${what} a metric`);
 }
 
-/**
- * OBJ-26: a check is the user's to define. It runs on a timer in panad's own service, out of reach
- * of the session that declared it, so a session that could plant one would get code execution
- * there. Clearing one (`check: null`) is a definition edit too, and is refused for the same reason.
- */
-function userOnlyCheck(caller: Caller, input: Record<string, unknown>): void {
-	if (caller.kind === "user") return;
-	if (["check", ...CHECK_FIELDS].some((field) => input[field] !== undefined)) userOnly(caller, "define a check on");
-}
-
 // --- Writes --------------------------------------------------------------------
 
 /**
@@ -436,7 +429,6 @@ export async function addMetric(runtime: Runtime, caller: Caller, value: string 
 	const row = await loadObjective(runtime.db, id);
 	assertDeclarable(row);
 	if (present(input, "target")) userOnly(caller, "set a target on");
-	userOnlyCheck(caller, input);
 	assertNoTypedBaseline(caller, input);
 
 	const name = slug(input.name);
@@ -446,7 +438,7 @@ export async function addMetric(runtime: Runtime, caller: Caller, value: string 
 	const aggregationValue = aggregation(input.aggregation);
 	const window = windowFor(input.window, aggregationValue);
 	const targetValue = target(input.target);
-	const check = checkFor(runtime, input, now);
+	const check = checkFor(runtime, caller, input, now, { command: null, cwd: null, author: null });
 
 	await runtime.db.atomically(async (tx) => {
 		const existing = await metricRow(tx, id, name);
@@ -470,6 +462,8 @@ export async function addMetric(runtime: Runtime, caller: Caller, value: string 
 			check?.nextAt ?? null,
 			now,
 		);
+		// OBJ-26/SCH-09: the author is stored beside the check; a session's check runs in its box.
+		await saveCheckAuthor(tx, metricScope(id, name), check?.author ?? null, now);
 		await recordObjectiveEvent(tx, runtime, {
 			objectiveId: id,
 			kind: "metric.add",
@@ -593,7 +587,6 @@ export async function setMetric(
 
 	const targetTouched = input.target !== undefined;
 	if (targetTouched) userOnly(caller, "set a target on");
-	userOnlyCheck(caller, input);
 	assertNoTypedBaseline(caller, input);
 
 	const definitionTouched = ["unit", "direction", "aggregation", "window", "check", ...CHECK_FIELDS].some((field) => input[field] !== undefined);
@@ -616,7 +609,13 @@ export async function setMetric(
 			edit.window = aggregate === "raw" && input.window === undefined ? null : windowFor(input.window ?? existing.window_spec, aggregate);
 		}
 		const checkTouched = ["check", ...CHECK_FIELDS].some((field) => input[field] !== undefined);
-		if (checkTouched) edit.check = checkFor(runtime, input, now);
+		if (checkTouched) {
+			edit.check = checkFor(runtime, caller, input, now, {
+				command: existing.check_command,
+				cwd: existing.check_cwd,
+				author: await checkAuthor(runtime.db, metricScope(id, metric)),
+			});
+		}
 	}
 
 	const nextTarget = targetTouched ? target(input.target) : existing.target;
@@ -639,6 +638,7 @@ export async function setMetric(
 			push("check_every", edit.check?.every ?? null);
 			push("check_cron", edit.check?.cron ?? null);
 			push("next_check_at", edit.check?.nextAt ?? null);
+			await saveCheckAuthor(tx, metricScope(id, metric), edit.check?.author ?? null, now);
 		}
 		if (targetTouched) push("target", nextTarget);
 		if (sets.length > 0) {
