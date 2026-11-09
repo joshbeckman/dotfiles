@@ -100,9 +100,18 @@ export function startClientTelemetry(options = {}) {
 	}
 	if (typeof setInterval === "function") timer = setInterval(flush, flushMs);
 
-	// A page load's own cost: response received, then parsed and ready.
-	const nav = typeof perf.getEntriesByType === "function" ? perf.getEntriesByType("navigation")[0] : undefined;
-	if (nav && nav.domContentLoadedEventEnd > 0) record("view", "page-load", nav.domContentLoadedEventEnd, undefined);
+	// A page load's own cost: response received, then parsed and ready. A module runs before
+	// DOMContentLoaded, and the navigation entry does not gain that event's time until the load
+	// event, so the sample lands there. It is what makes a cold view sample separable from boot.
+	const navigation = () => (typeof perf.getEntriesByType === "function" ? perf.getEntriesByType("navigation")[0] : undefined);
+	if (navigation()) {
+		const recordPageLoad = () => {
+			const end = navigation()?.domContentLoadedEventEnd ?? 0;
+			if (end > 0) record("view", "page-load", end, undefined);
+		};
+		if (target?.document?.readyState === "complete") recordPageLoad();
+		else if (typeof target?.addEventListener === "function") target.addEventListener("load", recordPageLoad, { once: true });
+	}
 
 	// Long tasks need an observer; a browser without one still reports api and view samples.
 	const Observer = target?.PerformanceObserver ?? (typeof PerformanceObserver === "undefined" ? undefined : PerformanceObserver);

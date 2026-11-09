@@ -507,9 +507,17 @@ async function authorize(rawValue) {
 
 // ---- Live events (WEB-06) -------------------------------------------------------------------
 
+/**
+ * The domain a pana:// link needs. `/events` sends it in `hello` as soon as the stream opens, so it
+ * usually arrives before the first route runs, and a payload URL teaches it too. The timer only
+ * bounds a page whose stream never opens. A domain already learned resolves this at once: the
+ * stream usually opens before the first route, and waiting on the timer then cost the first inbox
+ * draw 1040 ms of a 1049 ms render, measured on 2026-11-08.
+ */
 function ensureDomain() {
 	if (state.domainReady) return state.domainReady;
 	state.domainReady = new Promise((resolve) => {
+		if (state.domain) return resolve();
 		const timer = setTimeout(resolve, 1000);
 		state.domainResolved = () => {
 			clearTimeout(timer);

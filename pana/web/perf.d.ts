@@ -17,9 +17,15 @@ export interface TelemetryPerformance {
 	getEntriesByType?(type: string): Array<{ domContentLoadedEventEnd: number }>;
 }
 
+export interface TelemetryDocument {
+	visibilityState?: string;
+	readyState?: string;
+	addEventListener?(type: string, listener: () => void): void;
+}
+
 export interface TelemetryTarget {
 	addEventListener?(type: string, listener: () => void): void;
-	document?: { visibilityState?: string };
+	document?: TelemetryDocument;
 	PerformanceObserver?: unknown;
 }
 

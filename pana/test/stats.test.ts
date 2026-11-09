@@ -389,6 +389,37 @@ describe("the PWA's recorder", () => {
 		};
 	}
 
+	// OBS-03: a cold view sample is only separable from boot when the load itself is measured. The
+	// navigation entry gains its DOMContentLoaded time only by the load event, so the sample waits.
+	it("records the page load when the document finishes loading", () => {
+		const listeners = new Map<string, () => void>();
+		const posted: unknown[][] = [];
+		const nav = { domContentLoadedEventEnd: 0 };
+		const telemetry = startClientTelemetry({
+			post: (samples: unknown[]) => posted.push(samples),
+			performance: { now: () => 0, getEntriesByType: (type: string) => (type === "navigation" ? [nav] : []) },
+			target: {
+				addEventListener: (type: string, listener: () => void) => listeners.set(type, listener),
+				document: { readyState: "loading" },
+			},
+		})!;
+		expect(telemetry.pending()).toBe(0);
+		nav.domContentLoadedEventEnd = 212.5;
+		listeners.get("load")!();
+		telemetry.flush();
+		expect(posted[0]).toEqual([{ kind: "view", name: "page-load", durationMs: 212.5 }]);
+	});
+
+	it("records a page load the browser has already finished", () => {
+		const posted: unknown[][] = [];
+		startClientTelemetry({
+			post: (samples: unknown[]) => posted.push(samples),
+			performance: { now: () => 0, getEntriesByType: () => [{ domContentLoadedEventEnd: 88 }] },
+			target: { document: { readyState: "complete" } },
+		})!.flush();
+		expect(posted[0]).toEqual([{ kind: "view", name: "page-load", durationMs: 88 }]);
+	});
+
 	it("measures a call from the request to the reply", () => {
 		const { telemetry, posted, advance } = recorder();
 		const started = telemetry.now();
