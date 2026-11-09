@@ -248,10 +248,9 @@ it("OBJ-02 one migration at the end of MIGRATIONS adds every table the package n
 		expect(await columns("objective_escalations"), column).toContain(column);
 	}
 
-	// It is the last migration, numbered, and the schema version follows it.
-	const last = MIGRATIONS.at(-1)!;
-	expect(last).toMatchObject({ version: 15, name: "messages by sender" });
-	expect(SCHEMA_VERSION).toBe(15);
+	// It is one migration, numbered, and the schema version follows the list.
+	expect(MIGRATIONS.find((migration) => migration.version === 12)).toMatchObject({ version: 12, name: "objectives" });
+	expect(SCHEMA_VERSION).toBe(MIGRATIONS.length);
 	expect(MIGRATIONS.map((migration) => migration.version)).toEqual(MIGRATIONS.map((_, index) => index + 1));
 
 	// A database newer than the code still refuses to open (DB-03 holds for this version).

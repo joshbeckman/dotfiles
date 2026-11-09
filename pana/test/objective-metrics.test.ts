@@ -268,29 +268,45 @@ it("OBJ-26 the check lives on the metric, runs on the clock with no session, and
 	expect(await counts()).toEqual(before);
 });
 
-it("OBJ-26 a check is the user's to define: a session may declare no check and change none", async () => {
+// OBJ-26/SCH-09: a session declares its own check again, and the check runs in the session's box.
+it("OBJ-26 a session's check runs in its own box, with its own env and cwd", async () => {
 	await start();
-	const { objective, lead } = await active();
-	const declared = await addMetric(objective.id, { name: "weight", unit: "kg", direction: "down" });
+	process.env.PANA_TEST_SECRET = "panad-only";
+	try {
+		const { objective, lead } = await active();
+		const scratch = join(t!.runtime.paths.scratch, lead);
+		// The command proves the box: the session's identity, its scratch, its PWD, and no variable
+		// panad holds. A miss prints the environment and fails with a non-numeric stdout.
+		const command = `[[ "$PANA_SESSION" == "${lead}" && "$PANA_SCRATCH" == "${scratch}" && "$PWD" == "${scratch}" && -z "\${PANA_TEST_SECRET:-}" ]] && printf 80 || { env; exit 2; }`;
+		const declared = await addMetric(objective.id, { name: "weight", unit: "kg", direction: "down", check: command, checkEvery: "1d" }, lead);
+		// A session's check defaults to its scratch, never panad's cwd.
+		expect(declared.check).toMatchObject({ command, cwd: scratch });
 
-	// A check runs on a timer inside panad, out of the declaring session's reach, so a session is
-	// refused on both paths: declaring a metric with one, and adding one to a metric.
-	const asLead = await t!.client.post(
-		`/objectives/${objective.id}/metrics`,
-		{ name: "sneaky", unit: "x", direction: "up", check: "env", checkEvery: "1h" },
-		{ caller: lead },
-	);
-	expect(asLead.status).toBe(403);
-	const setAsLead = await t!.client.post(`/objectives/${objective.id}/metrics/weight`, { check: "env", checkEvery: "1h" }, { caller: lead });
-	expect(setAsLead.status).toBe(403);
-	// Clearing one is a definition edit too, and gets the same refusal.
-	expect((await t!.client.post(`/objectives/${objective.id}/metrics/weight`, { check: null }, { caller: lead })).status).toBe(403);
-	expect((await metric(objective.id, "weight")).check).toBeNull();
-	expect(declared.check).toBeNull();
+		await t!.clock.advanceTo(declared.check!.nextCheckAt!);
+		await vi.waitFor(async () => expect((await metric(objective.id, "weight")).readings).toHaveLength(1));
+		const checked = await metric(objective.id, "weight");
+		expect(checked.readings[0]).toMatchObject({ value: 80, source: "check" });
+		expect(checked.check!.lastCheck).toMatchObject({ status: "passed", exitCode: 0, stderr: "" });
 
-	// A metric without a check is still a session's to declare, so the gate is the check alone.
-	const plain = await t!.client.post(`/objectives/${objective.id}/metrics`, { name: "steps", unit: "count", direction: "up" }, { caller: lead });
-	expect(plain.status).toBe(201);
+		// A cwd outside the box is refused while the check is declared, and the box is named.
+		const outside = await t!.client.post(
+			`/objectives/${objective.id}/metrics`,
+			{ name: "sneaky", unit: "x", direction: "up", check: "env", checkCwd: tmpdir(), checkEvery: "1h" },
+			{ caller: lead },
+		);
+		expect(outside.status).toBe(400);
+		expect((outside.body as { error: { code: string; message: string } }).error.code).toBe("invalid_check_cwd");
+		expect((outside.body as { error: { message: string } }).error.message).toContain(scratch);
+		// A peer session's worktree is outside it too.
+		const peer = await t!.client.post(
+			`/objectives/${objective.id}/metrics`,
+			{ name: "peer", unit: "x", direction: "up", check: "true", checkCwd: join(t!.runtime.paths.dir, "worktrees", "01ARZ3NDEKTSV4RRFFQ69G5FAV"), checkEvery: "1h" },
+			{ caller: lead },
+		);
+		expect(peer.status).toBe(400);
+	} finally {
+		delete process.env.PANA_TEST_SECRET;
+	}
 });
 
 it("OBJ-26 a non-numeric stdout, other exit code, signal, timeout, or error records failed and posts one notice", async () => {
@@ -691,8 +707,8 @@ it("OBJ-29 a reading records where it came from, and a session reports only its 
 	expect((await t!.client.post(`/objectives/${objective.id}/metrics/weight/readings`, { value: "not a number" })).status).toBe(400);
 	expect((await t!.client.post(`/objectives/${objective.id}/metrics/weight/readings`, { value: 1, source: "oracle" })).status).toBe(400);
 
-	// Metrics arrived without a schema change of their own: migration 12 still holds them, and the
-	// last migration is a later, index-only one.
-	expect(MIGRATIONS.at(-1)).toMatchObject({ version: 15, name: "messages by sender" });
+	// Metrics arrived without a schema change of their own: migration 12 still holds them, and no
+	// later migration alters their shape (a check's author lives in `check_authors`, SCH-09).
 	expect(MIGRATIONS.find((migration) => migration.version === 12)).toMatchObject({ version: 12, name: "objectives" });
+	expect(MIGRATIONS.filter((migration) => migration.version > 12 && /objective_metrics/.test(migration.sql))).toEqual([]);
 });
