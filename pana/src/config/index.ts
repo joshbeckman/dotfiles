@@ -63,6 +63,17 @@ export interface RetentionConfig {
 }
 
 /**
+ * Log rotation (OBS-06). The request log and the client log are JSONL, append-only, and were
+ * never bounded; this is the bound. `maxBytes: 0` turns rotation off.
+ */
+export interface LogsConfig {
+	/** The size a log reaches before it rotates. `0` keeps one growing file. */
+	maxBytes: number;
+	/** Previous files kept as `<name>.1` … `<name>.<keep>`; at least 1, so a rotation never drops the last file outright. */
+	keep: number;
+}
+
+/**
  * Objective defaults (OBJ-16, OBJ-24, OBJ-18). An objective row overrides any of them per
  * objective; these are what a new objective starts with.
  */
@@ -109,6 +120,7 @@ export interface Config {
 	tools: ToolsConfig;
 	scratch: ScratchConfig;
 	retention: RetentionConfig;
+	logs: LogsConfig;
 	objectives: ObjectivesConfig;
 	worktreeAdapters?: WorktreeAdapter[];
 }
@@ -121,6 +133,7 @@ export const DEFAULTS = {
 	tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 	scratch: { ttlDays: 8 },
 	retention: { readDeliveryDays: 30 },
+	logs: { maxBytes: 4 * 1024 * 1024, keep: 2 },
 	objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 } as const;
 
@@ -172,7 +185,7 @@ export function parseConfig(raw: unknown): Config {
 		throw new ConfigError("config.json is missing required key: user", 2);
 	}
 
-	for (const key of ["budget", "files", "http", "tools", "scratch", "retention", "objectives", "ui"]) {
+	for (const key of ["budget", "files", "http", "tools", "scratch", "retention", "logs", "objectives", "ui"]) {
 		if (obj[key] !== undefined && (!obj[key] || typeof obj[key] !== "object" || Array.isArray(obj[key]))) {
 			throw new ConfigError(`config.json ${key} must be an object`, 2);
 		}
@@ -196,6 +209,7 @@ export function parseConfig(raw: unknown): Config {
 	const tools = (obj.tools ?? {}) as Record<string, unknown>;
 	const scratch = (obj.scratch ?? {}) as Record<string, unknown>;
 	const retention = (obj.retention ?? {}) as Record<string, unknown>;
+	const logs = (obj.logs ?? {}) as Record<string, unknown>;
 	const objectives = (obj.objectives ?? {}) as Record<string, unknown>;
 	const maxTotalMB = positive(scratch.maxTotalMB, "scratch.maxTotalMB", "megabytes");
 
@@ -231,6 +245,11 @@ export function parseConfig(raw: unknown): Config {
 			// Zero is meaningful here, so this one accepts it: it turns the sweep off.
 			readDeliveryDays:
 				nonnegative(retention.readDeliveryDays, "retention.readDeliveryDays") ?? DEFAULTS.retention.readDeliveryDays,
+		},
+		logs: {
+			// Zero is meaningful here, so this one accepts it: it turns rotation off.
+			maxBytes: (logs.maxBytes === undefined ? undefined : integer(logs.maxBytes, "logs.maxBytes")) ?? DEFAULTS.logs.maxBytes,
+			keep: (logs.keep === undefined ? undefined : integer(logs.keep, "logs.keep", 1)) ?? DEFAULTS.logs.keep,
 		},
 		objectives: {
 			maxMembersPerRun:
@@ -285,6 +304,14 @@ function portNumber(value: unknown): number | undefined {
 }
 
 /** A positive number, or undefined when absent. A zero limit would kill every call or every scratch. */
+/** A whole number that is at least `min` (0 by default), for sizes and counts. */
+function integer(value: unknown, key: string, min = 0): number {
+	if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value < min) {
+		throw new ConfigError(`config.json ${key} must be a whole number of at least ${min}`, 2);
+	}
+	return value;
+}
+
 function positive(value: unknown, key: string, unit = "seconds"): number | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {

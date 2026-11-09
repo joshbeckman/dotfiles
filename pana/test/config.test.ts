@@ -94,6 +94,7 @@ describe("config and state", () => {
 			tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 			scratch: { ttlDays: 8 },
 			retention: { readDeliveryDays: 30 },
+			logs: { maxBytes: 4 * 1024 * 1024, keep: 2 },
 			objectives: { maxMembersPerRun: 8, maxDailyUserMessages: 10, wakeMinMinutes: 5 },
 		});
 		expect(DEFAULTS.files.maxBytes).toBe(25 * 1024 * 1024);
@@ -124,6 +125,7 @@ describe("config and state", () => {
 			http: { port: 9000 },
 			scratch: { ttlDays: 2, maxTotalMB: 512 },
 			retention: { readDeliveryDays: 14 },
+			logs: { maxBytes: 4 * 1024 * 1024, keep: 2 },
 			objectives: { maxMembersPerRun: 4, maxDailyUserMessages: 10, wakeMinMinutes: 20 },
 		});
 		expect(() => loadConfig(tempConfig({ domain: TEST_DOMAIN, user: TEST_USER, scratch: { ttlDays: 0 } }))).toThrow(/scratch.ttlDays/);
