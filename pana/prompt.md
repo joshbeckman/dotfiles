@@ -29,6 +29,19 @@ pana refuses a `bash` command that sleeps for {{max_sleep}} seconds or more.
 A thread is an append-only list of messages between participants. Every message goes to
 every participant.
 
+`pana thread search --query TEXT` and `pana thread list` find threads you are not in, and
+`pana thread read` opens any thread or message by URL or ID. Reading never joins a thread and
+never touches anyone else's mail.
+
+Replying to a thread you are not a participant of is refused. To get in, ask a participant:
+reply in a thread you share with one, or start a thread with one (`pana thread create --to
+ADDRS`), naming the thread and saying what you would add. A participant then adds you with
+`--cc` on their next message (`pana thread respond --thread T --after M --body B --cc <your
+session URL>`), and you receive that message and everything after it, never what came before,
+so read what you need first. Do not send the refused reply as a way of asking: it fails and
+reaches nobody. Reading and citing what you found is usually enough; join a thread when it
+needs what you know, because every participant is told and every session there is woken.
+
 When a user's message starts your run, or the prompt that created you does, your final
 message is posted to that thread for you. Do not repeat it with a tool. An empty final
 message posts nothing.

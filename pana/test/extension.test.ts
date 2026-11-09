@@ -840,6 +840,33 @@ describe("system prompt", () => {
 		expect(project).not.toContain("PARENT_AGENTS_PRM02");
 	});
 
+	it("PRM-09 the prompt tells a session how to find threads it is not in and how to ask to join one", async () => {
+		const seeded = await start();
+		const first = seeded.sessions[0]!;
+		const conversation = await conversationOf(t!, first.conversationId);
+		await conversation.configure({ model: FAUX_MODEL, cwd: tempDir("pana-cwd-") }, ctx);
+		await runTurn();
+
+		const pana = promptSections(await contextOf(t!, first.conversationId)).get("pana")!;
+		// Discovery: the commands that find a thread the session is not a participant of.
+		expect(pana).toContain("pana thread search");
+		expect(pana).toContain("pana thread list");
+		// CLI spelling throughout this paragraph: pana_thread_read is the tool name, which the
+		// tool list below the paragraph carries, and mixing the two reads as a different thing.
+		expect(pana).toContain("pana thread read");
+		// Reading is not joining, and the session cannot add itself.
+		expect(pana).toContain("Reading never joins");
+		expect(pana).toContain("refused");
+		// The way in: a participant's --cc, asked of a participant out of band, forward-only.
+		expect(pana).toContain("ask a participant");
+		expect(pana).toContain("start a thread with one");
+		expect(pana).toContain("--cc");
+		expect(pana).toContain("never what came before");
+		expect(pana).toContain("Do not send the refused reply as a way of asking");
+		// The discovery sentence names the commands and stops there; --help carries the output shape.
+		expect(pana).not.toContain("newest-created first");
+	});
+
 	it("PRM-03 the pana section includes the session URL, the memory worktree, and the memory commands", async () => {
 		const seeded = await start();
 		const first = seeded.sessions[0]!;
