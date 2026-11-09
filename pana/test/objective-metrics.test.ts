@@ -1,7 +1,7 @@
 // WP18 metrics (OBJ-25..OBJ-29): declared metrics, append-only readings, derived baseline and
 // current value, the scheduler-run check, and the user-only target.
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -275,9 +275,11 @@ it("OBJ-26 a session's check runs in its own box, with its own env and cwd", asy
 	try {
 		const { objective, lead } = await active();
 		const scratch = join(t!.runtime.paths.scratch, lead);
+		mkdirSync(scratch, { recursive: true });
 		// The command proves the box: the session's identity, its scratch, its PWD, and no variable
 		// panad holds. A miss prints the environment and fails with a non-numeric stdout.
-		const command = `[[ "$PANA_SESSION" == "${lead}" && "$PANA_SCRATCH" == "${scratch}" && "$PWD" == "${scratch}" && -z "\${PANA_TEST_SECRET:-}" ]] && printf 80 || { env; exit 2; }`;
+		// `PWD` is the physical path; `PANA_SCRATCH` keeps its own spelling (macOS symlinks /tmp).
+		const command = `[[ "$PANA_SESSION" == "${lead}" && "$PANA_SCRATCH" == "${scratch}" && "$(pwd -P)" == "${realpathSync(scratch)}" && -z "\${PANA_TEST_SECRET:-}" ]] && printf 80 || { env; exit 2; }`;
 		const declared = await addMetric(objective.id, { name: "weight", unit: "kg", direction: "down", check: command, checkEvery: "1d" }, lead);
 		// A session's check defaults to its scratch, never panad's cwd.
 		expect(declared.check).toMatchObject({ command, cwd: scratch });

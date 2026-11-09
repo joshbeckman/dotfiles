@@ -128,11 +128,14 @@ describe("schedule conditions", () => {
 		process.env.PANA_TEST_SECRET = "panad-only";
 		const mine = await session(t);
 		const scratch = join(t.runtime.paths.scratch, mine);
+		mkdirSync(scratch, { recursive: true });
 		const asSession = (extra: Record<string, unknown>) => t!.client.post<{ schedule: ScheduleView }>("/schedules", { ...base, ...extra }, { caller: mine });
 
 		// The command proves the box: the session's own identity, its scratch, its PWD, and no
 		// variable panad holds. Any miss prints the environment and fails with exit 2.
-		const command = `[[ "$PANA_SESSION" == "${mine}" && "$PANA_SCRATCH" == "${scratch}" && "$PWD" == "${scratch}" && -z "\${PANA_TEST_SECRET:-}" ]] || { env; exit 2; }`;
+		// `PWD` is the physical path the kernel starts the child in; on macOS `/tmp` and `/var` are
+		// symlinks, so compare it with the resolved scratch while `PANA_SCRATCH` keeps its own spelling.
+		const command = `[[ "$PANA_SESSION" == "${mine}" && "$PANA_SCRATCH" == "${scratch}" && "$(pwd -P)" == "${realpathSync(scratch)}" && -z "\${PANA_TEST_SECRET:-}" ]] || { env; exit 2; }`;
 		const made = await asSession({ check: command });
 		expect(made.status).toBe(201);
 		const schedule = made.body.schedule;
