@@ -126,7 +126,9 @@ so a daemon that runs for months leaves a bounded set of files.
 
 Rotation happens at a line boundary, so every file is valid JSONL on its own, and the reader
 behind `pana stats requests` reads the active file and the renamed ones as one continuous
-history. An operational key: a change takes effect on the next `panad` restart.
+history. Both logs are created `0600`, and a restart repairs a log or a rotated file that an
+earlier build left readable. An operational key: a change takes effect on the next `panad`
+restart.
 
 ### Objective defaults
 

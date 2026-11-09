@@ -358,6 +358,18 @@ export function statePaths(dir = stateDir()): StatePaths {
 	};
 }
 
+/** The two logs and the rotated files a previous run could have left beside them. */
+function logPaths(paths: StatePaths): string[] {
+	const files: string[] = [];
+	for (const path of [paths.log, paths.clientLog]) {
+		files.push(path);
+		// A bounded probe: rotation keeps `logs.keep` files, and anything deeper than this was
+		// made by a configuration with a larger limit.
+		for (let index = 1; index <= 9; index++) files.push(`${path}.${index}`);
+	}
+	return files;
+}
+
 /**
  * Create the state layout on first start (CFG-04): `pana.sqlite`, `files/`, `memory.git/`,
  * `memory/worktrees/`, `scratch/`, `profiles/default.json`, and a `web-token` with mode 0600.
@@ -379,8 +391,10 @@ export function ensureStateLayout(dir = stateDir()): StatePaths {
 	if (!existsSync(paths.defaultProfile)) {
 		writeFileSync(paths.defaultProfile, `${JSON.stringify({}, null, "\t")}\n`, { mode: 0o600 });
 	}
-	for (const path of [paths.defaultProfile, paths.webToken, paths.sqlite, paths.log]) {
-		// A file an earlier panad or another tool left readable is repaired here.
+	// A file an earlier panad or another tool left readable is repaired here. That includes both
+	// logs and the rotated files beside them (OBS-06): the client log was once created by a writer
+	// that set no mode, and a rotation hands a renamed file's mode to the file it becomes.
+	for (const path of [paths.defaultProfile, paths.webToken, paths.sqlite, ...logPaths(paths)]) {
 		if (existsSync(path)) chmodSync(path, 0o600);
 	}
 	// CFG-04: install the web token if there is none, and replace a corrupt one, so a bad write
