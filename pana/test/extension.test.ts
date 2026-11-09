@@ -867,6 +867,24 @@ describe("system prompt", () => {
 		expect(pana).not.toContain("newest-created first");
 	});
 
+	it("PRM-10 the prompt tells a session that a message body may carry raw HTML, and what never reaches the page", async () => {
+		const seeded = await start();
+		const first = seeded.sessions[0]!;
+		const conversation = await conversationOf(t!, first.conversationId);
+		await conversation.configure({ model: FAUX_MODEL, cwd: tempDir("pana-cwd-") }, ctx);
+		await runTurn();
+
+		const pana = promptSections(await contextOf(t!, first.conversationId)).get("pana")!.replace(/\s+/g, " ");
+		// Markdown is the default and stays the default; HTML is the escape hatch for what it cannot say.
+		expect(pana).toContain("Markdown is the default");
+		expect(pana).toContain("A message body may also carry raw HTML");
+		expect(pana).toContain("renders after sanitizing");
+		expect(pana).toContain("`<details>`");
+		// The limits, so a session does not promise a reader code or CSS that never runs (WEB-12).
+		expect(pana).toContain("Scripts, event handlers, and `<style>` never reach the page");
+		expect(pana).toContain("cannot run code or restyle the app");
+	});
+
 	it("PRM-03 the pana section includes the session URL, the memory worktree, and the memory commands", async () => {
 		const seeded = await start();
 		const first = seeded.sessions[0]!;
