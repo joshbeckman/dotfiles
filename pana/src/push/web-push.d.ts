@@ -28,6 +28,11 @@ declare module "web-push" {
 	}
 
 	export function generateVAPIDKeys(): VapidKeys;
+	export function generateRequestDetails(
+		subscription: PushSubscription,
+		payload?: string | Buffer,
+		options?: SendOptions,
+	): { method: string; headers: import("node:http").OutgoingHttpHeaders; body?: Buffer };
 	export function sendNotification(
 		subscription: PushSubscription,
 		payload?: string | Buffer,
@@ -36,6 +41,7 @@ declare module "web-push" {
 
 	const webpush: {
 		generateVAPIDKeys: typeof generateVAPIDKeys;
+		generateRequestDetails: typeof generateRequestDetails;
 		sendNotification: typeof sendNotification;
 	};
 	export default webpush;
