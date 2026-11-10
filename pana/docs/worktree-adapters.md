@@ -51,6 +51,22 @@ the command without `CAP_SYS_ADMIN` so it cannot remount them writable or bind a
 ancestor over them; macOS falls back to file-tool/cwd checks without Bash write
 enforcement.
 
+## Ordinary Git checkout
+
+Built-in creation registers a tree without checkout and checks its indexed paths before
+populating files in an isolated Git configuration. Any effective `filter` attribute
+fails closed, including `filter=lfs` without an installed driver. Git's attribute
+output cannot distinguish `-filter` from a driver literally named `unset`, so Pana
+conservatively refuses both. It also refuses sparse checkout and differences in the
+`text`, `crlf`, `eol`, `ident`, or `working-tree-encoding` attributes caused by
+external attribute sources. It preserves committed conversion attributes and copies
+these inert settings: `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`,
+`core.checkRoundtripEncoding`, `core.protectHFS`, `core.protectNTFS`, `core.ignoreCase`,
+`core.precomposeUnicode`, and `core.fileMode`. Other Git config is not copied. File
+and attribute listings above 64 MiB fail rather than bypass the checks. Concurrent
+changes to repository config or attributes are not an atomic snapshot. Managed
+adapters can implement a different trusted checkout policy.
+
 ## Failure and cleanup
 
 Adapter failures never fall back to Git or another location. Partial creation without

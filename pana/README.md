@@ -194,12 +194,14 @@ Pana runs beside the current pi setup and shares nothing with it.
   sessions are not required. Creation records ownership and uses configured
   [managed adapters](docs/worktree-adapters.md) where needed. Generated branch names
   avoid local/cached-remote exact and slash-prefix collisions without fetching. Built-in
-  Git creation checks out with isolated configuration, so smudge and process filters
-  do not run. Files that require filters (such as Git LFS files) contain their repository
-  blobs until a trusted user applies the filters. Git config-dependent checkout settings,
-  including sparse checkout and configured line endings, are not applied during creation.
-  Later Git commands in the worktree use normal configuration and can run filters.
-  Managed adapters run their own trusted creation commands and do not have this isolation.
+  Git creation isolates checkout from filter commands. It refuses a checkout with any
+  effective filter attribute, including Git LFS, rather than return unconverted files.
+  It preserves selected safe Git checkout settings, including line endings, and checks
+  external conversion attributes against the isolated checkout. It refuses differing
+  external attributes and sparse checkout. These failures leave an unowned partial tree
+  for inspection; see [failure and cleanup](docs/worktree-adapters.md#failure-and-cleanup).
+  Later Git commands use normal configuration and can run filters. Managed adapters run
+  their own trusted creation commands and do not have this isolation.
 - `tools.protectCheckouts: "guard"` (the default) protects **file-tool writes by path**:
   primary checkouts and unowned linked trees are refused, including through symlinks.
   Known peer ownership overrides an explicit cwd. Execution whose actual cwd is an
