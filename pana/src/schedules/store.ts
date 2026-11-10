@@ -248,7 +248,7 @@ function withDelay(input: ScheduleInput, now: number): ScheduleInput {
  * WAK-01: a session wakes only itself; the user may wake any session. The target must exist and
  * must not be archived, since an archived session never runs again.
  */
-async function wakeTarget(runtime: Runtime, caller: Caller, value: unknown): Promise<string> {
+async function wakeTarget(tx: SqliteExecutor, runtime: Runtime, caller: Caller, value: unknown): Promise<string> {
 	const named = typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 	let id: string;
 	if (named === undefined) {
@@ -260,7 +260,7 @@ async function wakeTarget(runtime: Runtime, caller: Caller, value: unknown): Pro
 		id = ref.id;
 	}
 	if (caller.kind === "session" && id !== caller.id) throw ApiError.forbidden("a session may schedule wakes only for itself");
-	const row = await runtime.db.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", id);
+	const row = await tx.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", id);
 	if (!row) throw ApiError.notFound(`session ${id}`);
 	if (row.state === "archived") throw ApiError.stale(`session ${id} is archived`, { session: id });
 	return id;
@@ -421,11 +421,11 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 	const timing = scheduleTiming(input, runtime.config.timezone, now);
 	const condition = conditions(runtime, caller, input, timing.cron, { command: null, cwd: null, author: null }, false);
 	const payload = schedulePayload(input, kind);
-	if (kind === "wake") payload.session = await wakeTarget(runtime, caller, payload.session);
 	const subject = parseScheduleSubject(input.subject);
 	const id = runtime.newId();
 	let saved!: ScheduleJoinRow;
 	const view = await runtime.db.write(async (tx) => {
+		if (kind === "wake") payload.session = await wakeTarget(tx, runtime, caller, payload.session);
 		await ensureParticipant(tx, runtime, now, caller);
 		await tx.run(
 			`INSERT INTO schedules (id, kind, state, cron, at, timezone, creator_id, payload, next_at, created_at, updated_at, check_command, check_cwd, stop_after_success, subject, subject_source)
@@ -447,7 +447,7 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 			subject === null ? "first-line" : "manual",
 		);
 		// SCH-09: the author is stored beside the check; a session's check runs in its box.
-		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now);
+		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now, condition.check !== null);
 		saved = await scheduleRow(tx, id);
 		return scheduleView(saved, runtime);
 	});
@@ -471,19 +471,18 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 	const now = runtime.clock.now();
 	const retime = hasValue(typeof input.cron === "string" ? input.cron.trim() : input.cron) || hasValue(input.at);
 	const timing = retime ? scheduleTiming(input, runtime.config.timezone, now) : undefined;
-	// UX-09: an edit can retarget a wake, so both the old and the new session get the news.
-	const before = await runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id);
-	if (!before || before.state === "deleted") throw ApiError.notFound(`schedule ${id}`);
-	requireOwner({ id, creator_id: before.creator_id }, caller);
-	// #203: a new payload can retarget a wake, so the target is validated exactly as on create.
-	const nextKind = hasValue(input.kind) ? scheduleKind(input.kind) : before.kind;
-	if (nextKind === "wake" && typeof input.payload === "object" && input.payload !== null) {
-		await wakeTarget(runtime, caller, (input.payload as Record<string, unknown>).session);
-	}
+	// Capture the actual pre-update row inside the write for authorization and wake notifications.
+	let before!: ScheduleJoinRow;
 	const view = await runtime.db.write(async (tx) => {
 		const existing = await scheduleRow(tx, id);
+		before = existing;
+		requireOwner(existing, caller);
 		const kind = hasValue(input.kind) ? scheduleKind(input.kind) : existing.kind;
-		const payload = input.payload === undefined ? JSON.parse(existing.payload) : schedulePayload(input, kind);
+		const rawPayload = input.payload === undefined ? JSON.parse(existing.payload) : input.payload;
+		const payload = input.payload !== undefined || kind === "wake"
+			? schedulePayload({ payload: rawPayload }, kind)
+			: rawPayload;
+		if (kind === "wake") payload.session = await wakeTarget(tx, runtime, caller, payload.session);
 		const descriptionChanged = kind !== existing.kind || fallbackDescription(kind, payload) !== fallbackDescription(existing.kind, JSON.parse(existing.payload));
 		regenerate = suppliedSubject === null || (suppliedSubject === undefined && existing.subject_source !== "manual" && descriptionChanged);
 		const subject = suppliedSubject ?? (regenerate ? fallbackScheduleSubject(kind, payload) : existing.subject);
@@ -515,7 +514,7 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 			source,
 			id,
 		);
-		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now);
+		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now, condition.check !== null);
 		saved = await scheduleRow(tx, id);
 		return scheduleView(saved, runtime);
 	});
@@ -535,7 +534,7 @@ export async function deleteSchedule(runtime: Runtime, caller: Caller, id: strin
 		if (!row || row.state === "deleted") return undefined;
 		requireOwner(row, caller);
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
-		await saveCheckAuthor(tx, scheduleScope(id), null, now);
+		await saveCheckAuthor(tx, scheduleScope(id), null, now, false);
 		return row;
 	});
 	if (!deleted) throw ApiError.notFound(`schedule ${id}`);
@@ -579,6 +578,17 @@ export async function claimSchedule(runtime: Runtime, id: string, state: "active
 	});
 }
 
+/** Claim a fire and its exact check authority in the same transaction. */
+export async function claimScheduleForRun(runtime: Runtime, expected: ScheduleRow, state: "active" | "done", nextAt: number | null): Promise<{ row: ScheduleRow; author: string | null | undefined } | undefined> {
+	return runtime.db.write(async (tx) => {
+		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", expected.id);
+		if (!row || row.state !== "active" || row.revision !== expected.revision || row.next_at !== expected.next_at) return undefined;
+		const author = row.check_command === null ? undefined : await checkAuthor(tx, scheduleScope(row.id));
+		await tx.run("UPDATE schedules SET state = ?, next_at = ?, updated_at = ? WHERE id = ?", state, nextAt, runtime.clock.now(), row.id);
+		return { row, author };
+	});
+}
+
 /**
  * WAK-07: retire a schedule that has finished its work, hidden from `list` and from
  * `GET /schedules/:id` the same way a user's delete is. The row stays in the table, so a spent
@@ -593,7 +603,8 @@ export async function finishSchedule(runtime: Runtime, id: string, revision: num
 			id,
 			revision,
 		);
-		await saveCheckAuthor(tx, scheduleScope(id), null, now);
+		const changed = await tx.get<{ n: number }>("SELECT changes() AS n");
+		if (changed?.n === 1) await saveCheckAuthor(tx, scheduleScope(id), null, now, false);
 	});
 	notifySchedulesChanged(runtime);
 }

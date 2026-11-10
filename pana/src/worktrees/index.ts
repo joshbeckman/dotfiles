@@ -15,7 +15,7 @@ import { realPath } from "../extension/checkouts.ts";
 import { checkoutCommon, owners, saveOwner } from "./ownership.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { generatedBranch } from "./branch.ts";
-import { gitIn, scrubbedEnv } from "./git.ts";
+import { checkoutIsolated, gitIn, scrubbedEnv } from "./git.ts";
 
 const run = promisify(execFile);
 
@@ -108,7 +108,7 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 		if (owner && (owner.session !== sessionId || owner.common !== common)) {
 			throw ApiError.badRequest("worktree_collision", "destination belongs to another session or repository");
 		}
-		if (existsSync(path) && !owner && adapter) throw ApiError.badRequest("worktree_collision", `unowned destination already exists: ${path}`);
+		if (existsSync(path) && !owner) throw ApiError.badRequest("worktree_collision", `unowned destination already exists: ${path}`);
 		let created = false;
 		let branch = requested;
 		if (!existsSync(path)) {
@@ -143,7 +143,13 @@ export async function addWorktree(runtime: Runtime, sessionId: string, input: Ad
 				// A generated-name race must fail rather than join another writer's branch.
 				const exists = requested === undefined ? "" : await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
 				try {
-					await git(repo, exists === "" ? ["worktree", "add", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "-q", path, branch]);
+					await git(repo, exists === "" ? ["worktree", "add", "--no-checkout", "-q", "-b", branch, path, "HEAD"] : ["worktree", "add", "--no-checkout", "-q", path, branch]);
+					try {
+						await checkoutIsolated(path, common);
+					} catch (error) {
+						const stderr = (error as { stderr?: string }).stderr?.trim();
+						throw ApiError.badRequest("worktree_checkout_failed", `checkout failed; inspect the unowned worktree at ${path}: ${stderr || (error as Error).message}`);
+					}
 				} catch (error) {
 					// Leave no empty directory behind for the retry to trip over.
 					try { rmdirSync(path); } catch { /* git may have populated it; keep it for inspection */ }

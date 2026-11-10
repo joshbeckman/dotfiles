@@ -67,19 +67,21 @@ export const handlers: Handlers = {
 		const keys = (body.keys ?? {}) as { p256dh?: unknown; auth?: unknown };
 		const p256dh = stringField(keys.p256dh, "keys.p256dh");
 		const auth = stringField(keys.auth, "keys.auth");
-		// Re-posting an endpoint updates it; only a new one can exceed the cap.
-		const held = await ctx.runtime.db.get<{ n: number }>(
-			"SELECT COUNT(*) AS n FROM push_subscriptions WHERE participant_id = ?",
-			ctx.caller.id,
-		);
-		const known = await ctx.runtime.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint = ?", endpoint);
-		if ((known?.n ?? 0) === 0 && (held?.n ?? 0) >= MAX_SUBSCRIPTIONS) {
-			throw new ApiError(409, "too_many_subscriptions", `a participant may hold ${MAX_SUBSCRIPTIONS} push subscriptions`);
-		}
 		const now = ctx.runtime.clock.now();
 		const id = ctx.runtime.newId();
-		await ctx.runtime.db.write((tx) =>
-			tx.run(
+		const storedId = await ctx.runtime.db.write(async (tx) => {
+			// Only refreshing an endpoint this participant already holds is exempt from the cap.
+			// Count and upsert under the same write transaction, including ownership transfers.
+			const held = await tx.get<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM push_subscriptions WHERE participant_id = ?", ctx.caller.id,
+			);
+			const known = await tx.get<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint = ? AND participant_id = ?", endpoint, ctx.caller.id,
+			);
+			if ((known?.n ?? 0) === 0 && (held?.n ?? 0) >= MAX_SUBSCRIPTIONS) {
+				throw new ApiError(409, "too_many_subscriptions", `a participant may hold ${MAX_SUBSCRIPTIONS} push subscriptions`);
+			}
+			await tx.run(
 				`INSERT INTO push_subscriptions (id, participant_id, endpoint, p256dh, auth, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(endpoint) DO UPDATE SET
@@ -92,9 +94,10 @@ export const handlers: Handlers = {
 				p256dh,
 				auth,
 				now,
-			),
-		);
-		const row = await ctx.runtime.db.get<{ id: string }>("SELECT id FROM push_subscriptions WHERE endpoint = ?", endpoint);
-		return { status: 201, body: { subscription: { id: row?.id ?? id, endpoint } } };
+			);
+			const row = await tx.get<{ id: string }>("SELECT id FROM push_subscriptions WHERE endpoint = ?", endpoint);
+			return row!.id;
+		});
+		return { status: 201, body: { subscription: { id: storedId, endpoint } } };
 	},
 };

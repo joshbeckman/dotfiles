@@ -14,12 +14,12 @@ import { admitScheduledWake, releaseLeadHold } from "../objectives/hold.ts";
 import { wakeScheduled } from "../sessions/wake.ts";
 import { createThread, postNotice } from "../threads/index.ts";
 import { runStoredCheck } from "./check.ts";
-import { checkAuthor, scheduleScope } from "./check-box.ts";
 import { announceWakes, wakeSessionOf } from "./live.ts";
 import { registerScheduler, unregisterScheduler } from "./registry.ts";
 import {
 	activeSchedules,
 	claimSchedule,
+	claimScheduleForRun,
 	creatorAddress,
 	dueSchedules,
 	finishSchedule,
@@ -153,7 +153,7 @@ class ScheduleLoop implements Scheduler {
 		const nextAt = row.cron ? nextCronAt(row.cron, timezone, now) : null;
 		// A cron with no future run is finished, the same as a one-off that has run.
 		const keepsRunning = row.cron !== null && nextAt !== null;
-		const claimed = await claimSchedule(this.#runtime, row.id, keepsRunning ? "active" : "done", nextAt, row);
+		const claimed = await claimScheduleForRun(this.#runtime, row, keepsRunning ? "active" : "done", nextAt);
 		if (!claimed || this.#closed) return;
 		// UX-09: the claim moved a recurring wake to its next time, or spent a one-off, so the
 		// thread footer's scheduled chip changes now rather than when the session next reports.
@@ -164,9 +164,9 @@ class ScheduleLoop implements Scheduler {
 				const result = await runStoredCheck(
 					this.#runtime,
 					{
-						command: row.check_command,
-						cwd: row.check_cwd,
-						author: await checkAuthor(this.#runtime.db, scheduleScope(row.id)),
+						command: claimed.row.check_command!,
+						cwd: claimed.row.check_cwd,
+						author: claimed.author,
 					},
 					this.#runtime.clock,
 					this.#abort.signal,

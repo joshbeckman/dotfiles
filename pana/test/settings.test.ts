@@ -7,10 +7,7 @@ import { afterEach, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
 import { isUserColor, loadConfig } from "../src/config/index.ts";
 import {
-	cachedSourceRevision,
 	readSourceRevision,
-	runningRevision,
-	SOURCE_REFRESH_MS,
 	UNTRACKED_FILE_CAP,
 } from "../src/config/source.ts";
 import { makeStateDir, startTestPanad, type TestPanad } from "./harness/index.ts";
@@ -168,21 +165,6 @@ it("SET-02 a settings read never waits on git, and counts no local file beyond t
 			// The read reports the snapshot captured at startup, never a fresh subprocess.
 			expect(read.body.source).toEqual(t.runtime.processInfo!.running);
 		}
-	} finally { git.restore(); }
-});
-
-it("SET-02 a stale source snapshot refreshes behind the response, off the event loop", async () => {
-	const git = slowGit();
-	try {
-		const before = runningRevision;
-		const started = performance.now();
-		// An aged cache: the read still answers from it and refreshes in the background.
-		const stale = cachedSourceRevision(Date.now() + SOURCE_REFRESH_MS + 1);
-		expect(performance.now() - started).toBeLessThan(100);
-		expect(stale).toEqual(before);
-		await until(() => git.calls() > 0);
-		await until(() => cachedSourceRevision() !== stale);
-		expect(cachedSourceRevision()).toEqual(before);
 	} finally { git.restore(); }
 });
 

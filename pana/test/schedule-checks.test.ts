@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, realpathSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCheck, CHECK_OUTPUT_BYTES, CHECK_TIMEOUT_MS } from "../src/schedules/check.ts";
+import { runCheck, runStoredCheck, CHECK_OUTPUT_BYTES, CHECK_TIMEOUT_MS } from "../src/schedules/check.ts";
 import { scheduleScope, sessionBox } from "../src/schedules/check-box.ts";
-import type { ScheduleView } from "../src/schedules/store.ts";
+import { claimScheduleForRun, finishSchedule, type ScheduleRow, type ScheduleView } from "../src/schedules/store.ts";
 import type { Runtime } from "../src/server/runtime.ts";
 import { createFakeClock, startTestPanad, type TestPanad } from "./harness/index.ts";
 
@@ -271,6 +271,23 @@ describe("schedule conditions", () => {
 		expect(await run("kill -TERM $$")).toMatchObject({ status: "failed", signal: "SIGTERM" });
 	});
 
+	it("SCH-12 normal completion kills background group members, even if they ignore TERM", async () => {
+		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
+		const clock = createFakeClock();
+		for (const code of [0, 1, 7]) {
+			const pidFile = join(dir, `child-${code}`);
+			let pid = 0;
+			try {
+				const result = await runCheck(`(trap '' TERM; while :; do :; done) >/dev/null 2>&1 & echo $! > '${pidFile}'; exit ${code}`, dir, clock, new AbortController().signal);
+				pid = Number(readFileSync(pidFile, "utf8"));
+				expect(result).toMatchObject({ exitCode: code, status: code === 0 ? "passed" : code === 1 ? "not_ready" : "failed" });
+				await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+			} finally {
+				if (pid) { try { process.kill(pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+			}
+		}
+	});
+
 	it("SCH-12 times out and kills a process group using the runtime clock; shutdown cancellation also settles", async () => {
 		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
 		const clock = createFakeClock();
@@ -393,4 +410,72 @@ describe("schedule conditions", () => {
 		await t.clock.advance(180_000);
 		expect(calls).toBe(2);
 	});
+});
+
+describe("check authority races", () => {
+	it("captures command, cwd and session authority together across update and delete", async () => {
+		t = await startTestPanad();
+		const mine = await session(t);
+		const made = await t.client.post<{ schedule: ScheduleView }>("/schedules", { ...base, check: 'printf "%s" "$PANA_SESSION"' }, { caller: mine });
+		const id = made.body.schedule.id;
+		const before = (await t.runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id))!;
+		const claimed = (await claimScheduleForRun(t.runtime, before, "active", before.next_at! + 60_000))!;
+		expect(claimed.author).toBe(mine);
+		expect((await t.client.post(`/schedules/${id}`, { check: "printf user" })).status).toBe(200);
+		expect(await claimScheduleForRun(t.runtime, before, "active", before.next_at! + 60_000)).toBeUndefined();
+		expect((await t.client.delete(`/schedules/${id}`)).status).toBe(204);
+		expect(await claimScheduleForRun(t.runtime, before, "active", before.next_at! + 60_000)).toBeUndefined();
+		const result = await runStoredCheck(t.runtime, { command: claimed.row.check_command!, cwd: claimed.row.check_cwd, author: claimed.author }, t.clock, new AbortController().signal);
+		expect(result).toMatchObject({ status: "passed", stdout: mine });
+	});
+
+	it("does not erase a newer author's record when stale wake completion loses", async () => {
+		t = await startTestPanad();
+		const mine = await session(t);
+		const made = await t.client.post<{ schedule: ScheduleView }>("/schedules", { ...base }, { caller: mine });
+		const id = made.body.schedule.id;
+		const old = (await t.runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id))!;
+		expect((await t.client.post(`/schedules/${id}`, { check: "true" }, { caller: mine })).status).toBe(200);
+		await finishSchedule(t.runtime, id, old.revision);
+		expect(await t.runtime.db.get("SELECT session_id FROM check_authors WHERE scope = ?", scheduleScope(id))).toEqual({ session_id: mine });
+		expect((await show(id)).state).toBe("active");
+	});
+
+	it("fails closed for missing legacy authority until the check is explicitly redefined", async () => {
+		t = await startTestPanad();
+		const schedule = await create({ check: "true" });
+		await t.runtime.db.write(tx => tx.run("DELETE FROM check_authors WHERE scope = ?", scheduleScope(schedule.id)));
+		expect((await t.client.post(`/schedules/${schedule.id}`, { checkCwd: tmpdir() })).status).toBe(400);
+		await t.clock.advanceTo(schedule.nextAt!);
+		expect(await checked(schedule.id)).toMatchObject({ status: "failed", error: expect.stringContaining("author is missing") });
+		expect((await t.client.post(`/schedules/${schedule.id}`, { check: "true" })).status).toBe(200);
+		await t.clock.advanceTo((await show(schedule.id)).nextAt!);
+		expect((await checked(schedule.id, schedule.nextAt!)).status).toBe("passed");
+	});
+});
+
+it("SCH-09 upgrades a pre-author database without guessing who wrote its check", async () => {
+	t = await startTestPanad();
+	const schedule = await create({ check: "true" });
+	// Model a version-15 database: it predates the check_authors table entirely.
+	await t.runtime.db.write(async tx => {
+		await tx.exec("DROP TABLE check_authors; PRAGMA user_version = 15;");
+	});
+	const first = t;
+	await first.stop();
+	t = await startTestPanad({ stateDir: first.dir, clock: first.clock });
+	expect(await t.runtime.db.get("PRAGMA user_version")).toEqual({ user_version: 16 });
+	await t.clock.advanceTo(schedule.nextAt!);
+	expect(await checked(schedule.id)).toMatchObject({ status: "failed", error: expect.stringContaining("author is missing") });
+});
+
+it("SCH-09 preserves a legacy session author on restart", async () => {
+	t = await startTestPanad();
+	const mine = await session(t);
+	const made = await t.client.post<{ schedule: ScheduleView }>("/schedules", { ...base, check: 'printf "%s" "$PANA_SESSION"' }, { caller: mine });
+	const first = t;
+	await first.stop();
+	t = await startTestPanad({ stateDir: first.dir, clock: first.clock });
+	await t.clock.advanceTo(made.body.schedule.nextAt!);
+	expect(await checked(made.body.schedule.id)).toMatchObject({ status: "passed", stdout: mine });
 });

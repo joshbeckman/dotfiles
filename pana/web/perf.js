@@ -15,34 +15,130 @@
 export const CLIENT_BATCH_MAX = 200;
 /** How often a batch is posted while a page stays open. */
 export const CLIENT_FLUSH_MS = 10_000;
+/** Match the daemon limit; a suspended page may resume after more than ten minutes. */
+const CLIENT_DURATION_MAX_MS = 600_000;
 
-const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const HEX_ID = /^[0-9a-f]{16,}$/;
+// Only these literal patterns can leave the browser. Keep this list in sync with the API
+// route table; unknown routes use a fixed fallback, never a path supplied by a caller.
+const API_PATTERNS = [
+	"POST /sessions",
+	"GET /sessions",
+	"GET /sessions/:id",
+	"GET /sessions/:id/transcript",
+	"POST /sessions/:id/stop",
+	"POST /sessions/:id/resume",
+	"POST /sessions/:id/compact",
+	"POST /sessions/:id/archive",
+	"GET /inbox",
+	"POST /threads",
+	"GET /threads",
+	"GET /threads/:id",
+	"POST /threads/:id/messages",
+	"POST /threads/:id/subject",
+	"POST /threads/:id/archive",
+	"POST /threads/:id/unarchive",
+	"GET /messages/:id",
+	"POST /messages/:id/read",
+	"POST /messages/:id/revisions",
+	"POST /messages/:id/redact",
+	"POST /files",
+	"GET /files/:id/*",
+	"GET /memory/worktree",
+	"POST /memory/worktree",
+	"GET /memory/search",
+	"POST /memory/commit",
+	"GET /memory/log",
+	"GET /memory/commits/:hash",
+	"GET /memory/files/*",
+	"POST /memory/files/*",
+	"DELETE /memory/files/*",
+	"GET /memory/files",
+	"GET /scratch",
+	"POST /scratch/prune",
+	"POST /worktrees",
+	"GET /schedules",
+	"POST /schedules",
+	"GET /schedules/:id",
+	"POST /schedules/:id",
+	"DELETE /schedules/:id",
+	"POST /objectives",
+	"GET /objectives",
+	"POST /objectives/stop",
+	"GET /objectives/:id",
+	"POST /objectives/:id/launch",
+	"POST /objectives/:id/stop",
+	"POST /objectives/:id/resume",
+	"POST /objectives/:id/done",
+	"POST /objectives/:id/archive",
+	"POST /objectives/:id/goal",
+	"GET /objectives/:id/charter",
+	"POST /objectives/:id/charter",
+	"GET /objectives/:id/metrics",
+	"POST /objectives/:id/metrics",
+	"POST /objectives/:id/metrics/:name",
+	"POST /objectives/:id/metrics/:name/readings",
+	"GET /objectives/:id/brief",
+	"POST /objectives/:id/report",
+	"POST /objectives/:id/escalate",
+	"POST /objectives/:id/regenerate-lead",
+	"POST /objectives/:id/artifacts",
+	"DELETE /objectives/:id/artifacts/:fileId",
+	"POST /objectives/:id/limits",
+	"GET /push/key",
+	"GET /push/subscriptions",
+	"POST /push/subscriptions",
+	"GET /events",
+	"GET /settings",
+	"POST /settings",
+	"POST /settings/restart",
+	"GET /stats/requests",
+	"POST /stats/client",
+];
+const VIEW_PATTERNS = [
+	"#/", "#/inbox", "#/compose", "#/threads", "#/threads/:id",
+	"#/sessions", "#/sessions/:id", "#/memory", "#/memory/files/*",
+	"#/memory/edit/*", "#/memory/commits/:id", "#/memory/new",
+	"#/schedules", "#/settings", "#/objectives", "#/objectives/:id",
+];
+const API_NAMES = new Set([...API_PATTERNS, "UNKNOWN /unknown"]);
+const VIEW_NAMES = new Set([...VIEW_PATTERNS, "#/unknown", "page-load"]);
 
-/**
- * The route pattern of a request path (OBS-03): `/threads/01M6…?x=1` becomes `/threads/:id`.
- * Ids are stripped rather than sent, so a batch names an operation and never a subject.
- */
-export function apiName(method, path) {
-	const clean = String(path ?? "").split("?")[0].split("#")[0];
-	const parts = clean.split("/").filter((part) => part.length > 0);
-	const words = parts.map((part) => (ULID.test(part) || HEX_ID.test(part) ? ":id" : part));
-	return `${String(method ?? "GET").toUpperCase()} /${words.join("/")}`.replace(/\/$/, "");
+/** Match placeholders without ever copying their contents into a name. */
+function matches(pattern, path) {
+	const expected = pattern.split("/").filter(Boolean);
+	const actual = path.split("/").filter(Boolean);
+	for (let i = 0; i < expected.length; i++) {
+		if (expected[i] === "*") return actual.length > i;
+		if (actual[i] === undefined) return false;
+		if (!expected[i].startsWith(":") && expected[i] !== actual[i]) return false;
+	}
+	return expected.length === actual.length;
 }
 
-/**
- * The view a hash names (OBS-03): `#/threads/01M6…` becomes `#/threads/:id`. A fragment that is not
- * a route names no view; the launch URL carries the token in one, and a sample named after it would
- * put the token in `client.log` (OBS-04).
- */
+/** Return a fixed route pattern, even for malformed or unknown paths and methods. */
+export function apiName(method, path) {
+	const verb = String(method ?? "GET").toUpperCase();
+	const clean = String(path ?? "").split(/[?#]/, 1)[0];
+	const name = API_PATTERNS.find((candidate) => {
+		const [candidateVerb, pattern] = candidate.split(" ");
+		return candidateVerb === verb && matches(pattern, clean);
+	});
+	return name ?? "UNKNOWN /unknown";
+}
+
+/** Return a fixed view pattern, never a file path, query, fragment token, or unknown route. */
 export function viewName(hash) {
 	const raw = String(hash ?? "");
-	if (raw !== "" && !raw.startsWith("#/")) return "#/";
-	const clean = raw.replace(/^#\/?/, "").split("?")[0];
-	const parts = clean.split("/").filter((part) => part.length > 0);
-	if (parts.length === 0) return "#/";
-	const words = parts.map((part) => (ULID.test(part) || HEX_ID.test(part) ? ":id" : part));
-	return `#/${words.join("/")}`;
+	if (raw === "" || !raw.startsWith("#/")) return "#/";
+	const clean = raw.split("?", 1)[0];
+	return VIEW_PATTERNS.find((pattern) => matches(pattern, clean)) ?? "#/unknown";
+}
+
+/** The server also checks the exact set, so a direct POST cannot write path data as a name. */
+export function isSafeClientName(kind, name) {
+	return typeof name === "string" && (kind === "api" ? API_NAMES.has(name)
+		: kind === "view" ? VIEW_NAMES.has(name)
+		: kind === "longtask" && name === "long-task");
 }
 
 /**
@@ -65,14 +161,14 @@ export function startClientTelemetry(options = {}) {
 
 	function record(kind, name, durationMs, status) {
 		if (stopped) return;
-		if (!Number.isFinite(durationMs) || durationMs < 0) return;
+		if (!isSafeClientName(kind, name) || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > CLIENT_DURATION_MAX_MS) return;
 		if (samples.length >= max) {
 			// Keep the newest: a page that renders a thousand rows should still report the last ones.
 			samples.shift();
 			dropped++;
 		}
 		const sample = { kind, name, durationMs: Math.round(durationMs * 1000) / 1000 };
-		if (typeof status === "number" && status >= 100 && status <= 599) sample.status = status;
+		if (Number.isInteger(status) && status >= 100 && status <= 599) sample.status = status;
 		samples.push(sample);
 	}
 
@@ -98,10 +194,11 @@ export function startClientTelemetry(options = {}) {
 	}
 
 	if (target && typeof target.addEventListener === "function") {
-		// A page that is being hidden is the last chance to send what it measured.
-		target.addEventListener("pagehide", stop);
+		// Flush before backgrounding or entering the back-forward cache. Do not stop: the
+		// same recorder must keep measuring when the page becomes visible or is restored.
+		target.addEventListener("pagehide", flush);
 		target.addEventListener("visibilitychange", () => {
-			if (target.document?.visibilityState === "hidden") stop();
+			if (target.document?.visibilityState === "hidden") flush();
 		});
 	}
 	if (typeof setInterval === "function") timer = setInterval(flush, flushMs);

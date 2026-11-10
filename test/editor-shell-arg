@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Test actual Ex command expansion, not just the string returned by ShellArg."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+root = Path(__file__).resolve().parent.parent
+editors = [(name, shutil.which(name)) for name in ('vim', 'nvim')]
+if not any(path for _, path in editors):
+    print('skip: vim and nvim not installed')
+    raise SystemExit(0)
+
+with tempfile.TemporaryDirectory() as directory:
+    temp = Path(directory)
+    capture = temp / 'capture'
+    capture.write_text('#!/bin/sh\nprintf "%s\\0" "$@" > "$ARG_FILE"\n')
+    capture.chmod(0o755)
+    script = temp / 'test.vim'
+    script.write_text('''
+set shell=/bin/sh
+execute 'silent! source ' . fnameescape($CONFIG)
+if !exists('*ShellArg') | cquit 2 | endif
+" Ex expands a filename token into this dangerous-looking buffer name.
+execute 'file ' . fnameescape("bad' ; touch INJECTED ; '")
+execute 'silent !' . $CAPTURE . ' ' . ShellArg($PAYLOAD)
+call rename($ARG_FILE, $ARG_FILE . '.bang')
+let &grepprg = $CAPTURE
+execute 'silent grep! ' . ShellArgGrep($PAYLOAD)
+qa!
+''')
+    payloads = [
+        'plain spaces',
+        "quote' double\" ; $(touch INJECTED) `touch INJECTED`",
+        '% # ! <cword> <cfile> <afile> <abuf> <amatch> <sfile> <slnum>',
+        r'\% \# \! \<cword> back\slash',
+        'literal <nonkeyword>\nsecond line',
+        '-leading-option',
+    ]
+    for name, editor in editors:
+        if not editor:
+            print(f'skip: {name} not installed')
+            continue
+        for config in (root / '.vimrc', root / '.config/nvim/init.vim'):
+            for i, payload in enumerate(payloads):
+                output = temp / 'args'
+                output.unlink(missing_ok=True)
+                env = dict(os.environ, CONFIG=str(config), CAPTURE=str(capture),
+                           ARG_FILE=str(output), PAYLOAD=payload)
+                args = ([editor, '-Nu', 'NONE', '-n', '-es'] if name == 'vim'
+                        else [editor, '--headless', '-u', 'NONE', '-n'])
+                result = subprocess.run(args + ['-S', str(script)], cwd=temp, env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                expected = payload.encode() + b'\0'
+                actual = output.read_bytes() if output.exists() else None
+                bang_output = Path(str(output) + '.bang')
+                bang = bang_output.read_bytes() if bang_output.exists() else None
+                bang_output.unlink(missing_ok=True)
+                if result.returncode or actual != expected or bang != expected or (temp / 'INJECTED').exists():
+                    raise AssertionError(f'{name} {config.name} payload {i}: '
+                                         f'code={result.returncode}, grep={actual!r}, bang={bang!r}, '
+                                         f'expected={expected!r}, stderr={result.stderr!r}')
+        print(f'ok: {name} :! and :grep preserve shell arguments')

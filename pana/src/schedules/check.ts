@@ -17,6 +17,7 @@
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { constants } from "node:os";
 import type { Clock, Runtime } from "../server/runtime.ts";
 import type { CheckoutGuard } from "../config/index.ts";
@@ -63,8 +64,8 @@ export function checkHost(runtime: Runtime): CheckHost {
 export interface StoredCheck {
 	command: string;
 	cwd: string | null;
-	/** The session whose box it runs in; null is the user's own check. */
-	author: string | null;
+	/** Session ID, null for an explicit user author, or undefined when authority is unknown. */
+	author: string | null | undefined;
 }
 
 /**
@@ -77,6 +78,9 @@ export async function runStoredCheck(
 	clock: Clock,
 	abort: AbortSignal,
 ): Promise<CheckResult> {
+	if (stored.author === undefined) {
+		return { checkedAt: clock.now(), status: "failed", exitCode: null, signal: null, stdout: "", stderr: "", error: "check author is missing; redefine the check to establish its authority" };
+	}
 	const box = stored.author === null ? undefined : sessionBox(runtime, stored.author);
 	const cwd = stored.cwd ?? box?.scratchDir ?? process.cwd();
 	return runCheck(stored.command, cwd, clock, abort, { ...checkHost(runtime), box });
@@ -144,8 +148,38 @@ export async function runCheck(
 	};
 	abort.addEventListener("abort", cancel, { once: true });
 	if (abort.aborted) cancel();
+	// Keep the group leader alive until the command exits. It records the command's status, then
+	// kills its own group, including descendants which outlive the command. The executor still
+	// kills that same group on timeout or shutdown.
+	const nonce = randomBytes(16).toString("hex");
+	const marker = `\x1e${nonce}:`;
+	const shell = existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+	const quoted = `'${command.replaceAll("'", `'\\''`)}'`;
+	const wrapped = `${shell} -c ${quoted}\nstatus=$?\nprintf '\\036${nonce}:%s\\037' "$status"\nkill -KILL -- "-$$"`;
+	let pending = "";
+	let commandExit: number | undefined;
+	const collectStdout = (text: string) => {
+		pending += text;
+		const at = pending.indexOf(marker);
+		if (at >= 0) {
+			const end = pending.indexOf("\x1f", at + marker.length);
+			// A status has at most three digits. Do not buffer an unbounded fake marker.
+			if (end < 0 && pending.length - at <= marker.length + 3) return;
+			const value = end < 0 ? "" : pending.slice(at + marker.length, end);
+			if (end >= 0 && /^\d{1,3}$/.test(value)) {
+				commandExit = Number(value);
+				stdout = retain(stdout, pending.slice(0, at));
+				pending = pending.slice(end + 1);
+			}
+		}
+		// Keep enough tail to recognize a marker split across output chunks.
+		const safe = Math.max(0, pending.length - marker.length);
+		stdout = retain(stdout, pending.slice(0, safe));
+		pending = pending.slice(safe);
+	};
 	const env = new PanaExecutionEnv({
 		cwd,
+		allowCwdCheckout: host.box === undefined,
 		sessionId: host.box?.id,
 		scratchDir: host.box?.scratchDir,
 		stateDir: host.stateDir,
@@ -155,11 +189,11 @@ export async function runCheck(
 	});
 	const execution = await env
 		.exec(
-			command,
+			wrapped,
 			{
 				cwd,
 				onOutput: (text, _context, info) => {
-					if (info.stream === "stdout") stdout = retain(stdout, text);
+					if (info.stream === "stdout") collectStdout(text);
 					else stderr = retain(stderr, text);
 				},
 			},
@@ -171,11 +205,12 @@ export async function runCheck(
 			cancelTimer?.();
 			abort.removeEventListener("abort", cancel);
 		});
+	stdout = retain(stdout, pending);
 	if (stopped !== null) return failure(stopped);
 	if (!execution.ok) return failure(execution.error.message);
 	// A child the kernel killed has no exit status of its own; the executor reports the shell's
 	// `128 + n`, which is where a check's own signal has always been read from.
-	const exitCode = execution.value.exitCode;
+	const exitCode = commandExit ?? execution.value.exitCode;
 	const signal = exitCode > 128 ? signalName(exitCode) : null;
 	return {
 		checkedAt: clock.now(),

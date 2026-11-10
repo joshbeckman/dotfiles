@@ -93,6 +93,24 @@ describe("#211 the subscription route applies those rules", () => {
 		expect((await subscribe("https://fcm.googleapis.com/fcm/send/abc")).status).toBe(201);
 	});
 
+	it("#211 concurrent creates cannot exceed the cap, including transferred endpoints", async () => {
+		t = await startTestPanad();
+		for (let i = 0; i < MAX_SUBSCRIPTIONS - 1; i++) {
+			expect((await subscribe(`https://push.example/existing-${i}`)).status).toBe(201);
+		}
+		const responses = await Promise.all(Array.from({ length: 12 }, (_, i) => subscribe(`https://push.example/new-${i}`)));
+		expect(responses.filter((response) => response.status === 201)).toHaveLength(1);
+		expect(responses.filter((response) => response.status === 409)).toHaveLength(11);
+		expect((await t.tcp.get<{ subscriptions: unknown[] }>("/push/subscriptions")).body.subscriptions).toHaveLength(MAX_SUBSCRIPTIONS);
+
+		await t.runtime.db.write(async (tx) => {
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES ('other', 'user', 'other', 0)");
+			await tx.run("INSERT INTO push_subscriptions (id, participant_id, endpoint, p256dh, auth, created_at) VALUES ('other-sub', 'other', 'https://push.example/other', 'p', 'a', 0)");
+		});
+		expect((await subscribe("https://push.example/other")).status).toBe(409);
+		expect(await t.runtime.db.get("SELECT participant_id FROM push_subscriptions WHERE id = 'other-sub'")).toEqual({ participant_id: "other" });
+	});
+
 	it("#211 caps the subscriptions one participant holds", async () => {
 		t = await startTestPanad();
 		for (let i = 0; i < MAX_SUBSCRIPTIONS; i++) {
@@ -114,8 +132,10 @@ describe("#211 the fan-out lasts only as long as its budget", () => {
 		t = await startTestPanad();
 		const sent: string[] = [];
 		let release: (() => void) | undefined;
-		setPushTransport(t.runtime, async (subscription: { endpoint: string }) => {
+		let aborted = false;
+		setPushTransport(t.runtime, async (subscription: { endpoint: string }, _message, _keys, signal) => {
 			if (subscription.endpoint.includes("hung")) {
+				signal.addEventListener("abort", () => { aborted = true; }, { once: true });
 				await new Promise<void>((resolve) => {
 					release = resolve;
 				});
@@ -132,6 +152,7 @@ describe("#211 the fan-out lasts only as long as its budget", () => {
 		await t.clock.advance(PUSH_TIMEOUT_MS);
 		const summary = await pushed;
 		expect(summary).toEqual({ sent: 1, gone: 0, failed: 1 });
+		expect(aborted).toBe(true);
 		release?.();
 	});
 

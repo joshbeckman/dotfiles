@@ -34,19 +34,19 @@ nnoremap <Leader>v :vert sf
 nnoremap <Leader>h :sf 
 nnoremap <Leader>f :tabnew<CR>:Files<CR>
 nnoremap <Leader>F :tabnew<CR>:FindSimilarFiles<CR>
-" Build a shell argument from buffer text. :grep and :! re-expand % and #
-" in the command line, inserting the raw buffer name quotes and all, so
-" escape those before shell-quoting. They also expand <cword>, <cfile> and
-" friends, so text containing one of those tokens is still Ex-expanded;
-" escaping < blindly is unsafe (the backslash survives when the token is not
-" special), so that needs its own mechanism and is not covered here.
+" :grep and :! expand Ex keywords and shell history before invoking the shell.
+" The special argument escapes both those expansions and shell metacharacters.
 function! ShellArg(text)
-  return shellescape(escape(a:text, '%#'))
+  return shellescape(a:text, 1)
 endfunction
-nnoremap <Leader>g :grep -r --include=<C-R>=ShellArg('*.' . expand('%:e'))<CR> <C-R>=ShellArg(expand('<cword>'))<CR> ./<CR><CR>:cw<CR>
-vnoremap <Leader>g y:grep -r --include=<C-R>=ShellArg('*.' . expand('%:e'))<CR> <C-R>=ShellArg(escape(@", '[]().*^$\\'))<CR> ./<CR><CR>:cw<CR>
-nnoremap <Leader>G :let @z=expand('<cword>')<CR>:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include=<C-R>=ShellArg('*.' . @x)<CR> <C-R>=ShellArg(@z)<CR> ./<CR><CR>:cw<CR>
-vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include=<C-R>=ShellArg('*.' . @x)<CR> <C-R>=ShellArg(escape(@", '[]().*^$\\'))<CR> ./<CR><CR>:cw<CR>
+" :grep does not remove the extra backslash for shell-history expansion.
+function! ShellArgGrep(text)
+  return substitute(ShellArg(a:text), '\\!', '!', 'g')
+endfunction
+nnoremap <Leader>g :grep -r --include=<C-R>=ShellArgGrep('*.' . expand('%:e'))<CR> <C-R>=ShellArgGrep(expand('<cword>'))<CR> ./<CR><CR>:cw<CR>
+vnoremap <Leader>g y:grep -r --include=<C-R>=ShellArgGrep('*.' . expand('%:e'))<CR> <C-R>=ShellArgGrep(escape(@", '[]().*^$\\'))<CR> ./<CR><CR>:cw<CR>
+nnoremap <Leader>G :let @z=expand('<cword>')<CR>:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include=<C-R>=ShellArgGrep('*.' . @x)<CR> <C-R>=ShellArgGrep(@z)<CR> ./<CR><CR>:cw<CR>
+vnoremap <Leader>G y:let @x=expand('%:e')<CR>:tabnew<CR>:grep -r --include=<C-R>=ShellArgGrep('*.' . @x)<CR> <C-R>=ShellArgGrep(escape(@", '[]().*^$\\'))<CR> ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>s :Buffers<CR>

@@ -6,6 +6,7 @@
 // a duration, and an optional status. Anything else in the body is rejected rather than stored,
 // so no message text and no token can reach the file.
 
+import { isSafeClientName } from "../../web/perf.js";
 import { ApiError } from "../api/errors.ts";
 import { RotatingLog } from "../logs/index.ts";
 import { CLIENT_KINDS, type ClientKind } from "./summary.ts";
@@ -16,8 +17,6 @@ export const CLIENT_BATCH_MAX = 200;
 export const CLIENT_NAME_MAX = 120;
 /** Longest sample kept. A client that claims an hour is a bug, not a measurement. */
 export const CLIENT_DURATION_MAX_MS = 600_000;
-
-const NAME = /^[\w #?=&:./%*+-]{1,120}$/;
 
 export interface ClientSample {
 	kind: ClientKind;
@@ -46,8 +45,8 @@ function clientSample(value: unknown, index: number): ClientSample {
 		throw ApiError.badRequest("invalid_sample", `${where} has no kind; expected one of ${CLIENT_KINDS.join(", ")}`);
 	}
 	const name = record.name;
-	if (typeof name !== "string" || !NAME.test(name)) {
-		throw ApiError.badRequest("invalid_sample", `${where} needs a name of 1 to ${CLIENT_NAME_MAX} plain characters`);
+	if (typeof name !== "string" || !isSafeClientName(kind, name)) {
+		throw ApiError.badRequest("invalid_sample", `${where} needs a known name for its kind`);
 	}
 	const durationMs = record.durationMs;
 	if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > CLIENT_DURATION_MAX_MS) {
@@ -95,6 +94,11 @@ export async function appendClientSamples(
 		keep: options.keep ?? 1,
 		...(options.onError ? { onError: options.onError } : {}),
 	});
-	for (const sample of samples) log.append(clientLine(sample, now));
-	return samples.length;
+	let written = 0;
+	for (const sample of samples) {
+		// Stop after the first failure: retrying every line would report the same disk error repeatedly.
+		if (!log.append(clientLine(sample, now))) break;
+		written++;
+	}
+	return written;
 }

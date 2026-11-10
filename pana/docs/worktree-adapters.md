@@ -26,9 +26,11 @@ repositories whose checkout is the tree directory itself. Use absolute paths in
 configuration; `~` and environment variables are not expanded.
 
 Both `pana worktree add REPO` and profiles with `cwd: "worktree"` use this adapter.
+Adapter commands are trusted machine configuration. Unlike built-in Git creation, Pana
+does not isolate any checkout or filter commands the adapter runs.
 Ordinary repositories still use Pana's state layout, but profile-created trees now
 use `<state>/worktrees/<session>/<repo-name>`, like the API. Existing profile cwd values
-and state-layout trees remain usable. Previously verified owned adapter trees retain
+and previously owned state-layout trees remain usable. Previously verified owned adapter trees retain
 their original paths, including case-preserving IDs. Always use the returned path.
 
 A command exit of zero is not enough: Pana checks the path, shared repository,
@@ -49,13 +51,30 @@ the command without `CAP_SYS_ADMIN` so it cannot remount them writable or bind a
 ancestor over them; macOS falls back to file-tool/cwd checks without Bash write
 enforcement.
 
+## Ordinary Git checkout
+
+Built-in creation registers a tree without checkout and checks its indexed paths before
+populating files in an isolated Git configuration. Any effective `filter` attribute
+fails closed, including `filter=lfs` without an installed driver. Git's attribute
+output cannot distinguish `-filter` from a driver literally named `unset`, so Pana
+conservatively refuses both. It also refuses sparse checkout and differences in the
+`text`, `crlf`, `eol`, `ident`, or `working-tree-encoding` attributes caused by
+external attribute sources. It preserves committed conversion attributes and copies
+these inert settings: `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`,
+`core.checkRoundtripEncoding`, `core.protectHFS`, `core.protectNTFS`, `core.ignoreCase`,
+`core.precomposeUnicode`, and `core.fileMode`. Other Git config is not copied. File
+and attribute listings above 64 MiB fail rather than bypass the checks. Concurrent
+changes to repository config or attributes are not an atomic snapshot. Managed
+adapters can implement a different trusted checkout policy.
+
 ## Failure and cleanup
 
 Adapter failures never fall back to Git or another location. Partial creation without
-an ownership receipt fails closed on retry: report the error and ask the user to
-inspect/reconcile or remove the partial tree using its supported lifecycle. Pana does
-not undo materializer side effects or delete a tree automatically. A branch may also
-remain after a failed Git creation; ordinary Git creation can reuse that branch.
+an ownership receipt fails closed on retry for both adapters and ordinary Git trees:
+report the error and ask the user to inspect/reconcile or remove the partial tree using
+its supported lifecycle. Pana does not undo materializer side effects or delete a tree
+automatically. A branch may also remain after a failed Git creation; once the partial
+tree is reconciled, ordinary Git creation can reuse that branch.
 
 Project trees are not scratch and have no automatic TTL cleanup. The session prompt
 requires completion-time cleanup of the session's own task-created trees after useful

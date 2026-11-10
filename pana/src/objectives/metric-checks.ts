@@ -36,6 +36,8 @@ interface CheckRow extends MetricRow {
 	phase: ObjectivePhase;
 }
 
+interface ClaimedCheck extends CheckRow { author: string | null | undefined; }
+
 /** A number and nothing else. A check that prints prose has not measured anything. */
 const NUMERIC = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
@@ -81,9 +83,9 @@ export function nextCheckTime(row: Pick<MetricRow, "check_every" | "check_cron">
 
 /**
  * Claim one occurrence: move `next_check_at` forward in the same write that confirms the row is
- * still the one we read. A second timer, a restart, or an edit mid-check loses the race cleanly.
+ * still the one we read. A second timer, a restart, or an edit before the claim loses the race cleanly.
  */
-async function claimCheck(runtime: Runtime, row: DueMetricCheck, nextAt: number | null): Promise<CheckRow | undefined> {
+export async function claimCheck(runtime: Runtime, row: DueMetricCheck, nextAt: number | null): Promise<ClaimedCheck | undefined> {
 	return runtime.db.write(async (tx) => {
 		const current = await tx.get<CheckRow>(
 			`SELECT m.*, o.phase AS phase
@@ -92,14 +94,16 @@ async function claimCheck(runtime: Runtime, row: DueMetricCheck, nextAt: number 
 			row.objective_id,
 			row.name,
 		);
-		if (!current || current.next_check_at !== row.next_check_at || current.check_command !== row.check_command) return undefined;
+		if (!current || current.next_check_at !== row.next_check_at || current.check_command !== row.check_command ||
+			current.check_cwd !== row.check_cwd || current.check_every !== row.check_every || current.check_cron !== row.check_cron) return undefined;
+		const author = await checkAuthor(tx, metricScope(current.objective_id, current.name));
 		await tx.run(
 			"UPDATE objective_metrics SET next_check_at = ? WHERE objective_id = ? AND name = ?",
 			nextAt,
 			row.objective_id,
 			row.name,
 		);
-		return current;
+		return { ...current, author };
 	});
 }
 
@@ -251,7 +255,7 @@ class CheckLoop implements MetricChecks {
 			{
 				command: claimed.check_command!,
 				cwd: claimed.check_cwd,
-				author: await checkAuthor(this.#runtime.db, metricScope(claimed.objective_id, claimed.name)),
+				author: claimed.author,
 			},
 			this.#runtime.clock,
 			this.#abort.signal,

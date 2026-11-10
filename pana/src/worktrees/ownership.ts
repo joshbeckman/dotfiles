@@ -52,7 +52,8 @@ export function namedForSession(path: string, session: string): boolean {
 }
 
 export function ownedPaths(state: string, session: string): string[] {
-	return owners(state).filter((o) => o.session === session && checkoutCommon(o.path) === o.common).map((o) => o.path);
+	return owners(state).filter((o) => o.session === session && namedForSession(o.path, session) &&
+		realPath(o.path) === resolve(o.path) && checkoutCommon(o.path) === o.common).map((o) => o.path);
 }
 
 export function saveOwner(state: string, key: string, owner: WorktreeOwner): void {

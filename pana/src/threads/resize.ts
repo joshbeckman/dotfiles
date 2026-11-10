@@ -7,7 +7,7 @@
 // thread reopened on a phone never re-reads a twelve-megapixel photo to show it 400 pixels wide.
 
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { Runtime } from "../server/runtime.ts";
 import type { LoadedFile } from "./files.ts";
@@ -193,12 +193,7 @@ async function make(from: string, absolute: string, width: number, format: "jpeg
 		} catch {
 			// Nothing was written.
 		}
-		try {
-			// A failed run leaves no empty cache directory behind.
-			rmdirSync(dirname(absolute));
-		} catch {
-			// Another copy lives there.
-		}
+		// Keep the directory: another active or queued resize may not have created its file yet.
 		throw error;
 	} finally {
 		releaseSlot();

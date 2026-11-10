@@ -88,6 +88,37 @@ print('fix: fixture commit\\n\\nVerify alias attribution without a real model or
                            AGENT_NAME='Fixture Agent', AGENT_HANDLE='fixture-agent',
                            PI_COMMIT_TRAILER_MODEL='must-not-appear', PI_COMMIT_MODEL='fixture/second-model')
 
+    def model_args(self):
+        return json.loads(Path(self.env['MODEL_LOG']).read_text())
+
+    def test_direct_provider_default_and_override(self):
+        for override, expected in (('', 'anthropic/claude-haiku-4-5'), ('fixture/direct', 'fixture/direct')):
+            with self.subTest(override=override):
+                self.assert_commit('Co-authored-by: AI <person+pi@example.org>', PI_COMMIT_MODEL=override)
+                args = self.model_args()
+                self.assertEqual(args[args.index('--model') + 1], expected)
+                self.assertNotIn('-e', args)
+
+    def test_extension_requires_model_and_uses_explicit_override(self):
+        extension = self.root / 'provider.ts'
+        extension.touch()
+        self.executable('devx', '''#!/bin/sh
+[ "$1" = pi ] || exit 1
+shift
+exec pi "$@"
+''')
+        result = self.invoke(PI_COMMIT_PROVIDER_EXT=str(extension))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PI_COMMIT_MODEL is required', result.stderr)
+        self.assertFalse(Path(self.env['MODEL_LOG']).exists())
+        self.assertFalse(Path(self.env['COMMIT_LOG']).exists())
+
+        self.assert_commit('Co-authored-by: AI <person+pi@example.org>',
+                           PI_COMMIT_PROVIDER_EXT=str(extension), PI_COMMIT_MODEL='fixture/proxy-model')
+        args = self.model_args()
+        self.assertEqual(args[args.index('--model') + 1], 'fixture/proxy-model')
+        self.assertEqual(args[args.index('-e') + 1], str(extension))
+
     def test_attribution_errors_stop_before_model_or_commit(self):
         for helper in (None, '#!/bin/sh\nexit 7\n', '#!/bin/sh\nexit 0\n'):
             with self.subTest(helper=helper):

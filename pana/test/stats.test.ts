@@ -5,11 +5,13 @@
 // without a daemon. The route tests drive a real in-process panad, because the point of the route
 // is that the numbers come from the log panad itself is writing.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ROUTES } from "../src/api/routes.ts";
+import type { RequestContext } from "../src/api/types.ts";
 import { main } from "../src/cli/index.ts";
 import { runPanaCommand } from "../src/cli/commands.ts";
 import {
@@ -24,6 +26,7 @@ import {
 	summarizeRequestsFile,
 } from "../src/stats/index.ts";
 import { CLIENT_BATCH_MAX, clientLine } from "../src/stats/client.ts";
+import { handlers as statsHandlers } from "../src/stats/handlers.ts";
 import { renderStatsText } from "../src/stats/text.ts";
 import { apiName, clientBody, startClientTelemetry, viewName } from "../web/perf.js";
 import { startTestPanad, type TestPanad } from "./harness/index.ts";
@@ -247,12 +250,86 @@ describe("POST /stats/client", () => {
 		expect(view?.p50).toBe(40);
 	});
 
+	it("reports a partial batch when rotation fails without exposing sample contents", async () => {
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1", timezone: "UTC", logs: { maxBytes: 1, keep: 1 } } });
+		const path = t.runtime.paths.clientLog;
+		mkdirSync(`${path}.1`);
+		const samples = [1, 2, 3].map((durationMs) => ({ kind: "api", name: "GET /inbox", durationMs, body: "private sample content" }));
+		const res = await t.client.post<{ accepted: number; samples: number }>("/stats/client", { samples });
+		expect(res.status).toBe(202);
+		expect(res.body).toEqual({ accepted: 1, samples: 3 });
+		expect(readFileSync(path, "utf8").trim().split("\n")).toHaveLength(1);
+		const reports = t.reports.filter(({ what }) => what === "request client log");
+		expect(reports).toHaveLength(1);
+		expect(String(reports[0]!.error)).toMatch(/client log write failed/);
+		expect(String(reports[0]!.error)).not.toContain("private sample content");
+		expect((await t.client.get("/inbox")).status).toBe(200);
+	});
+
+	it("reports zero accepted when a client log write fails", async () => {
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1", timezone: "UTC", logs: { maxBytes: 0 } } });
+		mkdirSync(t.runtime.paths.clientLog);
+		const res = await t.client.post<{ accepted: number; samples: number }>("/stats/client", {
+			samples: [{ kind: "view", name: "#/inbox", durationMs: 1 }, { kind: "view", name: "#/inbox", durationMs: 2 }],
+		});
+		expect(res.status).toBe(202);
+		expect(res.body).toEqual({ accepted: 0, samples: 2 });
+		const reports = t.reports.filter(({ what }) => what === "request client log");
+		expect(reports).toHaveLength(1);
+		expect(String(reports[0]!.error)).toMatch(/client log write failed/);
+		expect((await t.client.get("/inbox")).status).toBe(200);
+	});
+
+	it("does not fail the request if reporting the log error throws", async () => {
+		const panad = await start();
+		mkdirSync(panad.runtime.paths.clientLog);
+		const ctx: RequestContext = {
+			runtime: panad.runtime,
+			transport: "socket",
+			caller: { kind: "user", id: panad.runtime.config.user, url: panad.runtime.userUrl },
+			params: {}, query: new URLSearchParams(), rawBody: Buffer.alloc(0), headers: {},
+			body: { samples: [{ kind: "view", name: "#/inbox", durationMs: 1 }] },
+			report: () => { throw new Error("reporter failed"); },
+		};
+		const result = await statsHandlers["stats.client"]!(ctx);
+		expect(result).toEqual({ status: 202, body: { accepted: 0, samples: 1 } });
+	});
+
 	it("keeps the sample's own names and no field it was not given", async () => {
 		const panad = await start();
-		await panad.client.post("/stats/client", { samples: [{ kind: "api", name: "GET /x", durationMs: 1, body: "secret", token: "nope" }] });
+		await panad.client.post("/stats/client", { samples: [{ kind: "api", name: "GET /inbox", durationMs: 1, body: "secret", token: "nope" }] });
 		const stored = JSON.parse(readFileSync(panad.runtime.paths.clientLog, "utf8").trim());
 		expect(stored).not.toHaveProperty("body");
 		expect(stored).not.toHaveProperty("token");
+	});
+
+	it("rejects arbitrary names even when they look like route patterns", async () => {
+		const panad = await start();
+		for (const sample of [
+			{ kind: "api", name: "GET /memory/files/private.md", durationMs: 1 },
+			{ kind: "api", name: "GET /memory/files/:secret", durationMs: 1 },
+			{ kind: "view", name: "#/memory/files/private.md", durationMs: 1 },
+			{ kind: "view", name: "#/inbox?token=secret", durationMs: 1 },
+			{ kind: "longtask", name: "#/inbox", durationMs: 1 },
+		]) {
+			const res = await panad.client.post("/stats/client", { samples: [sample] });
+			expect(res.status).toBe(400);
+		}
+		expect(existsSync(panad.runtime.paths.clientLog)).toBe(false);
+	});
+
+	it("accepts a whole batch for unusual memory filenames without storing them", async () => {
+		const panad = await start();
+		const paths = ["notes/a b.md", "私密/💡.md", "a%25b.md", "name!with'quotes.md", "x".repeat(500)];
+		const samples = paths.flatMap((path) => [
+			{ kind: "api", name: apiName("GET", `/memory/files/${path}`), durationMs: 1 },
+			{ kind: "view", name: viewName(`#/memory/files/${path}`), durationMs: 2 },
+		]);
+		const res = await panad.client.post("/stats/client", { samples });
+		expect(res.status).toBe(202);
+		const text = readFileSync(panad.runtime.paths.clientLog, "utf8");
+		expect(text.split("\n").filter(Boolean)).toHaveLength(samples.length);
+		for (const path of paths) expect(text).not.toContain(path);
 	});
 
 	it("rejects a batch that is not samples", async () => {
@@ -368,6 +445,24 @@ describe("the PWA's own names", () => {
 		expect(viewName("#")).toBe("#/");
 	});
 
+	it("maps every API route to an explicit pattern", () => {
+		for (const route of ROUTES) {
+			if (route.name === "web.index" || route.name === "web.static") continue;
+			const path = route.pattern.replace(/:[^/]+/g, "arbitrary-id").replace("*", "private/folder/name.md");
+			expect(apiName(route.method, path), `${route.method} ${path}`).toBe(`${route.method} ${route.pattern}`);
+		}
+	});
+
+	it("never copies arbitrary route components or methods", () => {
+		expect(apiName("GET", "/memory/files/private/space %20!雪.md?token=secret")).toBe("GET /memory/files/*");
+		expect(apiName("POST", "/objectives/my-secret/metrics/private-name/readings")).toBe("POST /objectives/:id/metrics/:name/readings");
+		expect(apiName("SECRET", "/inbox")).toBe("UNKNOWN /unknown");
+		expect(apiName("GET", "/private/secret")).toBe("UNKNOWN /unknown");
+		expect(viewName("#/memory/edit/private/雪!.md?source=secret")).toBe("#/memory/edit/*");
+		expect(viewName("#/memory/commits/private-hash")).toBe("#/memory/commits/:id");
+		expect(viewName("#/unknown/private-name")).toBe("#/unknown");
+	});
+
 	it("caps a batch at what the daemon accepts", () => {
 		expect(clientBody(Array.from({ length: 5 }, () => ({}))).samples).toHaveLength(5);
 		expect(clientBody(Array.from({ length: CLIENT_BATCH_MAX + 50 }, () => ({}))).samples).toHaveLength(CLIENT_BATCH_MAX);
@@ -440,12 +535,22 @@ describe("the PWA's recorder", () => {
 
 	it("keeps the newest samples when a page outruns its batch", () => {
 		const { telemetry, posted } = recorder({ maxSamples: 2 });
-		telemetry.view("#/a", 1);
-		telemetry.view("#/b", 2);
-		telemetry.view("#/c", 3);
+		telemetry.view("#/inbox", 1);
+		telemetry.view("#/sessions", 2);
+		telemetry.view("#/threads", 3);
 		expect(telemetry.droppedSamples()).toBe(1);
 		telemetry.flush();
-		expect((posted[0] as Array<{ name: string }>).map((sample) => sample.name)).toEqual(["#/b", "#/c"]);
+		expect((posted[0] as Array<{ name: string }>).map((sample) => sample.name)).toEqual(["#/sessions", "#/threads"]);
+	});
+
+	it("drops invalid names and overlong samples instead of poisoning a batch", () => {
+		const { telemetry, posted } = recorder();
+		telemetry.view("#/memory/files/private.md", 1);
+		telemetry.api("GET /inbox", 600_001, 200);
+		telemetry.api("GET /inbox", 1, 200.5);
+		telemetry.flush();
+		expect(posted[0]).toEqual([{ kind: "api", name: "GET /inbox", durationMs: 1 }]);
+		telemetry.stop();
 	});
 
 	it("drops a batch that cannot be delivered, and keeps measuring", () => {
@@ -457,12 +562,61 @@ describe("the PWA's recorder", () => {
 			performance: { now: () => 0 },
 			target: undefined,
 		})!;
-		telemetry.view("#/a", 1);
+		telemetry.view("#/inbox", 1);
 		expect(() => telemetry.flush()).not.toThrow();
 		expect(telemetry.pending()).toBe(0);
-		telemetry.view("#/b", 2);
+		telemetry.view("#/sessions", 2);
 		telemetry.flush();
 		expect(posted).toEqual([]);
+	});
+
+	it("flushes on background and pagehide, then keeps measuring after return and restoration", () => {
+		const listeners = new Map<string, () => void>();
+		const document = { visibilityState: "visible" };
+		const posted: unknown[][] = [];
+		const telemetry = startClientTelemetry({
+			post: (samples: unknown[]) => posted.push(samples),
+			performance: { now: () => 0 },
+			target: { document, addEventListener: (type: string, listener: () => void) => listeners.set(type, listener) },
+		})!;
+		telemetry.view("#/inbox", 1);
+		document.visibilityState = "hidden";
+		listeners.get("visibilitychange")!();
+		expect(posted).toHaveLength(1);
+		document.visibilityState = "visible";
+		listeners.get("visibilitychange")!();
+		telemetry.api("GET /inbox", 2, 200);
+		listeners.get("pagehide")!();
+		expect(posted).toHaveLength(2);
+		listeners.get("pageshow")?.();
+		telemetry.view("#/inbox", 3);
+		expect(telemetry.flush()).toBe(1);
+		expect(posted).toHaveLength(3);
+		telemetry.stop();
+		telemetry.view("#/inbox", 4);
+		expect(telemetry.pending()).toBe(0);
+	});
+
+	it("continues periodic flushing after a page is restored", () => {
+		vi.useFakeTimers();
+		try {
+			const listeners = new Map<string, () => void>();
+			const posted: unknown[][] = [];
+			const telemetry = startClientTelemetry({
+				post: (samples: unknown[]) => posted.push(samples),
+				performance: { now: () => 0 },
+				target: { addEventListener: (type: string, listener: () => void) => listeners.set(type, listener) },
+				flushMs: 100,
+			})!;
+			telemetry.view("#/inbox", 1);
+			listeners.get("pagehide")!();
+			telemetry.view("#/threads", 2);
+			vi.advanceTimersByTime(100);
+			expect(posted).toHaveLength(2);
+			telemetry.stop();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("has no recorder without something to post with", () => {

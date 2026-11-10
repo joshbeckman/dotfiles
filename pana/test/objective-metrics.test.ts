@@ -8,6 +8,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runPanaCommand } from "../src/cli/commands.ts";
 import { MIGRATIONS } from "../src/db/schema.ts";
 import type { ObjectiveView } from "../src/objectives/index.ts";
+import { claimCheck, dueMetricChecks } from "../src/objectives/metric-checks.ts";
+import { runStoredCheck } from "../src/schedules/check.ts";
+import { metricScope } from "../src/schedules/check-box.ts";
 import type { MetricView, MetricsView } from "../src/objectives/metrics.ts";
 import { startTestPanad, TEST_USER, type TestPanad, type TestPanadOptions } from "./harness/index.ts";
 
@@ -713,4 +716,45 @@ it("OBJ-29 a reading records where it came from, and a session reports only its 
 	// later migration alters their shape (a check's author lives in `check_authors`, SCH-09).
 	expect(MIGRATIONS.find((migration) => migration.version === 12)).toMatchObject({ version: 12, name: "objectives" });
 	expect(MIGRATIONS.filter((migration) => migration.version > 12 && /objective_metrics/.test(migration.sql))).toEqual([]);
+});
+
+it("OBJ-26 claims metric command, cwd and author together across edits and removal", async () => {
+	await start();
+	const { objective, lead } = await active();
+	const added = await addMetric(objective.id, { name: "race", unit: "x", direction: "up", check: 'printf "%s" "$PANA_SESSION"', checkEvery: "1d" }, lead);
+	const row = (await dueMetricChecks(t!.runtime, added.check!.nextCheckAt!))[0]!;
+	const claimed = (await claimCheck(t!.runtime, row, row.next_check_at! + DAY))!;
+	expect(claimed.author).toBe(lead);
+	expect((await t!.client.post(`/objectives/${objective.id}/metrics/race`, { check: "printf 4", checkEvery: "1d" })).status).toBe(200);
+	expect(await claimCheck(t!.runtime, row, row.next_check_at! + DAY)).toBeUndefined();
+	expect((await t!.client.post(`/objectives/${objective.id}/metrics/race`, { check: null })).status).toBe(200);
+	const result = await runStoredCheck(t!.runtime, { command: claimed.check_command!, cwd: claimed.check_cwd, author: claimed.author }, t!.clock, new AbortController().signal);
+	expect(result).toMatchObject({ status: "passed", stdout: lead });
+});
+
+it("OBJ-26 missing legacy metric authority fails closed and explicit redefinition restores it", async () => {
+	await start();
+	const { objective } = await active();
+	const added = await addMetric(objective.id, { name: "legacy", unit: "x", direction: "up", check: "printf 7", checkEvery: "1d" });
+	await t!.runtime.db.write(tx => tx.run("DELETE FROM check_authors WHERE scope = ?", metricScope(objective.id, "legacy")));
+	await t!.clock.advanceTo(added.check!.nextCheckAt!);
+	await vi.waitFor(async () => expect((await metric(objective.id, "legacy")).check!.lastCheck).toMatchObject({ status: "failed", error: expect.stringContaining("author is missing") }));
+	expect((await metric(objective.id, "legacy")).readings).toEqual([]);
+	expect((await t!.client.post(`/objectives/${objective.id}/metrics/legacy`, { check: "printf 7", checkEvery: "1d" })).status).toBe(200);
+	await t!.clock.advanceTo((await metric(objective.id, "legacy")).check!.nextCheckAt!);
+	await vi.waitFor(async () => expect((await metric(objective.id, "legacy")).readings).toHaveLength(1));
+});
+
+it("OBJ-26 rejects a stale due row even when only the cwd changes", async () => {
+	await start();
+	const { objective, lead } = await active();
+	const added = await addMetric(objective.id, { name: "moved", unit: "x", direction: "up", check: "printf 1", checkEvery: "1d" }, lead);
+	const old = (await dueMetricChecks(t!.runtime, added.check!.nextCheckAt!))[0]!;
+	const newCwd = join(t!.runtime.paths.scratch, lead, "subdir");
+	mkdirSync(newCwd, { recursive: true });
+	await t!.runtime.db.write(tx => tx.run("UPDATE objective_metrics SET check_cwd = ? WHERE objective_id = ? AND name = ?", newCwd, objective.id, "moved"));
+	expect(await claimCheck(t!.runtime, old, old.next_check_at! + DAY)).toBeUndefined();
+	const current = (await dueMetricChecks(t!.runtime, added.check!.nextCheckAt!))[0]!;
+	const claim = (await claimCheck(t!.runtime, current, current.next_check_at! + DAY))!;
+	expect(claim).toMatchObject({ check_cwd: newCwd, author: lead });
 });

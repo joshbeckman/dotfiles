@@ -5,7 +5,7 @@
 
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,7 +35,7 @@ function tmp(prefix = "pana-guard-"): string {
 }
 
 /** A HOME with one primary checkout at `home/dotfiles`, its worktree, and a scratch directory. */
-function setup() {
+function setup(objectFormat?: "sha256") {
 	const home = tmp();
 	const repo = join(home, "dotfiles");
 	const scratch = join(home, "scratch");
@@ -46,7 +46,7 @@ function setup() {
 			cwd,
 			env: { PATH: process.env.PATH, HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
 		}).toString();
-	git(repo, ["init", "-q"]);
+	git(repo, ["init", "-q", ...(objectFormat ? [`--object-format=${objectFormat}`] : [])]);
 	git(repo, ["config", "user.name", "tester"]);
 	git(repo, ["config", "user.email", "tester@example.test"]);
 	git(repo, ["config", "commit.gpgsign", "false"]);
@@ -226,6 +226,7 @@ describe("GUARD-03 pana worktree add", () => {
 		expect(first.path).toBe(join(realPath(state), "worktrees", "01HZZZZZZZZZZZZZZZZZZZZZZZ", "dotfiles"));
 		expect(first.branch).toBe("pana/01HZZZZZZZZZZZZZZZZZZZZZZZ/dotfiles");
 		expect(existsSync(join(first.path, "tracked.txt"))).toBe(true);
+		expect(t.git(first.path, ["status", "--porcelain"])).toBe("");
 
 		const again = await addWorktree(runtime, "01HZZZZZZZZZZZZZZZZZZZZZZZ", { repo: t.repo });
 		expect(again.created).toBe(false);
@@ -241,6 +242,33 @@ describe("GUARD-03 pana worktree add", () => {
 		expect(t.git(first.path, ["branch", "--show-current"]).trim()).toBe(first.branch);
 		const again = await addWorktree(runtime, "session", { repo: t.repo });
 		expect(again).toEqual({ ...first, created: false });
+	});
+
+	it("materializes executable files and symlinks with a clean index", async () => {
+		const t = setup();
+		writeFileSync(join(t.repo, "executable"), "#!/bin/sh\n");
+		chmodSync(join(t.repo, "executable"), 0o755);
+		symlinkSync("tracked.txt", join(t.repo, "link"));
+		t.git(t.repo, ["add", "executable", "link"]);
+		t.git(t.repo, ["commit", "-qm", "modes"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(lstatSync(join(result.path, "executable")).mode & 0o111).not.toBe(0);
+		expect(lstatSync(join(result.path, "link")).isSymbolicLink()).toBe(true);
+		expect(readlinkSync(join(result.path, "link"))).toBe("tracked.txt");
+		expect(t.git(result.path, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("checks out the requested existing branch and supports sha256 repositories", async () => {
+		const t = setup("sha256");
+		t.git(t.repo, ["branch", "earlier"]);
+		writeFileSync(join(t.repo, "tracked.txt"), "newer\n");
+		t.git(t.repo, ["add", "tracked.txt"]);
+		t.git(t.repo, ["commit", "-qm", "newer"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo, branch: "earlier" });
+		expect(readFileSync(join(result.path, "tracked.txt"), "utf8")).toBe("primary\n");
+		expect(t.git(result.path, ["status", "--porcelain"])).toBe("");
 	});
 
 	it("does not reuse a colliding generated branch without an existing worktree", async () => {
@@ -292,6 +320,162 @@ describe("GUARD-03 pana worktree add", () => {
 		expect(result.created).toBe(true);
 		expect(existsSync(join(result.path, "tracked.txt"))).toBe(true);
 		expect(existsSync(marker)).toBe(false);
+	});
+
+	for (const event of ["reference-transaction", "post-checkout"]) it(`does not run configured ${event} hooks`, async (context) => {
+		const t = setup();
+		const marker = join(t.home, "configured-hook-ran");
+		const hook = join(t.home, "configured-hook.sh");
+		writeFileSync(hook, `#!/bin/sh\necho ran >> '${marker}'\n`);
+		chmodSync(hook, 0o755);
+		t.git(t.repo, ["config", "hook.payload.event", event]);
+		t.git(t.repo, ["config", "hook.payload.command", hook]);
+		t.git(t.repo, ["config", "hook.payload.enabled", "true"]);
+		// The positive control also demonstrates that hooksPath alone does not block this hook.
+		t.git(t.repo, ["-c", "core.hooksPath=/dev/null", "worktree", "add", "-q", "-b", "unsafe-hook", ...(event === "reference-transaction" ? ["--no-checkout"] : []), join(t.home, "unsafe-hook"), "HEAD"]);
+		if (!existsSync(marker)) context.skip(); // Git versions without configured-hook support.
+		rmSync(marker);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(result.created).toBe(true);
+		expect(existsSync(marker)).toBe(false);
+	});
+
+	it.each(["smudge", "process"])("does not run %s filters from local, included, or global config", async (driver) => {
+		for (const scope of ["local", "include", "global"]) {
+			const t = setup();
+			const marker = join(t.home, "filter-ran");
+			const script = join(t.home, "filter.sh");
+			writeFileSync(script, `#!/bin/sh\necho ran >> '${marker}'\n${driver === "smudge" ? "cat" : "exit 1"}\n`);
+			chmodSync(script, 0o755);
+			writeFileSync(join(t.repo, ".gitattributes"), "tracked.txt filter=payload\n");
+			t.git(t.repo, ["add", ".gitattributes"]);
+			t.git(t.repo, ["commit", "-qm", "attributes"]);
+			const config = `[filter "payload"]\n\t${driver} = ${script}\n\trequired = true\n`;
+			if (scope === "local") {
+				t.git(t.repo, ["config", `filter.payload.${driver}`, script]);
+				t.git(t.repo, ["config", "filter.payload.required", "true"]);
+			} else {
+				const file = join(t.home, scope === "global" ? ".gitconfig" : "included-config");
+				writeFileSync(file, config);
+				if (scope === "include") t.git(t.repo, ["config", "include.path", file]);
+			}
+			// Prove that a normal checkout actually invokes the payload, including a required
+			// process filter that fails its protocol handshake.
+			try {
+				execFileSync("git", ["-C", t.repo, "worktree", "add", "-q", "-b", "unsafe", join(t.home, "unsafe"), "HEAD"], {
+					env: { PATH: process.env.PATH, HOME: t.home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(t.home, ".gitconfig") },
+					stdio: "pipe",
+				});
+			} catch (error) {
+				if (driver !== "process") throw error;
+			}
+			expect(existsSync(marker)).toBe(true);
+			rmSync(marker);
+			const oldHome = process.env.HOME;
+			process.env.HOME = t.home;
+			try {
+				const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+				await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/checkout filter attribute on "tracked.txt" cannot run safely/);
+				expect(existsSync(join(realPath(runtime.paths.dir), "worktrees", "session", "dotfiles", ".git"))).toBe(true);
+				expect(existsSync(marker)).toBe(false);
+			} finally {
+				if (oldHome === undefined) delete process.env.HOME;
+				else process.env.HOME = oldHome;
+			}
+		}
+	});
+
+	it.each(["filter=lfs", "filter=unset", "filter=unspecified", "-filter"])("refuses %s even without a configured driver", async (attribute) => {
+		const t = setup();
+		writeFileSync(join(t.repo, "tracked.txt"), "version https://git-lfs.github.com/spec/v1\noid sha256:example\nsize 123\n");
+		writeFileSync(join(t.repo, ".gitattributes"), `tracked.txt ${attribute}\n`);
+		t.git(t.repo, ["add", ".gitattributes", "tracked.txt"]);
+		t.git(t.repo, ["commit", "-qm", "filtered pointer"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/checkout filter attribute on "tracked.txt"/);
+	});
+
+	it.each(["explicit", "implicit"])("preserves %s configured line ending conversions without executing filters", async (mode) => {
+		const t = setup();
+		if (mode === "explicit") t.git(t.repo, ["config", "core.autocrlf", "true"]);
+		else appendFileSync(join(t.repo, ".git", "config"), "\n[core]\n\tautocrlf\n");
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(readFileSync(join(result.path, "tracked.txt"), "utf8")).toBe("primary\r\n");
+		expect(t.git(result.path, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("preserves core.symlinks=false during checkout", async () => {
+		const t = setup();
+		symlinkSync("tracked.txt", join(t.repo, "link"));
+		t.git(t.repo, ["add", "link"]);
+		t.git(t.repo, ["commit", "-qm", "symlink"]);
+		t.git(t.repo, ["config", "core.symlinks", "false"]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(lstatSync(join(result.path, "link")).isSymbolicLink()).toBe(false);
+		expect(readFileSync(join(result.path, "link"), "utf8")).toBe("tracked.txt");
+		expect(t.git(result.path, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("preserves committed working-tree-encoding and ident attributes", async () => {
+		const t = setup();
+		writeFileSync(join(t.repo, "tracked.txt"), "primary $Id$\n");
+		t.git(t.repo, ["add", "tracked.txt"]);
+		writeFileSync(join(t.repo, "tracked.txt"), Buffer.from("primary $Id$\n", "utf16le"));
+		writeFileSync(join(t.repo, ".gitattributes"), "tracked.txt working-tree-encoding=UTF-16LE ident\n");
+		t.git(t.repo, ["add", ".gitattributes"]);
+		t.git(t.repo, ["commit", "-qm", "conversion attributes"]);
+		const object = t.git(t.repo, ["rev-parse", "HEAD:tracked.txt"]).trim();
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		const result = await addWorktree(runtime, "session", { repo: t.repo });
+		expect(readFileSync(join(result.path, "tracked.txt"))).toEqual(Buffer.from(`primary $Id: ${object} $\n`, "utf16le"));
+		expect(t.git(result.path, ["status", "--porcelain"])).toBe("");
+	});
+
+	it.each(["info", "global"])("refuses %s-sourced filter attributes even without a configured driver", async (source) => {
+		const t = setup();
+		const attributes = source === "info" ? join(t.repo, ".git", "info", "attributes") : join(t.home, "global-attributes");
+		writeFileSync(attributes, "tracked.txt filter=lfs\n");
+		if (source === "global") t.git(t.repo, ["config", "core.attributesfile", attributes]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/checkout filter attribute on "tracked.txt"/);
+	});
+
+	it.each(["info", "global"])("refuses differing %s conversion attributes", async (source) => {
+		const t = setup();
+		const attributes = source === "info" ? join(t.repo, ".git", "info", "attributes") : join(t.home, "global-attributes");
+		writeFileSync(attributes, "tracked.txt text eol=crlf\n");
+		if (source === "global") t.git(t.repo, ["config", "core.attributesfile", attributes]);
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/checkout attribute (text|eol).*differs outside the committed tree/);
+	});
+
+	it.each(["explicit", "implicit"])("refuses %s sparse checkout rather than silently materializing the full tree", async (mode) => {
+		const t = setup();
+		if (mode === "explicit") t.git(t.repo, ["config", "core.sparsecheckout", "true"]);
+		else appendFileSync(join(t.repo, ".git", "config"), "\n[core]\n\tsparseCheckout\n");
+		const runtime = { paths: { dir: tmp("pana-state-") } } as unknown as Runtime;
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/sparse checkout is not supported/);
+	});
+
+	it("leaves a failed checkout unowned and refuses to adopt it on retry", async () => {
+		const t = setup();
+		const blob = t.git(t.repo, ["hash-object", "-w", "tracked.txt"]).trim();
+		// A valid tree can name a file too long for the filesystem; checkout must fail.
+		const tree = execFileSync("git", ["-C", t.repo, "mktree"], {
+			input: `100644 blob ${blob}\t${"x".repeat(300)}\n`,
+			env: { PATH: process.env.PATH, HOME: t.home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+		}).toString().trim();
+		const commit = t.git(t.repo, ["commit-tree", tree, "-m", "uncheckoutable"]).trim();
+		t.git(t.repo, ["update-ref", "HEAD", commit]);
+		const state = tmp("pana-state-");
+		const path = join(realPath(state), "worktrees", "session", "dotfiles");
+		const runtime = { paths: { dir: state } } as unknown as Runtime;
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/checkout failed; inspect the unowned worktree/);
+		expect(existsSync(join(path, ".git"))).toBe(true);
+		await expect(addWorktree(runtime, "session", { repo: t.repo })).rejects.toThrow(/unowned destination/);
 	});
 
 	it("ignores GIT_* variables inherited from the shell that started panad", async () => {

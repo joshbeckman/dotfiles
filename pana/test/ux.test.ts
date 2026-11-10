@@ -1045,15 +1045,21 @@ describe("UX-21 a time reveals its exact timestamp and how long ago it was", () 
 	});
 
 	it("UX-21 exactTime carries the seconds and the zone, so two times in one minute differ", () => {
-		const first = exactTime(now);
-		const second = exactTime(now + 7_000);
-		// Seconds, which the short form drops, are what tells two nearby times apart.
-		expect(first).not.toBe(second);
-		expect(first).toContain(":00:00");
-		expect(second).toContain(":00:07");
-		expect(first).toMatch(/2026/);
-		// The text the browser parses back is the same second the server sent.
-		expect(Math.abs(Date.parse(first) - now)).toBeLessThan(1000);
+		const first = exactTime(now, "en-US");
+		const second = exactTime(now + 7_000, "en-US");
+		const local = new Date(now);
+		const hour = local.getHours() % 12 || 12;
+		const minute = String(local.getMinutes()).padStart(2, "0");
+		const period = local.getHours() < 12 ? "AM" : "PM";
+		const zone = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+			.formatToParts(local).find((part) => part.type === "timeZoneName")?.value;
+		// Check the local clock and its zone without parsing a localized display string.
+		expect(first).toContain(`${hour}:${minute}:00 ${period}`);
+		expect(second).toContain(`${hour}:${minute}:07 ${period}`);
+		expect(first).toContain(String(local.getFullYear()));
+		expect(zone).toBeTruthy();
+		expect(first).toContain(zone);
+		expect(second).toContain(zone);
 		expect(exactTime("nonsense")).toBe("nonsense");
 	});
 

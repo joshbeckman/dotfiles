@@ -1,15 +1,18 @@
 // Web Push: VAPID keys, subscriptions, and delivery (PSH-01..04).
 //
-// `web-push` is the only sender. Tests replace the transport per runtime through
-// `setPushTransport`, so no test reaches the network. A push that a push service no longer
-// recognizes (404 or 410) deletes that subscription row (PSH-04).
+// `web-push` builds the encrypted request; the network transport pins its validated DNS answers.
+// Tests can replace the transport per runtime through `setPushTransport`. A push that a push
+// service no longer recognizes (404 or 410) deletes that subscription row (PSH-04).
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { Resolver } from "node:dns/promises";
+import { Agent, request } from "node:https";
+import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import webpush, { type PushSubscription, type VapidKeys } from "web-push";
 import type { Runtime } from "../server/runtime.ts";
+import { PUSH_CONCURRENCY, withPushSlot } from "./limits.ts";
+export { PUSH_CONCURRENCY } from "./limits.ts";
 
 /** The file under the state directory that holds the domain's VAPID key pair. */
 export const VAPID_FILE = "vapid.json";
@@ -62,9 +65,6 @@ export const MAX_SUBSCRIPTIONS = 5;
 /** How long one push service gets before its send is abandoned. */
 export const PUSH_TIMEOUT_MS = 10_000;
 
-/** How many subscriptions a fan-out sends to at once, so a hung endpoint holds only its own slot. */
-export const PUSH_CONCURRENCY = 4;
-
 /**
  * Names that can only resolve inside a machine or a private network: loopback aliases, mDNS,
  * cloud metadata, and Tailscale's MagicDNS. A push service is a public HTTPS host, so none of
@@ -105,6 +105,12 @@ export function endpointProblem(endpoint: string): string | undefined {
 	return undefined;
 }
 
+// IPv4-compatible and mapped IPv6 addresses can reach IPv4 destinations, including private ones.
+// Reject the entire ranges, including expanded and hex-encoded forms.
+const embeddedIPv4 = new BlockList();
+embeddedIPv4.addSubnet("::", 96, "ipv6");
+embeddedIPv4.addSubnet("::ffff:0:0", 96, "ipv6");
+
 /** Whether an address a hostname resolved to is routable on the public internet. */
 export function isPublicAddress(address: string): boolean {
 	const bare = address.toLowerCase().split("%")[0]!;
@@ -121,10 +127,7 @@ export function isPublicAddress(address: string): boolean {
 		return true;
 	}
 	if (isIP(bare) === 6) {
-		// An IPv4-mapped address is the same reachability question as the IPv4 address inside it.
-		const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(bare);
-		if (mapped) return isPublicAddress(mapped[1]!);
-		if (bare === "::" || bare === "::1") return false;
+		if (embeddedIPv4.check(bare, "ipv6")) return false;
 		const first = Number.parseInt(bare.split(":")[0] || "0", 16);
 		if ((first & 0xfe00) === 0xfc00) return false; // unique-local fc00::/7
 		if ((first & 0xffc0) === 0xfe80) return false; // link-local fe80::/10
@@ -134,28 +137,93 @@ export function isPublicAddress(address: string): boolean {
 	return false;
 }
 
-/**
- * Refuse to hand a host to the sender that resolves somewhere private. Checking the name is not
- * enough on its own: a public-looking name can point at 169.254.169.254. Called at fetch time,
- * so a subscription stored before these rules existed is caught too.
+/** Resolve once and bind the HTTPS connection to those validated answers. The URL stays intact,
+ * so HTTP Host, TLS SNI and certificate verification all use the original hostname.
  */
-async function assertPublicHost(endpoint: string): Promise<void> {
-	const url = new URL(endpoint);
-	const addresses = await lookup(url.hostname, { all: true, verbatim: true });
-	if (addresses.length === 0) throw new Error(`${url.hostname} does not resolve`);
+export async function publicPushAgent(endpoint: string, signal: AbortSignal, resolver = new Resolver()): Promise<Agent> {
+	const host = new URL(endpoint).hostname;
+	if (signal.aborted) throw new Error("push send aborted");
+	const abort = () => resolver.cancel();
+	signal.addEventListener("abort", abort, { once: true });
+	let addresses: Array<{ address: string; family: number }>;
+	try {
+		const query = async (family: 4 | 6) => {
+			try {
+				const result = family === 4 ? await resolver.resolve4(host) : await resolver.resolve6(host);
+				return result.map((address) => ({ address, family }));
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code === "ENODATA" || code === "ENOTFOUND") return [];
+				throw error;
+			}
+		};
+		const [v4, v6] = await Promise.all([query(4), query(6)]);
+		if (signal.aborted) throw new Error("push send aborted");
+		addresses = [...v4, ...v6];
+	} catch (error) {
+		if (!signal.aborted) resolver.cancel();
+		throw error;
+	} finally {
+		signal.removeEventListener("abort", abort);
+	}
+	if (addresses.length === 0) throw new Error(`${host} does not resolve`);
 	const blocked = addresses.find((entry) => !isPublicAddress(entry.address));
-	if (blocked) throw new Error(`${url.hostname} resolves to a non-public address (${blocked.address})`);
+	if (blocked) throw new Error(`${host} resolves to a non-public address (${blocked.address})`);
+
+	return new Agent({
+		lookup: (hostname, options, callback) => {
+			const matches = hostname === host ? addresses.filter((entry) => !options.family || entry.family === options.family) : [];
+			if (matches.length === 0) {
+				callback(new Error(`no validated address for ${hostname}`), "", 0);
+			} else if (options.all) {
+				callback(null, matches);
+			} else {
+				callback(null, matches[0]!.address, matches[0]!.family);
+			}
+		},
+	});
+}
+
+/** Send generated web-push bytes through the pinned agent, and destroy the socket on abort. */
+export async function sendPinnedRequest(
+	endpoint: string,
+	details: { method: string; headers: import("node:http").OutgoingHttpHeaders; body?: Buffer },
+	agent: Agent,
+	signal: AbortSignal,
+): Promise<void> {
+	if (signal.aborted) throw new Error("push send aborted");
+	await new Promise<void>((resolve, reject) => {
+		const req = request(endpoint, { method: details.method, headers: details.headers, agent }, (res) => {
+			res.resume();
+			res.on("error", reject);
+			res.on("end", () => {
+				if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+				else reject(Object.assign(new Error(`push service returned ${res.statusCode}`), { statusCode: res.statusCode }));
+			});
+		});
+		const abort = () => req.destroy(new Error("push send aborted"));
+		signal.addEventListener("abort", abort, { once: true });
+		req.once("close", () => signal.removeEventListener("abort", abort));
+		req.on("error", reject);
+		if (signal.aborted) abort();
+		else req.end(details.body);
+	});
 }
 
 /** Reject a send that outlives its budget, so one hung endpoint cannot hold a fan-out open. */
-async function withTimeout<T>(runtime: Runtime, work: Promise<T>, ms: number = PUSH_TIMEOUT_MS): Promise<T> {
+async function withTimeout<T>(runtime: Runtime, work: (signal: AbortSignal) => Promise<T>, ms: number = PUSH_TIMEOUT_MS): Promise<T> {
+	const control = new AbortController();
 	let cancel: (() => void) | undefined;
 	const expired = new Promise<never>((_, reject) => {
-		// A deadline the send must observe is work, not bookkeeping, so it is not a background timer.
-		cancel = runtime.clock.setTimer(() => reject(new Error(`push send timed out after ${ms} ms`)), ms, { background: false });
+		// The budget includes time waiting for a global transport slot.
+		cancel = runtime.clock.setTimer(() => {
+			const error = new Error(`push send timed out after ${ms} ms`);
+			reject(error);
+			control.abort(error);
+		}, ms, { background: false });
 	});
 	try {
-		return await Promise.race([work, expired]);
+		return await Promise.race([withPushSlot(control.signal, () => work(control.signal)), expired]);
 	} finally {
 		cancel?.();
 	}
@@ -184,6 +252,7 @@ export type PushTransport = (
 	subscription: PushSubscription,
 	message: PushMessage,
 	vapid: VapidKeys,
+	signal: AbortSignal,
 ) => Promise<void>;
 
 const transports = new WeakMap<Runtime, PushTransport>();
@@ -203,18 +272,24 @@ function vapidSubject(runtime: Runtime): string {
 function transportFor(runtime: Runtime): PushTransport {
 	const custom = transports.get(runtime);
 	if (custom) return custom;
-	return async (subscription, message, vapid) => {
-		// Only the network path fetches, so only it resolves names: tests inject a transport.
-		await assertPublicHost(subscription.endpoint);
-		await webpush.sendNotification(subscription, JSON.stringify(message), {
-			vapidDetails: {
-				subject: vapidSubject(runtime),
-				publicKey: vapid.publicKey,
-				privateKey: vapid.privateKey,
-			},
-			TTL: 60 * 60 * 24,
-			urgency: "normal",
-		});
+	return async (subscription, message, vapid, signal?: AbortSignal) => {
+		// The caller supplies a deadline signal when the timeout transport is integrated.
+		const deadline = signal ?? new AbortController().signal;
+		const agent = await publicPushAgent(subscription.endpoint, deadline);
+		try {
+			const details = webpush.generateRequestDetails(subscription, JSON.stringify(message), {
+				vapidDetails: {
+					subject: vapidSubject(runtime),
+					publicKey: vapid.publicKey,
+					privateKey: vapid.privateKey,
+				},
+				TTL: 60 * 60 * 24,
+				urgency: "normal",
+			});
+			await sendPinnedRequest(subscription.endpoint, details, agent, deadline);
+		} finally {
+			agent.destroy();
+		}
 	};
 }
 
@@ -248,10 +323,11 @@ export async function sendToSubscription(
 	try {
 		await withTimeout(
 			runtime,
-			transportFor(runtime)(
+			(signal) => transportFor(runtime)(
 				{ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
 				message,
 				vapidKeys(runtime),
+				signal,
 			),
 		);
 		return "sent";
