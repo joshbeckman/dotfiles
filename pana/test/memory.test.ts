@@ -1,4 +1,4 @@
-import { existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { statusToExitCode } from "../src/api/errors.ts";
@@ -458,6 +458,86 @@ describe("memory", () => {
 			expect(await git(["-C", checkout, "status", "--porcelain"]), plant).toBe("");
 			expect(existsSync(join(checkout, "planted.md")), plant).toBe(false);
 
+			await t.close();
+			t = undefined;
+		}
+	});
+
+	it("MEM-02 rejects a substituted .git pointer on an already registered writer", async () => {
+		for (const target of ["checkout", "another writer"] as const) {
+			t = await startTestPanad();
+			expect((await t.tcp.post("/memory/files/keep.md", { content: "memory\n" })).status).toBe(201);
+			const path = await worktree();
+			const main = await git(["-C", repo(), "rev-parse", "main"]);
+			let victim: string;
+			if (target === "checkout") {
+				victim = join(t.runtime.paths.dir, "checkout");
+				mkdirSync(victim);
+				await git(["-C", victim, "init", "--quiet", "--initial-branch=main"]);
+				await git(["-C", victim, "config", "user.email", "user@example.com"]);
+				await git(["-C", victim, "config", "user.name", "User"]);
+				writeFileSync(join(victim, "keep.md"), "victim\n");
+				await git(["-C", victim, "add", "-A"]);
+				await git(["-C", victim, "commit", "--quiet", "-m", "victim"]);
+				await git(["-C", victim, "config", "core.worktree", victim]);
+			} else {
+				victim = await worktree(await addSession(t));
+				writeFileSync(join(victim, "private.md"), "unpublished\n");
+			}
+			const victimHead = await git(["-C", victim, "rev-parse", "HEAD"]);
+			const victimStatus = await git(["-C", victim, "status", "--porcelain"]);
+			const gitDir = await git(["-C", victim, "rev-parse", "--absolute-git-dir"]);
+			writeFileSync(join(path, ".git"), `gitdir: ${gitDir}\n`);
+
+			const responses = [
+				await t.client.get("/memory/worktree"),
+				await commit("must not commit"),
+				await t.tcp.post("/memory/files/new.md", { content: "must not save\n" }),
+				await t.tcp.delete("/memory/files/keep.md"),
+			];
+			for (const res of responses) {
+				expect(res.status, target).toBe(500);
+				expect(res.body, target).toMatchObject({ error: { code: "untrusted_worktree" } });
+			}
+			expect(await git(["-C", repo(), "rev-parse", "main"]), target).toBe(main);
+			expect(await git(["-C", victim, "rev-parse", "HEAD"]), target).toBe(victimHead);
+			expect(await git(["-C", victim, "status", "--porcelain"]), target).toBe(victimStatus);
+			expect(readFileSync(join(path, "keep.md"), "utf8"), target).toBe("memory\n");
+			expect(existsSync(join(path, "new.md")), target).toBe(false);
+			if (target === "checkout") expect(readFileSync(join(victim, "keep.md"), "utf8")).toBe("victim\n");
+			else expect(readFileSync(join(victim, "private.md"), "utf8")).toBe("unpublished\n");
+			await t.close();
+			t = undefined;
+		}
+	});
+
+	it("MEM-02 rejects a registered writer whose Git configuration redirects its worktree root", async () => {
+		t = await startTestPanad();
+		const path = await worktree();
+		const victim = join(t.runtime.paths.dir, "victim");
+		mkdirSync(victim);
+		writeFileSync(join(victim, "private.md"), "untouched\n");
+		await git(["-C", path, "config", "--worktree", "core.worktree", victim]);
+		const main = await git(["-C", repo(), "rev-parse", "main"]);
+		const res = await commit("must not commit");
+		expect(res.status).toBe(500);
+		expect(res.body).toMatchObject({ error: { code: "untrusted_worktree" } });
+		expect(await git(["-C", repo(), "rev-parse", "main"])).toBe(main);
+		expect(readFileSync(join(victim, "private.md"), "utf8")).toBe("untouched\n");
+		expect(await git(["-C", path, "status", "--porcelain"])).toBe("?? private.md");
+	});
+
+	it("MEM-02 refuses missing or dangling .git on a registered worktree without pruning it", async () => {
+		for (const pointer of ["missing", "dangling"] as const) {
+			t = await startTestPanad();
+			const path = await worktree();
+			unlinkSync(join(path, ".git"));
+			if (pointer === "dangling") symlinkSync(join(t.runtime.paths.dir, "missing"), join(path, ".git"));
+			const before = await git(["-C", repo(), "worktree", "list", "--porcelain"]);
+			const res = await t.client.get("/memory/worktree");
+			expect(res.status, pointer).toBe(500);
+			expect(res.body, pointer).toMatchObject({ error: { code: "untrusted_worktree" } });
+			expect(await git(["-C", repo(), "worktree", "list", "--porcelain"]), pointer).toBe(before);
 			await t.close();
 			t = undefined;
 		}

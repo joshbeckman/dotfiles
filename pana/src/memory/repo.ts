@@ -12,6 +12,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	readdirSync,
+	readFileSync,
 	realpathSync,
 	renameSync,
 	rmSync,
@@ -19,7 +20,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { ApiError } from "../api/errors.ts";
 import { formatUrl } from "../ids/index.ts";
 import { gitOrThrow, runGit } from "./git.ts";
@@ -257,11 +258,14 @@ export class Memory {
 		const branch = `writer/${writer.id}`;
 		const base = { caller: writer.id, path, branch, repo: gitDir };
 
-		// A `.git` on disk proves nothing: a planted directory (or a symlink to somebody's checkout)
-		// would redirect every memory git command below. Trust it only once it is proven to be a
-		// worktree of memory.git on this writer's branch.
-		if (existsSync(join(path, ".git"))) {
-			await this.assertRegisteredWorktree(writer.id, branch);
+		// A registered path can have a missing or substituted .git. Do not prune or recreate it
+		// while its directory still exists: that could destroy the only link to its writer state.
+		const entries = await this.registeredWorktrees();
+		const expected = join(realpathOrSelf(worktreesDir), writer.id);
+		const registered = entries.filter((entry) => join(realpathOrSelf(dirname(entry.path)), basename(entry.path)) === expected);
+		if (lstatSync(join(path, ".git"), { throwIfNoEntry: false }) !== undefined ||
+			(registered.length > 0 && lstatSync(path, { throwIfNoEntry: false }) !== undefined)) {
+			await this.assertRegisteredWorktree(writer.id, branch, registered);
 			return { ...base, created: false };
 		}
 
@@ -287,6 +291,10 @@ export class Memory {
 			result = await add();
 		}
 		if (result.code !== 0) throw new Error(`git worktree add failed: ${result.stderr.trim()}`);
+		const createdEntries = (await this.registeredWorktrees()).filter(
+			(entry) => join(realpathOrSelf(dirname(entry.path)), basename(entry.path)) === expected,
+		);
+		await this.assertRegisteredWorktree(writer.id, branch, createdEntries);
 		// A writer may also run plain `git commit` in its worktree. Without its own identity that
 		// commit would carry whatever global git identity the process has, e.g. the human's.
 		await serialize("repo/worktree-config", () => this.enableWorktreeConfig());
@@ -295,39 +303,52 @@ export class Memory {
 		return { ...base, created: true };
 	}
 
-	/**
-	 * Prove that `<worktreesDir>/<id>` is a worktree of `memory.git` on `writer/<id>` before any
-	 * git command runs there. `existsSync(join(path, ".git"))` accepts anything, including a
-	 * directory whose `.git` file names the user's primary checkout; every later `git -C <path>`
-	 * would then stage, commit, and rebase in that checkout. So resolve the path for real, prove
-	 * it is exactly the directory we expect under the worktrees root, and require `git worktree list`
-	 * to register it on the writer's branch. A path that fails is refused, not repaired: we
-	 * cannot tell a hostile plant from a valuable directory a user put there.
-	 */
-	private async assertRegisteredWorktree(id: string, branch: string): Promise<void> {
+	private async registeredWorktrees(): Promise<Array<{ path: string; branch?: string }>> {
+		const list = await gitOrThrow(["-C", this.options.gitDir, "worktree", "list", "--porcelain", "-z"]);
+		const entries: Array<{ path: string; branch?: string }> = [];
+		for (const field of list.stdout.split("\0")) {
+			if (field.startsWith("worktree ")) entries.push({ path: field.slice("worktree ".length) });
+			else if (field.startsWith("branch ") && entries.length > 0) {
+				const entry = entries[entries.length - 1];
+				if (entry !== undefined) entry.branch = field.slice("branch ".length);
+			}
+		}
+		return entries;
+	}
+
+	/** Prove both the registration and the binding Git will actually use, before writing. */
+	private async assertRegisteredWorktree(id: string, branch: string, entries: Array<{ path: string; branch?: string }>): Promise<void> {
 		const { gitDir, worktreesDir } = this.options;
 		const path = join(worktreesDir, id);
 		const expected = join(realpathOrSelf(worktreesDir), id);
 		const real = realpathOrSelf(path);
-		if (real !== expected) {
-			throw untrustedWorktree(path, `it resolves to ${real}, not ${expected}`);
+		if (real !== expected) throw untrustedWorktree(path, `it resolves to ${real}, not ${expected}`);
+		if (entries.length !== 1) throw untrustedWorktree(path, `${gitDir} does not uniquely register it as a worktree`);
+		if (entries[0]?.branch !== `refs/heads/${branch}`) {
+			throw untrustedWorktree(path, `it is checked out at ${entries[0]?.branch ?? "a detached HEAD"}, not ${branch}`);
 		}
 
-		const list = await gitOrThrow(["-C", gitDir, "worktree", "list", "--porcelain"]);
-		const entries: Array<{ path: string; branch?: string }> = [];
-		for (const line of list.stdout.split("\n")) {
-			if (line.startsWith("worktree ")) entries.push({ path: line.slice("worktree ".length) });
-			else if (line.startsWith("branch ") && entries.length > 0) {
-				const entry = entries[entries.length - 1];
-				if (entry !== undefined) entry.branch = line.slice("branch ".length);
+		// Git's worktree list reads the admin backlink, not this directory's .git pointer. Check
+		// both directions and Git's effective root; core.worktree can redirect Git despite a match.
+		try {
+			const dotGit = join(path, ".git");
+			if (!lstatSync(dotGit).isFile()) throw new Error(".git is not a regular file");
+			const result = await runGit(["rev-parse", "--absolute-git-dir"], { cwd: path });
+			if (result.code !== 0) throw new Error("Git cannot resolve .git");
+			const admin = realpathSync(result.stdout.trimEnd());
+			if (dirname(admin) !== realpathSync(join(gitDir, "worktrees"))) throw new Error(".git points outside memory worktree metadata");
+			const backlink = readFileSync(join(admin, "gitdir"), "utf8").trimEnd();
+			if (realpathSync(resolve(admin, backlink)) !== realpathSync(dotGit)) throw new Error("worktree metadata points to another .git");
+			const common = await runGit(["rev-parse", "--git-common-dir"], { cwd: path });
+			const root = await runGit(["rev-parse", "--show-toplevel"], { cwd: path });
+			const head = await runGit(["symbolic-ref", "-q", "HEAD"], { cwd: path });
+			if (common.code !== 0 || realpathSync(resolve(path, common.stdout.trimEnd())) !== realpathSync(gitDir) ||
+				root.code !== 0 || realpathSync(root.stdout.trimEnd()) !== real ||
+				head.code !== 0 || head.stdout.trimEnd() !== `refs/heads/${branch}`) {
+				throw new Error("Git resolves a different repository, root, or branch");
 			}
-		}
-		const registered = entries.find((entry) => realpathOrSelf(entry.path) === real);
-		if (registered === undefined) {
-			throw untrustedWorktree(path, `${gitDir} does not register it as a worktree`);
-		}
-		if (registered.branch !== `refs/heads/${branch}`) {
-			throw untrustedWorktree(path, `it is checked out at ${registered.branch ?? "a detached HEAD"}, not ${branch}`);
+		} catch (error) {
+			throw untrustedWorktree(path, error instanceof Error ? error.message : "cannot verify Git binding");
 		}
 	}
 
