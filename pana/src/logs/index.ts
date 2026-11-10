@@ -56,7 +56,7 @@ export class RotatingLog {
 		const bytes = Buffer.byteLength(text);
 		try {
 			// Rotate before writing, never after: a file is renamed at a line boundary.
-			if (this.maxBytes > 0 && this.size() > 0 && this.size() + bytes > this.maxBytes) this.rotate();
+			if (this.maxBytes > 0 && this.size() > 0 && this.size() + bytes > this.maxBytes && !this.rotate()) return;
 			// 0600: the request log names sessions and the paths they opened (CFG-04), and a
 			// rotated file keeps the mode of the file it was renamed from.
 			appendFileSync(this.path, text, { mode: 0o600 });
@@ -69,7 +69,7 @@ export class RotatingLog {
 	}
 
 	/** Rename the active file to `<name>.1`, shifting older ones up, and start a new one. */
-	rotate(): void {
+	rotate(): boolean {
 		try {
 			for (let index = this.keep; index >= 1; index--) {
 				const from = index === 1 ? this.path : `${this.path}.${index - 1}`;
@@ -78,9 +78,11 @@ export class RotatingLog {
 				if (existsSync(from)) renameSync(from, to);
 			}
 			this.#bytes = 0;
+			return true;
 		} catch (error) {
 			this.#bytes = undefined;
 			this.#onError?.(error);
+			return false;
 		}
 	}
 }

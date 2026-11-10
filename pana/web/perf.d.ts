@@ -48,6 +48,7 @@ export interface ClientTelemetry {
 	droppedSamples(): number;
 }
 
+export function isSafeClientName(kind: string, name: unknown): boolean;
 export function apiName(method: string, path: string): string;
 export function viewName(hash: string): string;
 export function startClientTelemetry(options?: TelemetryOptions): ClientTelemetry | undefined;

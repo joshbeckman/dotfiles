@@ -6,7 +6,7 @@
 // real in-process panad with a tiny `logs.maxBytes`, because the point is that a daemon rotating
 // every few requests still answers one continuous summary.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -97,6 +97,24 @@ describe("rotation", () => {
 		log.append(line(3));
 		expect(numbersIn(path)).toEqual([3]);
 		expect(numbersIn(`${path}.1`)).toEqual([1, 2]);
+	});
+
+	it("drops a line when rotation fails, then retries on the next append", () => {
+		const dir = tempDir();
+		const path = join(dir, "panad.log");
+		const errors: unknown[] = [];
+		const size = Buffer.byteLength(line(1));
+		writeFileSync(path, line(1));
+		// A directory at the destination makes unlink fail, even under a privileged test user.
+		mkdirSync(`${path}.1`);
+		const log = new RotatingLog({ path, maxBytes: size, keep: 1, onError: (error) => errors.push(error) });
+		log.append(line(2));
+		expect(errors).toHaveLength(1);
+		expect(numbersIn(path)).toEqual([1]);
+		rmSync(`${path}.1`, { recursive: true });
+		log.append(line(3));
+		expect(numbersIn(path)).toEqual([3]);
+		expect(numbersIn(`${path}.1`)).toEqual([1]);
 	});
 
 	it("reports a write it could not make instead of throwing", () => {
