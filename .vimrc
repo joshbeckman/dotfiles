@@ -116,16 +116,16 @@ nnoremap <Leader>o :tabf
 nnoremap <Leader>v :vert sf 
 nnoremap <Leader>h :sf 
 nnoremap <Leader>f :tabnew<CR>:FZF<CR>
-" Build a shell argument from buffer text. :grep and :! re-expand % and #
-" in the command line, inserting the raw buffer name quotes and all, so
-" escape those before shell-quoting. They also expand <cword>, <cfile> and
-" friends, so text containing one of those tokens is still Ex-expanded;
-" escaping < blindly is unsafe (the backslash survives when the token is not
-" special), so that needs its own mechanism and is not covered here.
+" :grep and :! expand Ex keywords and shell history before invoking the shell.
+" The special argument escapes both those expansions and shell metacharacters.
 function! ShellArg(text)
-  return shellescape(escape(a:text, '%#'))
+  return shellescape(a:text, 1)
 endfunction
-nnoremap <Leader>g :grep -r --include=<C-R>=ShellArg('*.' . expand('%:e'))<CR> <C-R>=ShellArg(expand('<cword>'))<CR> ./<CR><CR>:cw<CR>
+" :grep does not remove the extra backslash for shell-history expansion.
+function! ShellArgGrep(text)
+  return substitute(ShellArg(a:text), '\\!', '!', 'g')
+endfunction
+nnoremap <Leader>g :grep -r --include=<C-R>=ShellArgGrep('*.' . expand('%:e'))<CR> <C-R>=ShellArgGrep(expand('<cword>'))<CR> ./<CR><CR>:cw<CR>
 " search for visually-selected text with '//'
 vnoremap // y/\V<C-R>=escape(@",'/\')<CR><CR>
 nnoremap <Leader>t <C-w><C-]><C-w>T
