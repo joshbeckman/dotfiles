@@ -94,6 +94,11 @@ export async function appendClientSamples(
 		keep: options.keep ?? 1,
 		...(options.onError ? { onError: options.onError } : {}),
 	});
-	for (const sample of samples) log.append(clientLine(sample, now));
-	return samples.length;
+	let written = 0;
+	for (const sample of samples) {
+		// Stop after the first failure: retrying every line would report the same disk error repeatedly.
+		if (!log.append(clientLine(sample, now))) break;
+		written++;
+	}
+	return written;
 }

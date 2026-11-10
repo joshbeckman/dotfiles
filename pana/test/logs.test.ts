@@ -108,11 +108,11 @@ describe("rotation", () => {
 		// A directory at the destination makes unlink fail, even under a privileged test user.
 		mkdirSync(`${path}.1`);
 		const log = new RotatingLog({ path, maxBytes: size, keep: 1, onError: (error) => errors.push(error) });
-		log.append(line(2));
+		expect(log.append(line(2))).toBe(false);
 		expect(errors).toHaveLength(1);
 		expect(numbersIn(path)).toEqual([1]);
 		rmSync(`${path}.1`, { recursive: true });
-		log.append(line(3));
+		expect(log.append(line(3))).toBe(true);
 		expect(numbersIn(path)).toEqual([3]);
 		expect(numbersIn(`${path}.1`)).toEqual([1]);
 	});
@@ -120,7 +120,7 @@ describe("rotation", () => {
 	it("reports a write it could not make instead of throwing", () => {
 		const errors: unknown[] = [];
 		const log = new RotatingLog({ path: join(tempDir(), "missing", "panad.log"), maxBytes: 0, keep: 1, onError: (error) => errors.push(error) });
-		expect(() => log.append(line(1))).not.toThrow();
+		expect(log.append(line(1))).toBe(false);
 		expect(errors).toHaveLength(1);
 	});
 });

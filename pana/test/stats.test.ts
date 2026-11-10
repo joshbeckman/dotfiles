@@ -5,12 +5,13 @@
 // without a daemon. The route tests drive a real in-process panad, because the point of the route
 // is that the numbers come from the log panad itself is writing.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROUTES } from "../src/api/routes.ts";
+import type { RequestContext } from "../src/api/types.ts";
 import { main } from "../src/cli/index.ts";
 import { runPanaCommand } from "../src/cli/commands.ts";
 import {
@@ -25,6 +26,7 @@ import {
 	summarizeRequestsFile,
 } from "../src/stats/index.ts";
 import { CLIENT_BATCH_MAX, clientLine } from "../src/stats/client.ts";
+import { handlers as statsHandlers } from "../src/stats/handlers.ts";
 import { renderStatsText } from "../src/stats/text.ts";
 import { apiName, clientBody, startClientTelemetry, viewName } from "../web/perf.js";
 import { startTestPanad, type TestPanad } from "./harness/index.ts";
@@ -246,6 +248,51 @@ describe("POST /stats/client", () => {
 		const view = summary.body.client.groups.find((group) => group.kind === "view");
 		expect(view?.name).toBe("#/inbox");
 		expect(view?.p50).toBe(40);
+	});
+
+	it("reports a partial batch when rotation fails without exposing sample contents", async () => {
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1", timezone: "UTC", logs: { maxBytes: 1, keep: 1 } } });
+		const path = t.runtime.paths.clientLog;
+		mkdirSync(`${path}.1`);
+		const samples = [1, 2, 3].map((durationMs) => ({ kind: "api", name: "GET /inbox", durationMs, body: "private sample content" }));
+		const res = await t.client.post<{ accepted: number; samples: number }>("/stats/client", { samples });
+		expect(res.status).toBe(202);
+		expect(res.body).toEqual({ accepted: 1, samples: 3 });
+		expect(readFileSync(path, "utf8").trim().split("\n")).toHaveLength(1);
+		const reports = t.reports.filter(({ what }) => what === "request client log");
+		expect(reports).toHaveLength(1);
+		expect(String(reports[0]!.error)).toMatch(/client log write failed/);
+		expect(String(reports[0]!.error)).not.toContain("private sample content");
+		expect((await t.client.get("/inbox")).status).toBe(200);
+	});
+
+	it("reports zero accepted when a client log write fails", async () => {
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1", timezone: "UTC", logs: { maxBytes: 0 } } });
+		mkdirSync(t.runtime.paths.clientLog);
+		const res = await t.client.post<{ accepted: number; samples: number }>("/stats/client", {
+			samples: [{ kind: "view", name: "#/inbox", durationMs: 1 }, { kind: "view", name: "#/inbox", durationMs: 2 }],
+		});
+		expect(res.status).toBe(202);
+		expect(res.body).toEqual({ accepted: 0, samples: 2 });
+		const reports = t.reports.filter(({ what }) => what === "request client log");
+		expect(reports).toHaveLength(1);
+		expect(String(reports[0]!.error)).toMatch(/client log write failed/);
+		expect((await t.client.get("/inbox")).status).toBe(200);
+	});
+
+	it("does not fail the request if reporting the log error throws", async () => {
+		const panad = await start();
+		mkdirSync(panad.runtime.paths.clientLog);
+		const ctx: RequestContext = {
+			runtime: panad.runtime,
+			transport: "socket",
+			caller: { kind: "user", id: panad.runtime.config.user, url: panad.runtime.userUrl },
+			params: {}, query: new URLSearchParams(), rawBody: Buffer.alloc(0), headers: {},
+			body: { samples: [{ kind: "view", name: "#/inbox", durationMs: 1 }] },
+			report: () => { throw new Error("reporter failed"); },
+		};
+		const result = await statsHandlers["stats.client"]!(ctx);
+		expect(result).toEqual({ status: 202, body: { accepted: 0, samples: 1 } });
 	});
 
 	it("keeps the sample's own names and no field it was not given", async () => {

@@ -23,6 +23,8 @@ export interface RequestContext {
 	query: URLSearchParams;
 	/** Parsed JSON body; undefined for an empty or non-JSON body. */
 	body: unknown;
+	/** Report a nonfatal handler error to the daemon, without changing the response. */
+	report?: (error: unknown, what: string) => void;
 	/** The raw request bytes, for uploads. */
 	rawBody: Buffer;
 	headers: Record<string, string | string[] | undefined>;

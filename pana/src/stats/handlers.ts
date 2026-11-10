@@ -47,6 +47,12 @@ export const handlers: Handlers = {
 		const written = await appendClientSamples(ctx.runtime.paths.clientLog, samples, ctx.runtime.clock.now(), {
 			maxBytes: ctx.runtime.config.logs.maxBytes,
 			keep: ctx.runtime.config.logs.keep,
+			onError: (error) => {
+				// Report the OS error code, not error text that could carry sample data or paths.
+				const code = typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+				const suffix = typeof code === "string" && /^E[A-Z0-9]{1,20}$/.test(code) ? ` (${code})` : "";
+				try { ctx.report?.(new Error(`client log write failed${suffix}`), "client log"); } catch { /* Reporting must not fail the request. */ }
+			},
 		});
 		return { status: 202, body: { accepted: written, samples: samples.length } };
 	},

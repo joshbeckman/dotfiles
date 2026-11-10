@@ -90,6 +90,7 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 			params: match.params,
 			query: url.searchParams,
 			body,
+			report: options.onError,
 			rawBody,
 			headers: req.headers,
 		};

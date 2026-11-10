@@ -51,20 +51,22 @@ export class RotatingLog {
 	 * Append text, rotating first if it would pass the limit. A write failure is reported and
 	 * dropped: a full disk must not fail the request or the page that produced the line.
 	 */
-	append(text: string): void {
-		if (text.length === 0) return;
+	append(text: string): boolean {
+		if (text.length === 0) return false;
 		const bytes = Buffer.byteLength(text);
 		try {
 			// Rotate before writing, never after: a file is renamed at a line boundary.
-			if (this.maxBytes > 0 && this.size() > 0 && this.size() + bytes > this.maxBytes && !this.rotate()) return;
+			if (this.maxBytes > 0 && this.size() > 0 && this.size() + bytes > this.maxBytes && !this.rotate()) return false;
 			// 0600: the request log names sessions and the paths they opened (CFG-04), and a
 			// rotated file keeps the mode of the file it was renamed from.
 			appendFileSync(this.path, text, { mode: 0o600 });
 			this.#bytes = this.size() + bytes;
+			return true;
 		} catch (error) {
 			// The file may have moved or been rewritten under us; the next append re-reads it.
 			this.#bytes = undefined;
 			this.#onError?.(error);
+			return false;
 		}
 	}
 
