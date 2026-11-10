@@ -1,5 +1,8 @@
+import { mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { sessionWakes, updateSchedule, type ScheduleView } from "../src/schedules/store.ts";
+import { runStoredCheck } from "../src/schedules/check.ts";
+import { claimScheduleForRun, sessionWakes, updateSchedule, type ScheduleRow, type ScheduleView } from "../src/schedules/store.ts";
 import { startTestPanad, TEST_USER, type TestPanad } from "./harness/index.ts";
 
 let t: TestPanad | undefined;
@@ -105,4 +108,34 @@ it("checks target state in the same write that saves the wake", async () => {
 	await expect(updateSchedule(t.runtime, { kind: "user", id: TEST_USER, url: "" }, wake.id, { payload: { session: other, note: "Check" } })).rejects.toMatchObject({ status: 409 });
 	const row = await db.get<{ payload: string }>("SELECT payload FROM schedules WHERE id = ?", wake.id);
 	expect(JSON.parse(row!.payload).session).toBe(mine);
+});
+
+
+it("keeps wake target, claimed check authority, and cwd provenance together across an edit", async () => {
+	t = await startTestPanad();
+	const mine = await session();
+	const made = await t.client.post<{ schedule: ScheduleView }>("/schedules", {
+		kind: "wake", cron: "* * * * *", note: "Initial", check: "true", subject: "Manual",
+	}, { caller: mine });
+	expect(made.status).toBe(201);
+	const id = made.body.schedule.id;
+	const before = (await t.runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id))!;
+	const edited = await t.client.post<{ schedule: ScheduleView }>(`/schedules/${id}`, {
+		payload: { session: t.runtime.url({ kind: "session", id: mine }), note: "Updated" },
+	}, { caller: mine });
+	expect(edited.status).toBe(200);
+	expect(edited.body.schedule.payload.session).toBe(mine);
+	expect(await claimScheduleForRun(t.runtime, before, "active", before.next_at! + 60_000)).toBeUndefined();
+	const current = (await t.runtime.db.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", id))!;
+	const claim = (await claimScheduleForRun(t.runtime, current, "active", current.next_at! + 60_000))!;
+	expect(claim.author).toBe(mine);
+	expect(JSON.parse(claim.row.payload).session).toBe(mine);
+	const stored = { command: claim.row.check_command!, cwd: claim.row.check_cwd, author: claim.author };
+	const signal = new AbortController().signal;
+	expect((await runStoredCheck(t.runtime, stored, t.clock, signal)).status).toBe("passed");
+	const replacement = join(t.runtime.paths.dir, "outside-check-box");
+	mkdirSync(replacement);
+	rmSync(stored.cwd!, { recursive: true });
+	symlinkSync(replacement, stored.cwd!);
+	expect((await runStoredCheck(t.runtime, stored, t.clock, signal)).status).toBe("failed");
 });
