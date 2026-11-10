@@ -1,7 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { inlineDisposition } from "../src/threads/files.ts";
 import { statusToExitCode } from "../src/api/errors.ts";
 import {
@@ -350,7 +350,42 @@ describe("files", () => {
 		expect(await resizedImage(t.runtime, loaded, 64, null)).toEqual({ bytes: loaded.bytes, mediaType: "image/png" });
 		const broken = { command: "no-such-resizer", probe: [], args: () => [] };
 		expect(await resizedImage(t.runtime, loaded, 64, broken)).toEqual({ bytes: loaded.bytes, mediaType: "image/png" });
-		expect(readdirSync(join(t.dir, "files", file.id))).toEqual(["wide.png"]);
+		expect(readdirSync(join(t.dir, "files", file.id, ".resized"))).toEqual([]);
+	});
+
+	it("FIL-07 a failed resize cannot remove the directory needed by a queued resize", async () => {
+		const t = await start();
+		const file = await upload(t, "wide.png", png(200, 100));
+		const loaded = await loadFile(t.runtime, file.id, "wide.png");
+		const script = `
+			const fs = require('node:fs');
+			const [dir, out, width] = process.argv.slice(1);
+			fs.writeFileSync(dir + '/started-' + width, '');
+			if (width === '96') { fs.writeFileSync(out, 'resized'); process.exit(0); }
+			const timer = setInterval(() => {
+				if (!fs.existsSync(dir + '/release-' + width)) return;
+				clearInterval(timer);
+				process.exit(width === '64' ? 1 : 0);
+			}, 10);
+		`;
+		const backend: ResizeBackend = { command: process.execPath, probe: [], args: (_from, to, width) => ["-e", script, t.dir, to, String(width)] };
+		const first = resizedImage(t.runtime, loaded, 64, backend);
+		const second = resizedImage(t.runtime, loaded, 80, backend);
+		const third = resizedImage(t.runtime, loaded, 96, backend);
+		try {
+			await vi.waitFor(() => {
+				expect(existsSync(join(t.dir, "started-64"))).toBe(true);
+				expect(existsSync(join(t.dir, "started-80"))).toBe(true);
+			});
+			expect(existsSync(join(t.dir, "started-96"))).toBe(false);
+			writeFileSync(join(t.dir, "release-64"), "");
+			expect((await first).bytes).toEqual(loaded.bytes);
+			expect(Buffer.from((await third).bytes).toString()).toBe("resized");
+		} finally {
+			writeFileSync(join(t.dir, "release-64"), "");
+			writeFileSync(join(t.dir, "release-80"), "");
+			await Promise.all([first, second, third]);
+		}
 	});
 
 	it("FIL-07 a picture too large to decode is served as it is, so a cheap request cannot buy its pixels", async () => {

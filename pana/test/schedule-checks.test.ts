@@ -271,6 +271,23 @@ describe("schedule conditions", () => {
 		expect(await run("kill -TERM $$")).toMatchObject({ status: "failed", signal: "SIGTERM" });
 	});
 
+	it("SCH-12 normal completion kills background group members, even if they ignore TERM", async () => {
+		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
+		const clock = createFakeClock();
+		for (const code of [0, 1, 7]) {
+			const pidFile = join(dir, `child-${code}`);
+			let pid = 0;
+			try {
+				const result = await runCheck(`(trap '' TERM; while :; do :; done) >/dev/null 2>&1 & echo $! > '${pidFile}'; exit ${code}`, dir, clock, new AbortController().signal);
+				pid = Number(readFileSync(pidFile, "utf8"));
+				expect(result).toMatchObject({ exitCode: code, status: code === 0 ? "passed" : code === 1 ? "not_ready" : "failed" });
+				await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+			} finally {
+				if (pid) { try { process.kill(pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+			}
+		}
+	});
+
 	it("SCH-12 times out and kills a process group using the runtime clock; shutdown cancellation also settles", async () => {
 		dir = mkdtempSync(join(tmpdir(), "pana-condition-"));
 		const clock = createFakeClock();

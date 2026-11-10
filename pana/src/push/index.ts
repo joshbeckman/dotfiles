@@ -11,6 +11,8 @@ import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import webpush, { type PushSubscription, type VapidKeys } from "web-push";
 import type { Runtime } from "../server/runtime.ts";
+import { PUSH_CONCURRENCY, withPushSlot } from "./limits.ts";
+export { PUSH_CONCURRENCY } from "./limits.ts";
 
 /** The file under the state directory that holds the domain's VAPID key pair. */
 export const VAPID_FILE = "vapid.json";
@@ -62,9 +64,6 @@ export const MAX_SUBSCRIPTIONS = 5;
 
 /** How long one push service gets before its send is abandoned. */
 export const PUSH_TIMEOUT_MS = 10_000;
-
-/** How many subscriptions a fan-out sends to at once, so a hung endpoint holds only its own slot. */
-export const PUSH_CONCURRENCY = 4;
 
 /**
  * Names that can only resolve inside a machine or a private network: loopback aliases, mDNS,
@@ -212,14 +211,19 @@ export async function sendPinnedRequest(
 }
 
 /** Reject a send that outlives its budget, so one hung endpoint cannot hold a fan-out open. */
-async function withTimeout<T>(runtime: Runtime, work: Promise<T>, ms: number = PUSH_TIMEOUT_MS): Promise<T> {
+async function withTimeout<T>(runtime: Runtime, work: (signal: AbortSignal) => Promise<T>, ms: number = PUSH_TIMEOUT_MS): Promise<T> {
+	const control = new AbortController();
 	let cancel: (() => void) | undefined;
 	const expired = new Promise<never>((_, reject) => {
-		// A deadline the send must observe is work, not bookkeeping, so it is not a background timer.
-		cancel = runtime.clock.setTimer(() => reject(new Error(`push send timed out after ${ms} ms`)), ms, { background: false });
+		// The budget includes time waiting for a global transport slot.
+		cancel = runtime.clock.setTimer(() => {
+			const error = new Error(`push send timed out after ${ms} ms`);
+			reject(error);
+			control.abort(error);
+		}, ms, { background: false });
 	});
 	try {
-		return await Promise.race([work, expired]);
+		return await Promise.race([withPushSlot(control.signal, () => work(control.signal)), expired]);
 	} finally {
 		cancel?.();
 	}
@@ -248,6 +252,7 @@ export type PushTransport = (
 	subscription: PushSubscription,
 	message: PushMessage,
 	vapid: VapidKeys,
+	signal: AbortSignal,
 ) => Promise<void>;
 
 const transports = new WeakMap<Runtime, PushTransport>();
@@ -318,10 +323,11 @@ export async function sendToSubscription(
 	try {
 		await withTimeout(
 			runtime,
-			transportFor(runtime)(
+			(signal) => transportFor(runtime)(
 				{ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
 				message,
 				vapidKeys(runtime),
+				signal,
 			),
 		);
 		return "sent";
