@@ -386,6 +386,7 @@ function checkFor(runtime: Runtime, caller: Caller, input: Record<string, unknow
 	// SCH-09's cwd rule applies here too: a session's metric check runs in the session's own box.
 	const plan = planCheck(runtime, caller, input, stored);
 	const nextAt = cron === null ? now + parseDuration(every!) : cronNext(runtime, cron, now);
+	if (plan.author === undefined) throw new Error("check definition has no author");
 	return { command, cwd: plan.cwd!, author: plan.author, every, cron, nextAt };
 }
 
@@ -463,7 +464,7 @@ export async function addMetric(runtime: Runtime, caller: Caller, value: string 
 			now,
 		);
 		// OBJ-26/SCH-09: the author is stored beside the check; a session's check runs in its box.
-		await saveCheckAuthor(tx, metricScope(id, name), check?.author ?? null, now);
+		await saveCheckAuthor(tx, metricScope(id, name), check?.author ?? null, now, check !== null);
 		await recordObjectiveEvent(tx, runtime, {
 			objectiveId: id,
 			kind: "metric.add",
@@ -608,20 +609,23 @@ export async function setMetric(
 			// Switching to `raw` drops the window the mean needed; a mean keeps or takes one.
 			edit.window = aggregate === "raw" && input.window === undefined ? null : windowFor(input.window ?? existing.window_spec, aggregate);
 		}
-		const checkTouched = ["check", ...CHECK_FIELDS].some((field) => input[field] !== undefined);
-		if (checkTouched) {
-			edit.check = checkFor(runtime, caller, input, now, {
-				command: existing.check_command,
-				cwd: existing.check_cwd,
-				author: await checkAuthor(runtime.db, metricScope(id, metric)),
-			});
-		}
 	}
 
 	const nextTarget = targetTouched ? target(input.target) : existing.target;
 	const targetChanged = targetTouched && nextTarget !== existing.target;
 
 	await runtime.db.atomically(async (tx) => {
+		// The check plan must use the current command, cwd and author from one transaction.
+		if (["check", ...CHECK_FIELDS].some((field) => input[field] !== undefined)) {
+			const current = await metricRow(tx, id, metric);
+			if (!current) throw ApiError.notFound(`metric ${metric} on objective ${id}`);
+			if (current.frozen_at !== null && caller.kind !== "user") throw ApiError.forbidden(`metric ${metric} has a reading, so its definition is frozen for sessions; only the user may change it`);
+			edit.check = checkFor(runtime, caller, input, now, {
+				command: current.check_command,
+				cwd: current.check_cwd,
+				author: await checkAuthor(tx, metricScope(id, metric)),
+			});
+		}
 		const sets: string[] = [];
 		const params: (string | number | null)[] = [];
 		const push = (column: string, value: string | number | null) => {
@@ -638,7 +642,7 @@ export async function setMetric(
 			push("check_every", edit.check?.every ?? null);
 			push("check_cron", edit.check?.cron ?? null);
 			push("next_check_at", edit.check?.nextAt ?? null);
-			await saveCheckAuthor(tx, metricScope(id, metric), edit.check?.author ?? null, now);
+			await saveCheckAuthor(tx, metricScope(id, metric), edit.check?.author ?? null, now, edit.check !== null);
 		}
 		if (targetTouched) push("target", nextTarget);
 		if (sets.length > 0) {

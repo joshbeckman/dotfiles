@@ -63,8 +63,8 @@ export function checkHost(runtime: Runtime): CheckHost {
 export interface StoredCheck {
 	command: string;
 	cwd: string | null;
-	/** The session whose box it runs in; null is the user's own check. */
-	author: string | null;
+	/** Session ID, null for an explicit user author, or undefined when authority is unknown. */
+	author: string | null | undefined;
 }
 
 /**
@@ -77,6 +77,9 @@ export async function runStoredCheck(
 	clock: Clock,
 	abort: AbortSignal,
 ): Promise<CheckResult> {
+	if (stored.author === undefined) {
+		return { checkedAt: clock.now(), status: "failed", exitCode: null, signal: null, stdout: "", stderr: "", error: "check author is missing; redefine the check to establish its authority" };
+	}
 	const box = stored.author === null ? undefined : sessionBox(runtime, stored.author);
 	const cwd = stored.cwd ?? box?.scratchDir ?? process.cwd();
 	return runCheck(stored.command, cwd, clock, abort, { ...checkHost(runtime), box });

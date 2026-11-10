@@ -60,8 +60,8 @@ export function boxRefusal(box: SessionBox, cwd: string): string | undefined {
 export interface CheckPlan {
 	command: string | null;
 	cwd: string | null;
-	/** The session whose box the check runs in; null is the user's own check. */
-	author: string | null;
+	/** Session ID, null for an explicit user author, or undefined when authority is unknown. */
+	author: string | null | undefined;
 }
 
 /** The fields that name a check, as an API body carries them. */
@@ -79,6 +79,9 @@ export interface CheckInput {
 export function planCheck(runtime: Runtime, caller: Caller, input: CheckInput, existing: CheckPlan): CheckPlan {
 	const author = caller.kind === "user" ? null : caller.id;
 	if (input.check === undefined && input.checkCwd === undefined) return existing;
+	if (existing.command !== null && existing.author === undefined && input.check === undefined) {
+		throw ApiError.badRequest("missing_check_author", "redefine the check command to establish its author");
+	}
 	const command = input.check === undefined ? existing.command : input.check;
 	if (command !== null && (typeof command !== "string" || command.trim().length === 0)) {
 		throw ApiError.badRequest("invalid_check", "--check must be a nonempty bash command");
@@ -117,19 +120,24 @@ export function metricScope(objectiveId: string, name: string): string {
 	return `metric:${objectiveId}/${name}`;
 }
 
-/** The session whose box a stored check runs in, or null for the user's check. */
-export async function checkAuthor(db: SqliteExecutor, scope: string): Promise<string | null> {
+// Empty cannot be a session ID. Older databases stored no row for a user check, which is
+// indistinguishable from a lost session author; those checks must be explicitly redefined.
+const USER_AUTHOR = "";
+
+/** Null is an explicit user author; undefined means unknown and must never run as the user. */
+export async function checkAuthor(db: SqliteExecutor, scope: string): Promise<string | null | undefined> {
 	const row = await db.get<{ session_id: string }>("SELECT session_id FROM check_authors WHERE scope = ?", scope);
-	return row?.session_id ?? null;
+	if (!row) return undefined;
+	return row.session_id === USER_AUTHOR ? null : row.session_id;
 }
 
-/** Record the session whose box a check runs in, or clear it for the user's own check. */
-export async function saveCheckAuthor(tx: SqliteExecutor, scope: string, sessionId: string | null, now: number): Promise<void> {
-	if (sessionId === null) await tx.run("DELETE FROM check_authors WHERE scope = ?", scope);
-	else await tx.run(
+/** Store an explicit author, preserve unknown authority, or remove it with the check. */
+export async function saveCheckAuthor(tx: SqliteExecutor, scope: string, author: string | null | undefined, now: number, hasCheck = true): Promise<void> {
+	if (!hasCheck) await tx.run("DELETE FROM check_authors WHERE scope = ?", scope);
+	else if (author !== undefined) await tx.run(
 		"INSERT OR REPLACE INTO check_authors (scope, session_id, updated_at) VALUES (?, ?, ?)",
 		scope,
-		sessionId,
+		author ?? USER_AUTHOR,
 		now,
 	);
 }

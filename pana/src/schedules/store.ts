@@ -447,7 +447,7 @@ export async function createSchedule(runtime: Runtime, caller: Caller, value: un
 			subject === null ? "first-line" : "manual",
 		);
 		// SCH-09: the author is stored beside the check; a session's check runs in its box.
-		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now);
+		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now, condition.check !== null);
 		saved = await scheduleRow(tx, id);
 		return scheduleView(saved, runtime);
 	});
@@ -514,7 +514,7 @@ export async function updateSchedule(runtime: Runtime, caller: Caller, id: strin
 			source,
 			id,
 		);
-		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now);
+		await saveCheckAuthor(tx, scheduleScope(id), condition.author, now, condition.check !== null);
 		saved = await scheduleRow(tx, id);
 		return scheduleView(saved, runtime);
 	});
@@ -534,7 +534,7 @@ export async function deleteSchedule(runtime: Runtime, caller: Caller, id: strin
 		if (!row || row.state === "deleted") return undefined;
 		requireOwner(row, caller);
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
-		await saveCheckAuthor(tx, scheduleScope(id), null, now);
+		await saveCheckAuthor(tx, scheduleScope(id), null, now, false);
 		return row;
 	});
 	if (!deleted) throw ApiError.notFound(`schedule ${id}`);
@@ -578,6 +578,17 @@ export async function claimSchedule(runtime: Runtime, id: string, state: "active
 	});
 }
 
+/** Claim a fire and its exact check authority in the same transaction. */
+export async function claimScheduleForRun(runtime: Runtime, expected: ScheduleRow, state: "active" | "done", nextAt: number | null): Promise<{ row: ScheduleRow; author: string | null | undefined } | undefined> {
+	return runtime.db.write(async (tx) => {
+		const row = await tx.get<ScheduleRow>("SELECT * FROM schedules WHERE id = ?", expected.id);
+		if (!row || row.state !== "active" || row.revision !== expected.revision || row.next_at !== expected.next_at) return undefined;
+		const author = row.check_command === null ? undefined : await checkAuthor(tx, scheduleScope(row.id));
+		await tx.run("UPDATE schedules SET state = ?, next_at = ?, updated_at = ? WHERE id = ?", state, nextAt, runtime.clock.now(), row.id);
+		return { row, author };
+	});
+}
+
 /**
  * WAK-07: retire a schedule that has finished its work, hidden from `list` and from
  * `GET /schedules/:id` the same way a user's delete is. The row stays in the table, so a spent
@@ -592,7 +603,8 @@ export async function finishSchedule(runtime: Runtime, id: string, revision: num
 			id,
 			revision,
 		);
-		await saveCheckAuthor(tx, scheduleScope(id), null, now);
+		const changed = await tx.get<{ n: number }>("SELECT changes() AS n");
+		if (changed?.n === 1) await saveCheckAuthor(tx, scheduleScope(id), null, now, false);
 	});
 	notifySchedulesChanged(runtime);
 }
