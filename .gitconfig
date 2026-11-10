@@ -91,6 +91,10 @@
         PI_MODEL=${PI_COMMIT_MODEL:-anthropic/claude-haiku-4-5}; \
         PI_USE_PROXY=0; \
         if [ -n \"$PI_PROVIDER_EXT\" ] && [ -f \"$PI_PROVIDER_EXT\" ] && command -v devx >/dev/null 2>&1; then \
+            if [ -z \"${PI_COMMIT_MODEL:-}\" ]; then \
+                echo 'PI_COMMIT_MODEL is required when using PI_COMMIT_PROVIDER_EXT' >&2; \
+                exit 1; \
+            fi; \
             PI_CMD='devx pi'; \
             PI_USE_PROXY=1; \
         fi; \

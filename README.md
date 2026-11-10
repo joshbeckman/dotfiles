@@ -49,7 +49,7 @@ To apply macOS system preferences (key repeat, Finder settings, etc.):
 
 ### Git
 
-- **`.gitconfig`** — aliases, delta pager, merge/diff settings, signing
+- **`.gitconfig`** — aliases, delta pager, merge/diff settings, signing. `git pi-commit` uses a direct model by default. When `PI_COMMIT_PROVIDER_EXT` selects an available extension, also set `PI_COMMIT_MODEL` to a model for that provider.
 - **`.git-templates/`** — custom git template hooks
 - **`.config/gh/config.yml`** — GitHub CLI preferences and aliases
 

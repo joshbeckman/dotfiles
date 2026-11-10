@@ -10,6 +10,7 @@ import { Harness, type HarnessOptions, type HarnessSettings, type Registry } fro
 import { chmodSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import type { Handlers } from "../api/types.ts";
 import { ConfigError, consumeConfigSnapshot, ensureStateLayout, loadConfig, readWebToken, stateDir as defaultStateDir, writeLaunchUrls } from "../config/index.ts";
 import { openSharedDatabase } from "../db/index.ts";
@@ -210,18 +211,18 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 		cleanup.unshift(() => objectives.close());
 
 		// API-04: the socket carries the user's authority, so no other user may ever connect to it.
-		// `listen(path)` creates the socket 0777 & ~umask, which the default umask makes 0755, and
-		// the chmod that follows leaves that window open. Bind a temporary name, restrict it, and
-		// rename it into place: the rename publishes the socket with the mode it already has.
-		const socketTemp = `${paths.socket}.tmp`;
+		// `listen(path)` creates the socket 0777 & ~umask. Bind under a short temporary name in
+		// the 0700 state directory, chmod it, then publish it by rename. The temporary name must be
+		// no longer than the public name, so a valid public path still fits the Unix socket limit.
+		const socketTemp = join(paths.dir, ".pana");
 		for (const path of [paths.socket, socketTemp]) if (existsSync(path)) unlinkSync(path);
 		const socketServer = createServer(createApp(appOptions, "socket"));
 		await listen(socketServer, (s, done) => s.listen(socketTemp, done));
-		chmodSync(socketTemp, 0o600);
-		renameSync(socketTemp, paths.socket);
 		cleanup.unshift(() => closeServer(socketServer), () => {
 			for (const path of [paths.socket, socketTemp]) if (existsSync(path)) unlinkSync(path);
 		});
+		chmodSync(socketTemp, 0o600);
+		renameSync(socketTemp, paths.socket);
 
 		let tcpPort: number | undefined;
 		const port = options.tcpPort ?? config.http.port;

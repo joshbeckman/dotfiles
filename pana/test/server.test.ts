@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
@@ -177,6 +177,28 @@ describe("panad", () => {
 		const after = await t.client.get("/inbox");
 		expect(after.status).toBe(200);
 		expect(logLines(t.dir)).toHaveLength(6);
+	});
+
+	it("API-04 a near-limit socket path starts privately without a longer temporary path", async () => {
+		// Darwin has 104 bytes in sun_path; Linux has 108. Leave room for the NUL, but not
+		// the old .tmp suffix. Use /tmp to keep the test root short on both hosts.
+		const limit = process.platform === "darwin" ? 103 : 107;
+		const root = track(mkdtempSync("/tmp/pana-socket-"));
+		const prefix = `${root}/`;
+		const dir = join(root, "x".repeat(limit - Buffer.byteLength(prefix) - Buffer.byteLength("/panad.sock")));
+		mkdirSync(dir, { mode: 0o755 }); // startup must tighten even an existing state directory
+		writeFileSync(join(dir, "config.json"), JSON.stringify({ domain: TEST_DOMAIN, user: TEST_USER }));
+		const socket = statePaths(dir).socket;
+		expect(Buffer.byteLength(socket)).toBe(limit);
+		expect(Buffer.byteLength(`${socket}.tmp`)).toBeGreaterThan(limit);
+
+		const t = await start({ stateDir: dir });
+		expect(statSync(dir).mode & 0o777).toBe(0o700);
+		expect(statSync(socket).mode & 0o777).toBe(0o600);
+		expect(readdirSync(dir)).not.toContain(".pana");
+		expect((await t.client.get("/inbox")).status).toBe(200);
+		await t.stop();
+		expect(existsSync(socket)).toBe(false);
 	});
 
 	it("SRV-04 a daemon that stops without a stop request reports failure", () => {
