@@ -43,6 +43,8 @@ export const PANA_ENV_NAMES = [
 
 export interface PanaEnvOptions {
 	cwd: string;
+	/** Only an explicitly chosen session cwd grants checkout authority, not a check cwd. */
+	allowCwdCheckout?: boolean;
 	/** The session's ULID, exported as `PANA_SESSION`; absent for a conversation that is not a session. */
 	sessionId?: string;
 	/** The originating thread URL, never the latest wake thread or an ancestor thread. */
@@ -168,6 +170,7 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 	readonly panaEnv: Record<string, string>;
 	/** The session's own cwd: writes under it are the session's business, even in a checkout (GUARD-05). */
 	readonly sessionCwd: string;
+	private readonly allowCwdCheckout: boolean;
 	/** The session's HOME, which is what `~` means in its commands. */
 	readonly home: string;
 	readonly protectCheckouts: CheckoutGuard;
@@ -188,6 +191,7 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 		this.managedLayouts = options.managedLayouts ?? [];
 		this.panaEnv = panaShellEnv(options);
 		this.sessionCwd = realPath(options.cwd);
+		this.allowCwdCheckout = options.allowCwdCheckout ?? true;
 		this.home = options.home ?? homedir();
 		this.protectCheckouts = options.protectCheckouts ?? "guard";
 		this.checkoutRoots = options.checkoutRoots ?? [homedir()];
@@ -269,7 +273,7 @@ export class PanaExecutionEnv extends NodeExecutionEnv {
 			if (claims.length) return claims.every((o) => o.session === this.sessionId);
 		}
 		// A cwd inside this checkout is explicit authority; an ancestor of many checkouts is not.
-		return under(root, this.sessionCwd);
+		return this.allowCwdCheckout && under(root, this.sessionCwd);
 	}
 
 	private managedCheckouts(): string[] {

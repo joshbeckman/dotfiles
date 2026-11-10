@@ -149,6 +149,7 @@ export async function runCheck(
 	if (abort.aborted) cancel();
 	const env = new PanaExecutionEnv({
 		cwd,
+		allowCwdCheckout: host.box === undefined,
 		sessionId: host.box?.id,
 		scratchDir: host.box?.scratchDir,
 		stateDir: host.stateDir,
