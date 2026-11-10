@@ -26,9 +26,11 @@ repositories whose checkout is the tree directory itself. Use absolute paths in
 configuration; `~` and environment variables are not expanded.
 
 Both `pana worktree add REPO` and profiles with `cwd: "worktree"` use this adapter.
+Adapter commands are trusted machine configuration. Unlike built-in Git creation, Pana
+does not isolate any checkout or filter commands the adapter runs.
 Ordinary repositories still use Pana's state layout, but profile-created trees now
 use `<state>/worktrees/<session>/<repo-name>`, like the API. Existing profile cwd values
-and state-layout trees remain usable. Previously verified owned adapter trees retain
+and previously owned state-layout trees remain usable. Previously verified owned adapter trees retain
 their original paths, including case-preserving IDs. Always use the returned path.
 
 A command exit of zero is not enough: Pana checks the path, shared repository,
@@ -52,10 +54,11 @@ enforcement.
 ## Failure and cleanup
 
 Adapter failures never fall back to Git or another location. Partial creation without
-an ownership receipt fails closed on retry: report the error and ask the user to
-inspect/reconcile or remove the partial tree using its supported lifecycle. Pana does
-not undo materializer side effects or delete a tree automatically. A branch may also
-remain after a failed Git creation; ordinary Git creation can reuse that branch.
+an ownership receipt fails closed on retry for both adapters and ordinary Git trees:
+report the error and ask the user to inspect/reconcile or remove the partial tree using
+its supported lifecycle. Pana does not undo materializer side effects or delete a tree
+automatically. A branch may also remain after a failed Git creation; once the partial
+tree is reconciled, ordinary Git creation can reuse that branch.
 
 Project trees are not scratch and have no automatic TTL cleanup. The session prompt
 requires completion-time cleanup of the session's own task-created trees after useful
