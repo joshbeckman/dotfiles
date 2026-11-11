@@ -310,37 +310,96 @@ export function syncChoices(root, has) {
 	}
 }
 
-/** Replace fenced mermaid blocks with rendered diagrams, loading the bundle only when needed. */
-export async function renderDiagrams(root, { ensureMermaid, DOMPurify, idPrefix = "pana-diagram", dark = false }) {
+/** Notes a reader sees where a diagram would have been. Each names its own failure. */
+export const DIAGRAM_NOTES = {
+	unavailable: "Diagram renderer unavailable; source follows.",
+	failed: "Diagram could not be rendered; source follows.",
+	timedOut: (ms) => `Diagram did not finish rendering in ${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}; source follows.`,
+};
+
+/**
+ * How long one diagram gets. Mermaid renders one diagram at a time in a queue, so a render that
+ * never settles would hold every diagram below it forever: the timeout turns a hang into a note.
+ * Ten seconds is generous for a phone; a diagram that misses it is not coming.
+ */
+export const DIAGRAM_TIMEOUT_MS = 10_000;
+
+/** Where a diagram failure goes when the caller names no reporter. */
+function logDiagramFailure(failure) {
+	console.error("pana: a Mermaid diagram did not render:", failure);
+}
+
+/**
+ * `work`, or a rejection once `ms` has passed. The rejection carries `timedOut`, so the caller can
+ * tell a diagram that hung from one that failed, which is the difference a reader needs to see.
+ */
+function within(work, ms) {
+	let timer;
+	const giveUp = new Promise((_, reject) => {
+		timer = setTimeout(() => {
+			const failure = new Error(`the render did not finish in ${ms}ms`);
+			failure.timedOut = true;
+			reject(failure);
+		}, ms);
+	});
+	return Promise.race([work, giveUp]).finally(() => clearTimeout(timer));
+}
+
+/** Put `note` before the code block it explains, so the reader sees why this is source. */
+function noteBefore(code, note) {
+	code.parentNode?.insertAdjacentText("beforebegin", note);
+}
+
+/**
+ * Replace fenced mermaid blocks with rendered diagrams, loading the bundle only when needed.
+ *
+ * Every way this can fail leaves a note and a logged error: a diagram that fails silently is a
+ * reader staring at source with no reason for it. `report` takes the error (default
+ * `console.error`) and `timeoutMs` bounds one diagram.
+ */
+export async function renderDiagrams(
+	root,
+	{ ensureMermaid, DOMPurify, idPrefix = "pana-diagram", dark = false, timeoutMs = DIAGRAM_TIMEOUT_MS, report = logDiagramFailure } = {},
+) {
 	const blocks = [...root.querySelectorAll("pre > code.language-mermaid")];
 	if (blocks.length === 0) return 0;
 	let mermaid;
 	try {
 		mermaid = await ensureMermaid();
-	} catch {
-		for (const code of blocks) code.parentNode.insertAdjacentText("beforebegin", "Diagram renderer unavailable; source follows.");
+	} catch (failure) {
+		report?.(failure);
+		for (const code of blocks) noteBefore(code, DIAGRAM_NOTES.unavailable);
 		return 0;
 	}
-	mermaid.initialize({
-		startOnLoad: false,
-		securityLevel: "strict",
-		theme: dark ? "dark" : "neutral",
-		htmlLabels: false,
-		flowchart: { htmlLabels: false },
-		maxTextSize: 20000,
-		suppressErrorRendering: true,
-	});
+	// A renderer that will not configure fails every diagram on the page the same way, and this
+	// call sits outside the per-block try: without its own catch it took the reason with it.
+	try {
+		mermaid.initialize({
+			startOnLoad: false,
+			securityLevel: "strict",
+			theme: dark ? "dark" : "neutral",
+			htmlLabels: false,
+			flowchart: { htmlLabels: false },
+			maxTextSize: 20000,
+			suppressErrorRendering: true,
+		});
+	} catch (failure) {
+		report?.(failure);
+		for (const code of blocks) noteBefore(code, DIAGRAM_NOTES.failed);
+		return 0;
+	}
 	let rendered = 0;
 	for (const [index, code] of blocks.entries()) {
 		try {
-			const { svg } = await mermaid.render(`${idPrefix}-${index}`, code.textContent ?? "");
+			const { svg } = await within(mermaid.render(`${idPrefix}-${index}`, code.textContent ?? ""), timeoutMs);
 			const container = document.createElement("div");
 			container.className = "diagram";
 			container.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
 			code.parentNode.replaceWith(container);
 			rendered++;
-		} catch {
-			code.parentNode.insertAdjacentText("beforebegin", "Diagram could not be rendered; source follows.");
+		} catch (failure) {
+			report?.(failure);
+			noteBefore(code, failure?.timedOut ? DIAGRAM_NOTES.timedOut(timeoutMs) : DIAGRAM_NOTES.failed);
 		}
 	}
 	return rendered;
@@ -373,6 +432,7 @@ export async function renderMessage(target, text, options) {
 	// WEB-10: the buttons are in place before the prose is, so a click never waits on bytes.
 	renderChoices(target, options);
 	void hydrateFiles(target, options.fetchFile, options).catch(() => {});
-	void renderDiagrams(target, options).catch(() => {});
+	const report = options.report ?? logDiagramFailure;
+	void renderDiagrams(target, options).catch(report);
 	return target;
 }
