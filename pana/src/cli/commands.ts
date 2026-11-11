@@ -223,6 +223,43 @@ function validateSchedule(params: CommandParams, wake = false): string | undefin
 	return undefined;
 }
 
+/** Every flag `schedule update` accepts, as the param it fills and the way it is written. */
+const SCHEDULE_UPDATE_FLAGS: ReadonlyArray<readonly [string, string]> = [
+	["cron", "--cron"],
+	["at", "--at"],
+	["check", "--check"],
+	["noCheck", "--no-check"],
+	["checkCwd", "--check-cwd"],
+	["stopAfterSuccess", "--stop-after-success"],
+	["noStopAfterSuccess", "--no-stop-after-success"],
+	["subject", "--subject"],
+];
+
+/**
+ * An update changes only what it names: an omitted flag keeps the stored timing, check, and
+ * subject, so the request never carries a field nobody asked to change.
+ */
+function validateScheduleUpdate(params: CommandParams): string | undefined {
+	const given = SCHEDULE_UPDATE_FLAGS.filter(([param]) => params[param] !== undefined).map(([, written]) => written);
+	if (given.length === 0) {
+		return `Provide one change: ${SCHEDULE_UPDATE_FLAGS.map(([, written]) => written).join(", ")}`;
+	}
+	if (scheduleSelector(params, "cron") !== undefined && scheduleSelector(params, "at") !== undefined) {
+		return "Conflicting schedule selectors: --cron, --at. Provide only one.";
+	}
+	if (text(params, "check") !== undefined && params.noCheck === true) return "--check and --no-check are exclusive";
+	if (text(params, "check") !== undefined && !text(params, "check")!.trim()) return "--check must not be empty";
+	const cwd = text(params, "checkCwd");
+	if (cwd !== undefined && text(params, "check") === undefined) return "--check-cwd requires --check";
+	if (cwd !== undefined && !isAbsolute(cwd)) return "--check-cwd must be an absolute directory";
+	if (params.stopAfterSuccess === true && params.noStopAfterSuccess === true) {
+		return "--stop-after-success and --no-stop-after-success are exclusive";
+	}
+	const subject = text(params, "subject");
+	if (subject !== undefined && !subject.trim()) return "--subject must not be empty";
+	return undefined;
+}
+
 function recurringFields(params: CommandParams): Record<string, unknown> {
 	return {
 		cron: scheduleSelector(params, "cron"),
@@ -675,6 +712,37 @@ export const COMMANDS: readonly CommandSpec[] = [
 		flags: [string("kind", "--kind KIND", "Only schedules of this kind"), ...PAGE_FLAGS],
 		positionals: [],
 		request: (params) => ({ method: "GET", path: "/schedules", query: { kind: text(params, "kind"), ...pageQuery(params) } }),
+	},
+	{
+		path: ["schedule", "update"],
+		usage:
+			'pana schedule update SCHEDULE [--cron CRON | --at TIME] [--check COMMAND [--check-cwd DIR] | --no-check] [--stop-after-success | --no-stop-after-success] [--subject TEXT]',
+		summary: "Change a schedule's timing, check, or subject in place",
+		flags: [
+			string("cron", "--cron CRON", "Cron expression in the domain timezone"),
+			string("at", "--at TIME", "Run once at this ISO time"),
+			string("check", "--check COMMAND", "Bash readiness check before each cron dispatch: 0 ready, 1 not ready"),
+			bool("noCheck", "--no-check", "Remove the check"),
+			string("checkCwd", "--check-cwd DIR", "Absolute check directory; the daemon's cwd for the user, the session's scratch for a session"),
+			bool("stopAfterSuccess", "--stop-after-success", "Finish a cron schedule after its first successful dispatch"),
+			bool("noStopAfterSuccess", "--no-stop-after-success", "Keep dispatching after a successful check"),
+			string("subject", "--subject TEXT", "Replace the schedule's label"),
+		],
+		positionals: [{ name: "SCHEDULE", param: "id", required: true }],
+		validate: (params) => validateScheduleUpdate(params),
+		request: (params) => ({
+			method: "POST",
+			path: `/schedules/${segment(text(params, "id"), "schedule")}`,
+			// Null clears the check and false stops finishing on success; an absent key keeps both.
+			body: compact({
+				cron: scheduleSelector(params, "cron"),
+				at: scheduleSelector(params, "at"),
+				check: params.noCheck === true ? null : text(params, "check"),
+				checkCwd: text(params, "checkCwd"),
+				stopAfterSuccess: params.noStopAfterSuccess === true ? false : params.stopAfterSuccess === true ? true : undefined,
+				subject: text(params, "subject"),
+			}),
+		}),
 	},
 	{
 		path: ["schedule", "delete"],

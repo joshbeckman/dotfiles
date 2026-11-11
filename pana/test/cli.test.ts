@@ -42,6 +42,7 @@ const README_COMMANDS = [
 	"pana schedule wake --at 2026-10-25T18:26:14Z --note TEXT",
 	'pana schedule wake --cron "*/5 * * * *" --note TEXT [--check COMMAND] [--check-cwd DIR] [--stop-after-success]',
 	"pana schedule list [--kind session|thread|wake]",
+	'pana schedule update SCHEDULE [--cron CRON | --at TIME] [--check COMMAND [--check-cwd DIR] | --no-check] [--stop-after-success | --no-stop-after-success] [--subject TEXT]',
 	"pana schedule delete SCHEDULE",
 	"pana stats requests [--since SPAN] [--route ROUTE] [--name NAME]",
 ];
@@ -390,6 +391,10 @@ describe("pana CLI routes", () => {
 				return { status: 201, body: { body: request.body } };
 			},
 			"schedules.list": record("schedules.list"),
+			"schedules.update": (request) => {
+				calls.push({ route: "schedules.update", query: {} });
+				return { status: 200, body: { params: request.params, body: request.body } };
+			},
 			"schedules.delete": record("schedules.delete"),
 		});
 		const env = { PANA_STATE: t.dir, PANA_SESSION: session };
@@ -417,6 +422,7 @@ describe("pana CLI routes", () => {
 		expect((await run1(["schedule", "session", "create", "--cron", "0 22 * * 1-5", "--prompt", "p"])).code).toBe(0);
 		expect((await run1(["schedule", "thread", "create", "--at", "2026-10-25T18:26:14Z", "--to", "a", "--body", "b"])).code).toBe(0);
 		expect((await run1(["schedule", "list", "--kind", "session"])).code).toBe(0);
+		expect((await run1(["schedule", "update", "01JBSCH", "--check", "true"])).code).toBe(0);
 		expect((await run1(["schedule", "delete", "01JBSCH"])).code).toBe(0);
 
 		expect(calls.map((call) => call.route)).toEqual([
@@ -441,6 +447,7 @@ describe("pana CLI routes", () => {
 			"schedules.create",
 			"schedules.create",
 			"schedules.list",
+			"schedules.update",
 			"schedules.delete",
 		]);
 
@@ -534,6 +541,77 @@ describe("pana CLI routes", () => {
 			["--in", "10m", "--at", "2027-01-01T00:00:00Z"],
 			["--in", "10m", "--check", "true"],
 		]) expect((await run(["schedule", "wake", "--note", "n", ...options], undefined)).code).toBe(2);
+	});
+
+	it("SCH-21 schedule update sends only the fields it was given", async () => {
+		const t = await start({ handlers: { "schedules.update": (request) => ({ status: 200, body: request.body }) } });
+		const body = async (args: string[]) => {
+			const result = await run(["schedule", "update", "01JBSCH", ...args, "--json"], t);
+			expect(result.code, args.join(" ")).toBe(0);
+			return JSON.parse(result.stdout);
+		};
+
+		expect(await body(["--check", "true", "--check-cwd", "/tmp"])).toEqual({ check: "true", checkCwd: "/tmp" });
+		expect(await body(["--no-check"])).toEqual({ check: null });
+		expect(await body(["--no-stop-after-success"])).toEqual({ stopAfterSuccess: false });
+		expect(await body(["--stop-after-success"])).toEqual({ stopAfterSuccess: true });
+		expect(await body(["--cron", "*/5 * * * *"])).toEqual({ cron: "*/5 * * * *" });
+		expect(await body(["--subject", "Weekly planning"])).toEqual({ subject: "Weekly planning" });
+	});
+
+	it("schedule update rejects an empty or contradictory change before dispatch", async () => {
+		const t = await start({ handlers: { "schedules.update": () => ({ status: 200, body: {} }) } });
+		const cases: Array<[string[], string]> = [
+			[[], "Provide one change:"],
+			[["--cron", "* * * * *", "--at", "2026-01-01T00:00:00Z"], "Conflicting schedule selectors"],
+			[["--check", "true", "--no-check"], "--check and --no-check are exclusive"],
+			[["--check-cwd", "/tmp"], "--check-cwd requires --check"],
+			[["--check", "true", "--check-cwd", "relative"], "--check-cwd must be an absolute directory"],
+			[["--check", "  "], "--check must not be empty"],
+			[["--stop-after-success", "--no-stop-after-success"], "are exclusive"],
+			[["--subject", "  "], "--subject must not be empty"],
+		];
+		for (const [args, message] of cases) {
+			const result = await run(["schedule", "update", "01JBSCH", ...args], t);
+			expect(result.code, args.join(" ")).toBe(2);
+			expect(result.stderr, args.join(" ")).toContain(message);
+		}
+	});
+
+	// The repair that a missing check author needs: a session that owns a schedule redefines the
+	// check as itself, which stores its own box and leaves the author recorded (SCH-09).
+	it("SCH-21 a session redefines its own check through schedule update", async () => {
+		const t = await start();
+		const session = t.runtime.newId();
+		const now = t.clock.now();
+		await t.runtime.db.write(async (tx) => {
+			await tx.run(
+				"INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)",
+				session,
+				t.runtime.url({ kind: "session", id: session }),
+				now,
+			);
+			await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", session, now, now);
+		});
+		const env = { PANA_STATE: t.dir, PANA_SESSION: session };
+
+		const created = await run(["schedule", "wake", "--cron", "*/5 * * * *", "--note", "n", "--check", "true", "--json"], t, { env });
+		expect(created.code).toBe(0);
+		const id = JSON.parse(created.stdout).schedule.id as string;
+		const scratch = join(t.dir, "scratch", session);
+		let stored = await t.runtime.db.get<{ check_command: string; check_cwd: string }>(
+			"SELECT check_command, check_cwd FROM schedules WHERE id = ?",
+			id,
+		);
+		expect(stored).toEqual({ check_command: "true", check_cwd: scratch });
+
+		const updated = await run(["schedule", "update", id, "--check", "echo 0", "--check-cwd", scratch], t, { env });
+		expect(updated.code).toBe(0);
+		stored = await t.runtime.db.get<{ check_command: string; check_cwd: string }>(
+			"SELECT check_command, check_cwd FROM schedules WHERE id = ?",
+			id,
+		);
+		expect(stored).toEqual({ check_command: "echo 0", check_cwd: scratch });
 	});
 
 	it("the user can read any inbox, and the caller is the user without PANA_SESSION", async () => {
