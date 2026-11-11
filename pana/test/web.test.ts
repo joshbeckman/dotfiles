@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { request } from "../src/api/client.ts";
 import { runPanaCli } from "../src/cli/commands.ts";
@@ -44,6 +45,14 @@ interface SseStream {
 	/** Everything the stream has received so far, for asserting what it never got. */
 	text(): string;
 	close(): void;
+}
+
+/** What a compressed response should be: the same bytes, decoded, or the reason it is not. */
+function sameBytes(plain: { headers: Record<string, string | string[] | undefined>; raw: Buffer }, compressed: { headers: Record<string, string | string[] | undefined>; raw: Buffer }): string {
+	const encoding = compressed.headers["content-encoding"];
+	if (encoding === "gzip") return gunzipSync(compressed.raw).equals(plain.raw) ? "ok" : "differs";
+	if (encoding === "br") return brotliDecompressSync(compressed.raw).equals(plain.raw) ? "ok" : "differs";
+	return `not compressed (${String(encoding)})`;
 }
 
 /** Minimal SSE reader: collect frames and wait for a substring. */
@@ -210,6 +219,67 @@ describe("PWA shell and static assets", () => {
 		// Still alive, on both transports.
 		expect((await request({ host: "127.0.0.1", port }, "GET", "/")).status).toBe(200);
 		expect((await t.client.get("/inbox")).status).toBe(200);
+	});
+
+	it("WEB-13 the shell and the API are compressed for a browser, revalidated by an etag, and never changed by either", async () => {
+		t = await startTestPanad();
+		const port = t.panad.tcpPort!;
+		const endpoint = { host: "127.0.0.1", port };
+		const plain = await request(endpoint, "GET", "/app.js");
+		expect(plain.status).toBe(200);
+		expect(plain.headers["content-encoding"]).toBeUndefined();
+
+		// A browser sends `accept-encoding`; it gets the smaller body and the same bytes back.
+		expect(sameBytes(plain, await request(endpoint, "GET", "/app.js", { headers: { "accept-encoding": "gzip" } }))).toBe("ok");
+		const gzipped = await request(endpoint, "GET", "/app.js", { headers: { "accept-encoding": "gzip" } });
+		expect(gzipped.headers["content-encoding"]).toBe("gzip");
+		expect(gzipped.headers.vary).toBe("accept-encoding");
+		expect(gzipped.raw.byteLength).toBeLessThan(plain.raw.byteLength / 2);
+		expect(gunzipSync(gzipped.raw).equals(Buffer.from(plain.raw))).toBe(true);
+		// `br` is preferred when both are offered, and a refusal of it is honored.
+		const brotli = await request(endpoint, "GET", "/app.js", { headers: { "accept-encoding": "gzip, br" } });
+		expect(brotli.headers["content-encoding"]).toBe("br");
+		expect(brotliDecompressSync(brotli.raw).equals(Buffer.from(plain.raw))).toBe(true);
+		expect((await request(endpoint, "GET", "/app.js", { headers: { "accept-encoding": "br;q=0, gzip" } })).headers["content-encoding"]).toBe("gzip");
+		expect((await request(endpoint, "GET", "/app.js", { headers: { "accept-encoding": "identity" } })).headers["content-encoding"]).toBeUndefined();
+
+		// The validator: the same file answers the same etag, and a reader that has it pays one
+		// round trip and no bytes.
+		const etag = String(plain.headers.etag);
+		expect(etag).toMatch(/^"[^"]+"$/);
+		const notModified = await request(endpoint, "GET", "/app.js", { headers: { "if-none-match": etag } });
+		expect(notModified.status).toBe(304);
+		expect(notModified.raw.byteLength).toBe(0);
+		expect(notModified.headers.etag).toBe(etag);
+		expect(notModified.headers["content-length"]).toBeUndefined();
+		expect((await request(endpoint, "GET", "/app.js")).headers.etag).toBe(etag);
+		expect((await request(endpoint, "GET", "/app.js", { headers: { "if-none-match": '"stale"' } })).status).toBe(200);
+
+		// What may be kept without asking: frames name their own face and icons change with the
+		// app, while markup, scripts, and styles revalidate.
+		expect(plain.headers["cache-control"]).toBe("no-cache");
+		const font = await request(endpoint, "GET", "/fonts/plex-sans-400.woff2", { headers: { "accept-encoding": "br" } });
+		expect(String(font.headers["cache-control"])).toContain("immutable");
+		// Already compressed or already binary: no encoding is spent on it.
+		expect(font.headers["content-encoding"]).toBeUndefined();
+		const icon = await request(endpoint, "GET", "/icon-192.png", { headers: { "accept-encoding": "br" } });
+		expect(String(icon.headers["cache-control"])).toContain("max-age=");
+		expect(icon.headers["content-encoding"]).toBeUndefined();
+
+		// JSON answers the same way, and a body too small to gain is sent as it is.
+		const created = await t.client.post<{ thread: { id: string } }>("/threads", { to: [TEST_USER], body: "word ".repeat(1500) });
+		expect(created.status).toBe(201);
+		const tcp = { host: "127.0.0.1", port, token: t.panad.webToken };
+		const thread = await request(tcp, "GET", `/threads/${created.body.thread.id}`);
+		expect(String(thread.headers["content-type"])).toBe("application/json");
+		const smallThread = await request(tcp, "GET", `/threads/${created.body.thread.id}`, { headers: { "accept-encoding": "br" } });
+		expect(smallThread.headers["content-encoding"]).toBe("br");
+		expect(smallThread.headers.vary).toBe("accept-encoding");
+		expect(smallThread.raw.byteLength).toBeLessThan(thread.raw.byteLength / 2);
+		expect(JSON.parse(brotliDecompressSync(smallThread.raw).toString("utf8"))).toMatchObject({ thread: { id: created.body.thread.id } });
+		const tiny = await request(tcp, "GET", "/push/key", { headers: { "accept-encoding": "br" } });
+		expect(tiny.status).toBe(200);
+		expect(tiny.headers["content-encoding"]).toBeUndefined();
 	});
 
 	it("WEB-02 the token round-trips from a launch URL and the shell carries an authorize panel", async () => {
