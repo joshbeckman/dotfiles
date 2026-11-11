@@ -535,6 +535,7 @@ export async function deleteSchedule(runtime: Runtime, caller: Caller, id: strin
 		requireOwner(row, caller);
 		await tx.run("UPDATE schedules SET state = 'deleted', next_at = NULL, updated_at = ? WHERE id = ?", now, id);
 		await saveCheckAuthor(tx, scheduleScope(id), null, now, false);
+		await tx.run("DELETE FROM schedule_notices WHERE schedule_id = ?", id);
 		return row;
 	});
 	if (!deleted) throw ApiError.notFound(`schedule ${id}`);
@@ -617,14 +618,54 @@ export async function skipScheduleTo(runtime: Runtime, id: string, nextAt: numbe
 	});
 }
 
-/** The creator's address, or the configured user when the schedule came from a session. */
+/**
+ * The creator's own address (SCH-22). A schedule a session created speaks to that session, because
+ * only its creator may change it (SCH-21); a user creator keeps the user's address. The configured
+ * user is the fallback for a creator row that no longer exists, so news about a schedule never
+ * goes nowhere.
+ */
 export async function creatorAddress(runtime: Runtime, creatorId: string): Promise<string> {
 	const row = await runtime.db.get<{ id: string; kind: string; url: string }>(
 		"SELECT id, kind, url FROM participants WHERE id = ?",
 		creatorId,
 	);
-	if (row && row.kind === "user") return row.url;
-	return runtime.userUrl;
+	return row?.url ?? runtime.userUrl;
+}
+
+/** The schedule's one status thread and the last thing posted there (SCH-22). */
+export interface ScheduleNoticeRow {
+	schedule_id: string;
+	thread_id: string;
+	reason: string | null;
+}
+
+export async function scheduleNotice(runtime: Runtime, id: string): Promise<ScheduleNoticeRow | undefined> {
+	return runtime.db.get<ScheduleNoticeRow>("SELECT * FROM schedule_notices WHERE schedule_id = ?", id);
+}
+
+/** Remember the thread this schedule speaks in, and the news that was already said there. */
+export async function recordScheduleNotice(runtime: Runtime, id: string, threadId: string, reason: string): Promise<void> {
+	const now = runtime.clock.now();
+	await runtime.db.write(async (tx) => {
+		await tx.run(
+			`INSERT INTO schedule_notices (schedule_id, thread_id, reason, updated_at) VALUES (?, ?, ?, ?)
+			 ON CONFLICT(schedule_id) DO UPDATE SET thread_id = excluded.thread_id, reason = excluded.reason, updated_at = excluded.updated_at`,
+			id,
+			threadId,
+			reason,
+			now,
+		);
+	});
+}
+
+/**
+ * A check that stopped failing ends the streak, so the same failure later is news again rather
+ * than a repeat. Writes only when a reason is stored, so a healthy schedule costs no write.
+ */
+export async function clearScheduleNotice(runtime: Runtime, id: string): Promise<void> {
+	await runtime.db.write(async (tx) => {
+		await tx.run("UPDATE schedule_notices SET reason = NULL, updated_at = ? WHERE schedule_id = ? AND reason IS NOT NULL", runtime.clock.now(), id);
+	});
 }
 
 /** Save diagnostics without altering recurrence or dispatching anything. */

@@ -41,6 +41,8 @@ const PANA_TABLES = [
 	"unread_counts",
 	// Migration 16: which session's box a check runs in (SCH-09).
 	"check_authors",
+	// Migration 17: the one thread a schedule speaks in, and what it last said (SCH-22).
+	"schedule_notices",
 ];
 
 const opened: TestPanad[] = [];

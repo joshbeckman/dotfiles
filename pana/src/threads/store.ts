@@ -1205,3 +1205,61 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 	announce(runtime, "notice", result, delivered);
 	return result;
 }
+
+export interface ScheduleStatusInput {
+	/** The schedule's creator: the user, or the session that owns the schedule (SCH-22). */
+	to: string;
+	/** Post into this schedule's existing thread instead of opening another one. */
+	thread?: string;
+	/** The thread's subject when a new one is opened. */
+	subject?: string;
+	body?: unknown;
+}
+
+/**
+ * SCH-22: report a schedule's own trouble to its creator.
+ *
+ * This is not a notice (NTC-01): the creator may be a session, and a session's mail is delivered
+ * through the wake hook, because the creator is the one who can repair the schedule and no one
+ * else is woken for it. One thread per schedule, posted by the domain, so repeated news reads as
+ * one conversation rather than one thread per firing. The caller decides when to speak: a
+ * repeated reason is skipped by `schedule_notices` before this is called.
+ */
+export async function postScheduleStatus(runtime: Runtime, input: ScheduleStatusInput): Promise<ThreadResult> {
+	const body = messageBody(input.body);
+	const now = runtime.clock.now();
+	const delivered: string[] = [];
+
+	const result = await runtime.db.atomically(async (tx) => {
+		const sender = await ensureDomain(tx, runtime, now);
+		const recipient = await participantFor(tx, runtime, now, input.to);
+		let threadId = input.thread;
+		if (threadId === undefined) {
+			threadId = runtime.newId();
+			await tx.run(
+				"INSERT INTO threads (id, subject, created_by, created_at) VALUES (?, ?, ?, ?)",
+				threadId,
+				input.subject ?? null,
+				sender.id,
+				now,
+			);
+			for (const member of [sender, recipient]) {
+				await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", threadId, member.id, now);
+			}
+		} else {
+			const thread = await tx.get<ThreadRecord>("SELECT * FROM threads WHERE id = ?", threadId);
+			if (!thread) throw ApiError.notFound(`thread ${threadId}`);
+			// The creator cannot change, but a repaired row may have lost its membership.
+			await tx.run(
+				"INSERT OR IGNORE INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)",
+				threadId,
+				recipient.id,
+				now,
+			);
+		}
+		const message = await appendMessage(tx, runtime, { messageId: runtime.newId(), threadId, sender, body, now, recipients: delivered });
+		return { thread: await threadView(tx, runtime, threadId), message };
+	});
+	announce(runtime, "notice", result, delivered);
+	return result;
+}
