@@ -745,6 +745,32 @@ it("OBJ-26 missing legacy metric authority fails closed and explicit redefinitio
 	await vi.waitFor(async () => expect((await metric(objective.id, "legacy")).readings).toHaveLength(1));
 });
 
+it("OBJ-43 pana objective metric edit redefines a legacy check and records its author", async () => {
+	await start();
+	const { objective } = await active();
+	const added = await addMetric(objective.id, { name: "legacy", unit: "x", direction: "up", check: "printf 7", checkEvery: "1d" });
+	await t!.runtime.db.write(tx => tx.run("DELETE FROM check_authors WHERE scope = ?", metricScope(objective.id, "legacy")));
+	await t!.clock.advanceTo(added.check!.nextCheckAt!);
+	await vi.waitFor(async () => expect((await metric(objective.id, "legacy")).check!.lastCheck).toMatchObject({ status: "failed", error: expect.stringContaining("author is missing") }));
+
+	const edited = await command("objective metric edit", { id: objective.id, name: "legacy", check: "printf 9", "check-every": "1d" });
+	expect(edited.exitCode).toBe(0);
+	const view = (await metric(objective.id, "legacy"));
+	expect(view.check).toMatchObject({ command: "printf 9", every: "1d" });
+	await t!.clock.advanceTo(view.check!.nextCheckAt!);
+	await vi.waitFor(async () => expect((await metric(objective.id, "legacy")).readings).toHaveLength(1));
+	expect((await metric(objective.id, "legacy")).readings[0]).toMatchObject({ value: 9, source: "check" });
+});
+
+it("OBJ-43 pana objective metric edit clears a check without touching its readings", async () => {
+	await start();
+	const { objective } = await active();
+	await addMetric(objective.id, { name: "checked", unit: "x", direction: "up", check: "printf 1", checkCron: "0 8 * * *" });
+	const cleared = await command("objective metric edit", { id: objective.id, name: "checked", noCheck: true });
+	expect(cleared.exitCode).toBe(0);
+	expect((await metric(objective.id, "checked")).check).toBeNull();
+});
+
 it("OBJ-26 rejects a stale due row even when only the cwd changes", async () => {
 	await start();
 	const { objective, lead } = await active();

@@ -545,10 +545,13 @@ pana objective create --goal TEXT [--autonomy manual|auto] [--due-at TIME] [--ma
 pana objective launch OBJECTIVE      # also: show, list, stop, resume, done, archive
 pana objective charter set OBJECTIVE --section Notes --body TEXT
 pana objective metric add OBJECTIVE --name NAME --unit UNIT --direction up|down [--target N]
+pana objective metric edit OBJECTIVE --name NAME (--check COMMAND (--check-every DURATION | --check-cron CRON) [--check-cwd DIR] | --no-check)
 pana objective report OBJECTIVE --body TEXT
 pana objective regenerate-lead OBJECTIVE --reason TEXT
 pana objective limits set OBJECTIVE --max-total-usd N   # `--max-total-usd default` clears it
 ```
+
+A metric's check is one definition, so `metric edit` restates it whole: the command, exactly one recurrence, and an optional cwd. It is also the repair for a metric check that reports `check author is missing`, which only the user may redefine once the metric holds readings.
 
 A failed lead leaves the objective stranded, and the user regenerates it: the next lead starts from the same briefing. [SPEC.md](SPEC.md) has the behaviours.
 

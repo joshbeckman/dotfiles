@@ -6,6 +6,7 @@
 // panad's 501 `not_implemented` until that package fills the handler in.
 
 import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { CommandUsageError } from "../cli/args.ts";
 import type { CommandParams, CommandSpec, FileAttachment, FlagSpec } from "../cli/commands.ts";
 import { parseRef } from "../ids/index.ts";
@@ -82,6 +83,28 @@ function validateGoal(params: CommandParams): string | undefined {
 	const hasGoal = Boolean(text(params, "goal")?.trim());
 	const hasFile = Boolean(text(params, "goal-file")?.trim());
 	if (hasGoal === hasFile) return "give one of --goal TEXT or --goal-file PATH";
+	return undefined;
+}
+
+/**
+ * A metric's check is one definition: a command, one recurrence, and a cwd. The API refuses a
+ * command without a recurrence and a recurrence without a command, so the CLI says so first.
+ */
+function validateMetricEdit(params: CommandParams): string | undefined {
+	const check = text(params, "check");
+	const every = text(params, "check-every");
+	const cron = text(params, "check-cron");
+	const cwd = text(params, "check-cwd");
+	if (check === undefined && (every !== undefined || cron !== undefined)) return "--check-every and --check-cron need --check";
+	if (check === undefined && params.noCheck !== true) return "Provide --check COMMAND or --no-check";
+	if (params.noCheck === true && (check !== undefined || every !== undefined || cron !== undefined || cwd !== undefined)) {
+		return "--no-check changes nothing else: drop --check, --check-every, --check-cron, and --check-cwd";
+	}
+	if (check !== undefined && !check.trim()) return "--check must not be empty";
+	if (every !== undefined && cron !== undefined) return "--check-every and --check-cron are exclusive";
+	if (check !== undefined && every === undefined && cron === undefined) return "--check needs --check-every DURATION or --check-cron CRON";
+	if (cwd !== undefined && check === undefined) return "--check-cwd requires --check";
+	if (cwd !== undefined && !isAbsolute(cwd)) return "--check-cwd must be an absolute directory";
 	return undefined;
 }
 
@@ -253,6 +276,33 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 				aggregation: text(params, "aggregation"),
 				window: text(params, "window"),
 				check: text(params, "check"),
+				checkCwd: text(params, "check-cwd"),
+				checkEvery: text(params, "check-every"),
+				checkCron: text(params, "check-cron"),
+			}),
+		}),
+	},
+	{
+		path: ["objective", "metric", "edit"],
+		usage:
+			"pana objective metric edit OBJECTIVE --name NAME (--check COMMAND (--check-every DURATION | --check-cron CRON) [--check-cwd DIR] | --no-check)",
+		summary: "Redefine a metric's check, or remove it",
+		flags: [
+			string("name", "--name NAME", "The metric's name", { required: true }),
+			string("check", "--check COMMAND", "Read the value from the world instead of trusting the lead"),
+			string("check-cwd", "--check-cwd DIR", "Absolute directory the check runs in; a session's check stays in its own box"),
+			string("check-every", "--check-every DURATION", "Run the check every this long, such as 1d"),
+			string("check-cron", "--check-cron CRON", "Run the check on a cron schedule"),
+			bool("noCheck", "--no-check", "Remove the metric's check"),
+		],
+		positionals: [{ name: "OBJECTIVE", param: "id", required: true }],
+		validate: (params) => validateMetricEdit(params),
+		request: (params) => ({
+			method: "POST",
+			path: `/objectives/${objectiveSegment(text(params, "id"))}/metrics/${encodeURIComponent(text(params, "name") ?? "")}`,
+			// Null clears the check; every other key is present only when it was given.
+			body: compact({
+				check: params.noCheck === true ? null : text(params, "check"),
 				checkCwd: text(params, "check-cwd"),
 				checkEvery: text(params, "check-every"),
 				checkCron: text(params, "check-cron"),

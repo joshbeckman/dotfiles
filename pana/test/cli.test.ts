@@ -614,6 +614,41 @@ describe("pana CLI routes", () => {
 		expect(stored).toEqual({ check_command: "echo 0", check_cwd: scratch });
 	});
 
+	it("objective metric edit sends the check it was given, or null to clear it", async () => {
+		const t = await start({ handlers: { "objectives.metrics.set": (request) => ({ status: 200, body: request.body }) } });
+		const body = async (args: string[]) => {
+			const result = await run(["objective", "metric", "edit", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "--name", "m", ...args, "--json"], t);
+			expect(result.code, args.join(" ")).toBe(0);
+			return JSON.parse(result.stdout);
+		};
+
+		expect(await body(["--check", "printf 1", "--check-every", "1d"])).toEqual({ check: "printf 1", checkEvery: "1d" });
+		expect(await body(["--check", "printf 1", "--check-cron", "0 8 * * *", "--check-cwd", "/tmp"])).toEqual({
+			check: "printf 1",
+			checkCron: "0 8 * * *",
+			checkCwd: "/tmp",
+		});
+		expect(await body(["--no-check"])).toEqual({ check: null });
+	});
+
+	it("objective metric edit rejects an incomplete or contradictory check before dispatch", async () => {
+		const t = await start({ handlers: { "objectives.metrics.set": () => ({ status: 200, body: {} }) } });
+		const cases: Array<[string[], string]> = [
+			[[], "Provide --check COMMAND or --no-check"],
+			[["--check", "printf 1"], "--check needs --check-every DURATION or --check-cron CRON"],
+			[["--check", "printf 1", "--check-every", "1d", "--check-cron", "0 8 * * *"], "are exclusive"],
+			[["--check-every", "1d"], "--check-every and --check-cron need --check"],
+			[["--check", "printf 1", "--check-every", "1d", "--check-cwd", "relative"], "--check-cwd must be an absolute directory"],
+			[["--check", " "], "--check must not be empty"],
+			[["--no-check", "--check", "printf 1"], "--no-check changes nothing else"],
+		];
+		for (const [args, message] of cases) {
+			const result = await run(["objective", "metric", "edit", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "--name", "m", ...args], t);
+			expect(result.code, args.join(" ")).toBe(2);
+			expect(result.stderr, args.join(" ")).toContain(message);
+		}
+	});
+
 	it("the user can read any inbox, and the caller is the user without PANA_SESSION", async () => {
 		const t = await start({ handlers: { "inbox.list": (request) => ({ status: 200, body: { caller: request.caller } }) } });
 		const result = await run(["session", "inbox", "01JBSESSION", "--json"], t);
