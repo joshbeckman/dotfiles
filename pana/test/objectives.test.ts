@@ -674,6 +674,7 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		"pana objective charter set OBJECTIVE --section SECTION",
 		"pana objective charter log OBJECTIVE [--section SECTION]",
 		"pana objective metric add OBJECTIVE --name NAME --unit UNIT --direction up|down",
+		"pana objective metric edit OBJECTIVE --name NAME (--check COMMAND (--check-every DURATION | --check-cron CRON) [--check-cwd DIR] | --no-check)",
 		"pana objective metric list OBJECTIVE",
 		"pana objective metric set OBJECTIVE --name NAME --value V [--source S]",
 		"pana objective metric target OBJECTIVE --name NAME [--target N]",
@@ -792,6 +793,8 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 		"objective charter set": { id: main.id, section: "Notes", body: "Measured weekly." },
 		"objective charter log": { id: main.id },
 		"objective metric add": { id: main.id, name: "kilowatt-hours", unit: "kWh", direction: "down" },
+		// OBJ-43: a check that was declared with the metric is restated whole.
+		"objective metric edit": { id: main.id, name: "kilowatt-hours", check: "printf 296", "check-every": "1d" },
 		"objective metric list": { id: main.id },
 		"objective metric set": { id: main.id, name: "kilowatt-hours", value: "296", source: "lead" },
 		"objective metric target": { id: main.id, name: "kilowatt-hours", target: "300" },
