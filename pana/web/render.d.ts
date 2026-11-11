@@ -14,6 +14,9 @@ export interface RenderOptions {
 	idPrefix?: string;
 	dark?: boolean;
 	onPick?: (option: Choice, button: unknown, group: unknown) => void;
+	/** Where a diagram failure is logged. Defaults to `console.error`. */
+	report?: (failure: unknown) => void;
+	timeoutMs?: number;
 }
 
 export const CHOICES_LANGUAGE: string;
@@ -27,5 +30,7 @@ export function escapeHtml(value: unknown): string;
 export function rewriteLinks(root: unknown, domain?: string): unknown;
 export function linkifyTextNodes(root: unknown, domain?: string): unknown;
 export function hydrateFiles(root: unknown, fetchFile: unknown, options?: Record<string, unknown>): Promise<void>;
-export function renderDiagrams(root: unknown, options: RenderOptions): Promise<number>;
+export function renderDiagrams(root: unknown, options?: RenderOptions): Promise<number>;
+export const DIAGRAM_NOTES: { unavailable: string; failed: string; timedOut: (ms: number) => string };
+export const DIAGRAM_TIMEOUT_MS: number;
 export function renderMessage(target: unknown, text: string, options: RenderOptions): Promise<unknown>;

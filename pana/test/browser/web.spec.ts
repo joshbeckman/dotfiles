@@ -482,6 +482,50 @@ describeBrowser("pana in a browser", () => {
 		expect(upload.body.file.url).toBe(`pana://${TEST_DOMAIN}/files/${upload.body.file.id}/${encodeURIComponent(name)}`);
 	});
 
+	it("WEB-04 a diagram that hangs or fails says so instead of showing silent source", async () => {
+		await start([{ text: "Ready when you are." }]);
+		await open();
+
+		// The real bundle path is covered above; these drive the failure paths, which no browser
+		// reaches on demand: a hang, a renderer that will not configure, and a bundle that will not load.
+		const failures = await evaluatePage<{ notes: Record<string, string>; stillCode: Record<string, boolean>; errors: string[] }>(`
+			location.hash = "#/inbox";
+			await until(() => window.MailRenderers && location.hash === "#/inbox");
+			const render = await import("/render.js");
+			const { marked, DOMPurify } = window.MailRenderers;
+			const errors = [];
+			const report = (failure) => errors.push(String((failure && failure.message) || failure));
+			const notes = {};
+			const stillCode = {};
+			const probe = async (label, options) => {
+				const host = document.createElement("div");
+				host.className = "body prose";
+				document.body.append(host);
+				const fence = String.fromCharCode(96).repeat(3);
+				host.innerHTML = render.markdownToHtml([fence + "mermaid", "graph TD; A-->B;", fence, ""].join(String.fromCharCode(10)), { marked, DOMPurify });
+				await render.renderDiagrams(host, Object.assign({ DOMPurify, idPrefix: label, report }, options));
+				notes[label] = host.textContent.trim();
+				stillCode[label] = Boolean(host.querySelector("pre > code.language-mermaid"));
+				host.remove();
+			};
+			await probe("hung", { ensureMermaid: async () => ({ initialize() {}, render: () => new Promise(() => {}) }), timeoutMs: 200 });
+			await probe("unconfigured", { ensureMermaid: async () => ({ initialize() { throw new Error("init refused"); }, render: async () => ({ svg: "" }) }) });
+			await probe("unloadable", { ensureMermaid: async () => { throw new Error("bundle missing"); } });
+			return { notes, stillCode, errors };
+		`);
+
+		// A render that never settles is the failure that used to sit there forever: mermaid
+		// serializes its renders, so one hang also held every diagram below it.
+		expect(failures.notes.hung).toContain("Diagram did not finish rendering in 200ms; source follows.");
+		expect(failures.notes.unconfigured).toContain("Diagram could not be rendered; source follows.");
+		expect(failures.notes.unloadable).toContain("Diagram renderer unavailable; source follows.");
+		expect(failures.stillCode).toEqual({ hung: true, unconfigured: true, unloadable: true });
+		// Each one named itself in the log; a silent failure is what let this go unexplained.
+		expect(failures.errors).toContain("the render did not finish in 200ms");
+		expect(failures.errors).toContain("init refused");
+		expect(failures.errors).toContain("bundle missing");
+	});
+
 	it("FIL-06 the composers upload an attachment and append the reference", async () => {
 		await start([{ text: "Ready when you are." }]);
 		const seeded = await seedSession("go");
