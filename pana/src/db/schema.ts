@@ -551,6 +551,24 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 17,
+		name: "schedule notice threads",
+		// SCH-22: a schedule tells its creator about its own trouble in one thread, and only when the
+		// news changes. The row keeps that thread and the last thing posted there, so a check that
+		// fails every five minutes for the same reason writes one message, not one thread per firing;
+		// a passing check clears `reason` so the next failure speaks again. Keyed by schedule, apart
+		// from the schedule row for the same reason as `check_authors`: a column would need a
+		// non-idempotent `ALTER TABLE`, and DB-03 requires every migration to re-run cleanly.
+		sql: `
+			CREATE TABLE IF NOT EXISTS schedule_notices (
+				schedule_id TEXT PRIMARY KEY,
+				thread_id   TEXT NOT NULL,
+				reason      TEXT,
+				updated_at  INTEGER NOT NULL
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

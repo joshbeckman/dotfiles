@@ -12,15 +12,16 @@ import type { Caller, Handlers } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { admitScheduledWake, releaseLeadHold } from "../objectives/hold.ts";
 import { wakeScheduled } from "../sessions/wake.ts";
-import { createThread, postNotice } from "../threads/index.ts";
+import { createThread } from "../threads/index.ts";
 import { runStoredCheck } from "./check.ts";
 import { announceWakes, wakeSessionOf } from "./live.ts";
+import { notifySchedule } from "./notices.ts";
 import { registerScheduler, unregisterScheduler } from "./registry.ts";
 import {
 	activeSchedules,
 	claimSchedule,
 	claimScheduleForRun,
-	creatorAddress,
+	clearScheduleNotice,
 	dueSchedules,
 	finishSchedule,
 	nextCronAt,
@@ -172,6 +173,9 @@ class ScheduleLoop implements Scheduler {
 					this.#abort.signal,
 				);
 				await recordCheck(this.#runtime, row.id, result);
+				// SCH-22: a check that stopped failing ends the streak, so the same failure later is
+				// news again rather than a repeat of something already said in the thread.
+				if (result.status !== "failed") await clearScheduleNotice(this.#runtime, row.id);
 				if (this.#closed) return;
 				if (result.status === "failed") {
 					this.#report(new Error(result.error ?? "check failed"), `schedule ${row.id} check`);
@@ -302,9 +306,10 @@ class ScheduleLoop implements Scheduler {
 		}
 	}
 
+	/** SCH-22: one thread per schedule, to its creator, and only when the words change. */
 	async #notify(row: ScheduleRow, body: string): Promise<void> {
 		try {
-			await postNotice(this.#runtime, { to: [await creatorAddress(this.#runtime, row.creator_id)], body });
+			await notifySchedule(this.#runtime, row, body);
 		} catch (error) {
 			this.#report(error, `schedule ${row.id} notice`);
 		}

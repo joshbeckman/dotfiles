@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCheck, runStoredCheck, CHECK_OUTPUT_BYTES, CHECK_TIMEOUT_MS } from "../src/schedules/check.ts";
 import { scheduleScope, sessionBox } from "../src/schedules/check-box.ts";
+import { SCHEMA_VERSION } from "../src/db/schema.ts";
 import { claimScheduleForRun, finishSchedule, type ScheduleRow, type ScheduleView } from "../src/schedules/store.ts";
 import type { Runtime } from "../src/server/runtime.ts";
 import { createFakeClock, startTestPanad, type TestPanad } from "./harness/index.ts";
@@ -464,7 +465,7 @@ it("SCH-09 upgrades a pre-author database without guessing who wrote its check",
 	const first = t;
 	await first.stop();
 	t = await startTestPanad({ stateDir: first.dir, clock: first.clock });
-	expect(await t.runtime.db.get("PRAGMA user_version")).toEqual({ user_version: 16 });
+	expect(await t.runtime.db.get("PRAGMA user_version")).toEqual({ user_version: SCHEMA_VERSION });
 	await t.clock.advanceTo(schedule.nextAt!);
 	expect(await checked(schedule.id)).toMatchObject({ status: "failed", error: expect.stringContaining("author is missing") });
 });
