@@ -39,6 +39,8 @@ try {
 		await resizePage(width, height);
 		await shot(`inbox${suffix}`, "#/inbox", `document.querySelectorAll("#inbox-list .item").length >= 3`);
 		await shot(`thread${suffix}`, `#/threads/${seeded.group.threadId}`, `document.querySelectorAll("#thread-messages [data-testid=message]").length >= 4`);
+		// BKM-05: this domain seeds no bookmarks, so the section shows its empty state.
+		await shot(`bookmarks${suffix}`, "#/bookmarks", `!document.getElementById("view-bookmarks").hidden && document.getElementById("bookmarks-list").textContent.length > 0`);
 		await shot(`session${suffix}`, `#/sessions/${seeded.capital.sessionId}`, `document.querySelectorAll("#transcript [data-testid=entry]").length >= 2`);
 		// OBJ-39: this domain seeds no objectives, so the section shows its empty state.
 		await shot(`objectives${suffix}`, "#/objectives", `!document.getElementById("view-objectives").hidden && document.getElementById("objectives-list").textContent.length > 0`);

@@ -1684,13 +1684,14 @@ kbd {
 	#nav {
 		order: 3;
 		flex-basis: 100%;
-		/* Six labels and their padding, not the gaps, are what a 360 px phone is short of. */
-		gap: 0.125rem;
+		/* BKM-05: seven labels and their padding, not the gaps, are what a 390 px phone is short
+		   of, so the row spends nothing on gaps. A narrower phone scrolls the menu. */
+		gap: 0;
 	}
 	#nav a {
-		font-size: 0.72rem;
+		font-size: 0.66rem;
 		letter-spacing: 0.01em;
-		padding-inline: 0.15rem;
+		padding-inline: 0.08rem;
 	}
 	/* MOB-04: six sections, one row. A narrower phone scrolls the menu rather than clipping a
 	   section or wrapping it to a second line. */

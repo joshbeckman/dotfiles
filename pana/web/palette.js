@@ -23,6 +23,7 @@ export const COMMANDS = [
 	},
 	{ id: "go:inbox", label: "Go to Inbox", hint: "g i", keywords: "unread mail" },
 	{ id: "go:threads", label: "Go to Threads", hint: "g t", keywords: "conversations browse" },
+	{ id: "go:bookmarks", label: "Go to Bookmarks", hint: "g b", keywords: "saved starred keep later" },
 	{ id: "go:sessions", label: "Go to Sessions", hint: "g s", keywords: "agents transcripts" },
 	{ id: "go:memory", label: "Go to Memory", hint: "g m", keywords: "notes files" },
 	{ id: "go:schedules", label: "Go to Schedules", hint: "g h", keywords: "wake cron timers" },

@@ -189,9 +189,9 @@ describeBrowser("MOB the PWA at phone width", () => {
 				settings: Boolean(settings && settings.getBoundingClientRect().width > 0),
 			};
 		`);
-		// Six sections, one row: Settings is configuration, so it sits with the tools beside the
+		// Seven sections, one row: Settings is configuration, so it sits with the tools beside the
 		// palette rather than wrapping the menu to a second line that holds one word.
-		expect(nav.items).toBe(6);
+		expect(nav.items).toBe(7);
 		expect(nav.rows).toBe(1);
 		expect(nav.fits).toBe(true);
 		expect(nav.overflow).toBe(0);

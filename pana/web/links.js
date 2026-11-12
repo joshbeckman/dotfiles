@@ -6,6 +6,8 @@ export const SECTIONS = [
 	{ id: "inbox", title: "Inbox", route: "#/inbox" },
 	{ id: "compose", title: "Compose", route: "#/compose" },
 	{ id: "threads", title: "Threads", route: "#/threads" },
+	// BKM-05: the messages the user saved.
+	{ id: "bookmarks", title: "Bookmarks", route: "#/bookmarks" },
 	{ id: "sessions", title: "Sessions", route: "#/sessions" },
 	{ id: "memory", title: "Memory", route: "#/memory" },
 	{ id: "schedules", title: "Schedules", route: "#/schedules" },

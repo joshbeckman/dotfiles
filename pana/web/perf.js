@@ -41,6 +41,9 @@ const API_PATTERNS = [
 	"POST /messages/:id/read",
 	"POST /messages/:id/revisions",
 	"POST /messages/:id/redact",
+	"POST /messages/:id/bookmark",
+	"POST /messages/:id/unbookmark",
+	"GET /bookmarks",
 	"POST /files",
 	"GET /files/:id/*",
 	"GET /memory/worktree",
@@ -98,7 +101,7 @@ const API_PATTERNS = [
 	"POST /stats/client",
 ];
 const VIEW_PATTERNS = [
-	"#/", "#/inbox", "#/compose", "#/threads", "#/threads/:id",
+	"#/", "#/inbox", "#/compose", "#/threads", "#/threads/:id", "#/bookmarks",
 	"#/sessions", "#/sessions/:id", "#/memory", "#/memory/files/*",
 	"#/memory/edit/*", "#/memory/commits/:id", "#/memory/new",
 	"#/schedules", "#/settings", "#/objectives", "#/objectives/:id",

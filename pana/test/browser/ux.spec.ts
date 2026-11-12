@@ -88,7 +88,9 @@ describeBrowser("pana usability in a browser", () => {
 					lineHeight: parseFloat(getComputedStyle(el).lineHeight),
 				}));
 			`);
-			expect(controls.length).toBe(12);
+			// UX-07 counts every compact control on this page: the nav's seven sections, Settings, the
+			// session menu's buttons, and the confirm button.
+			expect(controls.length).toBe(13);
 			for (const control of controls) {
 				expect(control.height, `${width}px: ${control.label}`).toBe(control.expected);
 				expect(control.lineHeight, control.label).toBeLessThan(control.height);

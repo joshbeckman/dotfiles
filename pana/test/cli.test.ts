@@ -30,6 +30,9 @@ const README_COMMANDS = [
 	"pana thread unarchive THREAD",
 	"pana thread list [--participant ADDR]",
 	"pana thread search --query TEXT [--participant ADDR]",
+	"pana bookmark add MESSAGE",
+	"pana bookmark remove MESSAGE",
+	"pana bookmark list [--limit N] [--cursor CURSOR]",
 	"pana memory",
 	"pana memory search TEXT",
 	"pana memory commit -m MSG",
@@ -306,7 +309,7 @@ describe("pana CLI", () => {
 		expect(root.code).toBe(0);
 		for (const command of README_COMMANDS) expect(root.stdout, command).toContain(command);
 
-		for (const noun of ["session", "thread", "memory", "schedule", "stats"]) {
+		for (const noun of ["session", "thread", "bookmark", "memory", "schedule", "stats"]) {
 			const help = await run([noun, "--help"], undefined);
 			expect(help.code).toBe(0);
 			for (const command of README_COMMANDS.filter((line) => line.startsWith(`pana ${noun} `) || line === `pana ${noun}`)) {

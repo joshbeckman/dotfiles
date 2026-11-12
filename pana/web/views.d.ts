@@ -110,6 +110,19 @@ export function messageView(message: any): {
 	body: string;
 	revised: boolean;
 	redacted: boolean;
+	bookmarked: boolean;
+};
+/** BKM-05: one row of `GET /bookmarks`. */
+export function bookmarkRow(bookmark: any): {
+	messageId: string;
+	messageUrl?: string;
+	threadId: string;
+	threadUrl?: string;
+	subject: string;
+	sender: PersonRef;
+	snippet: string;
+	at: number;
+	bookmarkedAt: number;
 };
 export function entryView(entry: any): EntryView;
 export function entryRaw(entry: any): string;

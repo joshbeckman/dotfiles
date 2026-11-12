@@ -100,6 +100,8 @@ export interface MessageView {
 	display?: string;
 	/** The reader's delivery read time, when the reader received the message. */
 	readAt?: number | null;
+	/** Present when the reader saved this message (BKM-03). */
+	bookmarked?: true;
 }
 
 export interface ThreadView {
@@ -351,6 +353,20 @@ async function readTimes(tx: SqliteExecutor, readerId: string | undefined, ids: 
 	return times;
 }
 
+/** BKM-03: which of these messages the reader saved, for the message menu's own label. */
+async function savedMessages(tx: SqliteExecutor, readerId: string | undefined, ids: readonly string[]): Promise<Set<string>> {
+	const saved = new Set<string>();
+	if (!readerId || ids.length === 0) return saved;
+	const placeholders = ids.map(() => "?").join(",");
+	const rows = await tx.all<{ message_id: string }>(
+		`SELECT message_id FROM message_bookmarks WHERE participant_id = ? AND message_id IN (${placeholders})`,
+		readerId,
+		...ids,
+	);
+	for (const row of rows) saved.add(row.message_id);
+	return saved;
+}
+
 async function messageViews(
 	tx: SqliteExecutor,
 	runtime: Runtime,
@@ -360,6 +376,7 @@ async function messageViews(
 	const ids = rows.map((row) => row.id);
 	const events = await latestEvents(tx, ids);
 	const read = await readTimes(tx, readerId, ids);
+	const saved = await savedMessages(tx, readerId, ids);
 	return rows.map((row) => {
 		const view: MessageView = {
 			id: row.id,
@@ -372,6 +389,7 @@ async function messageViews(
 			...applyEvent(row.body, events.get(row.id)),
 		};
 		if (read.has(row.id)) view.readAt = read.get(row.id) ?? null;
+		if (saved.has(row.id)) view.bookmarked = true;
 		return view;
 	});
 }
@@ -845,6 +863,133 @@ export async function archiveThread(runtime: Runtime, caller: Caller, threadId: 
 			thread,
 			archived: options.archived,
 			participant: { id: participant.id, kind: participant.kind, url: participant.url },
+		};
+	});
+}
+
+// --- Bookmarks (BKM) -----------------------------------------------------------
+
+/**
+ * BKM-01: save or unsave one message for the caller. It is the reader's own mark, so it takes no
+ * participant: the user made it, and a session has no bookmark list. Saving twice keeps the first
+ * time, so the list's order is when the reader first saved the message.
+ */
+export async function bookmarkMessage(
+	runtime: Runtime,
+	caller: Caller,
+	messageId: string,
+	bookmarked: boolean,
+): Promise<{ message: MessageView; bookmarked: boolean }> {
+	if (caller.kind !== "user") throw ApiError.forbidden("only the user may bookmark a message");
+	const now = runtime.clock.now();
+	return runtime.db.atomically(async (tx) => {
+		const row = await messageRow(tx, messageId);
+		const reader = await ensureCaller(tx, runtime, now, caller);
+		if (bookmarked) {
+			await tx.run(
+				`INSERT INTO message_bookmarks (message_id, participant_id, created_at) VALUES (?, ?, ?)
+				 ON CONFLICT (message_id, participant_id) DO NOTHING`,
+				messageId,
+				reader.id,
+				now,
+			);
+		} else {
+			await tx.run("DELETE FROM message_bookmarks WHERE message_id = ? AND participant_id = ?", messageId, reader.id);
+		}
+		return { message: (await messageViews(tx, runtime, [row], reader.id))[0]!, bookmarked };
+	});
+}
+
+/** One row of the reader's bookmark list (BKM-02). */
+export interface BookmarkView {
+	messageId: string;
+	messageUrl: string;
+	threadId: string;
+	threadUrl: string;
+	subject: string | null;
+	sender: PersonView;
+	/** When the message was sent. */
+	createdAt: number;
+	/** When the reader saved it; the list's order. */
+	bookmarkedAt: number;
+	/** One line of the current body; `[redacted]` for a redacted message. */
+	snippet: string;
+	revised: boolean;
+	redacted: boolean;
+}
+
+export const BOOKMARK_LIMIT = 50;
+
+export interface BookmarkOptions {
+	limit?: number;
+	cursor?: string | null;
+}
+
+interface BookmarkRow {
+	message_id: string;
+	bookmarked_at: number;
+	thread_id: string;
+	created_at: number;
+	body: string;
+	subject: string | null;
+	sender_id: string;
+	sender_kind: ParticipantKind;
+	sender_url: string;
+}
+
+/**
+ * BKM-02: the reader's saved messages, newest bookmark first, one page at a time (SCALE-03).
+ * A bookmark is a message, not a delivery, so it lists even when its thread was archived, when the
+ * user sent the message, or when the thread is one the user merely read by reference.
+ */
+export async function bookmarks(
+	runtime: Runtime,
+	caller: Caller,
+	options: BookmarkOptions = {},
+): Promise<{ participant: PersonView; bookmarks: BookmarkView[]; nextCursor: string | null }> {
+	const now = runtime.clock.now();
+	const limit = options.limit ?? BOOKMARK_LIMIT;
+	const after = decodeCursor(options.cursor, ["number", "string"]);
+	return runtime.db.atomically(async (tx) => {
+		const reader = await ensureCaller(tx, runtime, now, caller);
+		const rows = await tx.all<BookmarkRow>(
+			`SELECT b.message_id AS message_id, b.created_at AS bookmarked_at,
+			        m.thread_id AS thread_id, m.created_at AS created_at, m.body AS body,
+			        t.subject AS subject,
+			        p.id AS sender_id, p.kind AS sender_kind, p.url AS sender_url
+			   FROM message_bookmarks b
+			   JOIN messages m ON m.id = b.message_id
+			   JOIN threads t ON t.id = m.thread_id
+			   JOIN participants p ON p.id = m.sender_id
+			  WHERE b.participant_id = ?
+			        ${after ? "AND b.created_at <= ? AND (b.created_at < ? OR b.message_id < ?)" : ""}
+			  ORDER BY b.created_at DESC, b.message_id DESC
+			  LIMIT ?`,
+			reader.id,
+			...(after ? [after[0]!, after[0]!, after[1]!] : []),
+			limit + 1,
+		);
+		const { items, nextCursor } = pageOf(rows, limit, (row) => [row.bookmarked_at, row.message_id]);
+		const events = await latestEvents(tx, items.map((row) => row.message_id));
+		return {
+			participant: { id: reader.id, kind: reader.kind, url: reader.url },
+			bookmarks: items.map((row) => {
+				const current = applyEvent(row.body, events.get(row.message_id));
+				return {
+					messageId: row.message_id,
+					messageUrl: runtime.url({ kind: "message", id: row.message_id, thread: row.thread_id }),
+					threadId: row.thread_id,
+					threadUrl: runtime.url({ kind: "thread", id: row.thread_id }),
+					subject: row.subject,
+					sender: { id: row.sender_id, kind: row.sender_kind, url: row.sender_url },
+					createdAt: row.created_at,
+					bookmarkedAt: row.bookmarked_at,
+					snippet: current.redacted ? "[redacted]" : snippetOf(current.body),
+					revised: current.revised,
+					redacted: current.redacted,
+				};
+			}),
+			nextCursor,
 		};
 	});
 }
