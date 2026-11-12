@@ -98,7 +98,7 @@ afterEach(async () => {
 			location.hash = "#/threads";
 			await until(() => !document.getElementById("threads-browse").hidden);
 			location.hash = "#/threads/${capital.threadId}";
-			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length >= 2);
+			await until(() => !document.getElementById("thread").hidden && document.querySelectorAll("#thread-messages [data-testid=message]").length >= 2);
 			return [...document.querySelectorAll("#thread-messages [data-testid=bookmark-indicator]")].map((el) => el.textContent);
 		`);
 		expect(reload).toEqual(["", "Bookmarked"]);
