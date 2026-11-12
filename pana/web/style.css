@@ -879,13 +879,22 @@ a.button.quiet:hover,
 /* People: a colored mark before each participant (UX-06). */
 .people {
 	display: inline-flex;
+	max-width: 100%;
 	flex-wrap: wrap;
 	gap: var(--s1) var(--s3);
 }
 .person {
 	display: inline-flex;
+	min-width: 0;
+	max-width: 100%;
 	align-items: center;
 	gap: 0.3rem;
+}
+/* A role is self-declared context, not an authority or permission. */
+.participant-role {
+	color: var(--c-text-alt);
+	font-size: 0.85em;
+	overflow-wrap: anywhere;
 }
 .person::before {
 	content: "";

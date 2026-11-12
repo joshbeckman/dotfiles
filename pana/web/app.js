@@ -699,6 +699,65 @@ function learnDomain(value) {
 	}
 }
 
+// Keep role events that arrive while a thread read is in flight. The response can have been
+// captured before the event, so apply those events to it before drawing the header.
+const pendingRoleReads = new Set();
+let roleConnectionVersion = 0;
+async function readThreadWithRoles(id) {
+	const pending = { id, events: [] };
+	pendingRoleReads.add(pending);
+	try {
+		let body;
+		let version;
+		do {
+			version = roleConnectionVersion;
+			body = await api("GET", `/threads/${encodeURIComponent(id)}`);
+			// A new stream means events were missed. Re-read the current snapshot rather than
+			// replaying events from before that reconnect over a newer server value.
+			if (version !== roleConnectionVersion) pending.events.length = 0;
+		} while (version !== roleConnectionVersion);
+		for (const event of pending.events) {
+			const person = body.thread?.participants?.find((each) => each?.id === event.participantId);
+			if (person) person.role = event.role;
+		}
+		return body;
+	} finally {
+		pendingRoleReads.delete(pending);
+	}
+}
+
+function renderParticipantRole(node, role) {
+	const label = node.querySelector(".participant-role");
+	if (!label) return;
+	const visible = typeof role === "string" && role !== "" && role !== "participant";
+	label.textContent = visible ? role : "";
+	label.hidden = !visible;
+}
+
+function applyThreadRole(event, live = true) {
+	if (live) for (const pending of pendingRoleReads) if (pending.id === event.threadId) pending.events.push(event);
+	if (state.thread?.id !== event.threadId) return;
+	const person = state.thread.participants?.find((each) => each?.id === event.participantId);
+	if (!person) return;
+	person.role = event.role;
+	for (const node of $("thread-participants").children) {
+		if (node.dataset.participantId === event.participantId) renderParticipantRole(node, event.role);
+	}
+}
+
+// A stream may miss events while disconnected. Refresh only roles, not the draft or messages.
+let roleRefreshVersion = 0;
+async function refreshThreadRoles() {
+	if (state.section !== "threads" || !state.thread || $("thread").hidden) return;
+	const current = state.thread;
+	const version = ++roleRefreshVersion;
+	const body = await readThreadWithRoles(current.id);
+	if (version !== roleRefreshVersion || state.thread !== current || state.section !== "threads") return;
+	for (const person of body.thread?.participants ?? []) {
+		if (typeof person?.id === "string") applyThreadRole({ threadId: current.id, participantId: person.id, role: person.role }, false);
+	}
+}
+
 // Patch labels only: reopening a thread would disturb reply drafts, focus, and scroll.
 function applyThreadSubject(threadId, subject) {
 	if (state.thread?.id === threadId) {
@@ -732,14 +791,20 @@ function handleEvent(event) {
 		applyThreadSubject(event.threadId, event.subject);
 		return;
 	}
+	if (event.kind === "thread.role" && typeof event.threadId === "string" && typeof event.participantId === "string" && typeof event.role === "string") {
+		applyThreadRole(event);
+		return;
+	}
 	if (event.kind === "settings.ui") {
 		applyUserColor(event.userColor);
 		return;
 	}
 	if (event.kind === "hello") {
+		roleConnectionVersion++;
 		applyUserColor(event.userColor);
 		if (typeof event.domain === "string") state.domain = event.domain;
 		state.domainResolved?.();
+		void refreshThreadRoles().catch(fail);
 		return;
 	}
 	if (event.kind === "artifact.published") { void artifactPublished(event).catch(fail); return; }
@@ -2192,7 +2257,7 @@ const THREAD_PAGE_SIZE = 30;
 async function openThread(id, focusMessage) {
 	const version = ++threadRenderVersion;
 	const current = () => version === threadRenderVersion && state.section === "threads";
-	const body = await api("GET", `/threads/${id}`);
+	const body = await readThreadWithRoles(id);
 	if (!current()) return;
 	const thread = body.thread;
 	const messages = body.messages ?? [];
@@ -2220,7 +2285,15 @@ async function openThread(id, focusMessage) {
 	const participants = $("thread-participants");
 	participants.replaceChildren();
 	for (const participant of thread?.participants ?? []) {
-		participants.append(personLink(typeof participant === "object" ? participant : { url: participant }));
+		const person = typeof participant === "object" ? participant : { url: participant };
+		const node = personLink(person);
+		if (person.id) node.dataset.participantId = person.id;
+		const role = span("", "participant-role");
+		role.dataset.testid = "participant-role";
+		role.title = "Self-declared role";
+		node.append(role);
+		renderParticipantRole(node, person.role);
+		participants.append(node);
 	}
 	// UX-09: the response says who is working now, so an opened thread is right before any event.
 	const working = workingMap(id);
