@@ -260,6 +260,48 @@ it("ART-01 a version is an immutable snapshot, and a name is unique within its t
 	expect(elsewhere.body.artifact.id).not.toBe(artifactId);
 });
 
+it("ART-01 a manifest that reuses an earlier version's file id still stores a second copy", async () => {
+	await start();
+	const { id: threadId } = await thread();
+
+	// An API client holds the manifest's file ids, so it can publish twice naming one upload.
+	const html = await upload("index.html", "<h1>one</h1>");
+	const first = await t!.client.post<PublishView>(`/threads/${threadId}/artifacts/site`, {
+		entry: "index.html",
+		files: [{ path: "index.html", fileId: html }],
+	});
+	expect(first.status, JSON.stringify(first.body)).toBe(201);
+
+	// The second version adds an entry and reuses the first version's upload for index.html.
+	const entry = await upload("entry.html", "<h1>two</h1>");
+	const manifest = { entry: "entry.html", files: [{ path: "entry.html", fileId: entry }, { path: "index.html", fileId: html }] };
+	const second = await t!.client.post<PublishView>(`/threads/${threadId}/artifacts/site`, manifest);
+	expect(second.status, JSON.stringify(second.body)).toBe(201);
+	expect(second.body.version.seq).toBe(2);
+
+	// Two versions carry two copies: the reused file id is recorded again, with its own bytes.
+	const shown = await show(first.body.artifact.id);
+	const [v1, v2] = shown.versions as [VersionView, VersionView];
+	const firstHtml = v1.files.find((file) => file.path === "index.html")!.fileId;
+	const secondHtml = v2.files.find((file) => file.path === "index.html")!.fileId;
+	expect(firstHtml).toBe(html);
+	expect(secondHtml).not.toBe(html);
+	const stored = await t!.runtime.db.all<{ id: string; path: string; size: number }>("SELECT id, path, size FROM files ORDER BY created_at");
+	expect(stored.map((row) => row.id)).toEqual([html, entry, secondHtml]);
+	for (const id of [firstHtml, secondHtml]) {
+		const row = stored.find((file) => file.id === id)!;
+		expect(row.size).toBe(12);
+		expect(readFileSync(join(t!.dir, row.path)).toString()).toBe("<h1>one</h1>");
+	}
+
+	// A retried publish of the same manifest is still the existing version, and copies nothing.
+	const retried = await t!.client.post<PublishView>(`/threads/${threadId}/artifacts/site`, manifest);
+	expect(retried.status).toBe(200);
+	expect(retried.body.created).toBe(false);
+	expect(retried.body.version.id).toBe(second.body.version.id);
+	expect(await t!.runtime.db.all("SELECT count(*) AS n FROM files")).toEqual([{ n: 3 }]);
+});
+
 // --- ART-02 --------------------------------------------------------------------
 
 it("ART-02 the server checks the manifest alone and deletes nothing on a refusal", async () => {

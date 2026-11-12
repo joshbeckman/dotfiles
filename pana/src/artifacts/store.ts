@@ -1,7 +1,7 @@
 // Immutable builds. Only publish writes; every authorization and append shares its transaction.
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
-import { readFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import { requireOnObjective } from "../objectives/state.ts";
@@ -32,6 +32,36 @@ function fileBytes(runtime: Runtime, row: FileRecord): Buffer {
 	return readFileSync(path);
 }
 
+/**
+ * ART-01: a version owns whole copies. An API manifest may name a file id that an earlier version
+ * already recorded, or the same id at two paths, and the `files` table has no content hash to
+ * share, so record a second row with its own bytes instead of aliasing the first.
+ */
+async function versionFileId(tx: SqliteExecutor, runtime: Runtime, source: FileRecord, used: ReadonlySet<string>, now: number): Promise<string> {
+	if (!used.has(source.id) && !await tx.get("SELECT 1 FROM artifact_version_files WHERE file_id = ? LIMIT 1", source.id)) return source.id;
+	const id = runtime.newId();
+	const root = resolve(runtime.paths.files);
+	const absolute = resolve(root, id, source.name);
+	if (!absolute.startsWith(root + sep)) throw new Error("invalid stored file path");
+	const bytes = fileBytes(runtime, source);
+	mkdirSync(join(root, id), { recursive: true, mode: 0o700 });
+	writeFileSync(absolute, bytes, { mode: 0o600 });
+	// Nothing deletes these bytes when the transaction rolls back. A write that joined pi-durable
+	// work commits what it has and rethrows, so a failing publish may still own this row; an
+	// unreferenced copy is garbage, a missing one is a corrupt version.
+	await tx.run(
+		"INSERT INTO files (id,name,path,size,media_type,uploader_id,created_at) VALUES (?,?,?,?,?,?,?)",
+		id,
+		source.name,
+		join("files", id, source.name),
+		bytes.byteLength,
+		source.media_type,
+		source.uploader_id,
+		now,
+	);
+	return id;
+}
+
 /** User, active participant, or active objective member. Never joins or revives a session. */
 export async function requireArtifactWriter(tx: SqliteExecutor, caller: Caller, threadId: string) {
 	if (!await tx.get("SELECT id FROM threads WHERE id = ?", threadId)) throw ApiError.notFound(`thread ${threadId}`);
@@ -56,6 +86,7 @@ async function validate(tx: SqliteExecutor, runtime: Runtime, body: unknown) {
 	if (input.note !== undefined && typeof input.note !== "string") throw ApiError.badRequest("invalid_manifest", "note must be text");
 	const paths = new Set<string>();
 	const files: ManifestFile[] = [];
+	const records = new Map<string, FileRecord>();
 	let size = 0;
 	for (const item of input.files) {
 		if (!item || typeof item !== "object") throw ApiError.badRequest("invalid_manifest", "invalid file");
@@ -65,11 +96,11 @@ async function validate(tx: SqliteExecutor, runtime: Runtime, body: unknown) {
 		if (!record) throw ApiError.badRequest("invalid_manifest", `unknown file ${item.fileId}`);
 		if (record.size > runtime.config.files.maxBytes) throw ApiError.badRequest("invalid_manifest", "file exceeds files.maxBytes");
 		size += record.size;
-		paths.add(path); files.push({ path, fileId: item.fileId });
+		paths.add(path); files.push({ path, fileId: item.fileId }); records.set(item.fileId, record);
 	}
 	if (!paths.has(entry) || size > runtime.config.artifacts.maxBytes) throw ApiError.badRequest("invalid_manifest", "missing entry or version exceeds artifacts.maxBytes");
 	files.sort((a,b) => a.path.localeCompare(b.path));
-	return { entry, files, note: (input.note as string | undefined) ?? null };
+	return { entry, files, records, note: (input.note as string | undefined) ?? null };
 }
 
 export async function publishArtifact(runtime: Runtime, caller: Caller, threadId: string, name: string, body: unknown, origin?: string) {
@@ -103,7 +134,12 @@ export async function publishArtifact(runtime: Runtime, caller: Caller, threadId
 		}
 		const version: VersionRow = { id: runtime.newId(), artifact_id: artifact.id, seq: (newest?.seq ?? 0) + 1, entry: input.entry, note: input.note, created_by: caller.id, created_at: now };
 		await tx.run("INSERT INTO artifact_versions (id,artifact_id,seq,entry,note,created_by,created_at) VALUES (?,?,?,?,?,?,?)", version.id, artifact.id, version.seq, version.entry, version.note, caller.id, now);
-		for (const file of input.files) await tx.run("INSERT INTO artifact_version_files (version_id,path,file_id) VALUES (?,?,?)", version.id, file.path, file.fileId);
+		const used = new Set<string>();
+		for (const file of input.files) {
+			const fileId = await versionFileId(tx, runtime, input.records.get(file.fileId)!, used, now);
+			used.add(fileId);
+			await tx.run("INSERT INTO artifact_version_files (version_id,path,file_id) VALUES (?,?,?)", version.id, file.path, fileId);
+		}
 		await insertDomainMessage(tx, runtime, threadId, `${caller.url} published ${JSON.stringify(name).replace(/[\[\]<>`*_]/g, "\\$&")} v${version.seq} at ${new Date(now).toISOString()}: ${artifactUrl(runtime, artifact.id, version.seq)}`, now);
 		return { artifact: artifactView(runtime, artifact), version: await versionView(tx, runtime, version, origin), created: true };
 	});
