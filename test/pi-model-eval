@@ -10,6 +10,7 @@ cat >"$tmp/fake-pi" <<'RUBY'
 require "json"
 
 File.write(ENV["FAKE_PI_ARGV_FILE"], ARGV.join("\n")) if ENV["FAKE_PI_ARGV_FILE"]
+File.write(ENV["FAKE_PI_ENV_FILE"], JSON.generate("DEMO_FLAG" => ENV["DEMO_FLAG"], "SNAPSHOT_DIR" => ENV["SNAPSHOT_DIR"])) if ENV["FAKE_PI_ENV_FILE"]
 
 if ARGV.include?("--version")
   puts "fake-pi 1.0"
@@ -141,6 +142,21 @@ if "$root/bin/pi-model-eval" plan --models fake/model:off --config-label 'not pu
     echo 'unsafe config label unexpectedly accepted' >&2
     exit 1
 fi
+# Trial environment and snapshot variant are run policy, so they are recorded and checked.
+policy_plan="$($root/bin/pi-model-eval plan --models fake/model:off --env DEMO_FLAG=one --snapshot-variant removed)"
+ruby -rjson -e 'p=JSON.parse(STDIN.read); abort unless p["trial_env"] == {"DEMO_FLAG" => "one"} && p["snapshot_variant"] == "removed"' <<<"$policy_plan"
+if "$root/bin/pi-model-eval" plan --models fake/model:off --env PI_EVAL_ROOT=/tmp >/dev/null 2>&1; then
+  echo 'reserved --env key should be refused' >&2
+  exit 1
+fi
+if "$root/bin/pi-model-eval" plan --models fake/model:off --env 'lower=1' >/dev/null 2>&1; then
+  echo 'malformed --env key should be refused' >&2
+  exit 1
+fi
+if "$root/bin/pi-model-eval" plan --models fake/model:off --snapshot-variant '../escape' >/dev/null 2>&1; then
+  echo 'unsafe snapshot variant should be refused' >&2
+  exit 1
+fi
 if PI_CODING_AGENT_DIR="$tmp/missing-config" "$root/bin/pi-model-eval" plan --models fake/model:off >/dev/null 2>&1; then
     echo 'missing environment config directory unexpectedly accepted' >&2
     exit 1
@@ -205,7 +221,8 @@ EOF
 : >"$tmp/prose-answer"
 assert_grader_passes prose-release-note "$tmp/prose" "$tmp/prose-answer"
 
-run_dir="$(FAKE_PI_COST=0.01 FAKE_PI_STDERR='sensitive diagnostic should-not-persist' FAKE_PI_ARGV_FILE="$tmp/fake-argv" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --extension "$tmp/fake-pi" --fixtures design-event-cursor --results "$tmp/success")"
+run_dir="$(FAKE_PI_COST=0.01 FAKE_PI_STDERR='sensitive diagnostic should-not-persist' FAKE_PI_ARGV_FILE="$tmp/fake-argv" FAKE_PI_ENV_FILE="$tmp/fake-env" "$root/bin/pi-model-eval" run --pi "$tmp/fake-pi" --models fake/model:off --extension "$tmp/fake-pi" --env DEMO_FLAG=one --fixtures design-event-cursor --results "$tmp/success")"
+ruby -rjson -e 'e=JSON.parse(File.read(ARGV[0])); abort "flag=#{e["DEMO_FLAG"]} snapshot=#{e["SNAPSHOT_DIR"]}" unless e["DEMO_FLAG"] == "one" && e["SNAPSHOT_DIR"].nil?' "$tmp/fake-env"
 result="$(find "$run_dir/trials" -name result.json -print -quit)"
 ruby -rjson -e 'r=JSON.parse(File.read(ARGV[0])); abort unless r["status"] == "completed" && r["tokens"]["cacheRead"] == 2 && r["pricing_status"] == "catalog"' "$result"
 [[ -s "$run_dir/report.md" && -s "${result%/result.json}/events.jsonl" ]]

@@ -1,0 +1,15 @@
+{
+  "id": "viewmd-pr-diff-heavy",
+  "kind": "pull",
+  "source_url": "https://github.com/joshbeckman/dotfiles/pull/280",
+  "captured_at": "2026-11-12T06:36:05Z",
+  "cli_sha256": "8651c3803fab78fc1bfaa1dddd9e093b3344e25e3f6a12a7e1e4718f96ae4f29",
+  "sizes": {
+    "view-md.md": 77364,
+    "view-md-trimmed.md": 10339,
+    "diff.patch": 67420,
+    "pr.json": 12058,
+    "review-comments.json": 3
+  },
+  "viewmd": "absent"
+}

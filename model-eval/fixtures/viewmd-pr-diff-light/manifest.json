@@ -1,0 +1,15 @@
+{
+  "id": "viewmd-pr-diff-light",
+  "category": "read-github-context",
+  "grader": "grader.rb",
+  "allowed_commands": [],
+  "allowed_command_prefixes": [
+    "bin/gh ",
+    "bin/gw "
+  ],
+  "command_timeout_seconds": 20,
+  "allowed_files": [
+    ".calls.tsv",
+    ".bash.tsv"
+  ]
+}

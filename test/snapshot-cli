@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cli="$root/model-eval/snapshot-cli.rb"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+# Every fixture ships a copy of the stub CLI so a trial needs nothing from the repo. A copy that
+# drifts from the source would serve a different fixture than the one the grader was written for.
+for fixture in "$root"/model-eval/fixtures/viewmd-*/; do
+  cmp -s "$cli" "$fixture/workspace/bin/cli.rb" || {
+    echo "stale stub: ${fixture#"$root"/}workspace/bin/cli.rb" >&2
+    exit 1
+  }
+  for name in gh gw; do
+    grep -Fq -- "--as $name" "$fixture/workspace/bin/$name" || {
+      echo "wrong wrapper: $name" >&2
+      exit 1
+    }
+  done
+  [[ -d "$fixture/snapshot" ]] || { echo "missing snapshot: $fixture" >&2; exit 1; }
+  [[ -d "$fixture/snapshot-removed" ]] || { echo "missing removed variant: $fixture" >&2; exit 1; }
+done
+
+light="$root/model-eval/fixtures/viewmd-pr-diff-light"
+hunk="$root/model-eval/fixtures/viewmd-pr-review-hunk"
+workspace="$tmp/root"
+mkdir "$workspace"
+
+serve() {
+  local fixture="$1" variant="$2"
+  shift 2
+  SNAPSHOT_DIR="$fixture/snapshot${variant:+-$variant}" PI_EVAL_ROOT="$workspace" \
+    "$fixture/workspace/bin/gh" "$@"
+}
+
+# A field subset comes back as JSON with only the requested keys.
+serve "$light" "" pr view 304 --json title,comments >"$tmp/subset.json"
+ruby -rjson -e 'parsed = JSON.parse(File.read(ARGV[0])); abort "keys: #{parsed.keys}" unless parsed.keys.sort == %w[comments title]' "$tmp/subset.json"
+issue="$root/model-eval/fixtures/viewmd-issue-context"
+serve "$issue" "" issue view 287 --json title >"$tmp/issue.json"
+ruby -rjson -e 'abort "keys" unless JSON.parse(File.read(ARGV[0])).keys == ["title"]' "$tmp/issue.json"
+serve "$light" "" pr view 304 --json nonsense >/dev/null 2>"$tmp/err" && {
+  echo 'unknown JSON field should fail' >&2
+  exit 1
+}
+grep -Fq 'Unknown JSON field: nonsense' "$tmp/err"
+
+# The patch and review comments are separate reads, so a fixture without them stays honest.
+serve "$hunk" "" pr diff 272 >"$tmp/patch"
+head -1 "$tmp/patch" | grep -Fq 'diff --git '
+serve "$hunk" "" api repos/joshbeckman/dotfiles/pulls/272/comments >"$tmp/comments.json"
+ruby -rjson -e 'abort "comment count" unless JSON.parse(File.read(ARGV[0])).length == 2' "$tmp/comments.json"
+
+# view-md renders the whole item when the snapshot has one, and refuses when it does not.
+serve "$light" "" view-md 304 >"$tmp/full.md"
+grep -Fq '# Pull Request #304' "$tmp/full.md"
+if serve "$light" removed view-md 304 >/dev/null 2>"$tmp/err"; then
+  echo 'view-md should fail without an installed snapshot' >&2
+  exit 1
+fi
+grep -Fq 'unknown command "view-md"' "$tmp/err"
+serve "$light" removed pr view 304 --json title >/dev/null
+# Help must not advertise a command the machine does not have.
+serve "$light" removed --help >"$tmp/help-removed"
+serve "$light" "" --help >"$tmp/help-installed"
+grep -Fq 'view-md' "$tmp/help-installed"
+! grep -Fq 'view-md' "$tmp/help-removed"
+
+# Each call is recorded with its byte count so a run can report what it delivered.
+[[ -s "$workspace/.calls.tsv" ]]
+grep -q 'view-md' "$workspace/.calls.tsv"
+
+printf 'snapshot-cli tests passed\n'
