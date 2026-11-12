@@ -26,6 +26,7 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/threads", name: "threads.create", wp: "WP2" },
 	{ method: "GET", pattern: "/threads", name: "threads.search", wp: "WP7" },
 	{ method: "GET", pattern: "/threads/:id", name: "threads.read", wp: "WP2" },
+	{ method: "GET", pattern: "/threads/:id/participants", name: "threads.participants", wp: "WP2" },
 	{ method: "POST", pattern: "/threads/:id/messages", name: "threads.respond", wp: "WP2" },
 	{ method: "POST", pattern: "/threads/:id/subject", name: "threads.subject", wp: "WP7" },
 	{ method: "POST", pattern: "/threads/:id/archive", name: "threads.archive", wp: "WP2" },

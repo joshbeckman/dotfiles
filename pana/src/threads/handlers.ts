@@ -5,7 +5,7 @@ import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { attachmentDisposition, INLINE_MEDIA_TYPES, inlineDisposition, loadFile, sniffMediaType, uploadFile } from "./files.ts";
 import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
-import { archiveThread, bookmarkMessage, bookmarks, BOOKMARK_LIMIT, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage, setThreadRole } from "./store.ts";
+import { archiveThread, bookmarkMessage, bookmarks, BOOKMARK_LIMIT, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, readThreadParticipants, redactMessage, respond, reviseMessage, setThreadRole } from "./store.ts";
 
 /** FIL-07: a file's bytes never change for one id and width, so a browser may keep them. */
 export const FILES_CACHE_CONTROL = "private, max-age=604800";
@@ -50,6 +50,11 @@ export const handlers: Handlers = {
 	"threads.read": async (ctx): Promise<HandlerResult> => ({
 		status: 200,
 		body: await readThread(ctx.runtime, ctx.caller, ctx.params.id!),
+	}),
+
+	"threads.participants": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: { participants: await readThreadParticipants(ctx.runtime, ctx.params.id!) },
 	}),
 
 	"threads.role": async (ctx): Promise<HandlerResult> => {

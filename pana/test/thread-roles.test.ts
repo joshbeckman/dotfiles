@@ -101,7 +101,6 @@ it("upgrades an existing database without changing membership, and migration is 
 	expect(read.body.thread.participants.every(p => p.role === "participant")).toBe(true);
 });
 
-
 it("removes a label with its membership so a later join gets the default", async () => {
 	const { t, member, id } = await fixture();
 	await t.client.request("PUT", `/threads/${id}/role`, { caller: member, body: { role: "reviewer" } });
@@ -111,4 +110,32 @@ it("removes a label with its membership so a later join gets the default", async
 	});
 	const read = await t.client.get<{ thread: { participants: Array<{ id: string; role: string }> } }>(`/threads/${id}`);
 	expect(read.body.thread.participants.find(p => p.id === member)?.role).toBe("participant");
+});
+
+it("reads participants by reference without marking any deliveries read", async () => {
+	const { t, member, outsider, id } = await fixture();
+	const last = await t.runtime.db.get<{ id: string }>("SELECT id FROM messages WHERE thread_id = ?", id);
+	const reply = await t.client.post(`/threads/${id}/messages`, { after: last!.id, body: "unseen reply" }, { caller: member });
+	expect(reply.status).toBe(200);
+	expect((await t.client.request("PUT", `/threads/${id}/role`, { caller: member, body: { role: "investigator" } })).status).toBe(200);
+	const snapshot = async () => ({
+		deliveries: await t.runtime.db.all<{ read_at: number | null }>("SELECT * FROM deliveries ORDER BY id"),
+		unread: await t.runtime.db.all("SELECT * FROM unread_counts ORDER BY participant_id"),
+		members: await t.runtime.db.all("SELECT * FROM thread_participants ORDER BY participant_id"),
+	});
+	const before = await snapshot();
+	expect(before.deliveries.filter(d => d.read_at === null)).toHaveLength(2);
+	const path = `/threads/${id}/participants`;
+	const asUser = await t.tcp.get<{ participants: Array<{ id: string; role: string }> }>(path);
+	const asMember = await t.client.get<{ participants: Array<{ id: string; role: string }> }>(path, { caller: member });
+	const asOutsider = await t.client.get<{ participants: Array<{ id: string; role: string }> }>(path, { caller: outsider });
+	for (const response of [asUser, asMember, asOutsider]) {
+		expect(response.status).toBe(200);
+		expect(response.body.participants.find(p => p.id === member)?.role).toBe("investigator");
+		expect(response.body.participants.find(p => p.id === TEST_USER)?.role).toBe("participant");
+	}
+	expect(await snapshot()).toEqual(before);
+	expect((await t.client.get(`/threads/${t.runtime.newId()}/participants`, { caller: outsider })).status).toBe(404);
+	const read = await t.client.get<{ thread: { participants: unknown[] } }>(`/threads/${id}`);
+	expect(asUser.body.participants).toEqual(read.body.thread.participants);
 });

@@ -729,7 +729,20 @@ export async function readThread(
 			canArchive: thread.participants.some((participant) => participant.id === reader.id),
 		};
 	});
-	const sessions = read.thread.participants.filter((participant) => participant.kind === "session");
+	return { ...read, thread: { ...read.thread, participants: await withParticipantStates(runtime, read.thread.participants) } };
+}
+
+/** Read membership by reference, without marking deliveries read or joining the thread. */
+export async function readThreadParticipants(runtime: Runtime, threadId: string): Promise<ParticipantView[]> {
+	const participants = await runtime.db.atomically(async (tx) => {
+		if (!await tx.get("SELECT 1 FROM threads WHERE id = ?", threadId)) throw ApiError.notFound(`thread ${threadId}`);
+		return threadParticipants(tx, threadId);
+	});
+	return withParticipantStates(runtime, participants);
+}
+
+async function withParticipantStates(runtime: Runtime, participants: ParticipantView[]): Promise<ParticipantView[]> {
+	const sessions = participants.filter((participant) => participant.kind === "session");
 	const states = await sessionStates(runtime.db, runtime, sessions.map((participant) => participant.id));
 	// UX-09: a session asleep on a wake is not working, but the thread will get work at a time the
 	// footer can name, so each session participant carries its next pending wake too.
@@ -745,7 +758,7 @@ export async function readThread(
 						...working,
 					),
 				);
-	const participants = read.thread.participants.map((participant) => {
+	return participants.map((participant) => {
 		if (participant.kind !== "session" || !states.has(participant.id)) return participant;
 		const activity = activities.get(participant.id);
 		const wake = wakes.get(participant.id);
@@ -756,7 +769,6 @@ export async function readThread(
 			...(wake ? { wake } : {}),
 		};
 	});
-	return { ...read, thread: { ...read.thread, participants } };
 }
 
 // --- Messages ------------------------------------------------------------------

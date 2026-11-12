@@ -39,6 +39,7 @@ const API_PATTERNS = [
 	"POST /threads",
 	"GET /threads",
 	"GET /threads/:id",
+	"GET /threads/:id/participants",
 	"POST /threads/:id/messages",
 	"POST /threads/:id/subject",
 	"POST /threads/:id/archive",
