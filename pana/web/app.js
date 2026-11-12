@@ -1637,37 +1637,75 @@ async function loadBookmarks(cursor) {
 	if (request !== bookmarksRequest) return;
 	const rows = asList(body, ["bookmarks"]);
 	if (rows.length === 0 && !cursor) return empty(list, "No bookmarks yet. Save a message from its ⋯ menu.");
-	for (const raw of rows) list.append(bookmarkItem(bookmarkRow(raw)));
+	for (const raw of rows) list.append(await bookmarkItem(bookmarkRow(raw)));
 	showMore(list, nextCursor(body), (next) => loadBookmarks(next).catch(fail));
 }
 
-function bookmarkItem(row) {
+/**
+ * BKM-05: one saved message, whole. A bookmark is worth saving for what it says, so the card
+ * carries the rendered body rather than a snippet; the header still says whose it is, when it was
+ * sent, when it was saved, and links to its place in the thread.
+ */
+async function bookmarkItem(row) {
 	learnDomain(row.threadUrl);
-	const sender = span(row.sender.kind === "user" ? "You" : refLabel(row.sender.url));
+	const place = `#/threads/${row.threadId}?message=${row.messageId}`;
+	const article = document.createElement("article");
+	article.className = "message bookmark";
+	article.tabIndex = 0;
+	article.dataset.selectable = "";
+	article.dataset.testid = "bookmark-item";
+	article.dataset.id = row.messageId;
+	article.dataset.thread = row.threadId;
+	// UX-06: the message's own identity color, the way it reads in its thread.
+	participantIdentity(article, row.sender, [], row.threadId);
+
+	const header = document.createElement("header");
+	const subject = document.createElement("a");
+	subject.className = "bookmark-subject";
+	subject.href = `#/threads/${row.threadId}`;
+	subject.textContent = row.subject;
+	const sender = span(row.sender.kind === "user" ? "You" : refLabel(row.sender.url), "sender");
 	participantIdentity(sender, row.sender, [], row.threadId);
-	const snippet = span(row.snippet, "snippet");
-	snippet.dataset.testid = "bookmark-snippet";
-	const aside = document.createElement("div");
-	aside.className = "item-aside";
-	// The right side says when it was saved, because the message's own time is in the meta line.
-	const saved = span("Saved ");
+	const saved = span("Saved ", "bookmark-saved");
 	saved.append(timeEl(row.bookmarkedAt, { label: "bookmarked" }));
-	aside.append(saved);
-	return item(
-		row.subject,
-		[sender, timeEl(row.at)],
-		() => {
-			location.hash = `#/threads/${row.threadId}?message=${row.messageId}`;
-		},
-		{
-			testid: "bookmark-item",
-			threadId: row.threadId,
-			id: row.messageId,
-			below: snippet,
-			aside,
-			actions: [rowAction("bookmark-remove", "Remove", () => void removeBookmark(row))],
-		},
-	);
+	const actions = span("", "bookmark-actions");
+	const open = document.createElement("a");
+	open.className = "link-button";
+	open.href = place;
+	open.dataset.testid = "bookmark-open";
+	open.textContent = "Open in thread";
+	actions.append(open, rowAction("bookmark-remove", "Remove", () => void removeBookmark(row)));
+	header.append(subject, sender, timeEl(row.at, { label: "sent" }), saved, actions);
+	article.append(header);
+
+	const body = document.createElement("div");
+	body.className = "body prose";
+	body.dataset.testid = "bookmark-body";
+	article.append(body);
+	if (row.redacted) {
+		body.textContent = row.display ?? "[redacted]";
+	} else {
+		const { marked, DOMPurify } = window.MailRenderers ?? {};
+		await renderMessage(body, row.body, {
+			marked,
+			DOMPurify,
+			domain: state.domain,
+			fetchFile,
+			cache: fileUrls,
+			ensureMermaid,
+			idPrefix: `bookmark-${row.messageId}`,
+			dark: matchMedia("(prefers-color-scheme: dark)").matches,
+			onPick: pickChoice,
+		});
+		syncChoices(body, draftHas);
+	}
+
+	article.addEventListener("click", (event) => {
+		// A link or an action does its own thing; anywhere else opens the message in its thread.
+		if (event.target?.closest?.("a, button, [role='button']")) return;
+		location.hash = place;
+	});
+	return article;
 }
 
 /** BKM-05: take one message out of the list in place, without reloading the page. */

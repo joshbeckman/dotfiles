@@ -11,11 +11,18 @@ import { seedDomain } from "./seed.ts";
 const dir = process.argv[2] ?? "";
 if (!dir) throw new Error("usage: node test/browser/bookmarks-shots.ts DIR");
 
-const seeded = await seedDomain();
+const seeded = await seedDomain({
+	capitalReply: [
+		"Paris is the capital of France.",
+		"",
+		"The release note is a different question. A bookmark shows the whole message, so this second paragraph appears here in full rather than as a one-line snippet.",
+	].join("\n"),
+});
 const { t, capital } = seeded;
 const origin = loopbackOrigin(t.panad.tcpPort!);
 const page = await newPage(`${origin}/#${t.panad.webToken}`);
-const saved = capital.messageIds[0]!;
+// The session's reply, which has a body worth reading.
+const saved = capital.messageIds[1]!;
 
 async function shot(name: string): Promise<void> {
 	copyFileSync(await screenshot(true), join(dir, `bookmarks-${name}.png`));
@@ -25,7 +32,7 @@ async function shot(name: string): Promise<void> {
 /** Save the shot with the message's menu open, and say which label it offered. */
 async function menu(name: string): Promise<void> {
 	const label = await evaluatePage<string>(`
-		const message = document.querySelector("#thread-messages [data-testid=message]");
+		const message = document.querySelector("#thread-messages [data-testid=message][data-id='${saved}']");
 		const menu = message.querySelector("[data-testid=message-menu]");
 		if (!menu.open) menu.querySelector("summary").click();
 		await until(() => menu.open);

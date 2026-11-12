@@ -912,8 +912,12 @@ export interface BookmarkView {
 	createdAt: number;
 	/** When the reader saved it; the list's order. */
 	bookmarkedAt: number;
-	/** One line of the current body; `[redacted]` for a redacted message. */
+	/** One line of the current body, for a terminal list; `[redacted]` when redacted. */
 	snippet: string;
+	/** The current body, which the PWA renders whole (BKM-05). Absent on a redacted message. */
+	body?: string;
+	/** `[redacted]` for a redacted message, so a renderer has something to show. */
+	display?: string;
 	revised: boolean;
 	redacted: boolean;
 }
@@ -985,6 +989,8 @@ export async function bookmarks(
 					createdAt: row.created_at,
 					bookmarkedAt: row.bookmarked_at,
 					snippet: current.redacted ? "[redacted]" : snippetOf(current.body),
+					...(current.body === undefined ? {} : { body: current.body }),
+					...(current.display === undefined ? {} : { display: current.display }),
 					revised: current.revised,
 					redacted: current.redacted,
 				};

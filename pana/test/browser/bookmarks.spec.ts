@@ -60,29 +60,39 @@ afterEach(async () => {
 		expect(list.body.bookmarks).toHaveLength(1);
 	});
 
-	it("BKM-05 the Bookmarks section lists a saved message, opens it in its thread, and removes it in place", async () => {
-		seeded = await seedDomain();
+	it("BKM-05 the Bookmarks section shows the whole message, opens it in its thread, and removes it in place", async () => {
+		// A reply longer than a list snippet, with a phrase only the end of it carries.
+		const reply = [
+			"Paris is the capital of France.",
+			"",
+			"The release note is a different question, and this second paragraph is here to prove the bookmark card shows the whole message rather than its first hundred and forty characters.",
+		].join("\n");
+		seeded = await seedDomain({ capitalReply: reply });
 		const { t, capital } = seeded;
 		const origin = loopbackOrigin(t.panad.tcpPort!);
 		page = await newPage(`${origin}/#${t.panad.webToken}`);
-		const messageId = capital.messageIds[0]!;
+		// The session's reply, not the user's question.
+		const messageId = capital.messageIds[1]!;
 		await t.client.post(`/messages/${messageId}/bookmark`, {});
 
-		const empty = await evaluatePage<string>(`
+		const card = await evaluatePage<{ subject: string; paragraphs: number; text: string; open: string }>(`
 			location.hash = "#/bookmarks";
 			await until(() => document.querySelectorAll("#bookmarks-list [data-testid=bookmark-item]").length === 1);
-			const row = document.querySelector("#bookmarks-list [data-testid=bookmark-item]");
-			return [row.querySelector(".title").textContent, row.textContent.includes("What is the capital of France?")].join(" | ");
+			const item = document.querySelector("#bookmarks-list [data-testid=bookmark-item]");
+			const body = item.querySelector("[data-testid=bookmark-body]");
+			return {
+				subject: item.querySelector(".bookmark-subject").textContent,
+				paragraphs: body.querySelectorAll("p").length,
+				text: body.textContent,
+				open: item.querySelector("[data-testid=bookmark-open]").getAttribute("href"),
+			};
 		`);
-		expect(empty).toContain("What is the capital of France?");
+		expect(card.subject).toBe("What is the capital of France?");
+		expect(card.paragraphs).toBe(2);
+		expect(card.text).toContain("here to prove the bookmark card shows the whole message");
+		expect(card.open).toBe(`#/threads/${capital.threadId}?message=${messageId}`);
 
-		// The section is reachable from the nav, and the row carries the message's snippet.
-		const snippet = await evaluatePage<string>(`
-			return document.querySelector("#bookmarks-list [data-testid=bookmark-snippet]").textContent;
-		`);
-		expect(snippet.length).toBeGreaterThan(0);
-
-		// Clicking the row opens the thread at that message, and the row's link is that same place.
+		// Clicking the card opens the thread at that message.
 		const opened = await evaluatePage<{ hash: string; focused: boolean }>(`
 			document.querySelector("#bookmarks-list [data-testid=bookmark-item]").click();
 			await until(() => !document.getElementById("thread").hidden && document.querySelector("#thread-messages .focus"));

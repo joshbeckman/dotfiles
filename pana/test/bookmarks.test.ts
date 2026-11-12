@@ -51,6 +51,8 @@ interface BookmarkBody {
 		createdAt: number;
 		bookmarkedAt: number;
 		snippet: string;
+		body?: string;
+		display?: string;
 		revised: boolean;
 		redacted: boolean;
 	}>;
@@ -158,6 +160,8 @@ describe("bookmarks", () => {
 		expect(newest.subject).toBe("first message");
 		expect(newest.sender).toEqual({ id: TEST_USER, kind: "user", url: t.runtime.userUrl });
 		expect(newest.snippet).toBe("second message");
+		// BKM-05: the PWA renders the whole message, so the row carries its body.
+		expect((newest as { body?: string }).body).toBe("second message");
 		expect(newest.createdAt).toBe(reply.body.message.createdAt);
 		expect(newest.bookmarkedAt).toBeGreaterThan(list.body.bookmarks[1]!.bookmarkedAt);
 
@@ -186,7 +190,8 @@ describe("bookmarks", () => {
 
 		await t.client.post(`/messages/${id}/redact`, {});
 		const after = await t.client.get<BookmarkBody>("/bookmarks");
-		expect(after.body.bookmarks[0]).toMatchObject({ messageId: id, redacted: true, snippet: "[redacted]" });
+		expect(after.body.bookmarks[0]).toMatchObject({ messageId: id, redacted: true, snippet: "[redacted]", display: "[redacted]" });
+		expect(after.body.bookmarks[0]!.body).toBeUndefined();
 	});
 
 	it("BKM-03 a thread read marks the caller's bookmarked messages and never another reader's", async () => {
@@ -264,6 +269,9 @@ describe("bookmark surface", () => {
 			subject: "a saved thought",
 			sender: { url: t.runtime.userUrl, kind: "user" },
 			snippet: "a saved thought",
+			body: "a saved thought",
+			display: undefined,
+			redacted: false,
 			at: created.message.createdAt,
 			bookmarkedAt: body.body.bookmarks[0]!.bookmarkedAt,
 		});

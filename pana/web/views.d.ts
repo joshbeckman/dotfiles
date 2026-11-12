@@ -121,6 +121,9 @@ export function bookmarkRow(bookmark: any): {
 	subject: string;
 	sender: PersonRef;
 	snippet: string;
+	body: string;
+	display?: string;
+	redacted: boolean;
 	at: number;
 	bookmarkedAt: number;
 };

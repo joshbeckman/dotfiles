@@ -152,15 +152,16 @@ describeBrowser("MOB the PWA at phone width", () => {
 		expect(layout.opened).toEqual({ visible: true, inView: true });
 	});
 
-	it("MOB-04 the nav fits one phone row, and Settings is reachable outside it", async () => {
+	it("MOB-04 the nav is one phone row that scrolls, and Settings is reachable outside it", async () => {
 		seeded = await seedDomain();
 		page = await newPage(`${loopbackOrigin(seeded.t.panad.tcpPort!)}/#${seeded.t.panad.webToken}`);
 		await emulateViewport(PHONE);
 		const nav = await evaluatePage<{
 			items: number;
 			rows: number;
-			fits: boolean;
-			overflow: number;
+			scrolls: boolean;
+			labelWidth: number;
+			type: string;
 			bar: number;
 			sticky: number;
 			settings: boolean;
@@ -169,7 +170,6 @@ describeBrowser("MOB the PWA at phone width", () => {
 			await document.fonts.ready;
 			const nav = document.getElementById("nav");
 			const links = [...nav.querySelectorAll("a")];
-			const last = links.at(-1);
 			const settings = document.querySelector("[data-testid=nav-settings]");
 			const bar = document.querySelector(".topbar").getBoundingClientRect();
 			const probe = document.createElement("div");
@@ -180,9 +180,10 @@ describeBrowser("MOB the PWA at phone width", () => {
 			return {
 				items: links.length,
 				rows: new Set(links.map((a) => Math.round(a.getBoundingClientRect().top))).size,
-				// SCHEDULES was 28 px past the edge, so the last item was cut off mid-word.
-				fits: last.getBoundingClientRect().right <= nav.getBoundingClientRect().right + 1,
-				overflow: nav.scrollWidth - nav.clientWidth,
+				// BKM-05: seven labels keep their full size and the menu scrolls instead.
+				scrolls: nav.scrollWidth > nav.clientWidth,
+				labelWidth: Math.round(links.find((a) => a.dataset.section === "bookmarks").getBoundingClientRect().width),
+				type: getComputedStyle(links[0]).fontSize,
 				bar: Math.round(bar.height),
 				// Every sticky header below the bar is offset by this variable.
 				sticky,
@@ -193,11 +194,24 @@ describeBrowser("MOB the PWA at phone width", () => {
 		// palette rather than wrapping the menu to a second line that holds one word.
 		expect(nav.items).toBe(7);
 		expect(nav.rows).toBe(1);
-		expect(nav.fits).toBe(true);
-		expect(nav.overflow).toBe(0);
+		expect(nav.scrolls).toBe(true);
 		expect(nav.settings).toBe(true);
+		// The labels are not squished to fit: the phone keeps its 0.72rem type and the menu scrolls.
+		expect(nav.type).toBe("11.52px");
 		// The bar used to be 50 px taller than the variable the sticky headers trust.
 		expect(Math.abs(nav.bar - nav.sticky)).toBeLessThanOrEqual(2);
+		// The section the app is on is scrolled fully into sight, even at the far end.
+		const scrolled = await evaluatePage<{ left: boolean; right: boolean; moved: boolean }>(`
+			location.hash = "#/objectives";
+			await until(() => document.querySelector("#nav a[data-section=objectives][aria-current=page]"));
+			await sleep(100);
+			const nav = document.getElementById("nav");
+			const link = document.querySelector("#nav a[data-section=objectives]");
+			const bar = nav.getBoundingClientRect();
+			const item = link.getBoundingClientRect();
+			return { left: item.left >= bar.left - 1, right: item.right <= bar.right + 1, moved: nav.scrollLeft > 0 };
+		`);
+		expect(scrolled).toEqual({ left: true, right: true, moved: true });
 		const onSettings = await evaluatePage<{ current: string | null; navCurrent: boolean }>(`
 			location.hash = "#/settings";
 			await until(() => document.querySelector("[data-testid=nav-settings][aria-current=page]"));

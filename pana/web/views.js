@@ -50,6 +50,10 @@ export function bookmarkRow(bookmark) {
 		subject: bookmark.subject ?? "(no subject)",
 		sender: person(bookmark.sender ?? {}),
 		snippet: String(bookmark.snippet ?? ""),
+		// BKM-05: the PWA shows the whole message, so the body comes with the row.
+		body: String(bookmark.body ?? ""),
+		display: bookmark.display === undefined ? undefined : String(bookmark.display),
+		redacted: Boolean(bookmark.redacted),
 		at: bookmark.createdAt,
 		bookmarkedAt: bookmark.bookmarkedAt,
 	};
