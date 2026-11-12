@@ -61,8 +61,20 @@ case ${1:-} in
 esac
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
 	home=$XDG_RUNTIME_DIR/chrome-devtools-mcp-$scope
+	socket=$home/server.sock
 else
 	home=/tmp/chrome-devtools-mcp-$scope-$(id -u 2>/dev/null || echo 0)
+	socket=$home.sock
+fi
+# A killed daemon, or a `stop` that races the next call, leaves its state directory behind with
+# no socket. The presence check below would then skip the start, and every call would fail with
+# `connect ENOENT ...sock` until someone deleted the directory by hand. A pid file with no socket
+# behind it is not a running daemon, so clear its state and start one. The `case` confines the
+# removal to this scope's own directory: a stray pid file must never delete anything else.
+if [ -f "$home/daemon.pid" ] && [ ! -S "$socket" ]; then
+	case $home in
+		/tmp/chrome-devtools-mcp-"$scope"-* | */chrome-devtools-mcp-"$scope") rm -rf "$home" ;;
+	esac
 fi
 if [ ! -f "$home/daemon.pid" ]; then
 	# The CLI finds a browser only through `--executablePath`, or through `--channel`, whose
