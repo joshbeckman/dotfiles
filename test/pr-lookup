@@ -25,7 +25,21 @@ cat >"$tmp/bin/gh" <<'EOF2'
 #!/bin/sh
 case "$1" in
   extension) [ "$2" = list ] && printf 'gh view-md\tjoshbeckman/gh-view-md\t1\n' ;;
-  view-md) printf '# Full GitHub PR\n' ;;
+  view-md)
+    # The trimmed render is what `pr-view` must ask for; the flag is the whole point.
+    # OLD_VIEW_MD stands for an extension released before the flag existed.
+    if [ "$2" = "--help" ]; then
+      printf 'Usage: gh view-md <url> [options]\n'
+      [ -n "${OLD_VIEW_MD:-}" ] || printf '        --max-diff LINES  Maximum diff lines to show (default: 800)\n'
+      exit 0
+    fi
+    if [ -n "${OLD_VIEW_MD:-}" ]; then
+      [ "$2" = https://github.com/example/project/pull/7 ] || exit 93
+    else
+      [ "$2" = "--max-diff" ] && [ "$3" = 0 ] || exit 93
+    fi
+    printf '# Full GitHub PR\n'
+    ;;
   *) exit 2 ;;
 esac
 EOF2
@@ -58,6 +72,7 @@ for operation in pr-url pr-view pr-merged pr-checks; do
 done
 [[ "$(run pr-url https://github.com/example/project/pull/7)" == 'https://github.com/example/project/pull/7' ]]
 [[ "$(run pr-view https://github.com/example/project/pull/7)" == '# Full GitHub PR' ]]
+[[ "$(OLD_VIEW_MD=1 run pr-view https://github.com/example/project/pull/7)" == '# Full GitHub PR' ]]
 # Without the `gh view-md` extension, `pr-view` falls back to `gh pr view`.
 casebin="$tmp/gh-no-ext"
 mkdir "$casebin"

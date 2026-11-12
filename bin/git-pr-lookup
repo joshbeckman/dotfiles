@@ -54,7 +54,14 @@ if [[ "$provider" == github ]]; then
       # Full markdown for an agent to read, when the `gh view-md` extension is installed.
       # Otherwise `gh pr view`, which needs no extension. No `--comments` either way: on gh
       # 2.103.3 it prints nothing and exits 0.
+      #
+      # `--max-diff 0` leaves the patch out and lists changed file names instead. The patch is
+      # the bulk of the render and the caller's own checkout has it; reading it costs tokens on
+      # every later turn of a session. Extensions before the flag get the plain render.
       if gh extension list 2>/dev/null | grep -q '^gh view-md'; then
+        if gh view-md --help 2>/dev/null | grep -q -- '--max-diff'; then
+          exec gh view-md --max-diff 0 "$url"
+        fi
         exec gh view-md "$url"
       fi
       exec gh pr view "$url"
