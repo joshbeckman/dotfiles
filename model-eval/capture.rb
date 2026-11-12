@@ -88,7 +88,8 @@ FileUtils.rm_rf(variant)
 FileUtils.mkdir_p(variant)
 files.each_key do |name|
   next if name.start_with?("view-md")
-  File.symlink(File.join(snapshot, "#{name}.gz"), File.join(variant, "#{name}.gz"))
+  # Relative so the link survives a clone; an absolute one would dangle on any other machine.
+  File.symlink(File.join("..", "snapshot", "#{name}.gz"), File.join(variant, "#{name}.gz"))
 end
 File.write(File.join(variant, "snapshot.json"), JSON.pretty_generate(metadata.merge("viewmd" => "absent")) + "\n")
 

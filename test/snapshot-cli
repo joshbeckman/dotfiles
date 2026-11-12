@@ -20,6 +20,10 @@ for fixture in "$root"/model-eval/fixtures/viewmd-*/; do
   done
   [[ -d "$fixture/snapshot" ]] || { echo "missing snapshot: $fixture" >&2; exit 1; }
   [[ -d "$fixture/snapshot-removed" ]] || { echo "missing removed variant: $fixture" >&2; exit 1; }
+  # A snapshot link committed with an absolute target dangles on every other machine.
+  for link in "$fixture"/snapshot-removed/*.gz; do
+    [[ -r "$link" ]] || { echo "dangling snapshot link: $link" >&2; exit 1; }
+  done
 done
 
 light="$root/model-eval/fixtures/viewmd-pr-diff-light"
