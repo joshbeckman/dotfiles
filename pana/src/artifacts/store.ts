@@ -7,6 +7,7 @@ import type { Caller } from "../api/types.ts";
 import { requireOnObjective } from "../objectives/state.ts";
 import type { ObjectiveRow } from "../objectives/schema.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { publish } from "../web/events.ts";
 import { insertDomainMessage, type FileRecord } from "../threads/store.ts";
 import { preview } from "./capability.ts";
 
@@ -153,6 +154,20 @@ export async function publishArtifact(runtime: Runtime, caller: Caller, threadId
 			const text = fileBytes(runtime, record!).toString("utf8");
 			for (const match of text.matchAll(/(?:["'`(=]\s*)(\/(?!\/)[^\s"'`<>)]*)/g)) warnings.push(`${file.path}: root-relative reference ${match[1]}`);
 		} catch { warnings.push(`${file.path}: could not inspect references`); }
+	}
+	// ART-15: one event of its own kind, after the version commits, so an open pane can offer the
+	// new version without a delivery, a wake, or a push. The identical-manifest answer emits none.
+	if (result.created) {
+		await publish(runtime, {
+			kind: "artifact.published",
+			threadId,
+			artifactId: result.artifact.id,
+			versionId: result.version.id,
+			seq: result.version.seq,
+			name: result.artifact.name,
+			url: artifactUrl(runtime, result.artifact.id, result.version.seq),
+			publishedBy: caller.url,
+		});
 	}
 	return { ...result, ...preview(runtime, result.version.id, origin, result.version.entry), warnings, entry: result.version.entry };
 }

@@ -18,6 +18,7 @@ import { runPanaCommand } from "../src/cli/commands.ts";
 import { ConfigError, parseConfig } from "../src/config/index.ts";
 import { SimulatedCrash } from "../src/db/index.ts";
 import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad, type TestPanadOptions } from "./harness/index.ts";
+import { subscribeEvents, type WebEvent } from "../src/web/events.ts";
 
 let t: TestPanad | undefined;
 const tempDirs: string[] = [];
@@ -967,4 +968,50 @@ it("ART-21 the CLI and the route print the same numbers", async () => {
 	expect(body).toEqual({ threads: [{ threadId, bytes: 10 }], bytes: 10 });
 	expect(renderText(body)).toContain(threadId);
 	expect(statusToExitCode(200)).toBe(0);
+});
+
+/** An in-process `/events` subscriber: every frame the hub writes, parsed, in order. */
+function events(t: TestPanad): { frames: WebEvent[] } {
+	const frames: WebEvent[] = [];
+	const res = {
+		write(chunk: string) {
+			for (const frame of chunk.split("\n\n")) {
+				const line = frame.split("\n").find((row) => row.startsWith("data:"));
+				if (line) frames.push(JSON.parse(line.slice(5).trim()) as WebEvent);
+			}
+			return true;
+		},
+		on() {
+			return this;
+		},
+	} as unknown as import("node:http").ServerResponse;
+	subscribeEvents(t.runtime, res, { kind: "user", id: t.runtime.config.user, url: t.runtime.userUrl });
+	return { frames };
+}
+
+it("ART-15 a publish emits one artifact.published event, and a retry emits none", async () => {
+	await start();
+	const { id: threadId, session } = await thread();
+	const stream = events(t!);
+
+	const first = await publishBuild(threadId, "site", { "index.html": "<h1>one</h1>" }, { caller: session });
+	expect(first.status).toBe(201);
+	const published = stream.frames.filter((frame) => frame.kind === "artifact.published");
+	expect(published).toHaveLength(1);
+	expect(published[0]).toMatchObject({
+		kind: "artifact.published",
+		threadId,
+		artifactId: first.body.artifact.id,
+		versionId: first.body.version.id,
+		seq: 1,
+		name: "site",
+		url: `pana://${TEST_DOMAIN}/artifacts/${first.body.artifact.id}/v/1`,
+		publishedBy: `pana://${TEST_DOMAIN}/sessions/${session}`,
+	});
+	// Its own kind: not the delivery or notice kind that marks a thread as mail.
+	expect(published[0]!.to).toBeUndefined();
+
+	const retried = await publishBuild(threadId, "site", { "index.html": "<h1>one</h1>" }, { caller: session });
+	expect(retried.status).toBe(200);
+	expect(stream.frames.filter((frame) => frame.kind === "artifact.published")).toHaveLength(1);
 });
