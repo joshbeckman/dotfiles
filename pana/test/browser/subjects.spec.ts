@@ -102,6 +102,75 @@ afterEach(async () => {
 		}
 	});
 
+	it("SUB-04 a same-thread refresh during regeneration reconciles the subject without live events", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Newer title" }] });
+		const panad = t;
+		const notice = await postNotice(panad.runtime, { body: "Initial subject" });
+		const id = notice.thread.id;
+		const release = panad.model.gate();
+		let began!: () => void;
+		const started = new Promise<void>((resolve) => { began = resolve; });
+		const original = panad.runtime.models.completeSimple.bind(panad.runtime.models);
+		const spy = vi.spyOn(panad.runtime.models, "completeSimple").mockImplementation((...args) => { began(); return original(...args); });
+		try {
+			page = await newPage(`${loopbackOrigin(panad.panad.tcpPort!)}/#${panad.panad.webToken}`);
+			await evaluatePage(`
+				location.hash = "#/threads/${id}";
+				await until(() => document.getElementById("thread-subject").textContent === "Initial subject");
+				window.__originalMessage = document.querySelector("#thread-messages [data-testid=message]");
+				document.getElementById("thread-subject-regenerate").click();
+				return true;
+			`);
+			await started;
+			await evaluatePage(`
+				window.dispatchEvent(new Event("pagehide"));
+				location.hash = "#/threads";
+				await until(() => !document.getElementById("threads-list").hidden && document.querySelector('#threads-list [data-thread="${id}"]'));
+				location.hash = "#/threads/${id}";
+				await until(() => document.querySelector("#thread-messages [data-testid=message]") !== window.__originalMessage && document.getElementById("thread-subject").textContent === "Initial subject");
+				return true;
+			`);
+			release();
+			expect(await evaluatePage(`
+				await until(() => !document.getElementById("thread-subject-regenerate").disabled);
+				return document.getElementById("thread-subject").textContent;
+			`)).toBe("Newer title");
+		} finally { release(); spy.mockRestore(); }
+	});
+
+	it("SUB-04 a failed reconciliation does not report a successful model request as failed", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Newer title" }] });
+		const panad = t;
+		const notice = await postNotice(panad.runtime, { body: "Initial subject" });
+		const id = notice.thread.id;
+		page = await newPage(`${loopbackOrigin(panad.panad.tcpPort!)}/#${panad.panad.webToken}`);
+		const result = await evaluatePage<{ status: string; subject: string }>(`
+			location.hash = "#/threads/${id}";
+			await until(() => document.getElementById("thread-subject").textContent === "Initial subject");
+			const original = window.fetch;
+			window.__releaseSubjectResponse = null;
+			window.fetch = async (path, options) => {
+				if (path === "/threads/${id}/subject" && options?.method === "POST" && options.body === undefined) {
+					return new Response('{}', { status: 503, headers: { 'content-type': 'application/json' } });
+				}
+				const response = await original(path, options);
+				if (path === "/threads/${id}/subject" && options?.method === "POST") {
+					await new Promise(resolve => { window.__releaseSubjectResponse = resolve; });
+				}
+				return response;
+			};
+			document.getElementById("thread-subject-regenerate").click();
+			await until(() => window.__releaseSubjectResponse !== null);
+			await until(() => document.getElementById("thread-subject").textContent === "Newer title");
+			window.__releaseSubjectResponse();
+			await until(() => !document.getElementById("thread-subject-regenerate").disabled);
+			return { status: document.getElementById("status").textContent, subject: document.getElementById("thread-subject").textContent };
+		`);
+		expect(result.status).toContain("Subject regenerated, but refresh failed. Reopen the thread to check it.");
+		expect(result.subject).toBe("Newer title");
+		expect(panad.model.calls()).toBe(1);
+	});
+
 	it("SUB-02/SUB-04 update an open thread and loaded list labels without disturbing a draft or list nodes", async () => {
 		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
 			{ text: "Background subject" }, { text: "Inbox subject" }, { text: "Browse subject" },

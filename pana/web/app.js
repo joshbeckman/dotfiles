@@ -1741,15 +1741,24 @@ async function regenerateThreadSubject() {
 	button.textContent = "Regenerating…";
 	try {
 		const body = await api("POST", `/threads/${thread.id}/subject`, { regenerate: true });
-		if (state.thread === thread) {
-			if (revision === subjectEventRevision) {
+		if (state.thread?.id === thread.id) {
+			if (state.thread === thread && revision === subjectEventRevision) {
 				applyThreadSubject(thread.id, body.subject ?? "(no subject)");
 			} else {
-				// An intervening event can be older OR newer than this response. Read the current
-				// subject, and discard that read too if another event arrives while it is in flight.
+				// An intervening event or thread refresh can be older OR newer than this response.
+				// Read the current subject, and avoid overwriting a later event or thread refresh.
+				const readThread = state.thread;
 				const readRevision = subjectEventRevision;
-				const current = await api("POST", `/threads/${thread.id}/subject`);
-				if (state.thread === thread && readRevision === subjectEventRevision) {
+				let current;
+				try {
+					current = await api("POST", `/threads/${thread.id}/subject`);
+				} catch {
+					status(body.applied === false
+						? "A newer subject was already applied, but refresh failed. Reopen the thread to check it."
+						: "Subject regenerated, but refresh failed. Reopen the thread to check it.", true);
+					return;
+				}
+				if (state.thread === readThread && readRevision === subjectEventRevision) {
 					applyThreadSubject(thread.id, current.subject ?? "(no subject)");
 				}
 			}
