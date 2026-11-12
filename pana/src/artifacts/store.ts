@@ -21,7 +21,7 @@ export function artifactView(runtime: Runtime, row: ArtifactRow) {
 }
 export async function versionView(tx: SqliteExecutor, runtime: Runtime, row: VersionRow, origin?: string) {
 	const files = await tx.all<ManifestFile & { size: number }>(`SELECT vf.path, vf.file_id AS fileId, f.size FROM artifact_version_files vf JOIN files f ON f.id = vf.file_id WHERE version_id = ? ORDER BY vf.path`, row.id);
-	return { id: row.id, artifactId: row.artifact_id, seq: row.seq, entry: row.entry, note: row.note, createdBy: row.created_by, createdAt: row.created_at, url: artifactUrl(runtime, row.artifact_id, row.seq), files, ...preview(runtime, row.id, origin) };
+	return { id: row.id, artifactId: row.artifact_id, seq: row.seq, entry: row.entry, note: row.note, createdBy: row.created_by, createdAt: row.created_at, url: artifactUrl(runtime, row.artifact_id, row.seq), files, ...preview(runtime, row.id, origin, row.entry) };
 }
 
 /** Read only a recorded upload under the file store. Fail closed if it is missing. */
@@ -117,7 +117,7 @@ export async function publishArtifact(runtime: Runtime, caller: Caller, threadId
 			for (const match of text.matchAll(/(?:["'`(=]\s*)(\/(?!\/)[^\s"'`<>)]*)/g)) warnings.push(`${file.path}: root-relative reference ${match[1]}`);
 		} catch { warnings.push(`${file.path}: could not inspect references`); }
 	}
-	return { ...result, ...preview(runtime, result.version.id, origin), warnings, entry: result.version.entry };
+	return { ...result, ...preview(runtime, result.version.id, origin, result.version.entry), warnings, entry: result.version.entry };
 }
 export async function listArtifacts(runtime: Runtime, threadId: string, origin?: string) {
 	if (!await runtime.db.get("SELECT id FROM threads WHERE id = ?", threadId)) throw ApiError.notFound(`thread ${threadId}`);

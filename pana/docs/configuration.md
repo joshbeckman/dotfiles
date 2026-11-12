@@ -50,7 +50,7 @@ not preserved when saving JSON.
 ## Validation rules
 
 The file must be a JSON object, not an array or `null`. Optional nested sections
-(`ui`, `budget`, `files`, `http`, `tools`, `scratch`, `objectives`) must be objects when
+(`ui`, `budget`, `files`, `artifacts`, `http`, `tools`, `scratch`, `objectives`) must be objects when
 present. An empty object uses that section's defaults. Omit an optional value to use its
 default; `null` is not a substitute for omission. Numeric values must be finite JSON
 numbers, not quoted strings. Except where an integer is explicitly required below,
@@ -232,7 +232,10 @@ configuration keys remain preserved.
 
 A build uses relative asset references. A root-relative URL leaves its capability prefix.
 Published versions stay immutable; there is no retention key. `pana stats artifacts` reports
-cumulative storage by thread and overall.
+cumulative version bytes by thread and overall. Uploads left unreferenced by a retry or a rejected
+publish are not included in those totals and still occupy storage. A preview of a nested entry
+opens its actual path so relative assets resolve beside it; a request for the capability root still
+serves the entry, but a browser opening that root resolves relative assets from the root.
 
 Artifact responses use `sandbox allow-scripts` without `allow-same-origin`. Code runs in an
 opaque origin in a frame or tab. It cannot read the reader's local storage, cookies, or panad

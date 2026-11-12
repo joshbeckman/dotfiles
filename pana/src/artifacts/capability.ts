@@ -27,11 +27,13 @@ function signingKey(runtime: Runtime, create = true): Buffer {
 function signature(key: Buffer, version: string, expiry: string) {
 	return createHmac("sha256", key).update(`${version}:${expiry}`).digest("base64url");
 }
-export function preview(runtime: Runtime, version: string, origin = runtime.artifactOrigin ?? `http://localhost:${runtime.config.http.port}`) {
+export function preview(runtime: Runtime, version: string, origin = runtime.artifactOrigin ?? `http://localhost:${runtime.config.http.port}`, entry?: string) {
 	const expiresAt = runtime.clock.now() + runtime.config.artifacts.capMinutes * 60_000;
 	const expiry = String(expiresAt);
 	const capability = `${expiry}.${signature(signingKey(runtime), version, expiry)}`;
-	return { previewUrl: `${origin}/a/${version}/${capability}/`, expiresAt };
+	// A nested entry must be opened at its own path for its relative assets to resolve.
+	const suffix = entry?.includes("/") ? entry.split("/").map(encodeURIComponent).join("/") : "";
+	return { previewUrl: `${origin}/a/${version}/${capability}/${suffix}`, expiresAt };
 }
 export function verify(runtime: Runtime, version: string, capability: string): boolean {
 	const match = /^(\d+)\.([A-Za-z0-9_-]{43})$/.exec(capability);

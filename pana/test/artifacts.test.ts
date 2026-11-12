@@ -623,6 +623,22 @@ it("ART-07 bytes come from the capability path, the root serves the entry, and e
 	expect((await t!.tcp.get(`/a/${version.id}/${capability}/`)).status).toBe(403);
 });
 
+it("ART-07 a nested entry preview resolves its own relative assets", async () => {
+	await start();
+	const { id: threadId } = await thread();
+	const published = await publishBuild(threadId, "nested", {
+		"sub/index.html": '<script src="./app.js"></script>',
+		"sub/app.js": "export default 1",
+	}, { entry: "sub/index.html" });
+	expect(published.status).toBe(201);
+	const url = new URL(published.body.previewUrl);
+	expect(url.pathname).toMatch(/\/sub\/index\.html$/);
+	expect(await (await fetch(url)).text()).toContain("./app.js");
+	expect(await (await fetch(new URL("./app.js", url))).text()).toBe("export default 1");
+	const root = url.pathname.slice(0, url.pathname.indexOf("/sub/index.html")) + "/";
+	expect((await t!.tcp.get(root)).raw.toString()).toContain("./app.js");
+});
+
 it("ART-07 a publish reports root-relative references, and the build's relative ones are served", async () => {
 	await start();
 	const { id: threadId } = await thread();
