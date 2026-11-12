@@ -1,10 +1,11 @@
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { main } from "../../src/cli/index.ts";
 import type { Handlers, RequestContext } from "../../src/api/types.ts";
 import { postNotice, readThread } from "../../src/threads/index.ts";
 import { publish, subscriberCount } from "../../src/web/events.ts";
+import { handlers as webHandlers } from "../../src/web/handlers.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { startTestPanad, type TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage, resizePage, screenshot } from "./cli.ts";
@@ -353,6 +354,110 @@ afterEach(async () => {
 		await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "newest role"); return true;`);
 		expect(reads).toBe(1);
 		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
+	});
+
+
+	it("keeps detached history colors current and participant focus on roster refresh", async () => {
+		type Person = { id: string; kind: string; url: string; role?: string };
+		let roster: Person[] = [];
+		let targetId = "";
+		// A test-only await at the start of renderMessage holds a message after its identity is
+		// assigned but before its detached node is inserted. All normal rendering stays unchanged.
+		const source = readFileSync(new URL("../../web/render.js", import.meta.url), "utf8");
+		const anchor = "export async function renderMessage(target, text, options) {";
+		if (!source.includes(anchor)) throw new Error("renderMessage test hook anchor missing");
+		const heldRender = source.replace(anchor, `${anchor}\n\tif (globalThis.__testHoldMessage) await globalThis.__testHoldMessage(target, text);`);
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1" }, script: [{ text: "done" }, { text: "done" }], handlers: {
+			"web.static": async (ctx: RequestContext) => ctx.params.rest === "render.js"
+				? { status: 200, bytes: Buffer.from(heldRender), headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } }
+				: webHandlers["web.static"]!(ctx),
+			"threads.read": async (ctx: RequestContext) => {
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				return { status: 200, body: ctx.params.id === targetId ? { ...body, thread: { ...body.thread, participants: roster } } : body };
+			},
+			"threads.participants": async () => ({ status: 200, body: { participants: roster } }),
+		} as Handlers });
+		const a = await t.client.post<{ session: { id: string; url: string } }>("/sessions", { prompt: "first session" });
+		const b = await t.client.post<{ session: { id: string; url: string } }>("/sessions", { prompt: "second session" });
+		expect(a.status).toBe(201); expect(b.status).toBe(201);
+		await t.client.post(`/sessions/${a.body.session.id}/stop`);
+		await t.client.post(`/sessions/${b.body.session.id}/stop`);
+		const made = await t.client.post<{ thread: { id: string; participants: Person[] }; message: { id: string } }>("/threads", { to: [a.body.session.id, b.body.session.id], body: "history thread" });
+		expect(made.status).toBe(201);
+		targetId = made.body.thread.id;
+		roster = made.body.thread.participants.map((person) => ({ ...person, role: "participant" }));
+		let head = made.body.message.id;
+		const ids: string[] = [];
+		for (let i = 0; i < 35; i++) {
+			const sent = await t.client.post<{ message: { id: string } }>(`/threads/${targetId}/messages`, { after: head, body: `render-marker-${i}` }, { caller: b.body.session.id });
+			expect(sent.status).toBe(200); head = sent.body.message.id; ids.push(head);
+		}
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`location.hash = "#/threads/${targetId}"; await until(() => !document.getElementById("thread").hidden && document.querySelector('#thread-messages [data-id="${ids[34]}"]')); return true;`);
+		await evaluatePage(`
+			window.__testHoldMessage = async (body, text) => {
+				if (!text.includes(window.__holdText)) return;
+				window.__heldMessage = body.parentElement;
+				await new Promise((resolve) => { window.__releaseMessage = resolve; });
+			};
+			window.__holdText = "render-marker-34";
+			return true;
+		`);
+		// A new delivery refreshes an undrafted open thread without hiding it. The refreshed
+		// initial page is held while an unknown member's role causes a separate roster refresh.
+		await postNotice(t.runtime, { thread: targetId, body: "Refresh the initial window" });
+		await evaluatePage(`await until(() => window.__heldMessage?.dataset.id === "${ids[34]}"); return true;`);
+		const initialBefore = await evaluatePage<string>(`return window.__heldMessage.dataset.color;`);
+		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV", role: "new participant" };
+		roster = [...roster.filter((person) => person.id !== a.body.session.id), added];
+		await evaluatePage(`document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] a').focus(); return true;`);
+		await publish(t.runtime, { kind: "thread.role", threadId: targetId, participantId: added.id, role: added.role });
+		const initialFocus = await evaluatePage<{ focused: boolean; headerColor: string; heldColor: string }>(`
+			await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "new participant");
+			return { focused: document.activeElement === document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] a'),
+				headerColor: document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"]').dataset.color, heldColor: window.__heldMessage.dataset.color };
+		`);
+		expect(initialFocus.focused).toBe(true); expect(initialFocus.heldColor).toBe(initialBefore); expect(initialFocus.headerColor).not.toBe(initialBefore);
+		const inserted = await evaluatePage<{ header: string; message: string }>(`
+			window.__releaseMessage();
+			await until(() => document.querySelector('#thread-messages [data-id="${ids[34]}"]'));
+			return { header: document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"]').dataset.color,
+				message: document.querySelector('#thread-messages [data-id="${ids[34]}"]').dataset.color };
+		`);
+		expect(inserted.message).toBe(inserted.header);
+		await evaluatePage(`document.getElementById("reply-body").value = "keep this draft"; return true;`);
+		// Restore the earlier session before the history load, then remove it while the range is
+		// held. This exercises detached nodes that were rendered both before and during the hold.
+		const originalA = made.body.thread.participants.find((person) => person.id === a.body.session.id)!;
+		const beforeB = roster.findIndex((person) => person.id === b.body.session.id);
+		roster = [...roster.slice(0, beforeB), { ...originalA, role: "returned" }, ...roster.slice(beforeB)];
+		await publish(t.runtime, { kind: "thread.role", threadId: targetId, participantId: originalA.id, role: "returned" });
+		await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${a.body.session.id}"] .participant-role')?.textContent === "returned"); return true;`);
+		await evaluatePage(`
+			window.__heldMessage = undefined; window.__holdText = "render-marker-4";
+			document.querySelector('[data-testid="thread-earlier"]').click();
+			await until(() => window.__heldMessage?.dataset.id === "${ids[4]}");
+			document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] a').focus();
+			window.dispatchEvent(new Event("pagehide")); return true;
+		`);
+		const historyBefore = await evaluatePage<string>(`return window.__heldMessage.dataset.color;`);
+		roster = roster.filter((person) => person.id !== a.body.session.id).map((person) => person.id === b.body.session.id ? { ...person, role: "history-refresh" } : person);
+		const historyFocus = await evaluatePage<{ focused: boolean; color: string; heldColor: string }>(`
+			window.dispatchEvent(new Event("focus"));
+			await until(() => document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] .participant-role')?.textContent === "history-refresh" && !document.querySelector('#thread-participants [data-participant-id="${a.body.session.id}"]'));
+			return { focused: document.activeElement === document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] a'),
+				color: document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"]').dataset.color, heldColor: window.__heldMessage.dataset.color };
+		`);
+		expect(historyFocus.focused).toBe(true); expect(historyFocus.heldColor).toBe(historyBefore); expect(historyFocus.color).not.toBe(historyBefore);
+		const history = await evaluatePage<{ held: string; alreadyRendered: string; header: string; focused: boolean }>(`
+			window.__releaseMessage();
+			await until(() => document.querySelector('#thread-messages [data-id="${ids[4]}"]'));
+			return { held: document.querySelector('#thread-messages [data-id="${ids[4]}"]').dataset.color,
+				alreadyRendered: document.querySelector('#thread-messages [data-id="${ids[0]}"]').dataset.color,
+				header: document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"]').dataset.color,
+				focused: document.activeElement === document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] a') };
+		`);
+		expect(history).toEqual({ held: historyFocus.color, alreadyRendered: historyFocus.color, header: historyFocus.color, focused: true });
 	});
 
 });

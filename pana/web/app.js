@@ -790,6 +790,9 @@ function syncRosterActivity(thread, events) {
 
 function renderThreadParticipants(thread) {
 	const container = $("thread-participants");
+	const active = document.activeElement;
+	const focusedId = active instanceof HTMLElement && container.contains(active) ? active.closest(".person")?.dataset.participantId : undefined;
+	let replacement;
 	container.replaceChildren();
 	for (const participant of thread?.participants ?? []) {
 		const person = typeof participant === "object" ? participant : { url: participant };
@@ -801,7 +804,11 @@ function renderThreadParticipants(thread) {
 		node.append(role);
 		renderParticipantRole(node, person.role);
 		container.append(node);
+		if (focusedId && person.id === focusedId) replacement = node.querySelector("a");
 	}
+	// Do not move focus from a draft or another control. Only restore a participant link that
+	// was focused before the synchronous redraw and still belongs to the refreshed roster.
+	replacement?.focus({ preventScroll: true });
 }
 
 function renderParticipantRole(node, role) {
@@ -836,9 +843,8 @@ async function refreshThreadRoles(seedEvent) {
 	current.participants = body.participants;
 	renderThreadParticipants(current);
 	// Existing messages retain their nodes and menus, but their colors follow the new roster.
-	for (const message of $("thread-messages").querySelectorAll('[data-testid="message"]')) {
-		participantIdentity(message, message.dataset.sender, current.participants, current.id);
-	}
+	syncMessageIdentities($("thread-messages"));
+	syncMessageIdentities($("stale-new"));
 	syncRosterActivity(current, events);
 }
 
@@ -2054,6 +2060,14 @@ function threadColumns(thread) {
 	return cells;
 }
 
+// A render can finish after a roster refresh while its nodes are still detached. Set identity
+// again immediately before insertion, as well as updating messages already on screen.
+function syncMessageIdentities(root) {
+	if (!state.thread) return;
+	const nodes = root instanceof Element && root.matches('[data-testid="message"]') ? [root] : root.querySelectorAll('[data-testid="message"]');
+	for (const node of nodes) participantIdentity(node, node.dataset.sender, state.thread.participants, state.thread.id);
+}
+
 async function messageElement(message, { focus }) {
 	const view = messageView(message);
 	learnDomain(view.sender);
@@ -2338,6 +2352,7 @@ async function artifactPublished(event) {
 			const next = [...container.querySelectorAll('[data-testid="message"]')].find((item) => Number(item.dataset.seq) > message.seq);
 			const top = next?.getBoundingClientRect().top;
 			container.querySelector(":scope > .hint")?.remove();
+			syncMessageIdentities(node);
 			container.insertBefore(node, next ?? container.querySelector(':scope > [data-history="later"]'));
 			if (next && top < 0) window.scrollBy(0, next.getBoundingClientRect().top - top);
 		}
@@ -2423,6 +2438,7 @@ async function openThread(id, focusMessage) {
 					const to = direction === "earlier" ? start : Math.min(messages.length, end + THREAD_PAGE_SIZE);
 					const fragment = await renderRange(from, to);
 					if (!current() || !fragment) return;
+					syncMessageIdentities(fragment);
 					const firstNew = fragment.firstElementChild;
 					const anchor = container.querySelector(".message");
 					const top = anchor?.getBoundingClientRect().top;
@@ -2447,6 +2463,7 @@ async function openThread(id, focusMessage) {
 	}
 	const initial = await renderRange(start, end);
 	if (!current() || !initial) return;
+	syncMessageIdentities(initial);
 	container.append(initial);
 	historyButtons();
 	if (messages.length === 0) empty(container, "No messages yet.");
@@ -2535,7 +2552,11 @@ async function showStale(error, draft) {
 	state.thread = thread;
 	const container = $("stale-new");
 	container.replaceChildren();
-	for (const message of newer) container.append(await messageElement(message, {}));
+	for (const message of newer) {
+		const node = await messageElement(message, {});
+		syncMessageIdentities(node);
+		container.append(node);
+	}
 	$("stale").hidden = false;
 	$("reply-body").value = $("reply-body").value || draft.body;
 	const newest = messages[messages.length - 1]?.id;
