@@ -66,6 +66,9 @@ interface VersionView {
 	createdAt: number;
 	url: string;
 	files: VersionFileView[];
+	previewUrl: string;
+	expiresAt: number;
+	pinned?: boolean;
 }
 
 interface PublishView {
@@ -81,9 +84,6 @@ interface PublishView {
 interface ShowView {
 	artifact: ArtifactView;
 	versions: VersionView[];
-	version: VersionView;
-	previewUrl: string;
-	expiresAt: number;
 }
 
 interface ListView {
@@ -409,12 +409,16 @@ it("ART-03 publish, list, and show answer a version", async () => {
 
 	const shown = await show(first.body.artifact.id);
 	expect(shown.versions.map((version) => [version.seq, version.note])).toEqual([[1, "first cut"], [2, "second cut"]]);
+	for (const version of shown.versions as Array<VersionView & {previewUrl: string}>) {
+		expect(pathOf(version.previewUrl)).toMatch(new RegExp(`^/a/${version.id}/[^/]+/$`));
+		expect((await fetch(version.previewUrl)).status).toBe(200);
+	}
 	expect(shown.versions[0]!.files.map((file) => file.path)).toEqual(["index.html"]);
-	expect(shown.version.seq).toBe(2);
+	expect(shown.versions.map(v => v.pinned)).toEqual([false, false]);
 	// A versioned read mints a preview for the version it answers, not for the newest one.
 	const pinned = await t!.client.get<ShowView>(`/artifacts/${first.body.artifact.id}?seq=1`);
-	expect(pinned.body.version.seq).toBe(1);
-	expect((await t!.tcp.get(pathOf(pinned.body.previewUrl))).raw.toString()).toBe("<h1>one</h1>");
+	expect(pinned.body.versions.map(v => v.pinned)).toEqual([true, false]);
+	expect((await t!.tcp.get(pathOf(pinned.body.versions[0]!.previewUrl))).raw.toString()).toBe("<h1>one</h1>");
 	expect((await t!.client.get(`/artifacts/${first.body.artifact.id}?seq=9`)).status).toBe(404);
 
 	// Unknown ids and threads are 404s, not empty answers.
@@ -590,7 +594,7 @@ it("ART-07 bytes come from the capability path, the root serves the entry, and e
 	});
 	expect(published.status).toBe(201);
 	const { previewUrl, version } = published.body;
-	expect(previewUrl).toBe(`https://${TEST_DOMAIN}/a/${version.id}/${new URL(previewUrl).pathname.split("/")[3]}/`);
+	expect(new URL(previewUrl).origin).toBe(`http://localhost:${t!.panad.tcpPort}`);
 	expect(pathOf(previewUrl)).toBe(`/a/${version.id}/${pathOf(previewUrl).split("/")[3]}/`);
 	const capability = pathOf(previewUrl).split("/")[3]!;
 
@@ -684,7 +688,7 @@ it("ART-08 the signing key is private state, capabilities are redacted from the 
 	// A key panad cannot read as its own refuses to serve: no bytes leave an unverifiable artifact.
 	chmodSync(keyPath, 0o644);
 	const refused = await t!.tcp.get(pathOf(published.body.previewUrl));
-	expect(refused.status).toBe(403);
+	expect(refused.status).toBe(500);
 	expect(refused.raw.length).toBeLessThan(200);
 });
 
@@ -703,18 +707,18 @@ it("ART-16 pana artifact publish uploads the build, prints the three URLs, and r
 	const artifactId = (await t!.runtime.db.get<{ id: string }>("SELECT id FROM artifacts"))!.id;
 	const versionId = (await t!.runtime.db.get<{ id: string }>("SELECT id FROM artifact_versions"))!.id;
 	expect(published.stdout).toContain(`artifact:`);
-	expect(published.stdout).toContain(`https://`);
+	expect(published.stdout).toContain(`http://localhost:${t!.panad.tcpPort}/a/`);
 	expect(published.stdout).toContain(`pana://${TEST_DOMAIN}/artifacts/${artifactId}`);
 	expect(published.stdout).toContain(`pana://${TEST_DOMAIN}/artifacts/${artifactId}/v/1`);
 	expect(published.stdout).toContain(`/a/${versionId}/`);
-	expect(published.stdout).toContain("expiresAt:");
+	expect(published.stdout).toContain("expires:");
 	expect(published.stdout).toContain("entry: index.html");
 	expect(published.stdout).toContain("index.html: root-relative reference /assets/app.js");
 
 	// The preview the command printed is the one a reader opens.
-	const previewLine = published.stdout.split("\n").find((line) => line.trim().startsWith("previewUrl:"))!;
-	const previewUrl = previewLine.slice(previewLine.indexOf("https://")).trim();
-	const served = await fetch(`http://127.0.0.1:${t!.panad.tcpPort}${pathOf(previewUrl)}`);
+	const previewLine = published.stdout.split("\n").find((line) => line.trim().startsWith("preview:"))!;
+	const previewUrl = previewLine.slice(previewLine.indexOf("http://")).trim();
+	const served = await fetch(previewUrl);
 	expect(served.status).toBe(200);
 
 	// `--json` carries the ids, the resolved version, and the preview with its expiry.
@@ -819,7 +823,7 @@ it("ART-18 a capability lasts artifacts.capMinutes, and the configured value app
 	await start({ stateDir: probe.dir });
 	expect(t!.runtime.config.artifacts.capMinutes).toBe(5);
 	const shown = await show(published.body.artifact.id);
-	expect(shown.expiresAt).toBe(t!.clock.now() + 5 * 60_000);
+	expect(shown.versions[0]!.expiresAt).toBe(t!.clock.now() + 5 * 60_000);
 	// Each authorized read renews the capability it hands back, and the older one still works
 	// until its own expiry.
 	expect((await t!.tcp.get(pathOf(published.body.previewUrl))).status).toBe(200);

@@ -2,7 +2,7 @@ import { extname } from "node:path";
 import { ApiError } from "../api/errors.ts";
 import type { Handlers, RequestContext } from "../api/types.ts";
 import { loadFile } from "../threads/files.ts";
-import { ARTIFACT_HEADERS, preview, verify } from "./capability.ts";
+import { ARTIFACT_HEADERS, verify } from "./capability.ts";
 import { artifactView, listArtifacts, publishArtifact, versionView, type ArtifactRow, type VersionRow } from "./store.ts";
 
 // The Host was checked by the request pipeline. TCP readers need the same origin they
@@ -41,7 +41,7 @@ export const handlers: Handlers = {
 		const seq = ctx.query.get("seq");
 		const version = seq === null ? versions.at(-1) : versions.find(v => String(v.seq) === seq);
 		if (!version) throw ApiError.notFound("artifact version");
-		return { status: 200, body: { artifact: artifactView(ctx.runtime, artifact), versions: versions.map(v => ({ ...v, pinned: v.id === version.id })), version, ...preview(ctx.runtime, version.id, previewOrigin(ctx)) } };
+		return { status: 200, body: { artifact: artifactView(ctx.runtime, artifact), versions: versions.map(v => ({ ...v, pinned: seq !== null && v.id === version.id })) } };
 	},
 	"artifacts.bytes": bytes,
 	"artifacts.entry": bytes,
