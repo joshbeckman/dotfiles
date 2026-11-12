@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { awaitSubjectJobs, scheduleSubject } from "../../src/search/index.ts";
 import { postNotice } from "../../src/threads/index.ts";
 import { subscriberCount } from "../../src/web/events.ts";
@@ -27,10 +28,12 @@ afterEach(async () => {
 			location.hash = "#/threads/${id}";
 			await until(() => document.getElementById("thread-subject").textContent === "Initial subject");
 			const original = window.fetch;
+			let held = false;
 			window.__releaseSubjectResponse = null;
 			window.fetch = async (path, options) => {
 				const response = await original(path, options);
-				if (path === "/threads/${id}/subject" && options?.method === "POST") {
+				if (!held && path === "/threads/${id}/subject" && options?.method === "POST") {
+					held = true;
 					await new Promise(resolve => { window.__releaseSubjectResponse = resolve; });
 				}
 				return response;
@@ -49,6 +52,54 @@ afterEach(async () => {
 			await until(() => !document.getElementById("thread-subject-regenerate").disabled);
 			return document.getElementById("thread-subject").textContent;
 		`)).toBe("Newer title");
+	});
+
+	it("SUB-04 a newer response refreshes the subject after an older event and a lost stream", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const notice = await postNotice(panad.runtime, { body: "Initial subject" });
+		const id = notice.thread.id;
+		let startOlder!: () => void;
+		let startNewer!: () => void;
+		let finishOlder!: (value: ReturnType<typeof fauxAssistantMessage>) => void;
+		let finishNewer!: (value: ReturnType<typeof fauxAssistantMessage>) => void;
+		const olderStarted = new Promise<void>((resolve) => { startOlder = resolve; });
+		const newerStarted = new Promise<void>((resolve) => { startNewer = resolve; });
+		const olderResult = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => { finishOlder = resolve; });
+		const newerResult = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => { finishNewer = resolve; });
+		let calls = 0;
+		const spy = vi.spyOn(panad.runtime.models, "completeSimple").mockImplementation(() => {
+			if (calls++ === 0) { startOlder(); return olderResult; }
+			startNewer(); return newerResult;
+		});
+		try {
+			page = await newPage(`${loopbackOrigin(panad.panad.tcpPort!)}/#${panad.panad.webToken}`);
+			await evaluatePage(`
+				location.hash = "#/threads/${id}";
+				await until(() => document.getElementById("thread-subject").textContent === "Initial subject");
+				return true;
+			`);
+			const older = panad.client.post(`/threads/${id}/subject`, { regenerate: true });
+			await olderStarted;
+			await evaluatePage(`document.getElementById("thread-subject-regenerate").click(); return true;`);
+			await newerStarted;
+			finishOlder(fauxAssistantMessage([fauxText("Older title")]));
+			expect((await older).status).toBe(200);
+			await evaluatePage(`
+				await until(() => document.getElementById("thread-subject").textContent === "Older title");
+				window.dispatchEvent(new Event("pagehide"));
+				return true;
+			`);
+			finishNewer(fauxAssistantMessage([fauxText("Newer title")]));
+			expect(await evaluatePage(`
+				await until(() => !document.getElementById("thread-subject-regenerate").disabled);
+				return document.getElementById("thread-subject").textContent;
+			`)).toBe("Newer title");
+		} finally {
+			finishOlder(fauxAssistantMessage([fauxText("Unused")]));
+			finishNewer(fauxAssistantMessage([fauxText("Unused")]));
+			spy.mockRestore();
+		}
 	});
 
 	it("SUB-02/SUB-04 update an open thread and loaded list labels without disturbing a draft or list nodes", async () => {
