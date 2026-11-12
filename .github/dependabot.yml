@@ -1,0 +1,49 @@
+# Dependency updates for pana. The scheduled session that handles these PRs
+# lives in pana, not here: it reads the jobs, migrates on red, merges on green.
+#
+# The @earendil-works packages ship in lockstep from one monorepo and break on
+# minors (1.4 to 1.5 dropped typebox), so they must arrive in a single PR.
+#
+# Cooldown is explicit because GitHub's default is 3 days for every version
+# update, and we want a week: a release that gets yanked or hotfixed in its first
+# days never becomes a PR here. Security updates ignore cooldown entirely, so a
+# CVE still arrives at once.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /pana
+    schedule:
+      interval: daily
+      time: "05:00"
+      timezone: America/Chicago
+    cooldown:
+      default-days: 7
+    versioning-strategy: increase
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+      scope: pana
+    ignore:
+      # CI runs Node 22 and pana's engines floor is 22.18; @types/node majors
+      # track Node releases we are not on.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+    groups:
+      earendil:
+        applies-to: [version-updates, security-updates]
+        patterns:
+          - "@earendil-works/*"
+      toolchain:
+        applies-to: [version-updates, security-updates]
+        patterns:
+          - "@types/node"
+          - typescript
+          - vitest
+          - vite
+          - "@vitest/*"
+      runtime:
+        applies-to: [version-updates, security-updates]
+        patterns:
+          - croner
+          - web-push
