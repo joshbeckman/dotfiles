@@ -11,7 +11,10 @@ import { chromeDevtoolsAvailable, closePage, evaluatePage, newPage, resizePage, 
 
 let t: TestPanad | undefined;
 let page: number | undefined;
+let releaseHeld: (() => void) | undefined;
 afterEach(async () => {
+	releaseHeld?.();
+	releaseHeld = undefined;
 	if (page !== undefined) await closePage(page);
 	page = undefined;
 	await t?.close();
@@ -108,6 +111,10 @@ afterEach(async () => {
 		// Miss a role event while the app is suspended, then reconnect with a draft in place.
 		await evaluatePage(`window.dispatchEvent(new Event("pagehide")); return true;`);
 		roles.set(key, "coordinator");
+		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV" };
+		const removed = participants.find((person) => person.kind === "domain")!;
+		participants = [...participants.filter((person) => person.id !== removed.id), added];
+		roles.set(`${id}:${added.id}`, "investigator");
 		await postNotice(t.runtime, { thread: id, body: "A delivery while away" });
 		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
 		await evaluatePage(`window.dispatchEvent(new Event("focus")); return true;`);
@@ -118,6 +125,7 @@ afterEach(async () => {
 				head: window.__originalHead === window.__pana.state.draft.after };
 		`);
 		expect(resumed).toEqual({ text: "coordinator", draft: "Keep this unsent draft", focus: true, head: true });
+		expect(await evaluatePage(`return { added: document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent, removed: Boolean(document.querySelector('#thread-participants [data-participant-id="${removed.id}"]')) };`)).toEqual({ added: "investigator", removed: false });
 		// The participant refresh must not mark the missed delivery read or reopen the draft.
 		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
 		await evaluatePage(`await until(() => document.getElementById("nav-inbox-count").getAttribute("aria-label") === "1 unread message"); return true;`);
@@ -127,21 +135,23 @@ afterEach(async () => {
 
 	it("does not let a stale reconnect read overwrite a newer role event", async () => {
 		let role = "initial";
+		let otherId = "";
 		let participants: Array<{ id: string; kind: string; url: string }> = [];
 		let hold = false;
 		let captured!: () => void;
 		const wasCaptured = new Promise<void>((resolve) => { captured = resolve; });
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => { release = resolve; });
+		releaseHeld = release;
 		t = await startTestPanad({ handlers: {
 			"threads.read": async (ctx: RequestContext) => {
 				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
 				return { status: 200, body: { ...body, thread: { ...body.thread, participants: body.thread.participants.map((p) => ({ ...p, role })) } } };
 			},
 			"threads.participants": async () => {
-				const snapshot = role;
+				const snapshot = participants.map((p) => ({ ...p, role: hold && p.id === otherId ? "held-response-applied" : role }));
 				if (hold) { hold = false; captured(); await gate; }
-				return { status: 200, body: { participants: participants.map((p) => ({ ...p, role: snapshot })) } };
+				return { status: 200, body: { participants: snapshot } };
 			},
 		} as Handlers });
 		const notice = await postNotice(t.runtime, { body: "Race test" });
@@ -149,6 +159,7 @@ afterEach(async () => {
 		participants = notice.thread.participants;
 		const read = await t.client.get<{ thread: { participants: Array<{ id: string }> } }>(`/threads/${id}`);
 		const participantId = read.body.thread.participants[0]!.id;
+		otherId = read.body.thread.participants[1]!.id;
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
 		await evaluatePage(`location.hash = "#/threads/${id}"; await until(() => document.querySelector('#thread-participants [data-participant-id="${participantId}"] .participant-role')?.textContent === "initial");
 			document.getElementById("reply-body").value = "draft"; window.dispatchEvent(new Event("pagehide")); return true;`);
@@ -159,9 +170,59 @@ afterEach(async () => {
 		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId, role });
 		await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${participantId}"] .participant-role').textContent === "newer"); return true;`);
 		release();
-		// Wait for the held response to finish, then verify it did not revert the event.
-		await evaluatePage(`await until(() => performance.getEntriesByType("resource").filter((entry) => entry.name.endsWith("/threads/${id}/participants") && entry.responseEnd > 0).length >= 1); return true;`);
+		// This value occurs only in the held snapshot, so observing it proves the response was
+		// applied, not merely that an earlier participant request finished.
+		await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${otherId}"] .participant-role')?.textContent === "held-response-applied"); return true;`);
 		expect(await evaluatePage(`return { role: document.querySelector('#thread-participants [data-participant-id="${participantId}"] .participant-role').textContent, draft: document.getElementById("reply-body").value };`)).toEqual({ role: "newer", draft: "draft" });
+	});
+
+
+	it("reconciles a new participant and role when reconnect overlaps the initial thread read", async () => {
+		let participants: Array<{ id: string; kind: string; url: string; role?: string }> = [];
+		let captured!: () => void;
+		const wasCaptured = new Promise<void>((resolve) => { captured = resolve; });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		let reads = 0;
+		t = await startTestPanad({ handlers: {
+			"threads.read": async (ctx: RequestContext) => {
+				reads++;
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				const snapshot = { ...body, thread: { ...body.thread, participants: body.thread.participants.map((p) => ({ ...p, role: "participant" })) } };
+				captured();
+				await gate;
+				return { status: 200, body: snapshot };
+			},
+			"threads.participants": async () => ({ status: 200, body: { participants } }),
+		} as Handlers });
+		const notice = await postNotice(t.runtime, { body: "Held initial read" });
+		const id = notice.thread.id;
+		const user = notice.thread.participants.find((person) => person.kind === "user")!;
+		const removed = notice.thread.participants.find((person) => person.kind === "domain")!;
+		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV", role: "investigator" };
+		participants = [...notice.thread.participants.map((person) => ({ ...person, role: "participant" }))];
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`await until(() => window.__pana?.state.domain); location.hash = "#/threads/${id}"; return true;`);
+		await wasCaptured;
+		// Mark a node through the live stream. Blue after focus proves the new stream's hello was
+		// processed before the held response is released (and therefore before its roster reread).
+		await evaluatePage(`const marker = document.createElement("span"); marker.id = "role-test-marker"; marker.dataset.userColor = "true"; document.body.append(marker); return true;`);
+		await publish(t.runtime, { kind: "settings.ui", userColor: "purple" });
+		await evaluatePage(`await until(() => document.getElementById("role-test-marker").dataset.color === "purple"); window.dispatchEvent(new Event("pagehide")); return true;`);
+		participants = [{ ...user, role: "participant" }, added];
+		await postNotice(t.runtime, { thread: id, body: "Unread during held read" });
+		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
+		await evaluatePage(`window.dispatchEvent(new Event("focus")); await until(() => document.getElementById("role-test-marker").dataset.color === "blue"); return true;`);
+		release();
+		const roster = await evaluatePage<{ role: string; removed: boolean; head: string }>(`
+			await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "investigator");
+			return { role: document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role').textContent,
+				removed: Boolean(document.querySelector('#thread-participants [data-participant-id="${removed.id}"]')),
+				head: document.getElementById("draft-head").textContent };
+		`);
+		expect(roster).toEqual({ role: "investigator", removed: false, head: notice.message.id });
+		expect(reads).toBe(1);
+		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
 	});
 
 });

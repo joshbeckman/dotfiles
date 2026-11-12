@@ -721,10 +721,8 @@ async function readThreadWithRoles(id, participantsOnly = false) {
 				body.participants = latest.participants;
 				participants = body.participants;
 			} else {
-				for (const person of participants ?? []) {
-					const updated = latest.participants?.find((each) => each?.id === person?.id);
-					if (updated) person.role = updated.role;
-				}
+				body.thread.participants = reconcileParticipants(participants, latest.participants);
+				participants = body.thread.participants;
 			}
 		}
 		for (const event of pending.events) {
@@ -734,6 +732,37 @@ async function readThreadWithRoles(id, participantsOnly = false) {
 		return body;
 	} finally {
 		pendingRoleReads.delete(pending);
+	}
+}
+
+// The roster is authoritative for membership and roles. Keep existing live fields: roster
+// snapshots do not carry session activity, and a newer live event may already have updated them.
+function reconcileParticipants(previous, latest) {
+	const byId = new Map((previous ?? []).map((person) => [person?.id, person]));
+	return (latest ?? []).map((person) => {
+		const old = byId.get(person?.id);
+		if (!old) return person;
+		const merged = { ...old, ...person };
+		for (const key of ["state", "activity", "wake"]) {
+			if (Object.hasOwn(old, key)) merged[key] = old[key];
+		}
+		return merged;
+	});
+}
+
+function renderThreadParticipants(thread) {
+	const container = $("thread-participants");
+	container.replaceChildren();
+	for (const participant of thread?.participants ?? []) {
+		const person = typeof participant === "object" ? participant : { url: participant };
+		const node = personLink(person, thread.participants, thread.id);
+		if (person.id) node.dataset.participantId = person.id;
+		const role = span("", "participant-role");
+		role.dataset.testid = "participant-role";
+		role.title = "Self-declared role";
+		node.append(role);
+		renderParticipantRole(node, person.role);
+		container.append(node);
 	}
 }
 
@@ -756,7 +785,7 @@ function applyThreadRole(event, live = true) {
 	}
 }
 
-// A stream may miss events while disconnected. Refresh only roles, not the draft or messages.
+// A stream may miss events while disconnected. Refresh the roster, not the draft or messages.
 let roleRefreshVersion = 0;
 async function refreshThreadRoles() {
 	if (state.section !== "threads" || !state.thread || $("thread").hidden) return;
@@ -764,9 +793,11 @@ async function refreshThreadRoles() {
 	const version = ++roleRefreshVersion;
 	const body = await readThreadWithRoles(current.id, true);
 	if (version !== roleRefreshVersion || state.thread !== current || state.section !== "threads") return;
-	for (const person of body.participants ?? []) {
-		if (typeof person?.id === "string") applyThreadRole({ threadId: current.id, participantId: person.id, role: person.role }, false);
-	}
+	current.participants = reconcileParticipants(current.participants, body.participants);
+	renderThreadParticipants(current);
+	const memberIds = new Set(current.participants.map((person) => person?.id));
+	for (const id of workingMap(current.id).keys()) if (!memberIds.has(id)) workingMap(current.id).delete(id);
+	renderThreadWorking();
 }
 
 // Patch labels only: reopening a thread would disturb reply drafts, focus, and scroll.
@@ -2293,19 +2324,7 @@ async function openThread(id, focusMessage) {
 	const threadUrl = $("thread-url");
 	threadUrl.replaceChildren(copyLink(thread?.url ?? `pana://${state.domain}/threads/${id}`, "thread"));
 	// REF-08 and UX-06: participants are colored links to their own views.
-	const participants = $("thread-participants");
-	participants.replaceChildren();
-	for (const participant of thread?.participants ?? []) {
-		const person = typeof participant === "object" ? participant : { url: participant };
-		const node = personLink(person);
-		if (person.id) node.dataset.participantId = person.id;
-		const role = span("", "participant-role");
-		role.dataset.testid = "participant-role";
-		role.title = "Self-declared role";
-		node.append(role);
-		renderParticipantRole(node, person.role);
-		participants.append(node);
-	}
+	renderThreadParticipants(thread);
 	// UX-09: the response says who is working now, so an opened thread is right before any event.
 	const working = workingMap(id);
 	working.clear();
