@@ -146,6 +146,7 @@
 					<div id="threads-list" data-testid="threads-list" class="list" role="list"></div>
 				</div>
 
+				<div id="thread-layout">
 				<article id="thread" data-testid="thread" hidden>
 					<div class="view-sticky" data-testid="thread-sticky">
 						<header class="view-header thread-header">
@@ -166,6 +167,7 @@
 					<p class="meta-line view-details">
 						<span id="thread-url" data-testid="thread-url" class="hint"></span>
 					</p>
+					<div id="artifact-list" data-testid="artifact-list" class="artifact-list" hidden></div>
 					<div id="thread-messages" data-testid="messages" class="messages"></div>
 
 					<div id="stale" data-testid="stale" class="notice" hidden>
@@ -189,6 +191,17 @@
 						</div>
 					</form>
 				</article>
+
+				<aside id="artifact-pane" data-testid="artifact-pane" class="artifact-pane" hidden>
+					<header class="artifact-header">
+						<a id="artifact-back" data-testid="artifact-back" class="button" href="#/threads">Thread</a>
+						<strong id="artifact-title"></strong>
+						<span id="artifact-version" data-testid="artifact-version"></span>
+						<button id="artifact-new-version" data-testid="artifact-new-version" type="button" hidden></button>
+					</header>
+					<div id="artifact-content" class="artifact-content"></div>
+				</aside>
+				</div>
 
 				<!-- Edit and redact confirmation. It moves into the message it acts on (UX-07). -->
 				<div id="confirm-home" hidden>
