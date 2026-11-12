@@ -209,15 +209,23 @@ describeBrowser("settings", () => {
 			let reached = 0;
 			const realFetch = window.fetch.bind(window);
 			window.fetch = (path, options) => { if (path === "/secrets") reached++; return realFetch(path, options); };
+			// The boot redirects to its own first route; navigate only once that has settled.
+			await until(() => document.querySelector('#nav a[aria-current="page"]'));
 			location.hash = "#/settings";
 			await until(() => !document.getElementById("settings-secret-name").disabled);
 			const name = document.getElementById("settings-secret-name");
 			const value = document.getElementById("settings-secret-value");
-			const reveal = document.getElementById("settings-secret-reveal");
-			reveal.click();
-			if (value.type !== "text" || reveal.getAttribute("aria-pressed") !== "true") throw new Error("Show did not reveal the value");
-			reveal.click();
-			if (value.type !== "password") throw new Error("Hide did not hide the value");
+			if (value.type !== "password") throw new Error("The value field is not masked");
+			if (document.querySelector("#settings-secret-reveal")) throw new Error("A control can reveal the value");
+			value.value = "typed but unsaved";
+			document.getElementById("settings-secret-clear").click();
+			if (value.value !== "") throw new Error("Clear did not empty the value");
+			value.value = "typed but unsaved";
+			location.hash = "#/inbox";
+			await until(() => value.value === "");
+			if (!document.getElementById("view-settings").hidden) throw new Error("Still on settings after navigating away");
+			location.hash = "#/settings";
+			await until(() => !document.getElementById("settings-secret-name").disabled);
 			name.value = "GARMIN_PASSWORD";
 			value.value = "hunter2 corrected";
 			document.getElementById("settings-secret-form").requestSubmit();

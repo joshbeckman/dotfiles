@@ -524,7 +524,7 @@
 				</section>
 				<section class="panel settings-secrets" aria-labelledby="settings-secrets-title">
 					<h3 id="settings-secrets-title">Secrets</h3>
-					<p class="hint">Values go to your <code>s</code> store and never come back to this page. A session reads one with <code>s NAME -- command</code>.</p>
+					<p class="hint">Values go to your <code>s</code> store and are never read back: not by this page, not by pana. A session reads one with <code>s NAME -- command</code>.</p>
 					<ul id="settings-secrets-list" class="settings-secrets-list" data-testid="settings-secrets-list"></ul>
 					<p id="settings-secrets-state" class="hint" role="status" aria-live="polite"></p>
 					<form id="settings-secret-form" data-testid="settings-secret-form">
@@ -534,8 +534,8 @@
 							</div>
 							<div class="field grow"><label for="settings-secret-value">Value</label>
 								<div class="settings-secret-value">
-									<input id="settings-secret-value" data-testid="settings-secret-value" type="password" spellcheck="false" autocapitalize="off" autocomplete="new-password" aria-describedby="settings-secret-hint" />
-									<button type="button" id="settings-secret-reveal" aria-pressed="false" aria-controls="settings-secret-value">Show</button>
+									<input id="settings-secret-value" data-testid="settings-secret-value" type="password" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="new-password" aria-describedby="settings-secret-hint" />
+									<button type="button" id="settings-secret-clear" aria-controls="settings-secret-value">Clear</button>
 								</div>
 							</div>
 						</div>

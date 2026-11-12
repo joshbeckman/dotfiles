@@ -327,6 +327,11 @@ async function restartSettings() {
 
 // ---- Secrets (SET-05) -----------------------------------------------------------------------
 
+/** Drop a typed but unsaved value: this page never shows one, so none may outlive the page. */
+function clearSecretDraft() {
+	$("settings-secret-value").value = "";
+}
+
 /** The `s` store: names only, and a form that writes one. A value never renders back. */
 let secretsData;
 const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -435,8 +440,8 @@ async function saveSecret(event) {
 	button.disabled = true;
 	try {
 		const data = await api("POST", "/secrets", { name, value });
-		// The value is deliberately cleared: this page cannot show it again, so it must not linger.
-		valueNode.value = "";
+		// Clear before rendering: the value must not sit in the DOM while the list redraws.
+		clearSecretDraft();
 		renderSecretNames(data.names ?? []);
 		secretError();
 		$("settings-secret-hint").textContent = `${name} saved to the s store.`;
@@ -4428,6 +4433,12 @@ function onKeydown(event) {
 function showSection(section) {
 	threadRenderVersion++;
 	state.section = section;
+	// SET-05: a typed secret lives only on the Settings page. Leaving it drops the draft, so a
+	// value is never sitting in the DOM of a page Josh is reading or showing someone.
+	if (section !== "settings" && $("settings-secret-value").value) {
+		clearSecretDraft();
+		secretError();
+	}
 	// Compose has no nav item of its own: it is the Threads page's New button. Settings sits in the
 	// top bar's tools rather than in the section menu, so this marks both places.
 	const navSection = section === "compose" ? "threads" : section;
@@ -4618,12 +4629,11 @@ $("settings-refresh").addEventListener("click", () => {
 	void loadSecrets();
 });
 $("settings-secret-form").addEventListener("submit", (event) => void saveSecret(event));
-$("settings-secret-reveal").addEventListener("click", () => {
-	const input = $("settings-secret-value");
-	const shown = input.type === "text";
-	input.type = shown ? "password" : "text";
-	$("settings-secret-reveal").textContent = shown ? "Show" : "Hide";
-	$("settings-secret-reveal").setAttribute("aria-pressed", String(!shown));
+// Nothing in this page shows a value. Clear is the only control over the field besides typing.
+$("settings-secret-clear").addEventListener("click", () => {
+	clearSecretDraft();
+	secretError();
+	$("settings-secret-value").focus();
 });
 $("settings-secret-name").addEventListener("input", () => secretError());
 $("settings-secret-value").addEventListener("input", () => secretError());
