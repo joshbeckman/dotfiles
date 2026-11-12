@@ -9,6 +9,8 @@ import type { HarnessSettings, Registry } from "@earendil-works/pi-durable";
 import { request, type ApiResponse, type RequestOptions } from "../../src/api/client.ts";
 import type { Handlers } from "../../src/api/types.ts";
 import type { WakeSubmitter } from "../../src/db/outbox.ts";
+import type { SecretStore } from "../../src/secrets/index.ts";
+import { SecretsError } from "../../src/secrets/index.ts";
 import { startPanad, type Panad } from "../../src/server/index.ts";
 import type { Runtime } from "../../src/server/runtime.ts";
 import { createFakeClock, type FakeClock } from "./clock.ts";
@@ -32,6 +34,8 @@ export interface TestPanadOptions {
 	settings?: HarnessSettings;
 	tailscaleNames?: string[];
 	wake?: (runtime: () => Runtime) => WakeSubmitter;
+	/** Replace the `s`-backed secret store (SET-05). */
+	secrets?: SecretStore;
 	/** Reuse a state directory, for restart tests. */
 	stateDir?: string;
 	clock?: FakeClock;
@@ -74,6 +78,24 @@ function makeClient(send: (method: string, path: string, options?: RequestOption
 	};
 }
 
+/**
+ * A test's secret store (SET-05): names and values in memory. The harness never runs the real
+ * `s`, which would read the developer's own store; a test that needs the spawn path passes a
+ * store of its own (test/secrets.test.ts runs a stand-in `s`).
+ */
+export function createMemorySecrets(initial: Record<string, string> = {}): SecretStore {
+	const values = new Map(Object.entries(initial));
+	return {
+		list: async () => [...values.keys()].sort(),
+		set: async (name, value) => {
+			values.set(name, value);
+		},
+		remove: async (name) => {
+			if (!values.delete(name)) throw new SecretsError("not_found", `key ${name} not found`);
+		},
+	};
+}
+
 /** Make a temp state directory with a test config.json. */
 export function makeStateDir(config: Record<string, unknown> = {}, raw?: Record<string, unknown>): string {
 	const dir = mkdtempSync(join(tmpdir(), "pana-test-"));
@@ -100,6 +122,7 @@ export async function startTestPanad(options: TestPanadOptions = {}): Promise<Te
 		tcpPort: 0,
 		tailscaleNames: options.tailscaleNames,
 		wake: options.wake,
+		secrets: options.secrets ?? createMemorySecrets(),
 		// A temporary domain must never reap the calling session's real browser as an orphan.
 		browserSweep: { browsers: [] },
 		onFatal: (error) => fatal.push(error),

@@ -34,6 +34,7 @@ import { withAuthRetries } from "./retry.ts";
 import { detectTailscaleNames } from "./tailscale.ts";
 import { createIdFactory, systemClock, urlHelpers, type Clock, type Runtime } from "./runtime.ts";
 import { startScratchSweeper } from "../scratch/index.ts";
+import { createSenvStore, type SecretStore } from "../secrets/index.ts";
 import { startRetentionSweeper } from "../threads/index.ts";
 import { startBrowserSweeper, type SweepBrowsersOptions } from "../extension/browser.ts";
 
@@ -60,6 +61,8 @@ export interface StartOptions {
 	tailscaleNames?: readonly string[];
 	/** Replaces the WP3 wake submitter. */
 	wake?: (runtime: () => Runtime) => WakeSubmitter;
+	/** Replaces the `s`-backed secret store (SET-05). Tests pass a fake. */
+	secrets?: SecretStore;
 	/** Override browser discovery/stopping for isolated test domains. Defaults to the real CLI. */
 	browserSweep?: SweepBrowsersOptions;
 	/** Memory may be ahead of disk (see src/db/atomic.ts). Default: log and exit 1. */
@@ -144,6 +147,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			newId: createIdFactory(clock),
 			...urlHelpers(config.domain, config.user),
 			wake: (options.wake ?? defaultWakeSubmitter)(getRuntime),
+			secrets: options.secrets ?? createSenvStore(),
 		};
 
 		// PSH-01: the VAPID pair exists before the first push, not on the first request.

@@ -91,6 +91,9 @@ const API_PATTERNS = [
 	"GET /settings",
 	"POST /settings",
 	"POST /settings/restart",
+	"GET /secrets",
+	"POST /secrets",
+	"DELETE /secrets/:name",
 	"GET /stats/requests",
 	"POST /stats/client",
 ];

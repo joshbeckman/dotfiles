@@ -6,6 +6,7 @@ import type { SetTimer } from "@earendil-works/pi-durable";
 import type { Config, StatePaths } from "../config/index.ts";
 import type { PanaDatabase } from "../db/atomic.ts";
 import type { WakeSubmitter } from "../db/outbox.ts";
+import type { SecretStore } from "../secrets/index.ts";
 import { formatUrl, monotonicUlidFactory, type Ref } from "../ids/index.ts";
 
 /**
@@ -51,6 +52,8 @@ export interface Runtime {
 	userUrl: string;
 	/** Submits a session wake for a delivery. WP3 owns the real one (src/sessions/wake.ts). */
 	wake: WakeSubmitter;
+	/** The user's `s` store: names out, values in (SET-05). */
+	secrets: SecretStore;
 }
 
 export function createIdFactory(clock: Clock): () => string {

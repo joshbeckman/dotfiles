@@ -51,6 +51,8 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 - [x] **SET-04** The user chooses an arbitrary hex message color in settings (`ui.userColor`: `#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA`; blue by default, legacy named palette values supported). Save applies it immediately to open windows and new connections, persists across restarts, and leaves session/domain colors unchanged.
 
+- [x] **SET-05** The Settings page lists, sets, replaces, and removes entries in the user's `s` secrets store, so a credential can be stored from a phone with no terminal. `GET /secrets` answers names only (`{names, available, maxValueBytes}`); `POST /secrets` takes `{name, value}`; `DELETE /secrets/:name` removes one. All three are user-only. A value reaches `s set -f NAME --stdin` on stdin, never in argv, and pana never reads one back. Names are env-style (`[A-Za-z_]` then letters, digits, underscores, at most 128) and values are 1 byte to 64 KiB with no NUL; anything else is 400 `invalid_secret` before `s` runs. A name `s` does not hold is 404. A missing, broken, or hung `s` (15s) reads as `available: false` on `GET` and 502 `secrets_unavailable` on a write, and the page states it rather than failing.
+
 ### IDs and URLs
 
 - [x] **ID-01** New IDs are monotonic ULIDs. Two IDs made in the same millisecond sort in creation order.
@@ -114,6 +116,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/worktrees` | a session makes a worktree of a repository (GUARD-03) |
 | GET, POST | `/settings` | user-only configuration and source/runtime status; save with `configRevision` |
 | POST | `/settings/restart` | user-only graceful daemon restart |
+| GET, POST | `/secrets` | user-only `s` store names, and a set or replace with `{name, value}` (SET-05) |
+| DELETE | `/secrets/:name` | user-only removal from the `s` store (SET-05) |
 | GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake`; a session caller receives `session.entry` and `session.live` only for its own session |
 
 - [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`. A 500 carries a generic message only; the failure's detail goes to panad's own log.

@@ -2190,5 +2190,16 @@ kbd {
 .settings-color-preview { border-left: 4px solid var(--who, var(--c-border)); padding: .75rem; }
 
 .settings-color-controls { display: flex; gap: var(--s2); align-items: center; }
+
+/* SET-05: one name per row, and a remove step that asks inside the row it acts on. */
+.settings-secrets { margin-top: var(--s4); }
+.settings-secrets-list { list-style: none; display: flex; flex-direction: column; gap: var(--s2); padding: 0; margin: 0; }
+.settings-secrets-list:empty { display: none; }
+.settings-secret { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); flex-wrap: wrap; border-bottom: 1px solid var(--c-border); padding-bottom: var(--s2); }
+.settings-secret-name { font-family: var(--font-mono); font-size: 0.875rem; overflow-wrap: anywhere; }
+.settings-secret .confirm { flex: 1 0 100%; }
+.settings-secret-value { display: flex; gap: var(--s2); align-items: center; }
+.settings-secret-value input { flex: 1; min-width: 0; }
+.settings-secret-value button { flex: none; }
 #settings-user-color-picker { flex: none; width: 3rem; min-height: 2.75rem; padding: var(--s1); }
 #settings-user-color { flex: 1; min-width: 0; font-family: var(--font-mono); }

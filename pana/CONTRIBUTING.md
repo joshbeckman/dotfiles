@@ -64,6 +64,7 @@ One directory per work package, so parallel agents rarely edit the same file.
 | Path | Owner | What |
 |---|---|---|
 | `src/config` | WP0 | `config.json`, defaults, state layout |
+| `src/secrets` | WP0 | the user's `s` store behind the Settings page |
 | `src/ids` | WP0 | ULIDs, `parseRef`, `formatUrl` |
 | `src/db` | WP0 | schema, migrations, the shared adapter, wakes |
 | `src/api` | WP0 | route table, error shapes, exit codes, HTTP client |

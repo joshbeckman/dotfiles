@@ -325,6 +325,137 @@ async function restartSettings() {
 	finally { settingsBusy = false; updateSettingsControls(); }
 }
 
+// ---- Secrets (SET-05) -----------------------------------------------------------------------
+
+/** The `s` store: names only, and a form that writes one. A value never renders back. */
+let secretsData;
+const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function secretError(text) {
+	const node = $("settings-secret-error");
+	node.textContent = text ?? "";
+	node.hidden = !text;
+}
+
+function secretHint(data) {
+	if (!data) return "";
+	if (!data.available) return data.error ?? "The s store is not available to panad.";
+	const kb = Math.round((data.maxValueBytes ?? 0) / 1024);
+	return kb ? `Letters, digits, and underscores in the name. Up to ${kb} KB per value.` : "";
+}
+
+/** Run one store write, then render the names the daemon answers with. */
+function renderSecretNames(names) {
+	secretsData = { ...secretsData, names };
+	renderSecrets(secretsData);
+}
+
+function renderSecrets(data) {
+	secretsData = data;
+	const list = $("settings-secrets-list");
+	const names = data?.available === false ? [] : data?.names ?? [];
+	list.replaceChildren();
+	for (const name of names) list.append(secretRow(name));
+	$("settings-secrets-state").textContent = data?.available === false
+		? secretHint(data)
+		: names.length ? "" : "No secrets stored yet.";
+	$("settings-secret-hint").textContent = data?.available === false ? "" : secretHint(data);
+	$("settings-secret-save").disabled = data?.available === false;
+	$("settings-secret-name").disabled = data?.available === false;
+	$("settings-secret-value").disabled = data?.available === false;
+}
+
+/** One stored name with a remove step that asks first, inside the row it acts on. */
+function secretRow(name) {
+	const item = document.createElement("li");
+	item.className = "settings-secret";
+	item.dataset.name = name;
+	const label = document.createElement("span");
+	label.className = "settings-secret-name";
+	label.textContent = name;
+	const remove = document.createElement("button");
+	remove.type = "button";
+	remove.className = "quiet";
+	remove.textContent = "Remove";
+	remove.setAttribute("aria-label", `Remove ${name}`);
+	remove.addEventListener("click", () => item.append(secretRemoveConfirm(name)));
+	item.append(label, remove);
+	return item;
+}
+
+function secretRemoveConfirm(name) {
+	const box = document.createElement("div");
+	box.className = "confirm";
+	const text = document.createElement("p");
+	text.textContent = `Remove ${name} from the s store?`;
+	const actions = document.createElement("div");
+	actions.className = "form-actions";
+	const cancel = document.createElement("button");
+	cancel.type = "button";
+	cancel.textContent = "Cancel";
+	cancel.addEventListener("click", () => box.remove());
+	const yes = document.createElement("button");
+	yes.type = "button";
+	yes.className = "danger";
+	yes.textContent = "Remove";
+	yes.addEventListener("click", () => { yes.disabled = true; cancel.disabled = true; void removeSecret(name, box); });
+	actions.append(cancel, yes);
+	box.append(text, actions);
+	cancel.focus();
+	return box;
+}
+
+async function loadSecrets() {
+	try {
+		renderSecrets(await api("GET", "/secrets"));
+	} catch (error) {
+		renderSecrets({ names: [], available: false, error: error.message });
+		fail(error);
+	}
+}
+
+async function saveSecret(event) {
+	event.preventDefault();
+	const nameNode = $("settings-secret-name");
+	const valueNode = $("settings-secret-value");
+	const name = nameNode.value.trim();
+	const value = valueNode.value;
+	secretError();
+	if (!SECRET_NAME.test(name)) {
+		secretError("A secret name starts with a letter or underscore and holds only letters, digits, and underscores.");
+		nameNode.focus();
+		return;
+	}
+	if (!value.length) {
+		secretError("A secret needs a value.");
+		valueNode.focus();
+		return;
+	}
+	const button = $("settings-secret-save");
+	button.disabled = true;
+	try {
+		const data = await api("POST", "/secrets", { name, value });
+		// The value is deliberately cleared: this page cannot show it again, so it must not linger.
+		valueNode.value = "";
+		renderSecretNames(data.names ?? []);
+		secretError();
+		$("settings-secret-hint").textContent = `${name} saved to the s store.`;
+	} catch (error) {
+		secretError(error.message);
+	} finally { button.disabled = secretsData?.available === false; }
+}
+
+async function removeSecret(name, box) {
+	try {
+		const data = await api("DELETE", `/secrets/${encodeURIComponent(name)}`);
+		box.remove();
+		renderSecretNames(data.names ?? []);
+	} catch (error) {
+		box.remove();
+		secretError(error.message);
+	}
+}
+
 // ---- HTTP -----------------------------------------------------------------------------------
 
 async function raw(path, options = {}) {
@@ -4402,6 +4533,7 @@ async function drawRoute() {
 				break;
 			case "settings":
 				await loadSettings();
+				await loadSecrets();
 				break;
 			case "objectives":
 				$("objectives-browse").hidden = false;
@@ -4481,7 +4613,20 @@ $("settings-config").addEventListener("input", () => {
 	$("settings-config-error").hidden = true;
 	updateSettingsControls();
 });
-$("settings-refresh").addEventListener("click", () => void loadSettings());
+$("settings-refresh").addEventListener("click", () => {
+	void loadSettings();
+	void loadSecrets();
+});
+$("settings-secret-form").addEventListener("submit", (event) => void saveSecret(event));
+$("settings-secret-reveal").addEventListener("click", () => {
+	const input = $("settings-secret-value");
+	const shown = input.type === "text";
+	input.type = shown ? "password" : "text";
+	$("settings-secret-reveal").textContent = shown ? "Show" : "Hide";
+	$("settings-secret-reveal").setAttribute("aria-pressed", String(!shown));
+});
+$("settings-secret-name").addEventListener("input", () => secretError());
+$("settings-secret-value").addEventListener("input", () => secretError());
 $("settings-reload-config").addEventListener("click", () => {
 	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
 	if (changed && !window.confirm("Discard unsaved configuration edits and reload the current file?")) return;
