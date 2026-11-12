@@ -325,6 +325,165 @@ async function restartSettings() {
 	finally { settingsBusy = false; updateSettingsControls(); }
 }
 
+// ---- Secrets (SET-05) -----------------------------------------------------------------------
+
+/** Drop a typed but unsaved value: this page never shows one, so none may outlive the page. */
+function clearSecretDraft() {
+	$("settings-secret-value").value = "";
+}
+
+/** The `s` store: names only, and a form that writes one. A value never renders back. */
+let secretsData;
+const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function secretError(text) {
+	const node = $("settings-secret-error");
+	node.textContent = text ?? "";
+	node.hidden = !text;
+}
+
+function secretHint(data) {
+	if (!data) return "";
+	if (!data.available) return data.error ?? "The s store is not available to panad.";
+	const kb = Math.round((data.maxValueBytes ?? 0) / 1024);
+	return `Letters, digits, and underscores in the name. One line per value, up to ${kb} KB. Trailing newlines are dropped.`;
+}
+
+/**
+ * SET-05: a single-line field loses line breaks before any script sees the paste, so a pasted
+ * multi-line value would be stored joined with no error. Refuse it here instead.
+ */
+function refuseMultiLinePaste(event) {
+	const text = event.clipboardData?.getData("text") ?? "";
+	if (!/[\r\n]/.test(text)) return;
+	event.preventDefault();
+	const trimmed = text.replace(/[\r\n]+$/, "");
+	if (!/[\r\n]/.test(trimmed)) {
+		$("settings-secret-value").value = trimmed;
+		secretError();
+		return;
+	}
+	secretError("That value has more than one line, and this field would join them. A multi-line secret has to be set on a machine with a terminal: s set NAME.");
+}
+
+/** Run one store write, then render the names the daemon answers with. */
+function renderSecretNames(names) {
+	if (names === null) {
+		// The write succeeded and the list that follows it did not; reload rather than show a
+		// list that silently lost the new name.
+		void loadSecrets();
+		return;
+	}
+	secretsData = { ...secretsData, names };
+	renderSecrets(secretsData);
+}
+
+function renderSecrets(data) {
+	secretsData = data;
+	const list = $("settings-secrets-list");
+	const names = data?.available === false ? [] : data?.names ?? [];
+	list.replaceChildren();
+	for (const name of names) list.append(secretRow(name));
+	$("settings-secrets-state").textContent = data?.available === false
+		? secretHint(data)
+		: names.length ? "" : "No secrets stored yet.";
+	$("settings-secret-hint").textContent = data?.available === false ? "" : secretHint(data);
+	$("settings-secret-save").disabled = data?.available === false;
+	$("settings-secret-name").disabled = data?.available === false;
+	$("settings-secret-value").disabled = data?.available === false;
+}
+
+/** One stored name with a remove step that asks first, inside the row it acts on. */
+function secretRow(name) {
+	const item = document.createElement("li");
+	item.className = "settings-secret";
+	item.dataset.name = name;
+	const label = document.createElement("span");
+	label.className = "settings-secret-name";
+	label.textContent = name;
+	const remove = document.createElement("button");
+	remove.type = "button";
+	remove.className = "quiet";
+	remove.textContent = "Remove";
+	remove.setAttribute("aria-label", `Remove ${name}`);
+	remove.addEventListener("click", () => item.append(secretRemoveConfirm(name)));
+	item.append(label, remove);
+	return item;
+}
+
+function secretRemoveConfirm(name) {
+	const box = document.createElement("div");
+	box.className = "confirm";
+	const text = document.createElement("p");
+	text.textContent = `Remove ${name} from the s store?`;
+	const actions = document.createElement("div");
+	actions.className = "form-actions";
+	const cancel = document.createElement("button");
+	cancel.type = "button";
+	cancel.textContent = "Cancel";
+	cancel.addEventListener("click", () => box.remove());
+	const yes = document.createElement("button");
+	yes.type = "button";
+	yes.className = "danger";
+	yes.textContent = "Remove";
+	yes.addEventListener("click", () => { yes.disabled = true; cancel.disabled = true; void removeSecret(name, box); });
+	actions.append(cancel, yes);
+	box.append(text, actions);
+	cancel.focus();
+	return box;
+}
+
+async function loadSecrets() {
+	try {
+		renderSecrets(await api("GET", "/secrets"));
+	} catch (error) {
+		renderSecrets({ names: [], available: false, error: error.message });
+		fail(error);
+	}
+}
+
+async function saveSecret(event) {
+	event.preventDefault();
+	const nameNode = $("settings-secret-name");
+	const valueNode = $("settings-secret-value");
+	const name = nameNode.value.trim();
+	const value = valueNode.value;
+	secretError();
+	if (!SECRET_NAME.test(name)) {
+		secretError("A secret name starts with a letter or underscore and holds only letters, digits, and underscores.");
+		nameNode.focus();
+		return;
+	}
+	if (!value.length) {
+		secretError("A secret needs a value.");
+		valueNode.focus();
+		return;
+	}
+	const button = $("settings-secret-save");
+	button.disabled = true;
+	try {
+		const data = await api("POST", "/secrets", { name, value });
+		// Clear before rendering: the value must not sit in the DOM while the list redraws.
+		clearSecretDraft();
+		renderSecretNames(Array.isArray(data.names) ? data.names : null);
+		secretError();
+		$("settings-secret-hint").textContent = `${name} saved to the s store.`;
+	} catch (error) {
+		secretError(error.message);
+	} finally { button.disabled = secretsData?.available === false; }
+}
+
+async function removeSecret(name, box) {
+	try {
+		const data = await api("DELETE", `/secrets/${encodeURIComponent(name)}`);
+		box.remove();
+		renderSecretNames(Array.isArray(data.names) ? data.names : null);
+	} catch (error) {
+		box.remove();
+		secretError(error.message);
+	}
+}
+
 // ---- HTTP -----------------------------------------------------------------------------------
 
 async function raw(path, options = {}) {
@@ -4366,6 +4525,12 @@ function onKeydown(event) {
 function showSection(section) {
 	threadRenderVersion++;
 	state.section = section;
+	// SET-05: a typed secret lives only on the Settings page. Leaving it drops the draft, so a
+	// value is never sitting in the DOM of a page Josh is reading or showing someone.
+	if (section !== "settings" && $("settings-secret-value").value) {
+		clearSecretDraft();
+		secretError();
+	}
 	// Compose has no nav item of its own: it is the Threads page's New button. Settings sits in the
 	// top bar's tools rather than in the section menu, so this marks both places.
 	const navSection = section === "compose" ? "threads" : section;
@@ -4471,6 +4636,7 @@ async function drawRoute() {
 				break;
 			case "settings":
 				await loadSettings();
+				await loadSecrets();
 				break;
 			case "objectives":
 				$("objectives-browse").hidden = false;
@@ -4550,7 +4716,20 @@ $("settings-config").addEventListener("input", () => {
 	$("settings-config-error").hidden = true;
 	updateSettingsControls();
 });
-$("settings-refresh").addEventListener("click", () => void loadSettings());
+$("settings-refresh").addEventListener("click", () => {
+	void loadSettings();
+	void loadSecrets();
+});
+$("settings-secret-form").addEventListener("submit", (event) => void saveSecret(event));
+// Nothing in this page shows a value. Clear is the only control over the field besides typing.
+$("settings-secret-clear").addEventListener("click", () => {
+	clearSecretDraft();
+	secretError();
+	$("settings-secret-value").focus();
+});
+$("settings-secret-name").addEventListener("input", () => secretError());
+$("settings-secret-value").addEventListener("input", () => secretError());
+$("settings-secret-value").addEventListener("paste", refuseMultiLinePaste);
 $("settings-reload-config").addEventListener("click", () => {
 	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
 	if (changed && !window.confirm("Discard unsaved configuration edits and reload the current file?")) return;

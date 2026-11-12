@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { postNotice } from "../../src/threads/index.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { participantColor } from "../../web/views.js";
-import { startTestPanad, type TestPanad } from "../harness/index.ts";
+import { createMemorySecrets, startTestPanad, type TestPanad } from "../harness/index.ts";
 import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, screenshot } from "./cli.ts";
 
 const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
@@ -200,6 +200,87 @@ describeBrowser("settings", () => {
 			await emulateViewport("390x844x1,mobile,touch", "dark");
 			await evaluatePage(`await until(() => document.getElementById("settings-user-color").value === "#12345678" && !document.getElementById("settings-config").disabled); return true;`);
 			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-phone-dark.png"));
+		}
+	});
+	it("sets and removes a secret without ever showing the value again", async () => {
+		t = await startTestPanad({ secrets: createMemorySecrets() });
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		const saved = await evaluatePage<{ value: string; hint: string; rows: string[]; leaked: boolean; reached: number }>(`
+			let reached = 0;
+			const realFetch = window.fetch.bind(window);
+			window.fetch = (path, options) => { if (path === "/secrets") reached++; return realFetch(path, options); };
+			// The boot redirects to its own first route; navigate only once that has settled.
+			await until(() => document.querySelector('#nav a[aria-current="page"]'));
+			location.hash = "#/settings";
+			await until(() => !document.getElementById("settings-secret-name").disabled);
+			const name = document.getElementById("settings-secret-name");
+			const value = document.getElementById("settings-secret-value");
+			if (value.type !== "password") throw new Error("The value field is not masked");
+			if (document.querySelector("#settings-secret-reveal")) throw new Error("A control can reveal the value");
+			if (value.getAttribute("autocomplete") !== "off") throw new Error("The field invites a password manager to keep the value");
+			// A single-line field joins a multi-line paste without an error, so the page refuses it.
+			const multi = new DataTransfer();
+			multi.setData("text/plain", "-----BEGIN KEY-----\\nAAAA\\n-----END KEY-----");
+			value.dispatchEvent(new ClipboardEvent("paste", { clipboardData: multi, bubbles: true, cancelable: true }));
+			if (!document.getElementById("settings-secret-error").textContent.includes("more than one line")) throw new Error("A multi-line paste was accepted");
+			if (value.value !== "") throw new Error("A multi-line paste reached the field");
+			const single = new DataTransfer();
+			single.setData("text/plain", "one-line-value\\n");
+			value.dispatchEvent(new ClipboardEvent("paste", { clipboardData: single, bubbles: true, cancelable: true }));
+			if (value.value !== "one-line-value") throw new Error("A trailing newline was not dropped from a paste");
+			if (document.getElementById("settings-secret-error").textContent) throw new Error("A clean paste reported an error");
+			value.value = "typed but unsaved";
+			document.getElementById("settings-secret-clear").click();
+			if (value.value !== "") throw new Error("Clear did not empty the value");
+			value.value = "typed but unsaved";
+			location.hash = "#/inbox";
+			await until(() => value.value === "");
+			if (!document.getElementById("view-settings").hidden) throw new Error("Still on settings after navigating away");
+			location.hash = "#/settings";
+			await until(() => !document.getElementById("settings-secret-name").disabled);
+			name.value = "GARMIN_PASSWORD";
+			value.value = "hunter2 corrected";
+			document.getElementById("settings-secret-form").requestSubmit();
+			await until(() => document.getElementById("settings-secrets-list").textContent.includes("GARMIN_PASSWORD"));
+			return {value: value.value, hint: document.getElementById("settings-secret-hint").textContent,
+				rows: [...document.querySelectorAll(".settings-secret")].map((row) => row.dataset.name),
+				leaked: document.body.textContent.includes("hunter2 corrected"), reached};
+		`);
+		expect(saved.value).toBe("");
+		expect(saved.rows).toEqual(["GARMIN_PASSWORD"]);
+		expect(saved.hint).toContain("saved to the s store");
+		// The value is stored, and nothing the page renders holds it again.
+		expect(saved.leaked).toBe(false);
+		expect(saved.reached).toBeGreaterThan(0);
+		expect(await t.runtime.secrets.list()).toEqual(["GARMIN_PASSWORD"]);
+		if (process.env.PANA_SETTINGS_SHOTS) {
+			mkdirSync(process.env.PANA_SETTINGS_SHOTS, { recursive: true });
+			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-secrets.png"));
+		}
+		const refused = await evaluatePage<string>(`
+			const name = document.getElementById("settings-secret-name");
+			name.value = "bad-name";
+			document.getElementById("settings-secret-value").value = "x";
+			document.getElementById("settings-secret-form").requestSubmit();
+			return document.getElementById("settings-secret-error").textContent;
+		`);
+		expect(refused).toContain("letters, digits, and underscores");
+		const removed = await evaluatePage<{ rows: string[]; state: string }>(`
+			const row = document.querySelector('.settings-secret[data-name="GARMIN_PASSWORD"]');
+			row.querySelector("button").click();
+			if (!row.querySelector(".confirm")) throw new Error("Remove did not ask first");
+			row.querySelector(".confirm .danger").click();
+			await until(() => document.getElementById("settings-secrets-list").textContent === "");
+			return {rows: [...document.querySelectorAll(".settings-secret")].map((item) => item.dataset.name),
+				state: document.getElementById("settings-secrets-state").textContent};
+		`);
+		expect(removed.rows).toEqual([]);
+		expect(removed.state).toBe("No secrets stored yet.");
+		expect(await t.runtime.secrets.list()).toEqual([]);
+		if (process.env.PANA_SETTINGS_SHOTS) {
+			await emulateViewport("390x844x1,mobile,touch", "dark");
+			await evaluatePage(`await until(() => !document.getElementById("settings-secret-name").disabled); return true;`);
+			copyFileSync(await screenshot(true), join(process.env.PANA_SETTINGS_SHOTS, "settings-secrets-phone-dark.png"));
 		}
 	});
 });

@@ -535,6 +535,30 @@
 						<button type="button" id="settings-restart-yes" class="danger">Yes, restart daemon</button></div>
 					</div>
 				</section>
+				<section class="panel settings-secrets" aria-labelledby="settings-secrets-title">
+					<h3 id="settings-secrets-title">Secrets</h3>
+					<p class="hint">Values go to your <code>s</code> store and are never read back: not by this page, not by pana. A session reads one with <code>s NAME -- command</code>.</p>
+					<ul id="settings-secrets-list" class="settings-secrets-list" data-testid="settings-secrets-list"></ul>
+					<p id="settings-secrets-state" class="hint" role="status" aria-live="polite"></p>
+					<form id="settings-secret-form" data-testid="settings-secret-form">
+						<div class="field-row">
+							<div class="field grow"><label for="settings-secret-name">Name</label>
+								<input id="settings-secret-name" data-testid="settings-secret-name" type="text" placeholder="GARMIN_PASSWORD" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="off" />
+							</div>
+							<div class="field grow"><label for="settings-secret-value">Value</label>
+								<div class="settings-secret-value">
+									<input id="settings-secret-value" data-testid="settings-secret-value" type="password" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" data-1p-ignore data-lpignore="true" aria-describedby="settings-secret-hint" />
+									<button type="button" id="settings-secret-clear" aria-controls="settings-secret-value">Clear</button>
+								</div>
+							</div>
+						</div>
+						<p id="settings-secret-error" role="alert" class="error" hidden></p>
+						<div class="form-actions">
+							<p id="settings-secret-hint" class="hint"></p>
+							<button type="submit" class="primary" id="settings-secret-save" data-testid="settings-secret-save">Save secret</button>
+						</div>
+					</form>
+				</section>
 				<form id="settings-form" class="panel">
 					<h3>Configuration</h3><p id="settings-config-path" class="hint"></p>
 					<p class="hint">Domain and user identify existing records and cannot be changed here. Unknown configuration keys are preserved.</p>

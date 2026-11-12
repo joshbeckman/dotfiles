@@ -51,6 +51,8 @@ WP0 goes first, built by one agent. It fixes every shared contract: schema, API 
 
 - [x] **SET-04** The user chooses an arbitrary hex message color in settings (`ui.userColor`: `#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA`; blue by default, legacy named palette values supported). Save applies it immediately to open windows and new connections, persists across restarts, and leaves session/domain colors unchanged.
 
+- [x] **SET-05** The Settings page lists, sets, replaces, and removes entries in the user's `s` secrets store, so a credential can be stored from a phone with no terminal. `GET /secrets` answers names only (`{names, available, maxValueBytes}`), `POST /secrets` takes `{name, value}`, and `DELETE /secrets/:name` removes one. All three are user-only and **TCP only**: on the Unix socket an unlabeled caller is the user (API-03), which is the authority a session's bash already holds, so these routes require the web token the PWA presents and refuse a socket caller with 403. A value reaches `s set -f NAME --stdin` on stdin, never in argv, and pana never reads one back. The page masks the field, offers no control that reveals it, empties it on save and on leaving the page, and refuses a pasted value with more than one line rather than let a single-line field join it, so no value is ever displayed. Names are env-style (`[A-Za-z_]` then letters, digits, underscores, at most 128); `s`'s own denylist of env names it will not store (`PATH`, `LD_PRELOAD`, `S_KEY_COMMAND`, …) is 400 like any other bad name. Values are 1 byte to 64 KiB, no NUL, and trailing newlines are dropped as `s` drops them, so a value that is only newlines is 400. Anything refused before `s` runs is 400 `invalid_secret`. A name `s` does not hold is 404. A missing or hung `s` (15s, and the kill reaches its password command) is 502 `secrets_unavailable` carrying `s`'s own `error:` line, capped; more than four waiting calls is 503 `secrets_busy`. `GET` answers `available: false` when `s list` itself cannot run, and 503 `secrets_busy` while the queue is full rather than reporting a busy store as unavailable; a store whose `s list` works but whose `s set` needs a password it cannot get stays `available: true` and the write answers 502 with the reason. A write that succeeds and whose following list fails answers 200 with `names: null` and the page reloads.
+
 ### IDs and URLs
 
 - [x] **ID-01** New IDs are monotonic ULIDs. Two IDs made in the same millisecond sort in creation order.
@@ -114,6 +116,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | POST | `/worktrees` | a session makes a worktree of a repository (GUARD-03) |
 | GET, POST | `/settings` | user-only configuration and source/runtime status; save with `configRevision` |
 | POST | `/settings/restart` | user-only graceful daemon restart |
+| GET, POST | `/secrets` | user-only `s` store names, and a set or replace with `{name, value}` (SET-05) |
+| DELETE | `/secrets/:name` | user-only removal from the `s` store (SET-05) |
 | GET | `/events` | server-sent events for the PWA: `delivery`, `notice`, `session.entry`, `session.state`, `session.live`, `session.wake`; a session caller receives `session.entry` and `session.live` only for its own session |
 
 - [x] **API-01** Errors return `{"error": {"code", "message", ...details}}`. A 500 carries a generic message only; the failure's detail goes to panad's own log.

@@ -6,6 +6,7 @@ import { handlers as memory } from "../memory/handlers.ts";
 import { handlers as objectives } from "../objectives/handlers.ts";
 import { handlers as push } from "../push/handlers.ts";
 import { handlers as scratch } from "../scratch/handlers.ts";
+import { handlers as secrets } from "../secrets/handlers.ts";
 import { handlers as schedules } from "../schedules/handlers.ts";
 import { handlers as search } from "../search/handlers.ts";
 import { handlers as sessions } from "../sessions/handlers.ts";
@@ -22,6 +23,7 @@ export const defaultHandlers: Handlers = {
 	...schedules,
 	...objectives,
 	...scratch,
+	...secrets,
 	...search,
 	...push,
 	...stats,
