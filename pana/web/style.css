@@ -928,6 +928,19 @@ a.button.quiet:hover,
 	font-weight: 600;
 	color: var(--c-text);
 }
+/* An empty live region takes no layout space but remains available to assistive technology. */
+.bookmark-indicator:empty {
+	position: absolute;
+}
+.bookmark-indicator:not(:empty) {
+	display: inline-block;
+	padding: 0 0.35rem;
+	border: 1px solid var(--c-border);
+	border-radius: var(--radius);
+	color: var(--c-text);
+	font-size: 0.72rem;
+	line-height: 1.4;
+}
 .message-actions {
 	display: inline-flex;
 	gap: var(--s3);
