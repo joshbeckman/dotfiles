@@ -147,7 +147,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			newId: createIdFactory(clock),
 			...urlHelpers(config.domain, config.user),
 			wake: (options.wake ?? defaultWakeSubmitter)(getRuntime),
-			secrets: options.secrets ?? createSenvStore(),
+			secrets: options.secrets ?? createSenvStore({ setTimer: clock.setTimer }),
 		};
 
 		// PSH-01: the VAPID pair exists before the first push, not on the first request.

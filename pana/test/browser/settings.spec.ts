@@ -217,6 +217,18 @@ describeBrowser("settings", () => {
 			const value = document.getElementById("settings-secret-value");
 			if (value.type !== "password") throw new Error("The value field is not masked");
 			if (document.querySelector("#settings-secret-reveal")) throw new Error("A control can reveal the value");
+			if (value.getAttribute("autocomplete") !== "off") throw new Error("The field invites a password manager to keep the value");
+			// A single-line field joins a multi-line paste without an error, so the page refuses it.
+			const multi = new DataTransfer();
+			multi.setData("text/plain", "-----BEGIN KEY-----\\nAAAA\\n-----END KEY-----");
+			value.dispatchEvent(new ClipboardEvent("paste", { clipboardData: multi, bubbles: true, cancelable: true }));
+			if (!document.getElementById("settings-secret-error").textContent.includes("more than one line")) throw new Error("A multi-line paste was accepted");
+			if (value.value !== "") throw new Error("A multi-line paste reached the field");
+			const single = new DataTransfer();
+			single.setData("text/plain", "one-line-value\\n");
+			value.dispatchEvent(new ClipboardEvent("paste", { clipboardData: single, bubbles: true, cancelable: true }));
+			if (value.value !== "one-line-value") throw new Error("A trailing newline was not dropped from a paste");
+			if (document.getElementById("settings-secret-error").textContent) throw new Error("A clean paste reported an error");
 			value.value = "typed but unsaved";
 			document.getElementById("settings-secret-clear").click();
 			if (value.value !== "") throw new Error("Clear did not empty the value");

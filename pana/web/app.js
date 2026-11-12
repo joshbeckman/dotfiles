@@ -346,11 +346,34 @@ function secretHint(data) {
 	if (!data) return "";
 	if (!data.available) return data.error ?? "The s store is not available to panad.";
 	const kb = Math.round((data.maxValueBytes ?? 0) / 1024);
-	return kb ? `Letters, digits, and underscores in the name. Up to ${kb} KB per value.` : "";
+	return `Letters, digits, and underscores in the name. One line per value, up to ${kb} KB. Trailing newlines are dropped.`;
+}
+
+/**
+ * SET-05: a single-line field loses line breaks before any script sees the paste, so a pasted
+ * multi-line value would be stored joined with no error. Refuse it here instead.
+ */
+function refuseMultiLinePaste(event) {
+	const text = event.clipboardData?.getData("text") ?? "";
+	if (!/[\r\n]/.test(text)) return;
+	event.preventDefault();
+	const trimmed = text.replace(/[\r\n]+$/, "");
+	if (!/[\r\n]/.test(trimmed)) {
+		$("settings-secret-value").value = trimmed;
+		secretError();
+		return;
+	}
+	secretError("That value has more than one line, and this field would join them. A multi-line secret has to be set on a machine with a terminal: s set NAME.");
 }
 
 /** Run one store write, then render the names the daemon answers with. */
 function renderSecretNames(names) {
+	if (names === null) {
+		// The write succeeded and the list that follows it did not; reload rather than show a
+		// list that silently lost the new name.
+		void loadSecrets();
+		return;
+	}
 	secretsData = { ...secretsData, names };
 	renderSecrets(secretsData);
 }
@@ -442,7 +465,7 @@ async function saveSecret(event) {
 		const data = await api("POST", "/secrets", { name, value });
 		// Clear before rendering: the value must not sit in the DOM while the list redraws.
 		clearSecretDraft();
-		renderSecretNames(data.names ?? []);
+		renderSecretNames(Array.isArray(data.names) ? data.names : null);
 		secretError();
 		$("settings-secret-hint").textContent = `${name} saved to the s store.`;
 	} catch (error) {
@@ -454,7 +477,7 @@ async function removeSecret(name, box) {
 	try {
 		const data = await api("DELETE", `/secrets/${encodeURIComponent(name)}`);
 		box.remove();
-		renderSecretNames(data.names ?? []);
+		renderSecretNames(Array.isArray(data.names) ? data.names : null);
 	} catch (error) {
 		box.remove();
 		secretError(error.message);
@@ -4637,6 +4660,7 @@ $("settings-secret-clear").addEventListener("click", () => {
 });
 $("settings-secret-name").addEventListener("input", () => secretError());
 $("settings-secret-value").addEventListener("input", () => secretError());
+$("settings-secret-value").addEventListener("paste", refuseMultiLinePaste);
 $("settings-reload-config").addEventListener("click", () => {
 	const changed = settingsSavedText !== undefined && $("settings-config").value !== settingsSavedText;
 	if (changed && !window.confirm("Discard unsaved configuration edits and reload the current file?")) return;
