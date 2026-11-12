@@ -2000,6 +2000,8 @@ function messageAction(menu, view, action, label, run) {
 
 /** BKM-04: save this message, or take the mark off, and swap the menu label in place. */
 async function setBookmark(view, article) {
+	if (article.dataset.bookmarkPending) return;
+	article.dataset.bookmarkPending = "true";
 	const save = !view.bookmarked;
 	try {
 		await api("POST", `/messages/${view.id}/${save ? "bookmark" : "unbookmark"}`, {});
@@ -2009,6 +2011,8 @@ async function setBookmark(view, article) {
 		status(save ? "Bookmarked." : "Bookmark removed.");
 	} catch (error) {
 		fail(error);
+	} finally {
+		delete article.dataset.bookmarkPending;
 	}
 }
 
@@ -4792,6 +4796,13 @@ function runKey(action, { target, form }) {
 			return focusReply();
 		case "archive":
 			return archiveKey();
+		case "bookmark": {
+			const message = selected();
+			if (message?.dataset.testid === "message" && selectables().includes(message)) {
+				message.querySelector("[data-testid=message-bookmark]")?.click();
+			}
+			return;
+		}
 	}
 }
 
@@ -4812,6 +4823,7 @@ function onKeydown(event) {
 	const action = keys.press(event, { inInput, inForm: Boolean(form), apple: APPLE });
 	if (!action) return;
 	event.preventDefault();
+	if (action === "bookmark" && event.repeat) return;
 	if (action !== "pending") runKey(action, { target, form });
 }
 
@@ -5176,8 +5188,8 @@ $("help").addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", onKeydown);
 document.addEventListener("focusin", (event) => {
-	const row = event.target?.closest?.("[data-selectable]");
-	if (row) select(row, { scroll: false });
+	const row = event.target?.closest?.("[data-selectable], #thread-messages [data-testid=message]");
+	if (row && (row.hasAttribute("data-selectable") || selectables().includes(row))) select(row, { scroll: false });
 });
 document.addEventListener("click", (event) => {
 	// A click that is not on a message's actions closes whichever one is open.
