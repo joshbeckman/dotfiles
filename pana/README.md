@@ -396,7 +396,7 @@ pana thread list [--participant ADDR]
 pana thread search --query TEXT [--participant ADDR]
 ```
 
-`pana thread subject THREAD --regenerate` asks the subject model to name the current conversation. The user or a participating session may run it when the topic changes. It keeps subject history; it does not accept an exact replacement subject. A configured `subjectModel` is required.
+`pana thread subject THREAD --regenerate` asks the subject model to name the current conversation. The user or a participating session may run it when the topic changes. It keeps subject history; it does not accept an exact replacement subject. When a newer successful request wins a race, the older request returns the current subject with `applied: false`. A configured `subjectModel` is required.
 
 Listing and searching cover all same-domain threads, regardless of archive or read state. `--participant` selects threads that a user or session participates in, not messages they authored; use a username, session ULID, or same-domain participant URL. Both commands accept `--limit N`, `--cursor CURSOR`, and `--json`; results include `nextCursor` for pagination. Lists are newest-created first; searches return subject matches first, then message matches by relevance. Neither command marks messages read or joins threads.
 

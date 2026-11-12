@@ -699,6 +699,9 @@ function learnDomain(value) {
 	}
 }
 
+// Count live changes to the open thread so a slow HTTP response cannot undo a newer event.
+let subjectEventRevision = 0;
+
 // Patch labels only: reopening a thread would disturb reply drafts, focus, and scroll.
 function applyThreadSubject(threadId, subject) {
 	if (state.thread?.id === threadId) {
@@ -729,6 +732,7 @@ function handleEvent(event) {
 	// against panad's clock even when the two machines disagree, as a test's fake clock does.
 	if (Number.isFinite(Number(event.at))) state.clockSkew = Date.now() - Number(event.at);
 	if (event.kind === "thread.subject" && typeof event.threadId === "string" && typeof event.subject === "string") {
+		if (state.thread?.id === event.threadId) subjectEventRevision++;
 		applyThreadSubject(event.threadId, event.subject);
 		return;
 	}
@@ -1732,12 +1736,15 @@ async function regenerateThreadSubject() {
 	const thread = state.thread;
 	if (!thread) return;
 	const button = $("thread-subject-regenerate");
+	const revision = subjectEventRevision;
 	button.disabled = true;
 	button.textContent = "Regenerating…";
 	try {
 		const body = await api("POST", `/threads/${thread.id}/subject`, { regenerate: true });
-		applyThreadSubject(thread.id, body.subject ?? "(no subject)");
-		status("Subject regenerated.");
+		if (state.thread === thread && revision === subjectEventRevision) {
+			applyThreadSubject(thread.id, body.subject ?? "(no subject)");
+		}
+		status(body.applied === false ? "A newer subject was already applied." : "Subject regenerated.");
 	} catch (error) {
 		// The route names the cause. The usual one is a config.json with no subjectModel, which is
 		// the user's to fix, so say how rather than echoing a failure.

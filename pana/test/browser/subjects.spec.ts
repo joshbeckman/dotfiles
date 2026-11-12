@@ -16,6 +16,41 @@ afterEach(async () => {
 });
 
 (chromeDevtoolsAvailable() ? describe : describe.skip)("live thread subjects", () => {
+	it("SUB-04 a delayed regeneration response cannot replace a newer live subject", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
+			{ text: "Older title" }, { text: "Newer title" },
+		] });
+		const notice = await postNotice(t.runtime, { body: "Initial subject" });
+		const id = notice.thread.id;
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`
+			location.hash = "#/threads/${id}";
+			await until(() => document.getElementById("thread-subject").textContent === "Initial subject");
+			const original = window.fetch;
+			window.__releaseSubjectResponse = null;
+			window.fetch = async (path, options) => {
+				const response = await original(path, options);
+				if (path === "/threads/${id}/subject" && options?.method === "POST") {
+					await new Promise(resolve => { window.__releaseSubjectResponse = resolve; });
+				}
+				return response;
+			};
+			document.getElementById("thread-subject-regenerate").click();
+			await until(() => window.__releaseSubjectResponse !== null);
+			await until(() => document.getElementById("thread-subject").textContent === "Older title");
+			return true;
+		`);
+		const newer = await t.client.post<{ applied: boolean }>(`/threads/${id}/subject`, { regenerate: true });
+		expect(newer.status).toBe(200);
+		expect(newer.body.applied).toBe(true);
+		expect(await evaluatePage(`
+			await until(() => document.getElementById("thread-subject").textContent === "Newer title");
+			window.__releaseSubjectResponse();
+			await until(() => !document.getElementById("thread-subject-regenerate").disabled);
+			return document.getElementById("thread-subject").textContent;
+		`)).toBe("Newer title");
+	});
+
 	it("SUB-02/SUB-04 update an open thread and loaded list labels without disturbing a draft or list nodes", async () => {
 		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
 			{ text: "Background subject" }, { text: "Inbox subject" }, { text: "Browse subject" },

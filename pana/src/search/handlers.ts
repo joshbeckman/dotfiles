@@ -54,10 +54,10 @@ export const handlers: Handlers = {
 			if (!member) throw ApiError.forbidden(`session ${ctx.caller.id} is not a participant of thread ${threadId}`);
 		}
 		try {
-			const { subject, previous } = await regenerateSubject(runtime, threadId);
+			const { subject, previous, applied } = await regenerateSubject(runtime, threadId);
 			return {
 				status: 200,
-				body: { threadUrl, subject, previous, history: await subjectHistory(runtime, threadId) },
+				body: { threadUrl, subject, previous, applied, history: await subjectHistory(runtime, threadId) },
 			};
 		} catch (error) {
 			throw asApiError(error);
