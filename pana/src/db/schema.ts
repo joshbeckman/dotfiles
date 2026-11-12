@@ -609,6 +609,20 @@ export const MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX IF NOT EXISTS artifact_version_files_file ON artifact_version_files(file_id);
 		`,
 	},
+	{
+		version: 20,
+		name: "thread participant roles",
+		// A separate table keeps this migration safe to rerun; missing rows mean the default.
+		sql: `
+			CREATE TABLE IF NOT EXISTS thread_participant_roles (
+				thread_id TEXT NOT NULL,
+				participant_id TEXT NOT NULL,
+				role TEXT NOT NULL,
+				PRIMARY KEY (thread_id, participant_id),
+				FOREIGN KEY (thread_id, participant_id) REFERENCES thread_participants(thread_id, participant_id) ON DELETE CASCADE
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
