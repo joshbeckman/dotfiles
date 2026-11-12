@@ -699,11 +699,15 @@ function learnDomain(value) {
 	}
 }
 
-// Buffer events while a roster read is in flight. Its snapshot may predate those events.
+// Buffer live changes while a thread or roster read is in flight. Its snapshot may predate them.
 const pendingRoleReads = new Set();
 let roleConnectionVersion = 0;
 function rememberRosterEvent(event) {
 	for (const pending of pendingRoleReads) {
+		if (event.kind === "thread.subject") {
+			if (event.threadId === pending.id) pending.subject = event.subject;
+			continue;
+		}
 		if (event.kind === "thread.role" && event.threadId !== pending.id) continue;
 		if (event.kind === "session.state" && !event.threadIds?.includes(pending.id)) continue;
 		pending.events.push(event);
@@ -755,6 +759,8 @@ async function readThreadWithRoles(id, participantsOnly = false, seedEvent) {
 				participants = body.thread.participants;
 			}
 		}
+		// Roster retries cannot refresh the subject; keep its latest event even across a reconnect.
+		if (!participantsOnly && pending.subject !== undefined) body.thread.subject = pending.subject;
 		for (const event of pending.events) {
 			const person = participants?.find((each) => each?.id === (event.participantId ?? event.sessionId));
 			if (person) patchRosterPerson(person, event);
@@ -880,6 +886,7 @@ function handleEvent(event) {
 	// against panad's clock even when the two machines disagree, as a test's fake clock does.
 	if (Number.isFinite(Number(event.at))) state.clockSkew = Date.now() - Number(event.at);
 	if (event.kind === "thread.subject" && typeof event.threadId === "string" && typeof event.subject === "string") {
+		rememberRosterEvent(event);
 		if (state.thread?.id === event.threadId) subjectEventRevision++;
 		applyThreadSubject(event.threadId, event.subject);
 		return;
@@ -2571,7 +2578,8 @@ async function submitReply(event) {
  * the user typed. The next send records the new head.
  */
 async function showStale(error, draft) {
-	const body = await api("GET", `/threads/${draft.threadId}`);
+	const { body, events } = await readThreadWithRoles(draft.threadId);
+	if (state.draft !== draft || state.thread?.id !== draft.threadId || state.section !== "threads") return;
 	const thread = body.thread;
 	const messages = body.messages ?? [];
 	const newerIds = new Set((Array.isArray(error?.body?.error?.newer) ? error.body.error.newer : []).map(String));
@@ -2579,6 +2587,10 @@ async function showStale(error, draft) {
 	const newer = headIndex === -1 ? messages.filter((message) => newerIds.has(message.id)) : messages.slice(headIndex + 1);
 	// New participants must be known before rendering their stale-warning messages.
 	state.thread = thread;
+	renderThreadSubject(thread?.subject ?? "(no subject)");
+	renderThreadParticipants(thread);
+	syncMessageIdentities($("thread-messages"));
+	syncRosterActivity(thread, events);
 	const container = $("stale-new");
 	container.replaceChildren();
 	for (const message of newer) {
@@ -2587,7 +2599,7 @@ async function showStale(error, draft) {
 		container.append(node);
 	}
 	$("stale").hidden = false;
-	$("reply-body").value = $("reply-body").value || draft.body;
+	if (!$("reply-body").value) $("reply-body").value = draft.body;
 	const newest = messages[messages.length - 1]?.id;
 	if (newest) {
 		draft.after = newest;

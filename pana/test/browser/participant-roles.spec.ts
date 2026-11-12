@@ -356,6 +356,101 @@ afterEach(async () => {
 		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
 	});
 
+	it("keeps a subject event received during an initial roster retry", async () => {
+		let participants: Array<{ id: string; kind: string; url: string; role?: string }> = [];
+		let capturedThread!: () => void, capturedRoster!: () => void;
+		const threadCaptured = new Promise<void>((resolve) => { capturedThread = resolve; });
+		const rosterCaptured = new Promise<void>((resolve) => { capturedRoster = resolve; });
+		let releaseThread!: () => void, releaseRoster!: () => void;
+		const threadGate = new Promise<void>((resolve) => { releaseThread = resolve; });
+		const rosterGate = new Promise<void>((resolve) => { releaseRoster = resolve; });
+		releaseHeld = () => { releaseThread(); releaseRoster(); };
+		let reads = 0;
+		t = await startTestPanad({ handlers: {
+			"threads.read": async (ctx: RequestContext) => {
+				reads++;
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				capturedThread(); await threadGate;
+				return { status: 200, body };
+			},
+			"threads.participants": async () => {
+				const snapshot = structuredClone(participants);
+				capturedRoster(); await rosterGate;
+				return { status: 200, body: { participants: snapshot } };
+			},
+		} as Handlers });
+		const notice = await postNotice(t.runtime, { body: "Old subject" });
+		const id = notice.thread.id;
+		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV", role: "snapshot" };
+		participants = [...notice.thread.participants, added];
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`await until(() => window.__pana?.state.domain); location.hash = "#/threads/${id}"; return true;`);
+		await threadCaptured;
+		await evaluatePage(`const marker = document.createElement("span"); marker.id = "subject-retry-marker"; marker.dataset.userColor = "true"; document.body.append(marker); return true;`);
+		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId: added.id, role: "joined" });
+		await publish(t.runtime, { kind: "settings.ui", userColor: "purple" });
+		await evaluatePage(`await until(() => document.getElementById("subject-retry-marker").dataset.color === "purple"); return true;`);
+		releaseThread();
+		await rosterCaptured;
+		await postNotice(t.runtime, { thread: id, body: "Unread during roster retry" });
+		await publish(t.runtime, { kind: "thread.subject", threadId: id, subject: "New subject" });
+		await publish(t.runtime, { kind: "settings.ui", userColor: "blue" });
+		await evaluatePage(`await until(() => document.getElementById("subject-retry-marker").dataset.color === "blue"); return true;`);
+		releaseRoster();
+		const result = await evaluatePage<{ subject: string; role: string; head: string }>(`
+			await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "joined");
+			return { subject: document.getElementById("thread-subject").textContent,
+				role: document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role').textContent,
+				head: document.getElementById("draft-head").textContent };
+		`);
+		expect(result).toEqual({ subject: "New subject", role: "joined", head: notice.message.id });
+		expect(reads).toBe(1);
+		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
+	});
+
+	it("reconciles roles and joined participants after a held stale-reply read", async () => {
+		let hold = false;
+		let captured!: () => void;
+		const wasCaptured = new Promise<void>((resolve) => { captured = resolve; });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		releaseHeld = release;
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1" }, script: [{ text: "Ready." }], handlers: {
+			"threads.read": async (ctx: RequestContext) => {
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				if (hold) { hold = false; captured(); await gate; }
+				return { status: 200, body };
+			},
+		} as Handlers });
+		const session = await t.client.post<{ session: { id: string; url: string } }>("/sessions", { prompt: "joining session" });
+		expect(session.status).toBe(201);
+		await t.client.post(`/sessions/${session.body.session.id}/stop`);
+		const notice = await postNotice(t.runtime, { body: "Stale reply test" });
+		const id = notice.thread.id;
+		const user = notice.thread.participants.find((person) => person.kind === "user")!;
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`location.hash = "#/threads/${id}"; await until(() => document.getElementById("draft-head").textContent === "${notice.message.id}");
+			const reply = document.getElementById("reply-body"); reply.value = "keep this draft"; reply.dispatchEvent(new Event("input")); reply.focus(); reply.setSelectionRange(2, 7);
+			window.__oldMessage = document.querySelector('#thread-messages [data-testid="message"]'); return true;`);
+		const joined = await t.client.post<{ message: { id: string } }>(`/threads/${id}/messages`, { after: notice.message.id, body: "Joining", cc: [session.body.session.id] });
+		expect(joined.status).toBe(200);
+		hold = true;
+		await evaluatePage(`document.getElementById("reply-form").requestSubmit(); return true;`);
+		await wasCaptured;
+		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId: user.id, role: "reviewer" });
+		await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role')?.textContent === "reviewer"); return true;`);
+		release();
+		const result = await evaluatePage<{ role: string; joined: boolean; draft: string; focus: boolean; selection: number[]; head: string; newer: string; sameMessage: boolean }>(`
+			await until(() => !document.getElementById("stale").hidden);
+			const reply = document.getElementById("reply-body");
+			return { role: document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role').textContent,
+				joined: Boolean(document.querySelector('#thread-participants [data-participant-id="${session.body.session.id}"]')),
+				draft: reply.value, focus: document.activeElement === reply, selection: [reply.selectionStart, reply.selectionEnd],
+				head: document.getElementById("draft-head").textContent, newer: document.getElementById("stale-new").textContent,
+				sameMessage: window.__oldMessage === document.querySelector('#thread-messages [data-testid="message"]') };
+		`);
+		expect(result).toMatchObject({ role: "reviewer", joined: true, draft: "keep this draft", focus: true, selection: [2, 7], head: joined.body.message.id, newer: expect.stringContaining("Joining"), sameMessage: true });
+	});
 
 	it("keeps detached history colors current and participant focus on roster refresh", async () => {
 		type Person = { id: string; kind: string; url: string; role?: string };
