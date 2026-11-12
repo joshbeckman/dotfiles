@@ -366,7 +366,7 @@ afterEach(async () => {
 		const rosterGate = new Promise<void>((resolve) => { releaseRoster = resolve; });
 		releaseHeld = () => { releaseThread(); releaseRoster(); };
 		let reads = 0;
-		t = await startTestPanad({ handlers: {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "New subject" }, { text: "Latest subject" }], handlers: {
 			"threads.read": async (ctx: RequestContext) => {
 				reads++;
 				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
@@ -384,7 +384,17 @@ afterEach(async () => {
 		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV", role: "snapshot" };
 		participants = [...notice.thread.participants, added];
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
-		await evaluatePage(`await until(() => window.__pana?.state.domain); location.hash = "#/threads/${id}"; return true;`);
+		await evaluatePage(`await until(() => window.__pana?.state.domain);
+			const original = window.fetch; window.__subjectReads = 0;
+			window.fetch = async (path, options) => {
+				const response = await original(path, options);
+				if (path === "/threads/${id}/subject" && options?.method === "POST" && options.body === undefined) {
+					window.__subjectReads++;
+					if (window.__subjectReads === 1) await new Promise(resolve => { window.__releaseSubjectRead = resolve; });
+				}
+				return response;
+			};
+			location.hash = "#/threads/${id}"; return true;`);
 		await threadCaptured;
 		await evaluatePage(`const marker = document.createElement("span"); marker.id = "subject-retry-marker"; marker.dataset.userColor = "true"; document.body.append(marker); return true;`);
 		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId: added.id, role: "joined" });
@@ -393,17 +403,59 @@ afterEach(async () => {
 		releaseThread();
 		await rosterCaptured;
 		await postNotice(t.runtime, { thread: id, body: "Unread during roster retry" });
-		await publish(t.runtime, { kind: "thread.subject", threadId: id, subject: "New subject" });
+		expect((await t.client.post(`/threads/${id}/subject`, { regenerate: true })).status).toBe(200);
 		await publish(t.runtime, { kind: "settings.ui", userColor: "blue" });
 		await evaluatePage(`await until(() => document.getElementById("subject-retry-marker").dataset.color === "blue"); return true;`);
 		releaseRoster();
-		const result = await evaluatePage<{ subject: string; role: string; head: string }>(`
+		await evaluatePage(`await until(() => window.__releaseSubjectRead); return true;`);
+		expect((await t.client.post(`/threads/${id}/subject`, { regenerate: true })).status).toBe(200);
+		await publish(t.runtime, { kind: "settings.ui", userColor: "purple" });
+		await evaluatePage(`await until(() => document.getElementById("subject-retry-marker").dataset.color === "purple"); window.__releaseSubjectRead(); return true;`);
+		const result = await evaluatePage<{ subject: string; role: string; head: string; subjectReads: number }>(`
 			await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "joined");
 			return { subject: document.getElementById("thread-subject").textContent,
 				role: document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role').textContent,
-				head: document.getElementById("draft-head").textContent };
+				head: document.getElementById("draft-head").textContent, subjectReads: window.__subjectReads };
 		`);
-		expect(result).toEqual({ subject: "New subject", role: "joined", head: notice.message.id });
+		expect(result).toEqual({ subject: "Latest subject", role: "joined", head: notice.message.id, subjectReads: 2 });
+		expect(reads).toBe(1);
+		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
+	});
+
+	it("does not overlay a pre-disconnect subject on a newer held thread snapshot", async () => {
+		let started!: () => void, captured!: () => void;
+		const wasStarted = new Promise<void>((resolve) => { started = resolve; });
+		const wasCaptured = new Promise<void>((resolve) => { captured = resolve; });
+		let takeSnapshot!: () => void, release!: () => void;
+		const beforeSnapshot = new Promise<void>((resolve) => { takeSnapshot = resolve; });
+		const afterSnapshot = new Promise<void>((resolve) => { release = resolve; });
+		releaseHeld = () => { takeSnapshot(); release(); };
+		let reads = 0;
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Subject A" }, { text: "Subject B" }], handlers: {
+			"threads.read": async (ctx: RequestContext) => {
+				reads++; started(); await beforeSnapshot;
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				captured(); await afterSnapshot;
+				return { status: 200, body };
+			},
+		} as Handlers });
+		const notice = await postNotice(t.runtime, { body: "Initial subject" });
+		const id = notice.thread.id;
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`await until(() => window.__pana?.state.domain); location.hash = "#/threads/${id}";
+			const marker = document.createElement("span"); marker.id = "subject-order-marker"; marker.dataset.userColor = "true"; document.body.append(marker); return true;`);
+		await wasStarted;
+		expect((await t.client.post(`/threads/${id}/subject`, { regenerate: true })).status).toBe(200);
+		await publish(t.runtime, { kind: "settings.ui", userColor: "purple" });
+		await evaluatePage(`await until(() => document.getElementById("subject-order-marker").dataset.color === "purple"); window.dispatchEvent(new Event("pagehide")); return true;`);
+		expect((await t.client.post(`/threads/${id}/subject`, { regenerate: true })).status).toBe(200);
+		takeSnapshot();
+		await wasCaptured;
+		await postNotice(t.runtime, { thread: id, body: "Unread after snapshot" });
+		await evaluatePage(`window.dispatchEvent(new Event("focus")); await until(() => document.getElementById("subject-order-marker").dataset.color === "blue"); return true;`);
+		release();
+		const subject = await evaluatePage<string>(`await until(() => document.getElementById("draft-head").textContent === "${notice.message.id}"); return document.getElementById("thread-subject").textContent;`);
+		expect(subject).toBe("Subject B");
 		expect(reads).toBe(1);
 		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
 	});

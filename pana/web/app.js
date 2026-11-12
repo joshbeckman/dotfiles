@@ -705,7 +705,7 @@ let roleConnectionVersion = 0;
 function rememberRosterEvent(event) {
 	for (const pending of pendingRoleReads) {
 		if (event.kind === "thread.subject") {
-			if (event.threadId === pending.id) pending.subject = event.subject;
+			if (event.threadId === pending.id) pending.subjectRevision++;
 			continue;
 		}
 		if (event.kind === "thread.role" && event.threadId !== pending.id) continue;
@@ -730,7 +730,7 @@ function patchRosterPerson(person, event) {
 }
 
 async function readThreadWithRoles(id, participantsOnly = false, seedEvent) {
-	const pending = { id, events: seedEvent ? [seedEvent] : [] };
+	const pending = { id, events: seedEvent ? [seedEvent] : [], subjectRevision: 0 };
 	pendingRoleReads.add(pending);
 	try {
 		const base = `/threads/${encodeURIComponent(id)}`;
@@ -742,25 +742,39 @@ async function readThreadWithRoles(id, participantsOnly = false, seedEvent) {
 		const retriedMembers = new Set();
 		const missingMembers = () => pending.events.filter((event) => event.kind === "thread.role" &&
 			!participants?.some((person) => person?.id === event.participantId) && !retriedMembers.has(event.participantId));
-		while (version !== roleConnectionVersion || missingMembers().length > 0) {
-			if (version !== roleConnectionVersion) {
-				pending.events.length = 0;
-				retriedMembers.clear();
-			} else {
-				for (const event of missingMembers()) retriedMembers.add(event.participantId);
+		let subjectRevision = 0;
+		let subjectNeedsRead = false;
+		while (true) {
+			if (version !== roleConnectionVersion || missingMembers().length > 0) {
+				if (version !== roleConnectionVersion) {
+					pending.events.length = 0;
+					retriedMembers.clear();
+					subjectNeedsRead = true;
+				} else {
+					for (const event of missingMembers()) retriedMembers.add(event.participantId);
+				}
+				version = roleConnectionVersion;
+				const latest = await api("GET", `${base}/participants`);
+				if (participantsOnly) {
+					body.participants = latest.participants;
+					participants = body.participants;
+				} else {
+					body.thread.participants = latest.participants;
+					participants = body.thread.participants;
+				}
+				continue;
 			}
-			version = roleConnectionVersion;
-			const latest = await api("GET", `${base}/participants`);
-			if (participantsOnly) {
-				body.participants = latest.participants;
-				participants = body.participants;
-			} else {
-				body.thread.participants = latest.participants;
-				participants = body.thread.participants;
+			if (!participantsOnly && (subjectNeedsRead || subjectRevision !== pending.subjectRevision)) {
+				// An event and a thread snapshot have no shared revision. Read the subject without
+				// marking mail read, and retry if an event or reconnect overlaps this read.
+				subjectNeedsRead = false;
+				subjectRevision = pending.subjectRevision;
+				const latest = await api("POST", `${base}/subject`);
+				body.thread.subject = latest.subject;
+				continue;
 			}
+			break;
 		}
-		// Roster retries cannot refresh the subject; keep its latest event even across a reconnect.
-		if (!participantsOnly && pending.subject !== undefined) body.thread.subject = pending.subject;
 		for (const event of pending.events) {
 			const person = participants?.find((each) => each?.id === (event.participantId ?? event.sessionId));
 			if (person) patchRosterPerson(person, event);
