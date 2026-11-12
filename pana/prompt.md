@@ -33,6 +33,10 @@ pana refuses a `bash` command that sleeps for {{max_sleep}} seconds or more.
 A thread is an append-only list of messages between participants. Every message goes to
 every participant.
 
+When a thread you participate in changes direction or topic, regenerate its subject with
+`pana thread subject THREAD --regenerate` after the new topic is in a posted message. The subject
+generator reads posted messages, not an unposted reply.
+
 `pana thread search --query TEXT` and `pana thread list` find threads you are not in, and
 `pana thread read` opens any thread or message by URL or ID. Reading never joins a thread and
 never touches anyone else's mail.

@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { subscribeEvents } from "../src/web/events.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +12,7 @@ import {
 	matchExpression,
 	reindexRevision,
 	removeRedacted,
+	regenerateSubject,
 	scheduleSubject,
 	SUBJECT_MAX_TOKENS,
 	searchSessions,
@@ -84,6 +86,41 @@ async function appendMessages(panad: TestPanad, threadId: string, bodies: string
 async function currentSubject(panad: TestPanad, threadId: string): Promise<string | null | undefined> {
 	const row = await panad.runtime.db.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", threadId);
 	return row?.subject;
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((done) => { resolve = done; });
+	return { promise, resolve };
+}
+
+function controlledSubjectCalls(panad: TestPanad, count = 2) {
+	const started = Array.from({ length: count }, () => deferred<void>());
+	const results = Array.from({ length: count }, () => deferred<ReturnType<typeof fauxAssistantMessage>>());
+	let called = 0;
+	const spy = vi.spyOn(panad.runtime.models, "completeSimple").mockImplementation(() => {
+		const index = called++;
+		started[index]!.resolve();
+		return results[index]!.promise;
+	});
+	restores.push(() => spy.mockRestore());
+	return { started, results, spy };
+}
+
+function subjectEvents(panad: TestPanad): { subjects: string[]; stop: () => void } {
+	const subjects: string[] = [];
+	const stop = subscribeEvents(panad.runtime, {
+		write(chunk: string) {
+			const line = chunk.split("\n").find((value) => value.startsWith("data:"));
+			if (line) {
+				const event = JSON.parse(line.slice(5));
+				if (event.kind === "thread.subject") subjects.push(event.subject);
+			}
+			return true;
+		},
+		on() { return this; },
+	} as unknown as ServerResponse, { kind: "user", id: panad.runtime.config.user, url: panad.runtime.userUrl });
+	return { subjects, stop };
 }
 
 describe("SUB subjects", () => {
@@ -240,12 +277,14 @@ describe("SUB subjects", () => {
 		interface SubjectBody {
 			subject: string;
 			previous: string | null;
+			applied: boolean;
 			history: Array<{ subject: string; source: string }>;
 		}
 		const first = await panad.client.post<SubjectBody>(`/threads/${seeded.threadId}/subject`, { regenerate: true });
 		expect(first.status).toBe(200);
 		expect(first.body.subject).toBe("First model subject");
 		expect(first.body.previous).toBe("first line subject");
+		expect(first.body.applied).toBe(true);
 		expect(first.body.history.map((s) => s.source)).toEqual(["first-line", "model"]);
 
 		const second = await panad.client.post<SubjectBody>(`/threads/${seeded.threadId}/subject?regenerate=true`);
@@ -260,6 +299,288 @@ describe("SUB subjects", () => {
 		// Search follows the newest subject; an old one is no longer indexed.
 		expect((await searchThreads(panad.runtime, "Second model subject")).map((h) => h.threadId)).toContain(seeded.threadId);
 		expect(await searchThreads(panad.runtime, "First model subject")).toEqual([]);
+	});
+
+	it("SUB-04 an old initial naming job cannot overwrite a newer successful regeneration", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad);
+		const events = subjectEvents(panad);
+		try {
+			scheduleSubject(panad.runtime, seeded.threadId);
+			await calls.started[0]!.promise;
+			const newer = regenerateSubject(panad.runtime, seeded.threadId);
+			await calls.started[1]!.promise;
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("New topic")]));
+			expect(await newer).toEqual({ subject: "New topic", previous: "Original topic", applied: true });
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Obsolete topic")]));
+			await awaitSubjectJobs(panad.runtime);
+			expect(await currentSubject(panad, seeded.threadId)).toBe("New topic");
+			expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual(["Original topic", "New topic"]);
+			expect(events.subjects).toEqual(["New topic"]);
+			expect((await searchThreads(panad.runtime, "New topic")).map((hit) => hit.threadId)).toContain(seeded.threadId);
+			expect(await searchThreads(panad.runtime, "Obsolete topic")).toEqual([]);
+		} finally {
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			events.stop();
+		}
+	});
+
+	it("SUB-04 initial naming scheduled after an already successful regeneration cannot overwrite it", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
+			{ text: "New topic" }, { text: "Obsolete initial title" },
+		] });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const events = subjectEvents(panad);
+		try {
+			await regenerateSubject(panad.runtime, seeded.threadId);
+			scheduleSubject(panad.runtime, seeded.threadId);
+			await awaitSubjectJobs(panad.runtime);
+			expect(await currentSubject(panad, seeded.threadId)).toBe("New topic");
+			expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual(["Original topic", "New topic"]);
+			expect(events.subjects).toEqual(["New topic"]);
+		} finally { events.stop(); }
+	});
+
+	it("SUB-04 an initial job after restart cannot replace a previously regenerated subject", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "New topic" }] });
+		const seeded = await seed(t, "Original topic");
+		await regenerateSubject(t.runtime, seeded.threadId);
+		const dir = t.dir;
+		await t.stop();
+		t = await startTestPanad({ stateDir: dir, script: [{ text: "Obsolete initial title" }] });
+		scheduleSubject(t.runtime, seeded.threadId);
+		await awaitSubjectJobs(t.runtime);
+		expect(await currentSubject(t, seeded.threadId)).toBe("New topic");
+		expect((await subjectHistory(t.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual(["Original topic", "New topic"]);
+	});
+
+	it("SUB-04 initial naming scheduled during a regeneration is older even when it starts later", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad);
+		const events = subjectEvents(panad);
+		try {
+			const newer = regenerateSubject(panad.runtime, seeded.threadId);
+			await calls.started[0]!.promise;
+			scheduleSubject(panad.runtime, seeded.threadId);
+			await calls.started[1]!.promise;
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("New topic")]));
+			await newer;
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Obsolete initial title")]));
+			await awaitSubjectJobs(panad.runtime);
+			expect(await currentSubject(panad, seeded.threadId)).toBe("New topic");
+			expect(events.subjects).toEqual(["New topic"]);
+		} finally {
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			events.stop();
+		}
+	});
+
+	it.each(["newer-first", "older-first", "newer-fails"] as const)("SUB-04 overlapping regenerations: %s", async (order) => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad);
+		const events = subjectEvents(panad);
+		const older = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[0]!.promise;
+		const newer = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[1]!.promise;
+		try {
+			if (order === "older-first") {
+				calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Older result")]));
+				expect(await older).toEqual({ subject: "Older result", previous: "Original topic", applied: true });
+				calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Newer result")]));
+				expect(await newer).toEqual({ subject: "Newer result", previous: "Older result", applied: true });
+				expect(events.subjects).toEqual(["Older result", "Newer result"]);
+			} else {
+				calls.results[1]!.resolve(order === "newer-fails"
+					? fauxAssistantMessage([], { stopReason: "error", errorMessage: "model failed" })
+					: fauxAssistantMessage([fauxText("Newer result")]));
+				if (order === "newer-fails") await expect(newer).rejects.toThrow("model failed");
+				else expect(await newer).toEqual({ subject: "Newer result", previous: "Original topic", applied: true });
+				calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Older result")]));
+				if (order === "newer-fails") {
+					expect(await older).toEqual({ subject: "Older result", previous: "Original topic", applied: true });
+					expect(events.subjects).toEqual(["Older result"]);
+				} else {
+					expect(await older).toEqual({ subject: "Newer result", previous: null, applied: false });
+					expect(events.subjects).toEqual(["Newer result"]);
+				}
+			}
+			const final = order === "newer-fails" ? "Older result" : "Newer result";
+			expect(await currentSubject(panad, seeded.threadId)).toBe(final);
+			expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual(["Original topic", ...events.subjects]);
+		} finally {
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			events.stop();
+		}
+	});
+
+	it("SUB-04 request order and conversation snapshots are reserved together", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad);
+		const older = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[0]!.promise;
+		await appendMessages(panad, seeded.threadId, ["New topic is now posted"]);
+		const newer = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[1]!.promise;
+		try {
+			const first = String(calls.spy.mock.calls[0]![1].messages[0]!.content);
+			const second = String(calls.spy.mock.calls[1]![1].messages[0]!.content);
+			expect(first).not.toContain("New topic is now posted");
+			expect(second).toContain("New topic is now posted");
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("New topic")]));
+			await newer;
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Original topic summary")]));
+			expect(await older).toMatchObject({ subject: "New topic", applied: false });
+		} finally {
+			for (const result of calls.results) result.resolve(fauxAssistantMessage([fauxText("Unused")]));
+		}
+	});
+
+	it("SUB-04 a superseded HTTP request explicitly reports that its result was not applied", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad);
+		const older = panad.client.post<{ subject: string; previous: string | null; applied: boolean }>(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		await calls.started[0]!.promise;
+		const newer = panad.client.post<{ subject: string; previous: string | null; applied: boolean }>(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		await calls.started[1]!.promise;
+		try {
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Newer result")]));
+			expect((await newer).body).toMatchObject({ subject: "Newer result", previous: "Original topic", applied: true });
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Older result")]));
+			expect((await older).body).toMatchObject({ subject: "Newer result", previous: null, applied: false });
+		} finally {
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+		}
+	});
+
+	it("SUB-04 a failed newer commit permits an older successful result", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad);
+		const events = subjectEvents(panad);
+		const older = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[0]!.promise;
+		const newer = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[1]!.promise;
+		try {
+			panad.runtime.db.faults = (sql) => {
+				if (sql.includes("INSERT INTO subjects ")) throw new Error("subject write failed");
+			};
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Newer result")]));
+			await expect(newer).rejects.toThrow("subject write failed");
+			panad.runtime.db.faults = undefined;
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Older result")]));
+			expect(await older).toEqual({ subject: "Older result", previous: "Original topic", applied: true });
+			expect(events.subjects).toEqual(["Older result"]);
+			expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual(["Original topic", "Older result"]);
+		} finally {
+			panad.runtime.db.faults = undefined;
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			events.stop();
+		}
+	});
+
+	it("SUB-04 a later failed job does not release ordering while an older job is still pending", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" } });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const calls = controlledSubjectCalls(panad, 3);
+		const events = subjectEvents(panad);
+		const oldest = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[0]!.promise;
+		const middle = regenerateSubject(panad.runtime, seeded.threadId);
+		await calls.started[1]!.promise;
+		try {
+			calls.results[1]!.resolve(fauxAssistantMessage([fauxText("Middle result")]));
+			await middle;
+			const newest = regenerateSubject(panad.runtime, seeded.threadId);
+			await calls.started[2]!.promise;
+			calls.results[2]!.resolve(fauxAssistantMessage([], { stopReason: "error", errorMessage: "model failed" }));
+			await expect(newest).rejects.toThrow("model failed");
+			calls.results[0]!.resolve(fauxAssistantMessage([fauxText("Oldest result")]));
+			expect(await oldest).toEqual({ subject: "Middle result", previous: null, applied: false });
+			expect(events.subjects).toEqual(["Middle result"]);
+			expect(await currentSubject(panad, seeded.threadId)).toBe("Middle result");
+		} finally {
+			for (const result of calls.results) result.resolve(fauxAssistantMessage([fauxText("Unused")]));
+			events.stop();
+		}
+	});
+
+	it("SUB-04 a failed subject commit rolls back history and search and emits no event", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
+			{ text: "Rejected result" }, { text: "Successful result" },
+		] });
+		const panad = t;
+		const seeded = await seed(panad, "Original topic");
+		const events = subjectEvents(panad);
+		try {
+			panad.runtime.db.faults = (sql) => {
+				if (sql.includes("INSERT INTO subjects ")) throw new Error("subject write failed");
+			};
+			await expect(regenerateSubject(panad.runtime, seeded.threadId)).rejects.toThrow("subject write failed");
+			panad.runtime.db.faults = undefined;
+			expect(await currentSubject(panad, seeded.threadId)).toBe("Original topic");
+			expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual(["Original topic"]);
+			expect(await searchThreads(panad.runtime, "Rejected result")).toEqual([]);
+			expect(events.subjects).toEqual([]);
+			expect((await regenerateSubject(panad.runtime, seeded.threadId)).subject).toBe("Successful result");
+			expect(events.subjects).toEqual(["Successful result"]);
+		} finally {
+			panad.runtime.db.faults = undefined;
+			events.stop();
+		}
+	});
+
+	it("SUB-04 regeneration permits participating sessions and the user, but rejects other sessions before calling the model", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
+			{ text: "Member's subject" }, { text: "User's subject" },
+		] });
+		const panad = t;
+		const seeded = await seed(panad, "Initial topic");
+		const member = panad.runtime.newId();
+		const outsider = panad.runtime.newId();
+		await panad.runtime.db.write(async (tx) => {
+			for (const id of [member, outsider]) {
+				await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, panad.runtime.url({ kind: "session", id }), panad.clock.now());
+				await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", id, panad.clock.now(), panad.clock.now());
+			}
+			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", seeded.threadId, member, panad.clock.now());
+			await tx.run("DELETE FROM thread_participants WHERE thread_id = ? AND participant_id = ?", seeded.threadId, TEST_USER);
+		});
+
+		const denied = await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true }, { caller: outsider });
+		expect(denied.status).toBe(403);
+		expect(panad.model.calls()).toBe(0);
+		expect(await currentSubject(panad, seeded.threadId)).toBe("Initial topic");
+		expect(await subjectHistory(panad.runtime, seeded.threadId)).toHaveLength(1);
+
+		const allowed = await panad.client.post<{ subject: string }>(`/threads/${seeded.threadId}/subject?regenerate=true`, undefined, { caller: member });
+		expect(allowed.status).toBe(200);
+		expect(allowed.body.subject).toBe("Member's subject");
+		const user = await panad.client.post<{ subject: string }>(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(user.status).toBe(200);
+		expect(user.body.subject).toBe("User's subject");
+		expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual([
+			"Initial topic", "Member's subject", "User's subject",
+		]);
 	});
 
 	it("regeneration reads the conversation in order with revisions, never redacted or superseded text", async () => {
