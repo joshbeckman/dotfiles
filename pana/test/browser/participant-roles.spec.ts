@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { main } from "../../src/cli/index.ts";
 import { postNotice, readThread } from "../../src/threads/index.ts";
 import { publish, subscriberCount } from "../../src/web/events.ts";
 import { loopbackOrigin } from "../../src/web/static.ts";
@@ -17,6 +18,30 @@ afterEach(async () => {
 });
 
 (chromeDevtoolsAvailable() ? describe : describe.skip)("thread participant roles", () => {
+	it("updates the open thread from the real CLI and backend", async () => {
+		t = await startTestPanad();
+		const notice = await postNotice(t.runtime, { body: "Role integration test" });
+		const id = notice.thread.id;
+		const user = notice.thread.participants.find((p) => p.kind === "user")!;
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`location.hash = "#/threads/${id}"; await until(() => document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role')); return true;`);
+		const cli = async (args: string[]) => {
+			let stdout = "", stderr = "";
+			const code = await main(["--json", ...args], {
+				env: { PANA_STATE: t!.dir }, stdout: { write: (chunk) => { stdout += chunk; } },
+				stderr: { write: (chunk) => { stderr += chunk; } },
+			});
+			expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+			return JSON.parse(stdout);
+		};
+		await cli(["thread", "role", "set", id, "release reviewer"]);
+		expect(await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role').textContent === "release reviewer"); return true;`)).toBe(true);
+		const read = await cli(["thread", "read", id]);
+		expect(read.thread.participants.find((p: { id: string }) => p.id === user.id).role).toBe("release reviewer");
+		await cli(["thread", "role", "clear", id]);
+		expect(await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role').hidden); return true;`)).toBe(true);
+	});
+
 	it("shows plain-text role hints, follows events and reconnects without disturbing a draft", async () => {
 		const roles = new Map<string, string>();
 		t = await startTestPanad({ handlers: {
