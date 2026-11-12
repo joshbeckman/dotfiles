@@ -606,6 +606,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				path TEXT NOT NULL, file_id TEXT NOT NULL REFERENCES files(id),
 				PRIMARY KEY(version_id, path)
 			);
+			CREATE INDEX IF NOT EXISTS artifact_version_files_file ON artifact_version_files(file_id);
 		`,
 	},
 ];

@@ -44,6 +44,7 @@ async function versionFileId(tx: SqliteExecutor, runtime: Runtime, source: FileR
 	const absolute = resolve(root, id, source.name);
 	if (!absolute.startsWith(root + sep)) throw new Error("invalid stored file path");
 	const bytes = fileBytes(runtime, source);
+	if (bytes.byteLength !== source.size) throw new Error("stored file size does not match its record");
 	mkdirSync(join(root, id), { recursive: true, mode: 0o700 });
 	writeFileSync(absolute, bytes, { mode: 0o600 });
 	// Nothing deletes these bytes when the transaction rolls back. A write that joined pi-durable

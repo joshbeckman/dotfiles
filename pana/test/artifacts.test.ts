@@ -302,6 +302,26 @@ it("ART-01 a manifest that reuses an earlier version's file id still stores a se
 	expect(await t!.runtime.db.all("SELECT count(*) AS n FROM files")).toEqual([{ n: 3 }]);
 });
 
+it("ART-01 two manifest paths naming one upload get separate copies", async () => {
+	await start();
+	const { id: threadId } = await thread();
+	const id = await upload("index.html", "shared bytes");
+	const manifest = { entry: "index.html", files: [
+		{ path: "index.html", fileId: id }, { path: "same.html", fileId: id },
+	] };
+	const made = await t!.client.post<PublishView>(`/threads/${threadId}/artifacts/site`, manifest);
+	expect(made.status).toBe(201);
+	const files = made.body.version.files;
+	expect(new Set(files.map(file => file.fileId)).size).toBe(2);
+	for (const file of files) {
+		const record = await t!.runtime.db.get<{path: string}>("SELECT path FROM files WHERE id = ?", file.fileId);
+		expect(readFileSync(join(t!.dir, record!.path), "utf8")).toBe("shared bytes");
+	}
+	const retried = await t!.client.post<PublishView>(`/threads/${threadId}/artifacts/site`, manifest);
+	expect(retried.status).toBe(200);
+	expect(retried.body.version.id).toBe(made.body.version.id);
+});
+
 // --- ART-02 --------------------------------------------------------------------
 
 it("ART-02 the server checks the manifest alone and deletes nothing on a refusal", async () => {
