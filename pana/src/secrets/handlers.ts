@@ -56,7 +56,9 @@ export const handlers: Handlers = {
 			return { status: 200, headers: NO_STORE, body: { names: await ctx.runtime.secrets.list(), available: true, maxValueBytes: MAX_VALUE_BYTES } };
 		} catch (error) {
 			// A store this daemon cannot reach is a state the page states plainly, not a failed page.
-			if (error instanceof SecretsError && error.code !== "invalid_name" && error.code !== "invalid_value") {
+			// A busy queue is not that state: it is temporary, and a caller should retry rather than
+			// read it as a store that is gone.
+			if (error instanceof SecretsError && isPermanentStoreState(error)) {
 				return { status: 200, headers: NO_STORE, body: { names: [], available: false, error: error.message, maxValueBytes: MAX_VALUE_BYTES } };
 			}
 			throw refusal(error);
@@ -88,6 +90,11 @@ export const handlers: Handlers = {
 		return { status: 200, headers: NO_STORE, body: { names: await namesAfterWrite(ctx) } };
 	},
 };
+
+/** A store state the page reports in place, rather than a failure: it cannot list, or it failed to. */
+function isPermanentStoreState(error: SecretsError): boolean {
+	return error.code === "unavailable" || error.code === "failed";
+}
 
 /**
  * The names after a write that has already happened. Reading them can fail on its own; that must

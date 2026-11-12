@@ -13,6 +13,7 @@ import { afterEach, expect, it } from "vitest";
 import {
 	createSenvStore,
 	MAX_VALUE_BYTES,
+	SecretsError,
 	secretNameError,
 	secretValueError,
 	senvChildEnv,
@@ -355,4 +356,19 @@ it("SET-05 trailing newlines are dropped on the way in, as s does", () => {
 	expect(withoutTrailingNewlines("value\r\n\n")).toBe("value");
 	expect(withoutTrailingNewlines("line1\nline2\n")).toBe("line1\nline2");
 	expect(withoutTrailingNewlines(" keep \n")).toBe(" keep ");
+});
+
+it("SET-05 a busy queue answers 503 rather than reading as a store that is gone", async () => {
+	t = await startTestPanad({
+		secrets: {
+			list: async () => {
+				throw new SecretsError("busy", "too many secret calls are already waiting on s");
+			},
+			set: async () => {},
+			remove: async () => {},
+		},
+	});
+	const listed = await t.tcp.get<any>("/secrets");
+	expect(listed.status).toBe(503);
+	expect(listed.body.error.code).toBe("secrets_busy");
 });
