@@ -5,12 +5,12 @@ import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 const RETRY_HINT = "(please retry your request)";
 const AUTH_ERROR = /(?<![a-z0-9])401(?![a-z0-9])|\bAuthenticationError\b|\bunauthorized\b|\binvalid[ _-]+api[ _-]+key\b|\bapi[ _-]+key[ _-]+(?:is[ _-]+)?invalid\b|\bexpired[ _-]+(?:access[ _-]+|auth[ _-]+)?token\b|\b(?:access[ _-]+|auth[ _-]+)?token[ _-]+(?:has[ _-]+|is[ _-]+)?expired\b/i;
 const FORBIDDEN = /(?<![a-z0-9])403(?![a-z0-9])/i;
-// Additional deterministic account-limit wording not recognized by pi-ai 1.4.0.
+// Additional deterministic account-limit wording not recognized by pi-ai's classifier.
 const ACCOUNT_LIMIT = /\b(?:quota[ _-]+(?:exceeded|exhausted)|(?:insufficient|exhausted)[ _-]+(?:balance|credits?)|(?:balance|credits?)[ _-]+(?:exhausted|depleted))\b/i;
 
 /**
  * Let pi-durable own the retry budget, durable backoff and progress reporting, including for
- * authentication failures. pi-ai 1.4.0 has no classifier override: append its recognized
+ * authentication failures. pi-ai has no classifier override: append its recognized
  * retry guidance as a compatibility bridge, retaining the provider's original diagnostic.
  * Its quota/billing exclusions still take precedence over that guidance.
  */

@@ -4,7 +4,7 @@
 // tools and the CLI can be compared against the same API route (TOL-02).
 
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { map, obj, str, unknown } from "@earendil-works/pi-schema";
 import {
 	defineExtension,
 	defineTool,
@@ -78,7 +78,7 @@ export function captureExtension(): Extension {
 			defineTool({
 				name: "capture_pana",
 				description: "Run a pana tool as a nested call and return its result for the test.",
-				parameters: Type.Object({ tool: Type.String(), args: Type.Record(Type.String(), Type.Unknown()) }),
+				parameters: obj({ tool: str(), args: map(unknown()) }),
 				async execute(args, api, context) {
 					const nested = await api.executeTool(args.tool, args.args as unknown as JsonObject, context);
 					const value = JSON.stringify({

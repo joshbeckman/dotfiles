@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { obj, str } from "@earendil-works/pi-schema";
 import { createRegistry, defineExtension, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +15,7 @@ afterEach(async () => {
 const echo = defineTool({
 	name: "echo",
 	description: "Echo text",
-	parameters: Type.Object({ text: Type.String() }),
+	parameters: obj({ text: str() }),
 	execute: async (args) => ({ output: [{ type: "text", text: `echo: ${args.text}` }] }),
 });
 

@@ -5,7 +5,7 @@
 // `pana/prompt.md` with the session's own URL and memory path. The profile's instructions
 // render last because pi-durable renders them as the final `instructions` section.
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { section, type PromptSection } from "@earendil-works/pi-durable";
 import { readFileSync } from "node:fs";

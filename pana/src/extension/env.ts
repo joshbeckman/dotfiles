@@ -7,7 +7,7 @@
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { err, ExecutionError, FileError } from "@earendil-works/pi-durable/env";
 import type { ExecutionEnv, ShellExecOptions, ShellExecResult, Result } from "@earendil-works/pi-durable/env";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { spawnSync } from "node:child_process";
 import { homedir, userInfo } from "node:os";
 import { existsSync, readdirSync } from "node:fs";

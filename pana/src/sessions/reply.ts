@@ -15,7 +15,7 @@
 // A rerun after a crash calls the hook again; RPL-04's own-post check and the note's request ID
 // keep it from posting or noting twice.
 
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { GenerationTask, hook, LiveDoc, type HookApi, type HookRegistration, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ApiError } from "../api/errors.ts";
