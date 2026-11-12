@@ -19,6 +19,7 @@ function compact(fields: Record<string, unknown>): Record<string, unknown> {
 }
 
 export const STATS_COMMANDS: readonly CommandSpec[] = [
+	{ path: ["stats", "artifacts"], usage: "pana stats artifacts", summary: "Cumulative artifact bytes, overall and per thread", flags: [], positionals: [], request: () => ({method: "GET", path: "/stats/artifacts"}) },
 	{
 		path: ["stats", "requests"],
 		usage: "pana stats requests [--since SPAN] [--route ROUTE] [--name NAME]",

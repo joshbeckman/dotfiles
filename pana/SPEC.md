@@ -86,6 +86,10 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | GET | `/threads` | list/search (`query`, `participant`, `limit`, `cursor`) |
 | GET | `/threads/:id` | read |
 | POST | `/threads/:id/messages` | respond |
+| POST | `/threads/:id/artifacts/:name` | publish an artifact version |
+| GET | `/threads/:id/artifacts`, `/artifacts/:id` | list artifacts and versions |
+| GET | `/a/:version/:capability/*` | preview version bytes with a capability |
+| GET | `/stats/artifacts` | cumulative version storage |
 | POST | `/threads/:id/subject` | regenerate subject |
 | POST | `/threads/:id/archive`, `/unarchive` | archive for the caller |
 | GET | `/messages/:id` | read one message |

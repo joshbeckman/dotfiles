@@ -586,6 +586,28 @@ export const MIGRATIONS: readonly Migration[] = [
 				ON message_bookmarks(participant_id, created_at DESC, message_id);
 		`,
 	},
+	{
+		version: 19,
+		name: "immutable thread artifacts",
+		sql: `
+			CREATE TABLE IF NOT EXISTS artifacts (
+				id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id),
+				name TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+				UNIQUE(thread_id, name)
+			);
+			CREATE TABLE IF NOT EXISTS artifact_versions (
+				id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL REFERENCES artifacts(id),
+				seq INTEGER NOT NULL, entry TEXT NOT NULL, note TEXT,
+				created_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+				UNIQUE(artifact_id, seq)
+			);
+			CREATE TABLE IF NOT EXISTS artifact_version_files (
+				version_id TEXT NOT NULL REFERENCES artifact_versions(id),
+				path TEXT NOT NULL, file_id TEXT NOT NULL REFERENCES files(id),
+				PRIMARY KEY(version_id, path)
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

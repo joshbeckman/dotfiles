@@ -90,6 +90,7 @@ describe("config and state", () => {
 			spawnDepth: 3,
 			budget: { sessionUsd: 100, domainDailyUsd: 500 },
 			files: { maxBytes: 26214400 },
+			artifacts: { maxBytes: 5242880, maxFiles: 200, capMinutes: 60 },
 			http: { port: 8766 },
 			tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 			scratch: { ttlDays: 8 },

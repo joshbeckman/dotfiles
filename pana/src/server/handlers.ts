@@ -1,5 +1,6 @@
 // Every package's handlers, merged. Each work package edits only its own handlers.ts.
 
+import { handlers as artifacts } from "../artifacts/handlers.ts";
 import { handlers as config } from "../config/handlers.ts";
 import type { Handlers } from "../api/types.ts";
 import { handlers as memory } from "../memory/handlers.ts";
@@ -17,6 +18,7 @@ import { handlers as worktrees } from "../worktrees/handlers.ts";
 
 export const defaultHandlers: Handlers = {
 	...config,
+	...artifacts,
 	...threads,
 	...sessions,
 	...memory,

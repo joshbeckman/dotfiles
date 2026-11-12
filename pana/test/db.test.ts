@@ -15,6 +15,9 @@ import { appendAndWake, seedThread, type Appended, type Fixture } from "./harnes
 
 const PANA_TABLES = [
 	"domain_costs",
+	"artifacts",
+	"artifact_versions",
+	"artifact_version_files",
 	"participants",
 	"sessions",
 	"threads",

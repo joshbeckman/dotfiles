@@ -34,6 +34,8 @@ export interface Runtime {
 		/** Re-exec panad (SET-03) with the exact configuration file this daemon validated. */
 		requestRestart?: (configSnapshot?: string) => void;
 	};
+	/** Reachable preview origin for socket callers. */
+	artifactOrigin?: string;
 	config: Config;
 	paths: StatePaths;
 	db: PanaDatabase;

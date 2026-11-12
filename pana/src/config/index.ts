@@ -116,6 +116,7 @@ export interface Config {
 	spawnDepth: number;
 	budget: Budget;
 	files: FileLimits;
+	artifacts: { maxBytes: number; maxFiles: number; capMinutes: number };
 	http: HttpConfig;
 	tools: ToolsConfig;
 	scratch: ScratchConfig;
@@ -129,6 +130,7 @@ export const DEFAULTS = {
 	spawnDepth: 3,
 	budget: { sessionUsd: 100, domainDailyUsd: 500 },
 	files: { maxBytes: 26214400 },
+	artifacts: { maxBytes: 5242880, maxFiles: 200, capMinutes: 60 },
 	http: { port: 8766 },
 	tools: { bashTimeoutSec: 600, protectCheckouts: "guard" },
 	scratch: { ttlDays: 8 },
@@ -185,7 +187,7 @@ export function parseConfig(raw: unknown): Config {
 		throw new ConfigError("config.json is missing required key: user", 2);
 	}
 
-	for (const key of ["budget", "files", "http", "tools", "scratch", "retention", "logs", "objectives", "ui"]) {
+	for (const key of ["budget", "artifacts", "files", "http", "tools", "scratch", "retention", "logs", "objectives", "ui"]) {
 		if (obj[key] !== undefined && (!obj[key] || typeof obj[key] !== "object" || Array.isArray(obj[key]))) {
 			throw new ConfigError(`config.json ${key} must be an object`, 2);
 		}
@@ -204,6 +206,7 @@ export function parseConfig(raw: unknown): Config {
 		throw new ConfigError("config.json ui.userColor must be a hex color (#RGB, #RGBA, #RRGGBB or #RRGGBBAA) or a legacy palette name", 2);
 	}
 	const budget = (obj.budget ?? {}) as Record<string, unknown>;
+	const artifacts = (obj.artifacts ?? {}) as Record<string, unknown>;
 	const files = (obj.files ?? {}) as Record<string, unknown>;
 	const http = (obj.http ?? {}) as Record<string, unknown>;
 	const tools = (obj.tools ?? {}) as Record<string, unknown>;
@@ -226,6 +229,11 @@ export function parseConfig(raw: unknown): Config {
 			sessionUsd: nonnegative(budget.sessionUsd, "budget.sessionUsd") ?? DEFAULTS.budget.sessionUsd,
 			domainDailyUsd:
 				nonnegative(budget.domainDailyUsd, "budget.domainDailyUsd") ?? DEFAULTS.budget.domainDailyUsd,
+		},
+		artifacts: {
+			maxBytes: artifacts.maxBytes === undefined ? DEFAULTS.artifacts.maxBytes : integer(artifacts.maxBytes, "artifacts.maxBytes", 1),
+			maxFiles: artifacts.maxFiles === undefined ? DEFAULTS.artifacts.maxFiles : integer(artifacts.maxFiles, "artifacts.maxFiles", 1),
+			capMinutes: artifacts.capMinutes === undefined ? DEFAULTS.artifacts.capMinutes : integer(artifacts.capMinutes, "artifacts.capMinutes", 1),
 		},
 		files: {
 			maxBytes: positive(files.maxBytes, "files.maxBytes", "bytes") ?? DEFAULTS.files.maxBytes,
