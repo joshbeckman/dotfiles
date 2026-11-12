@@ -51,7 +51,10 @@ if [[ "$provider" == github ]]; then
     url) exec gw pr-url ${selector:+"$selector"} ;;
     view)
       url="$(gw pr-url ${selector:+"$selector"})" || die 'could not resolve the GitHub pull request'
-      exec gw view-md "$url"
+      # `gw` is a `gh` wrapper here and has no markdown viewer, so read the PR with `gh`
+      # itself. No `--comments`: on gh 2.103.3 it prints nothing and exits 0. Ask for
+      # comments separately with `gh pr view <url> --json comments`.
+      exec gh pr view "$url"
       ;;
     checks)
       args=()
