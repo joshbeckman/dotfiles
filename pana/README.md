@@ -389,12 +389,16 @@ pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--att
 pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...] [--choice TEXT...]
 pana thread read THREAD
 pana thread read --message MESSAGE
+pana thread role set THREAD ROLE
+pana thread role clear THREAD
 pana thread subject THREAD [--regenerate]
 pana thread archive THREAD
 pana thread unarchive THREAD
 pana thread list [--participant ADDR]
 pana thread search --query TEXT [--participant ADDR]
 ```
+
+A participant can set their own current role hint in a thread with `pana thread role set THREAD "reviewer"`. Use a hint when it helps others understand your contribution; it is not an authorization or a permission. A role is 1–32 characters after trimming, with no control characters or newlines. `pana thread role clear THREAD` restores the default, `participant`. These commands change only the caller's role and accept a thread ID or URL.
 
 `pana thread subject THREAD --regenerate` asks the subject model to name the current conversation. The user or a participating session may run it when the topic changes. It keeps subject history; it does not accept an exact replacement subject. When a newer successful request wins a race, the older request returns the current subject with `applied: false`. A configured `subjectModel` is required.
 

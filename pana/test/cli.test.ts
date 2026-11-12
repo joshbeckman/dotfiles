@@ -25,6 +25,8 @@ const README_COMMANDS = [
 	"pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...]",
 	"pana thread read THREAD",
 	"pana thread read --message MESSAGE",
+	"pana thread role set THREAD ROLE",
+	"pana thread role clear THREAD",
 	"pana thread subject THREAD [--regenerate]",
 	"pana thread archive THREAD",
 	"pana thread unarchive THREAD",
@@ -351,6 +353,70 @@ describe("pana CLI", () => {
 			expect(result.stderr, argv.join(" ")).toContain(message);
 			expect(result.stderr, argv.join(" ")).toContain("usage: ");
 		}
+	});
+});
+
+describe("thread role CLI", () => {
+	it("CLI-09 sends set and clear to the role endpoint as the caller, and passes errors through", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pana-role-"));
+		dirs.push(dir);
+		const socketPath = join(dir, "socket");
+		const calls: Array<{ method: string | undefined; url: string | undefined; caller: string | undefined; body: unknown }> = [];
+		const server = createServer((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (chunk: Buffer) => chunks.push(chunk));
+			req.on("end", () => {
+				const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+				calls.push({ method: req.method, url: req.url, caller: req.headers["pana-caller"] as string | undefined, body });
+				res.setHeader("content-type", "application/json");
+				if (body.role === "bad\nrole") {
+					res.writeHead(400);
+					res.end(JSON.stringify({ error: { code: "invalid", message: "invalid role" } }));
+				} else {
+					res.end(JSON.stringify({ accepted: true }));
+				}
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+		servers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+		const env = { PANA_SESSION: "01SESSION" };
+		const cli = (args: string[]) => run(args, undefined, { socketPath, env });
+		const thread = "01H00000000000000000000000";
+		const url = `pana://example.test/threads/${thread}`;
+
+		const set = await cli(["thread", "role", "set", url, "  code reviewer  ", "--json"]);
+		expect(set.code).toBe(0);
+		expect(JSON.parse(set.stdout)).toEqual({ accepted: true });
+		const clear = await cli(["thread", "role", "clear", thread]);
+		expect(clear.code).toBe(0);
+		const invalid = await cli(["thread", "role", "set", thread, "bad\nrole"]);
+		expect(invalid.code).toBe(2);
+		expect(invalid.stderr).toContain("invalid role");
+		expect(calls).toEqual([
+			{ method: "PUT", url: `/threads/${thread}/role`, caller: "01SESSION", body: { role: "  code reviewer  " } },
+			{ method: "PUT", url: `/threads/${thread}/role`, caller: "01SESSION", body: { role: null } },
+			{ method: "PUT", url: `/threads/${thread}/role`, caller: "01SESSION", body: { role: "bad\nrole" } },
+		]);
+
+		for (const args of [
+			["thread", "role", "set", thread],
+			["thread", "role", "clear"],
+			["thread", "role", "clear", thread, "extra"],
+			["thread", "role", "set", "pana://example.test/sessions/01H00000000000000000000000", "reviewer"],
+		]) {
+			const result = await cli(args);
+			expect(result.code, args.join(" ")).toBe(2);
+		}
+		expect(calls).toHaveLength(3);
+	});
+
+	it("lists both commands and their scope in role help", async () => {
+		const help = await run(["thread", "role", "--help"], undefined);
+		expect(help.code).toBe(0);
+		expect(help.stdout).toContain("pana thread role set THREAD ROLE");
+		expect(help.stdout).toContain("pana thread role clear THREAD");
+		expect(help.stdout).toContain("not an authorization");
+		expect(help.stdout).toContain("restore participant");
 	});
 });
 

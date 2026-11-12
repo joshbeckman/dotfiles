@@ -477,6 +477,33 @@ export const COMMANDS: readonly CommandSpec[] = [
 				: { method: "GET", path: `/threads/${segment(text(params, "thread"), "thread")}` },
 	},
 	{
+		path: ["thread", "role", "set"],
+		usage: "pana thread role set THREAD ROLE",
+		summary: "Set your own role hint in a thread (not an authorization)",
+		flags: [],
+		positionals: [
+			{ name: "THREAD", param: "id", required: true },
+			{ name: "ROLE", param: "role", required: true },
+		],
+		request: (params) => ({
+			method: "PUT",
+			path: `/threads/${segment(text(params, "id"), "thread")}/role`,
+			body: { role: text(params, "role") },
+		}),
+	},
+	{
+		path: ["thread", "role", "clear"],
+		usage: "pana thread role clear THREAD",
+		summary: "Clear your own role hint (restore participant)",
+		flags: [],
+		positionals: [{ name: "THREAD", param: "id", required: true }],
+		request: (params) => ({
+			method: "PUT",
+			path: `/threads/${segment(text(params, "id"), "thread")}/role`,
+			body: { role: null },
+		}),
+	},
+	{
 		path: ["thread", "subject"],
 		usage: "pana thread subject THREAD [--regenerate]",
 		summary: "Show or regenerate a thread's subject",

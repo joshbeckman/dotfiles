@@ -69,6 +69,7 @@ interface DiscoveryParticipant {
 	id: string;
 	kind: "user" | "session" | "domain";
 	url: string;
+	role: string;
 }
 
 /** How big a thread is: how many messages it holds and when the newest one landed. */
@@ -113,8 +114,9 @@ async function withSharedMetadata<T extends { threadId: string }>(
 	const sizes = await threadSizes(ctx.runtime, ids);
 	if (ids.length > 0) {
 		const people = await ctx.runtime.db.all<DiscoveryParticipant & { threadId: string }>(
-			`SELECT tp.thread_id AS threadId, p.id, p.kind, p.url FROM thread_participants tp
+			`SELECT tp.thread_id AS threadId, p.id, p.kind, p.url, COALESCE(r.role, 'participant') AS role FROM thread_participants tp
 			 JOIN participants p ON p.id = tp.participant_id
+			 LEFT JOIN thread_participant_roles r ON r.thread_id = tp.thread_id AND r.participant_id = tp.participant_id
 			 WHERE tp.thread_id IN (${ids.map(() => "?").join(",")}) ORDER BY tp.joined_at, p.id`, ...ids,
 		);
 		for (const { threadId, ...person } of people) {

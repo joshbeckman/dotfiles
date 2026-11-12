@@ -26,6 +26,7 @@ import {
 import type { Runtime } from "../server/runtime.ts";
 import { sessionStates, workingSessions, type SessionState, type WorkingSession } from "../sessions/state.ts";
 import { liveActivities } from "../sessions/live.ts";
+import { publish } from "../web/events.ts";
 import { nextWakes, type NextWake } from "../schedules/live.ts";
 import { announce } from "./announce.ts";
 import { summarizeChoices } from "./choices.ts";
@@ -74,6 +75,7 @@ export interface PersonView {
 }
 
 export interface ParticipantView extends PersonView {
+	role: string;
 	joinedAt: number;
 	joinedMessageId: string | null;
 	/** A session's current state; absent for the user and the domain (UX-09). */
@@ -281,10 +283,12 @@ async function threadParticipants(tx: SqliteExecutor, threadId: string): Promise
 		url: string;
 		joined_at: number;
 		joined_message_id: string | null;
+		role: string;
 	}>(
 		`SELECT p.id AS id, p.kind AS kind, p.url AS url, tp.joined_at AS joined_at,
-		        tp.joined_message_id AS joined_message_id
+		        tp.joined_message_id AS joined_message_id, COALESCE(r.role, 'participant') AS role
 		   FROM thread_participants tp
+		   LEFT JOIN thread_participant_roles r ON r.thread_id = tp.thread_id AND r.participant_id = tp.participant_id
 		   JOIN participants p ON p.id = tp.participant_id
 		  WHERE tp.thread_id = ?
 		  ORDER BY COALESCE((SELECT seq FROM messages WHERE id = tp.joined_message_id), 0), p.id`,
@@ -294,9 +298,32 @@ async function threadParticipants(tx: SqliteExecutor, threadId: string): Promise
 		id: row.id,
 		kind: row.kind,
 		url: row.url,
+		role: row.role,
 		joinedAt: row.joined_at,
 		joinedMessageId: row.joined_message_id,
 	}));
+}
+
+/** A role is a self-declared label, not a permission or a message. */
+export async function setThreadRole(runtime: Runtime, caller: Caller, threadId: string, value: unknown): Promise<{ threadId: string; participantId: string; role: string }> {
+	if (value !== null && (typeof value !== "string" || /[\p{Cc}\u2028\u2029]/u.test(value))) {
+		throw ApiError.badRequest("invalid_role", "role must be plain text without control characters");
+	}
+	const role = value === null ? "participant" : (value as string).trim();
+	if ([...role].length < 1 || [...role].length > 32) throw ApiError.badRequest("invalid_role", "role must be 1–32 characters after trimming");
+	return runtime.db.write(async (tx) => {
+		if (!await tx.get("SELECT 1 FROM threads WHERE id = ?", threadId)) throw ApiError.notFound(`thread ${threadId}`);
+		if (!await tx.get("SELECT 1 FROM thread_participants WHERE thread_id = ? AND participant_id = ?", threadId, caller.id)) {
+			throw ApiError.forbidden(`caller is not a participant of thread ${threadId}`);
+		}
+		const previous = await tx.get<{ role: string }>("SELECT role FROM thread_participant_roles WHERE thread_id = ? AND participant_id = ?", threadId, caller.id);
+		if ((previous?.role ?? "participant") !== role) {
+			if (role === "participant") await tx.run("DELETE FROM thread_participant_roles WHERE thread_id = ? AND participant_id = ?", threadId, caller.id);
+			else await tx.run("INSERT INTO thread_participant_roles (thread_id, participant_id, role) VALUES (?, ?, ?) ON CONFLICT (thread_id, participant_id) DO UPDATE SET role = excluded.role", threadId, caller.id, role);
+			runtime.db.afterCommit(() => { void publish(runtime, { kind: "thread.role", threadId, participantId: caller.id, role }); });
+		}
+		return { threadId, participantId: caller.id, role };
+	});
 }
 
 async function person(tx: SqliteExecutor, id: string): Promise<PersonView> {
@@ -702,7 +729,20 @@ export async function readThread(
 			canArchive: thread.participants.some((participant) => participant.id === reader.id),
 		};
 	});
-	const sessions = read.thread.participants.filter((participant) => participant.kind === "session");
+	return { ...read, thread: { ...read.thread, participants: await withParticipantStates(runtime, read.thread.participants) } };
+}
+
+/** Read membership by reference, without marking deliveries read or joining the thread. */
+export async function readThreadParticipants(runtime: Runtime, threadId: string): Promise<ParticipantView[]> {
+	const participants = await runtime.db.atomically(async (tx) => {
+		if (!await tx.get("SELECT 1 FROM threads WHERE id = ?", threadId)) throw ApiError.notFound(`thread ${threadId}`);
+		return threadParticipants(tx, threadId);
+	});
+	return withParticipantStates(runtime, participants);
+}
+
+async function withParticipantStates(runtime: Runtime, participants: ParticipantView[]): Promise<ParticipantView[]> {
+	const sessions = participants.filter((participant) => participant.kind === "session");
 	const states = await sessionStates(runtime.db, runtime, sessions.map((participant) => participant.id));
 	// UX-09: a session asleep on a wake is not working, but the thread will get work at a time the
 	// footer can name, so each session participant carries its next pending wake too.
@@ -718,7 +758,7 @@ export async function readThread(
 						...working,
 					),
 				);
-	const participants = read.thread.participants.map((participant) => {
+	return participants.map((participant) => {
 		if (participant.kind !== "session" || !states.has(participant.id)) return participant;
 		const activity = activities.get(participant.id);
 		const wake = wakes.get(participant.id);
@@ -729,7 +769,6 @@ export async function readThread(
 			...(wake ? { wake } : {}),
 		};
 	});
-	return { ...read, thread: { ...read.thread, participants } };
 }
 
 // --- Messages ------------------------------------------------------------------
@@ -1118,7 +1157,7 @@ export interface InboxThread {
 	threadId: string;
 	threadUrl: string;
 	subject: string | null;
-	participants: PersonView[];
+	participants: Array<PersonView & { role: string }>;
 	/** The newest message in the thread, whoever sent it. */
 	latest: {
 		messageId: string;
@@ -1213,17 +1252,18 @@ export async function inboxThreads(
 		const members =
 			threadIds.length === 0
 				? []
-				: await tx.all<{ thread_id: string; id: string; kind: ParticipantKind; url: string }>(
-						`SELECT tp.thread_id AS thread_id, p.id AS id, p.kind AS kind, p.url AS url
+				: await tx.all<{ thread_id: string; id: string; kind: ParticipantKind; url: string; role: string }>(
+						`SELECT tp.thread_id AS thread_id, p.id AS id, p.kind AS kind, p.url AS url, COALESCE(r.role, 'participant') AS role
 						   FROM thread_participants tp JOIN participants p ON p.id = tp.participant_id
+						   LEFT JOIN thread_participant_roles r ON r.thread_id = tp.thread_id AND r.participant_id = tp.participant_id
 						  WHERE tp.thread_id IN (${inList(threadIds)})
 						  ORDER BY tp.thread_id, COALESCE((SELECT seq FROM messages WHERE id = tp.joined_message_id), 0), p.id`,
 						...threadIds,
 					);
-		const participantsOf = new Map<string, PersonView[]>();
+		const participantsOf = new Map<string, Array<PersonView & { role: string }>>();
 		for (const member of members) {
 			const list = participantsOf.get(member.thread_id) ?? [];
-			list.push({ id: member.id, kind: member.kind, url: member.url });
+			list.push({ id: member.id, kind: member.kind, url: member.url, role: member.role });
 			participantsOf.set(member.thread_id, list);
 		}
 		const unread = await unreadCounts(tx, reader.id, threadIds);

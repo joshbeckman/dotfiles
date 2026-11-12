@@ -699,6 +699,174 @@ function learnDomain(value) {
 	}
 }
 
+// Buffer live changes while a thread or roster read is in flight. Its snapshot may predate them.
+const pendingRoleReads = new Set();
+let roleConnectionVersion = 0;
+function rememberRosterEvent(event) {
+	for (const pending of pendingRoleReads) {
+		if (event.kind === "thread.subject") {
+			if (event.threadId === pending.id) pending.subjectRevision++;
+			continue;
+		}
+		if (event.kind === "thread.role" && event.threadId !== pending.id) continue;
+		if (event.kind === "session.state" && !event.threadIds?.includes(pending.id)) continue;
+		pending.events.push(event);
+	}
+}
+
+function patchRosterPerson(person, event) {
+	if (event.kind === "thread.role" && person.id === event.participantId) person.role = event.role;
+	if (person.kind !== "session" || person.id !== event.sessionId) return;
+	if (event.kind === "session.state") {
+		person.state = event.state;
+		if (!isWorking(event.state)) delete person.activity;
+	} else if (event.kind === "session.wake") {
+		if (event.wake && Number.isFinite(Number(event.wake.at))) person.wake = event.wake;
+		else delete person.wake;
+	} else if (event.kind === "session.live") {
+		if (event.live) person.activity = event.live;
+		else delete person.activity;
+	}
+}
+
+async function readThreadWithRoles(id, participantsOnly = false, seedEvent) {
+	const pending = { id, events: seedEvent ? [seedEvent] : [], subjectRevision: 0 };
+	pendingRoleReads.add(pending);
+	try {
+		const base = `/threads/${encodeURIComponent(id)}`;
+		let version = roleConnectionVersion;
+		const body = await api("GET", participantsOnly ? `${base}/participants` : base);
+		let participants = participantsOnly ? body.participants : body.thread?.participants;
+		// A reconnect can lose events, and a role event can name a member missing from the old
+		// snapshot. Re-read only the roster; a second thread read could mark missed mail read.
+		const retriedMembers = new Set();
+		const missingMembers = () => pending.events.filter((event) => event.kind === "thread.role" &&
+			!participants?.some((person) => person?.id === event.participantId) && !retriedMembers.has(event.participantId));
+		let subjectRevision = 0;
+		let subjectNeedsRead = false;
+		while (true) {
+			if (version !== roleConnectionVersion || missingMembers().length > 0) {
+				if (version !== roleConnectionVersion) {
+					pending.events.length = 0;
+					retriedMembers.clear();
+					subjectNeedsRead = true;
+				} else {
+					for (const event of missingMembers()) retriedMembers.add(event.participantId);
+				}
+				version = roleConnectionVersion;
+				const latest = await api("GET", `${base}/participants`);
+				if (participantsOnly) {
+					body.participants = latest.participants;
+					participants = body.participants;
+				} else {
+					body.thread.participants = latest.participants;
+					participants = body.thread.participants;
+				}
+				continue;
+			}
+			if (!participantsOnly && (subjectNeedsRead || subjectRevision !== pending.subjectRevision)) {
+				// An event and a thread snapshot have no shared revision. Read the subject without
+				// marking mail read, and retry if an event or reconnect overlaps this read.
+				subjectNeedsRead = false;
+				subjectRevision = pending.subjectRevision;
+				const latest = await api("POST", `${base}/subject`);
+				body.thread.subject = latest.subject;
+				continue;
+			}
+			break;
+		}
+		for (const event of pending.events) {
+			const person = participants?.find((each) => each?.id === (event.participantId ?? event.sessionId));
+			if (person) patchRosterPerson(person, event);
+		}
+		return { body, events: pending.events };
+	} finally {
+		pendingRoleReads.delete(pending);
+	}
+}
+
+// Synchronize the working set and live activity from the snapshot after applying buffered events.
+// A buffered full live view supersedes the snapshot's short activity; a stop or null clears it.
+function syncRosterActivity(thread, events) {
+	const working = workingMap(thread.id);
+	working.clear();
+	for (const session of workingParticipants(thread)) working.set(session.sessionId, session);
+	for (const person of thread.participants ?? []) {
+		if (person.kind !== "session") continue;
+		let activity = person.activity;
+		// A roster has only the short activity. Keep an equally recent full live view so a
+		// later visit to the session still has its tool and generation details.
+		const full = state.live.get(person.id)?.view;
+		if (activity && full?.tools && full.at === activity.at) activity = full;
+		for (const event of events) {
+			if (event.sessionId !== person.id) continue;
+			if (event.kind === "session.live") activity = event.live;
+			else if (event.kind === "session.state" && !isWorking(event.state)) activity = null;
+		}
+		rememberLive(person.id, activity);
+	}
+	workingChanged(thread.id);
+}
+
+function renderThreadParticipants(thread) {
+	const container = $("thread-participants");
+	const active = document.activeElement;
+	const focusedId = active instanceof HTMLElement && container.contains(active) ? active.closest(".person")?.dataset.participantId : undefined;
+	let replacement;
+	container.replaceChildren();
+	for (const participant of thread?.participants ?? []) {
+		const person = typeof participant === "object" ? participant : { url: participant };
+		const node = personLink(person, thread.participants, thread.id);
+		if (person.id) node.dataset.participantId = person.id;
+		const role = span("", "participant-role");
+		role.dataset.testid = "participant-role";
+		role.title = "Self-declared role";
+		node.append(role);
+		renderParticipantRole(node, person.role);
+		container.append(node);
+		if (focusedId && person.id === focusedId) replacement = node.querySelector("a");
+	}
+	// Do not move focus from a draft or another control. Only restore a participant link that
+	// was focused before the synchronous redraw and still belongs to the refreshed roster.
+	replacement?.focus({ preventScroll: true });
+}
+
+function renderParticipantRole(node, role) {
+	const label = node.querySelector(".participant-role");
+	if (!label) return;
+	const visible = typeof role === "string" && role !== "" && role !== "participant";
+	label.textContent = visible ? role : "";
+	label.hidden = !visible;
+}
+
+function applyThreadRole(event) {
+	if (state.thread?.id !== event.threadId) return;
+	const person = state.thread.participants?.find((each) => each?.id === event.participantId);
+	if (!person) {
+		void refreshThreadRoles(event).catch(fail);
+		return;
+	}
+	person.role = event.role;
+	for (const node of $("thread-participants").children) {
+		if (node.dataset.participantId === event.participantId) renderParticipantRole(node, event.role);
+	}
+}
+
+// A stream may miss events while disconnected. Refresh the roster, not the draft or messages.
+let roleRefreshVersion = 0;
+async function refreshThreadRoles(seedEvent) {
+	if (state.section !== "threads" || !state.thread || $("thread").hidden) return;
+	const current = state.thread;
+	const version = ++roleRefreshVersion;
+	const { body, events } = await readThreadWithRoles(current.id, true, seedEvent);
+	if (version !== roleRefreshVersion || state.thread !== current || state.section !== "threads") return;
+	current.participants = body.participants;
+	renderThreadParticipants(current);
+	// Existing messages retain their nodes and menus, but their colors follow the new roster.
+	syncMessageIdentities($("thread-messages"));
+	syncMessageIdentities($("stale-new"));
+	syncRosterActivity(current, events);
+}
 // Count live changes to the open thread so a slow HTTP response cannot undo a newer event.
 let subjectEventRevision = 0;
 
@@ -732,8 +900,14 @@ function handleEvent(event) {
 	// against panad's clock even when the two machines disagree, as a test's fake clock does.
 	if (Number.isFinite(Number(event.at))) state.clockSkew = Date.now() - Number(event.at);
 	if (event.kind === "thread.subject" && typeof event.threadId === "string" && typeof event.subject === "string") {
+		rememberRosterEvent(event);
 		if (state.thread?.id === event.threadId) subjectEventRevision++;
 		applyThreadSubject(event.threadId, event.subject);
+		return;
+	}
+	if (event.kind === "thread.role" && typeof event.threadId === "string" && typeof event.participantId === "string" && typeof event.role === "string") {
+		rememberRosterEvent(event);
+		applyThreadRole(event);
 		return;
 	}
 	if (event.kind === "settings.ui") {
@@ -741,14 +915,17 @@ function handleEvent(event) {
 		return;
 	}
 	if (event.kind === "hello") {
+		roleConnectionVersion++;
 		applyUserColor(event.userColor);
 		if (typeof event.domain === "string") state.domain = event.domain;
 		state.domainResolved?.();
+		void refreshThreadRoles().catch(fail);
 		return;
 	}
 	if (event.kind === "artifact.published") { void artifactPublished(event).catch(fail); return; }
 	// UX-09: who is working changes in the open thread and in the lists, without a reload.
 	if (event.kind === "session.state" && typeof event.sessionId === "string") {
+		rememberRosterEvent(event);
 		applyStateEvent(event);
 		// OBJ-39/UX-09: an objective's roster follows the same events, so a member's state is live.
 		applyObjectiveStateEvent(event);
@@ -756,11 +933,15 @@ function handleEvent(event) {
 	}
 	// UX-09: a session's next wake moved, so the open thread's scheduled chip follows without a reload.
 	if (event.kind === "session.wake" && typeof event.sessionId === "string") {
+		rememberRosterEvent(event);
 		applyWakeEvent(event);
 		return;
 	}
 	// UX-12: work in progress. It carries no entry, so it must not fall through to a reload.
 	if (event.kind === "session.live" && typeof event.sessionId === "string") {
+		rememberRosterEvent(event);
+		const person = state.thread?.participants?.find((each) => each?.kind === "session" && each.id === event.sessionId);
+		if (person) patchRosterPerson(person, event);
 		rememberLive(event.sessionId, event.live, event.at);
 		liveChanged(event.sessionId);
 		return;
@@ -1240,6 +1421,10 @@ function applyStateEvent(event) {
 		$("session-meta").querySelector(".badge")?.replaceWith(badge(next, "state-badge"));
 	}
 	for (const threadId of Array.isArray(event.threadIds) ? event.threadIds.map(String) : []) {
+		if (state.thread?.id === threadId) {
+			const person = state.thread.participants?.find((each) => each?.kind === "session" && each.id === sessionId);
+			if (person) patchRosterPerson(person, event);
+		}
 		const map = workingMap(threadId);
 		if (isWorking(next)) map.set(sessionId, { sessionId, url: String(event.url ?? ""), state: next });
 		else map.delete(sessionId);
@@ -1921,6 +2106,14 @@ function threadColumns(thread) {
 	return cells;
 }
 
+// A render can finish after a roster refresh while its nodes are still detached. Set identity
+// again immediately before insertion, as well as updating messages already on screen.
+function syncMessageIdentities(root) {
+	if (!state.thread) return;
+	const nodes = root instanceof Element && root.matches('[data-testid="message"]') ? [root] : root.querySelectorAll('[data-testid="message"]');
+	for (const node of nodes) participantIdentity(node, node.dataset.sender, state.thread.participants, state.thread.id);
+}
+
 async function messageElement(message, { focus }) {
 	const view = messageView(message);
 	learnDomain(view.sender);
@@ -2209,6 +2402,7 @@ async function artifactPublished(event) {
 			const next = [...container.querySelectorAll('[data-testid="message"]')].find((item) => Number(item.dataset.seq) > message.seq);
 			const top = next?.getBoundingClientRect().top;
 			container.querySelector(":scope > .hint")?.remove();
+			syncMessageIdentities(node);
 			container.insertBefore(node, next ?? container.querySelector(':scope > [data-history="later"]'));
 			if (next && top < 0) window.scrollBy(0, next.getBoundingClientRect().top - top);
 		}
@@ -2222,7 +2416,7 @@ const THREAD_PAGE_SIZE = 30;
 async function openThread(id, focusMessage) {
 	const version = ++threadRenderVersion;
 	const current = () => version === threadRenderVersion && state.section === "threads";
-	const body = await api("GET", `/threads/${id}`);
+	const { body, events } = await readThreadWithRoles(id);
 	if (!current()) return;
 	const thread = body.thread;
 	const messages = body.messages ?? [];
@@ -2247,22 +2441,9 @@ async function openThread(id, focusMessage) {
 	const threadUrl = $("thread-url");
 	threadUrl.replaceChildren(copyLink(thread?.url ?? `pana://${state.domain}/threads/${id}`, "thread"));
 	// REF-08 and UX-06: participants are colored links to their own views.
-	const participants = $("thread-participants");
-	participants.replaceChildren();
-	for (const participant of thread?.participants ?? []) {
-		participants.append(personLink(typeof participant === "object" ? participant : { url: participant }));
-	}
-	// UX-09: the response says who is working now, so an opened thread is right before any event.
-	const working = workingMap(id);
-	working.clear();
-	for (const session of workingParticipants(thread)) working.set(session.sessionId, session);
-	// UX-12: what each working session is doing now; a fuller view from `session.live` is kept.
-	for (const participant of thread?.participants ?? []) {
-		if (participant?.kind !== "session") continue;
-		if (!participant.activity) state.live.delete(participant.id);
-		else if (!state.live.get(participant.id)?.view?.tools) rememberLive(participant.id, participant.activity);
-	}
-	renderThreadWorking();
+	renderThreadParticipants(thread);
+	// Apply the snapshot and any events received while it was in flight.
+	syncRosterActivity(thread, events);
 	// REF-07: one toggle, labelled for the thread's state for this reader.
 	const archiveButton = $("thread-archive");
 	archiveButton.hidden = !state.threadCanArchive;
@@ -2307,6 +2488,7 @@ async function openThread(id, focusMessage) {
 					const to = direction === "earlier" ? start : Math.min(messages.length, end + THREAD_PAGE_SIZE);
 					const fragment = await renderRange(from, to);
 					if (!current() || !fragment) return;
+					syncMessageIdentities(fragment);
 					const firstNew = fragment.firstElementChild;
 					const anchor = container.querySelector(".message");
 					const top = anchor?.getBoundingClientRect().top;
@@ -2331,6 +2513,7 @@ async function openThread(id, focusMessage) {
 	}
 	const initial = await renderRange(start, end);
 	if (!current() || !initial) return;
+	syncMessageIdentities(initial);
 	container.append(initial);
 	historyButtons();
 	if (messages.length === 0) empty(container, "No messages yet.");
@@ -2409,7 +2592,8 @@ async function submitReply(event) {
  * the user typed. The next send records the new head.
  */
 async function showStale(error, draft) {
-	const body = await api("GET", `/threads/${draft.threadId}`);
+	const { body, events } = await readThreadWithRoles(draft.threadId);
+	if (state.draft !== draft || state.thread?.id !== draft.threadId || state.section !== "threads") return;
 	const thread = body.thread;
 	const messages = body.messages ?? [];
 	const newerIds = new Set((Array.isArray(error?.body?.error?.newer) ? error.body.error.newer : []).map(String));
@@ -2417,11 +2601,19 @@ async function showStale(error, draft) {
 	const newer = headIndex === -1 ? messages.filter((message) => newerIds.has(message.id)) : messages.slice(headIndex + 1);
 	// New participants must be known before rendering their stale-warning messages.
 	state.thread = thread;
+	renderThreadSubject(thread?.subject ?? "(no subject)");
+	renderThreadParticipants(thread);
+	syncMessageIdentities($("thread-messages"));
+	syncRosterActivity(thread, events);
 	const container = $("stale-new");
 	container.replaceChildren();
-	for (const message of newer) container.append(await messageElement(message, {}));
+	for (const message of newer) {
+		const node = await messageElement(message, {});
+		syncMessageIdentities(node);
+		container.append(node);
+	}
 	$("stale").hidden = false;
-	$("reply-body").value = $("reply-body").value || draft.body;
+	if (!$("reply-body").value) $("reply-body").value = draft.body;
 	const newest = messages[messages.length - 1]?.id;
 	if (newest) {
 		draft.after = newest;

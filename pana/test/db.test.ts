@@ -22,6 +22,7 @@ const PANA_TABLES = [
 	"sessions",
 	"threads",
 	"thread_participants",
+	"thread_participant_roles",
 	"messages",
 	"message_events",
 	"deliveries",

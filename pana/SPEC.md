@@ -154,6 +154,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **CLI-06** `pana --help` and `pana <noun> --help` list every command in the README.
 - [x] **CLI-07** Unknown commands and flags exit 2 with usage.
 - [x] **CLI-08** Text for a person — message bodies, subjects, schedule labels, and error messages alike — is stripped of the C0/C1 controls and escape introducers a terminal obeys before it is written, so no string can retitle the window, set the clipboard (OSC 52), forge a hyperlink, or overwrite what was printed. Newlines and tabs survive, and text prints literally rather than being reinterpreted. JSON keeps the exact string, with its C0/C1 range escaped so it stays terminal-safe too.
+- [x] **CLI-09** `thread role set THREAD ROLE` sends `PUT /threads/:id/role` with the caller's role string; `thread role clear THREAD` sends `role: null`. Both accept a thread ID or URL and pass the daemon's result or error through.
 
 ---
 

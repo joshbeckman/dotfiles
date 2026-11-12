@@ -5,7 +5,7 @@
 // Patterns use `:param` for one segment and a trailing `*` for the rest of the path, captured
 // as `params.rest`. Add routes at the end of a group; never rename a handler.
 
-export type Method = "GET" | "POST" | "DELETE";
+export type Method = "GET" | "POST" | "PUT" | "DELETE";
 
 export const ROUTES = [
 	{ method: "POST", pattern: "/threads/:id/artifacts/:name", name: "artifacts.publish", wp: "WP21" },
@@ -26,9 +26,11 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/threads", name: "threads.create", wp: "WP2" },
 	{ method: "GET", pattern: "/threads", name: "threads.search", wp: "WP7" },
 	{ method: "GET", pattern: "/threads/:id", name: "threads.read", wp: "WP2" },
+	{ method: "GET", pattern: "/threads/:id/participants", name: "threads.participants", wp: "WP2" },
 	{ method: "POST", pattern: "/threads/:id/messages", name: "threads.respond", wp: "WP2" },
 	{ method: "POST", pattern: "/threads/:id/subject", name: "threads.subject", wp: "WP7" },
 	{ method: "POST", pattern: "/threads/:id/archive", name: "threads.archive", wp: "WP2" },
+	{ method: "PUT", pattern: "/threads/:id/role", name: "threads.role", wp: "WP2" },
 	{ method: "POST", pattern: "/threads/:id/unarchive", name: "threads.unarchive", wp: "WP2" },
 	{ method: "GET", pattern: "/messages/:id", name: "messages.show", wp: "WP2" },
 	{ method: "POST", pattern: "/messages/:id/read", name: "messages.markRead", wp: "WP2" },
