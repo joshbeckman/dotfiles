@@ -56,6 +56,11 @@ head -1 "$tmp/patch" | grep -Fq 'diff --git '
 serve "$hunk" "" api repos/joshbeckman/dotfiles/pulls/272/comments >"$tmp/comments.json"
 ruby -rjson -e 'abort "comment count" unless JSON.parse(File.read(ARGV[0])).length == 2' "$tmp/comments.json"
 
+# An issue timeline is an events endpoint, and it is where a closed issue records its pull request.
+timeline="$root/model-eval/fixtures/viewmd-issue-timeline"
+serve "$timeline" "" api repos/joshbeckman/dotfiles/issues/224/timeline --jq '[.[] | select(.event == "cross-referenced") | .source.issue.number]' >"$tmp/timeline.json"
+grep -Fq '[239]' "$tmp/timeline.json"
+
 # view-md renders the whole item when the snapshot has one, and refuses when it does not.
 serve "$light" "" view-md 304 >"$tmp/full.md"
 grep -Fq '# Pull Request #304' "$tmp/full.md"

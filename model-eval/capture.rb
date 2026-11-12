@@ -59,6 +59,14 @@ if kind == "pull"
   end
 else
   files["issue.json"] = run("gh", "issue", "view", url, "--json", ISSUE_FIELDS.join(",")) + "\n"
+  # The timeline is where a closed issue records the pull request that addressed it, the labels
+  # added later, and the close itself. `gh issue view --json` does not return any of it.
+  files["timeline.json"] = begin
+    repository = url[%r{github\.com/([^/]+/[^/]+)/}, 1]
+    run("gh", "api", "repos/#{repository}/issues/#{number}/timeline", "--paginate") + "\n"
+  rescue StandardError
+    "[]\n"
+  end
 end
 
 FileUtils.rm_rf(snapshot)

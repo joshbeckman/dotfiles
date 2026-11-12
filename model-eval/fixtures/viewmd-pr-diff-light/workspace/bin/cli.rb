@@ -116,6 +116,8 @@ def api(args)
     finish(JSON.parse(read_snapshot("review-comments.json")), args)
   when %r{/issues/\d+/comments\z}
     finish(issue_comments(JSON.parse(read_snapshot("pr.json"))), args)
+  when %r{/issues/\d+/timeline\z}
+    finish(JSON.parse(read_snapshot("timeline.json")), args)
   else
     warn %({"message":"Not Found","status":"404"})
     exit 1

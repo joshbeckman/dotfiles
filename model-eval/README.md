@@ -4,7 +4,7 @@ I use this harness to compare configured Pi models on a small set of representat
 
 V1 contains one smoke fixture for each of four work categories: code development, debugging, interface design, and prose editing. Fixtures are synthetic and dependency-free. Deterministic graders remain outside the model-visible workspace.
 
-A second family, `viewmd-*`, covers one category: reading GitHub issues and pull requests. Those fixtures hold a snapshot of one real item instead of a synthetic workspace, so a run can compare read policies against each other.
+A second family, `viewmd-*`, covers one category: reading GitHub issues and pull requests. Six fixtures: a patch-heavy pull request, a discussion-heavy one, a small one, an issue answered from its body, an issue answered only from its timeline, and review comments with code context. Those fixtures hold a snapshot of one real item instead of a synthetic workspace, so a run can compare read policies against each other.
 
 ## Plan a run
 
@@ -112,7 +112,7 @@ be one plain command: the boundary refuses chaining, redirection, substitution, 
 environment assignment, so a trial cannot rewrite what the stub reads.
 
 What the stub serves: `pr view`, `pr diff`, `pr checks`, `issue view`, `api .../pulls/N/comments`,
-`extension list`, and `view-md` with `--max-diff`. `--json` takes a field subset and `--jq` filters
+`api .../issues/N/timeline`, `extension list`, and `view-md` with `--max-diff`. `--json` takes a field subset and `--jq` filters
 it. Every call appends its name and byte count to `.calls.tsv`, so a run can report delivered bytes
 next to tokens.
 
