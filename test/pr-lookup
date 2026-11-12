@@ -16,11 +16,17 @@ case "$1" in
   pr-url) printf 'https://github.com/example/project/pull/7\n' ;;
   pr-merged) printf '2026-01-02T03:04:05Z\n' ;;
   pr-checks) printf '| Check | Status | Result |\n| --- | --- | --- |\n' ;;
-  view-md) printf '# Full GitHub PR\n' ;;
   *) exit 2 ;;
 esac
 EOF
 chmod +x "$tmp/bin/gw"
+# `git pr-view` renders a GitHub PR with `gh` itself; `gw` has no markdown viewer.
+cat >"$tmp/bin/gh" <<'EOF2'
+#!/bin/sh
+[ "$1" = pr ] && [ "$2" = view ] || exit 2
+printf '# Full GitHub PR\n'
+EOF2
+chmod +x "$tmp/bin/gh"
 
 run() {
   (cd "$tmp/repo" && PATH="$tmp/bin:$root/bin:$PATH" git "$@")
