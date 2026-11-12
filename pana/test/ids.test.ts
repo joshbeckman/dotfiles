@@ -48,6 +48,8 @@ describe("IDs and URLs", () => {
 		expect(parseRef(`pana://${DOMAIN}/threads/${A}?message=${B}`, DOMAIN)).toEqual({ kind: "message", id: B, thread: A });
 		expect(parseRef(`pana://${DOMAIN}/files/${A}/report.pdf`, DOMAIN)).toEqual({ kind: "file", id: A, name: "report.pdf" });
 		expect(parseRef(`pana://${DOMAIN}/schedules/${A}`, DOMAIN)).toEqual({ kind: "schedule", id: A });
+		expect(parseRef(`pana://${DOMAIN}/artifacts/${A}`, DOMAIN)).toEqual({ kind: "artifact", id: A });
+		expect(parseRef(`pana://${DOMAIN}/artifacts/${A}/v/3`, DOMAIN)).toEqual({ kind: "artifact", id: A, version: 3 });
 		expect(parseRef(`pana://${DOMAIN}`, DOMAIN)).toEqual({ kind: "domain", id: DOMAIN });
 		expect(() => parseRef(`pana://${DOMAIN}/widgets/${A}`, DOMAIN)).toThrow(RefError);
 		expect(() => parseRef("https://example.com/x")).toThrow(RefError);
@@ -83,6 +85,8 @@ describe("IDs and URLs", () => {
 			{ kind: "file", id: A, name: "notes.md" },
 			{ kind: "file", id: A, name: "Q3 plan (final).pdf" },
 			{ kind: "schedule", id: A },
+			{ kind: "artifact", id: A },
+			{ kind: "artifact", id: A, version: 1 },
 			{ kind: "memory", id: "notes/plan #1? 100% café.md" },
 		];
 		for (const ref of refs) {
@@ -91,6 +95,19 @@ describe("IDs and URLs", () => {
 			expect(parseRef(url, DOMAIN)).toEqual(ref);
 		}
 		expect(formatUrl({ kind: "message", id: B, thread: A }, DOMAIN)).toBe(`pana://${DOMAIN}/threads/${A}?message=${B}`);
+		expect(formatUrl({ kind: "artifact", id: A, version: 12 }, DOMAIN)).toBe(`pana://${DOMAIN}/artifacts/${A}/v/12`);
+	});
+
+	it("ID-05 an artifact version is a positive whole number and the only suffix an artifact URL takes", () => {
+		for (const bad of [0, -1, 1.5, Number.NaN]) {
+			expect(() => formatUrl({ kind: "artifact", id: A, version: bad }, DOMAIN)).toThrow(RefError);
+		}
+		for (const path of ["/v/0", "/v/01", "/v/-1", "/v/1.5", "/v", "/v/1/2", "/x/1", "/v/99999999999999999999"]) {
+			expect(() => parseRef(`pana://${DOMAIN}/artifacts/${A}${path}`, DOMAIN)).toThrow(RefError);
+		}
+		// Parsed at the collection root: a thread path is a thread, never an artifact.
+		expect(parseRef(`pana://${DOMAIN}/threads/${A}`, DOMAIN)).toEqual({ kind: "thread", id: A });
+		expect(parseRef(`pana://${DOMAIN}/artifacts/${A}/v/12`, DOMAIN)).toEqual(parseRef(formatUrl({ kind: "artifact", id: A, version: 12 }, DOMAIN), DOMAIN));
 	});
 });
 

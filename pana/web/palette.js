@@ -3,7 +3,7 @@
 // (SRC-01, SRC-03, MEM-07). This file is data and pure functions — the commands, fuzzy matching,
 // and the result rows — so Node tests drive it. app.js owns the DOM and the fetches.
 
-import { memoryFileHref } from "./links.js";
+import { artifactHref, memoryFileHref } from "./links.js";
 import { memoryHitView, refLabel, threadRow } from "./views.js";
 
 /** How many hits of each store the palette shows. A search is a jump, not a browse (SCALE-03). */
@@ -148,6 +148,27 @@ export function memoryHits(body) {
 	});
 }
 
+/**
+ * Artifact hits by name (ART-13). The payload is `{artifacts: [{id, threadId, name, createdAt,
+ * newestVersion: {seq}}]}`, one row per artifact. A hit carries the thread that owns the
+ * artifact, because an artifact's app route is its thread's pane; a store that omits the thread
+ * still lists the name.
+ */
+export function artifactHits(body) {
+	return list(body, "artifacts").map((hit) => {
+		const version = hit?.newestVersion ?? hit?.version;
+		const seq = Number(version?.seq);
+		return {
+			kind: "artifact",
+			id: String(hit?.id ?? ""),
+			thread: hit?.threadId ? String(hit.threadId) : undefined,
+			label: String(hit?.name ?? ""),
+			meta: Number.isSafeInteger(seq) ? `v${seq}` : "",
+			at: hit?.createdAt,
+		};
+	});
+}
+
 /** A thread's search hits repeat once per matching message; the palette lists it once. */
 function dedupe(hits) {
 	const seen = new Set();
@@ -173,6 +194,7 @@ export function paletteHits(bodies, query, limit = HITS_PER_STORE) {
 		["Threads", threadHits(bodies?.threads)],
 		["Sessions", sessionHits(bodies?.sessions)],
 		["Memory", memoryHits(bodies?.memory)],
+		["Artifacts", artifactHits(bodies?.artifacts)],
 	];
 	return groups
 		.map(([title, hits]) => ({
@@ -187,5 +209,7 @@ export function hitHash(hit) {
 	if (hit.kind === "thread") return `#/threads/${hit.id}`;
 	if (hit.kind === "session") return `#/sessions/${hit.id}`;
 	if (hit.kind === "memory") return memoryFileHref(hit.id);
+	// ART-13: an artifact opens its pane, and a hit knows the thread that pane belongs to.
+	if (hit.kind === "artifact") return artifactHref(hit.id, { thread: hit.thread });
 	return "#/inbox";
 }

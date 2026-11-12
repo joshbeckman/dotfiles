@@ -87,9 +87,43 @@ export function appHref(href, domain) {
 		// OBJ-39: an objective URL opens its view, like every other ID (REF-08).
 		case "objectives":
 			return id ? `#/objectives/${encodeURIComponent(id)}` : "#/objectives";
+		// ART-13: both forms are refs, and the version is a path segment after `v`.
+		case "artifacts": {
+			if (!id) return undefined;
+			const seq = versionOf(rest);
+			if (seq === null) return undefined;
+			return artifactHref(id, { seq });
+		}
 		default:
 			return undefined;
 	}
+}
+
+/** An artifact version from the segments after the artifact id: none, or `v/<seq>`. */
+function versionOf(rest) {
+	if (!Array.isArray(rest) || rest.length === 0) return undefined;
+	if (rest.length !== 2 || rest[0] !== "v" || !/^[1-9][0-9]*$/.test(rest[1])) return null;
+	const seq = Number(rest[1]);
+	return Number.isSafeInteger(seq) ? seq : null;
+}
+
+/**
+ * The app route for one artifact (ART-13): `#/threads/<thread>/a/<artifactId>`, pinned to a
+ * version with `/v/<seq>` when one is given. A `pana://` artifact URL carries no thread, so
+ * `thread` is optional: without it the route is `#/artifacts/<artifactId>`, which the app resolves
+ * to the artifact's own thread before drawing the pane. A versioned route always shows that
+ * version and never adopts a newer one.
+ */
+export function artifactHref(artifactId, options = {}) {
+	const id = String(artifactId ?? "");
+	if (!id) return undefined;
+	const thread = String(options.thread ?? "");
+	const path = thread
+		? `#/threads/${encodeURIComponent(thread)}/a/${encodeURIComponent(id)}`
+		: `#/artifacts/${encodeURIComponent(id)}`;
+	const seq = Number(options.seq ?? NaN);
+	// A pinned link names a version, so a bad one is no pin rather than a broken route.
+	return Number.isSafeInteger(seq) && seq >= 1 ? `${path}/v/${seq}` : path;
 }
 
 /**
@@ -110,6 +144,8 @@ export function idHref(id, kind) {
 			return `#/schedules?focus=${encodeURIComponent(value)}`;
 		case "objective":
 			return `#/objectives/${encodeURIComponent(value)}`;
+		case "artifact":
+			return artifactHref(value);
 		default:
 			return undefined;
 	}

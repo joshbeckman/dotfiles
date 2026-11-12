@@ -50,6 +50,11 @@ export function memoryFileHref(path: unknown): string;
 export function memoryEditHref(path: unknown): string;
 export function memoryCommitHref(hash: unknown): string;
 export function idHref(id: string | null | undefined, kind: string): string | undefined;
+/**
+ * An artifact's app route (ART-13). `thread` names the pane's thread; without it the route is
+ * `#/artifacts/<id>`, which the app resolves to the artifact's thread. `seq` pins a version.
+ */
+export function artifactHref(artifactId: string | null | undefined, options?: { thread?: string | null; seq?: number | null }): string | undefined;
 export function panaLinkSegments(text: unknown, domain: string): LinkSegment[];
 export function newDraft(thread: ThreadLike | undefined): Draft;
 export function notificationTarget(payload: { threadId?: string; url?: string } | undefined): string;
