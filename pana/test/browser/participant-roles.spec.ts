@@ -225,4 +225,134 @@ afterEach(async () => {
 		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
 	});
 
+
+	it("reconciles live joins, session events and message identities without touching a draft", async () => {
+		type Person = { id: string; kind: string; url: string; role?: string; state?: string; activity?: { activity: string; at: number }; wake?: { at: number; url: string; subject: string; cron: null } };
+		let roster: Person[] = [];
+		let hold = false;
+		let heldCount = 0;
+		let firstCaptured!: () => void;
+		const first = new Promise<void>((resolve) => { firstCaptured = resolve; });
+		let secondCaptured!: () => void;
+		const second = new Promise<void>((resolve) => { secondCaptured = resolve; });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		releaseHeld = release;
+		t = await startTestPanad({ config: { defaultModel: "faux/faux-1" }, script: [{ text: "done" }, { text: "done" }], handlers: {
+			"threads.read": async (ctx: RequestContext) => {
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				return { status: 200, body: { ...body, thread: { ...body.thread, participants: roster.length ? roster : body.thread.participants } } };
+			},
+			"threads.participants": async () => {
+				const snapshot = structuredClone(roster);
+				if (hold) { heldCount++; if (heldCount === 1) firstCaptured(); if (heldCount === 2) secondCaptured(); await gate; }
+				return { status: 200, body: { participants: snapshot } };
+			},
+		} as Handlers });
+		const a = await t.client.post<{ session: { id: string; url: string } }>("/sessions", { prompt: "first session" });
+		const b = await t.client.post<{ session: { id: string; url: string } }>("/sessions", { prompt: "second session" });
+		expect(a.status).toBe(201); expect(b.status).toBe(201);
+		await t.client.post(`/sessions/${a.body.session.id}/stop`);
+		await t.client.post(`/sessions/${b.body.session.id}/stop`);
+		const made = await t.client.post<{ thread: { id: string; participants: Person[] }; message: { id: string } }>("/threads", { to: [a.body.session.id, b.body.session.id], body: "Group thread" });
+		expect(made.status).toBe(201);
+		const id = made.body.thread.id;
+		const posted = await t.client.post<{ message: { id: string } }>(`/threads/${id}/messages`, { after: made.body.message.id, body: "second session message" }, { caller: b.body.session.id });
+		expect(posted.status).toBe(200);
+		const wake = { at: t.clock.now() + 3_600_000, url: "pana://test.example/schedules/01ARZ3NDEKTSV4RRFFQ69G5FAW", subject: "old wake", cron: null };
+		roster = made.body.thread.participants.map((p) => ({ ...p, role: "participant", ...(p.id === a.body.session.id ? { state: "running", activity: { activity: "old work", at: t!.clock.now() }, wake } : p.id === b.body.session.id ? { state: "running", activity: { activity: "old second work", at: t!.clock.now() } } : {}) }));
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		const initial = await evaluatePage<{ color: string; messageColor: string }>(`
+			location.hash = "#/threads/${id}";
+			await until(() => document.querySelector('#thread-messages [data-id="${posted.body.message.id}"]') && document.querySelector('#thread-working [data-session="${a.body.session.id}"]'));
+			const reply = document.getElementById("reply-body"); reply.value = "draft for the old head"; reply.focus(); reply.setSelectionRange(3, 7);
+			window.__rosterMessage = document.querySelector('#thread-messages [data-id="${posted.body.message.id}"]');
+			window.__rosterHead = window.__pana.state.draft.after;
+			return { color: document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"]').dataset.color, messageColor: window.__rosterMessage.dataset.color };
+		`);
+		expect(initial.color).toBe(initial.messageColor);
+		// A fresh snapshot is authoritative even when an old participant had live fields.
+		await evaluatePage(`window.dispatchEvent(new Event("pagehide")); return true;`);
+		roster = roster.map((p) => p.id === a.body.session.id ? { id: p.id, kind: p.kind, url: p.url, role: "participant", state: "stopped" } : p.id === b.body.session.id ? { ...p, role: "snapshot-one", activity: { activity: "fresh work", at: t!.clock.now() } } : p);
+		await evaluatePage(`window.dispatchEvent(new Event("focus")); await until(() => document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] .participant-role')?.textContent === "snapshot-one"); return true;`);
+		expect(await evaluatePage(`return { firstWorking: Boolean(document.querySelector('#thread-working [data-testid="working-session"][data-session="${a.body.session.id}"]')), firstWake: Boolean(document.querySelector('#thread-working [data-testid="scheduled-session"][data-session="${a.body.session.id}"]')), secondWorking: Boolean(document.querySelector('#thread-working [data-testid="working-session"][data-session="${b.body.session.id}"]')), activity: document.querySelector('#thread-working [data-testid="working-session"][data-session="${b.body.session.id}"]')?.textContent };`)).toMatchObject({ firstWorking: false, firstWake: false, secondWorking: true, activity: expect.stringContaining("fresh work") });
+		// Removing the earlier session shifts the later session's identity. The existing message node
+		// must track the header without being replaced (or changing the draft).
+		await evaluatePage(`window.dispatchEvent(new Event("pagehide")); return true;`);
+		roster = roster.filter((p) => p.id !== a.body.session.id).map((p) => p.id === b.body.session.id ? { ...p, role: "snapshot-two" } : p);
+		const recolored = await evaluatePage<{ before: string; header: string; message: string; same: boolean }>(`
+			window.dispatchEvent(new Event("focus"));
+			await until(() => document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"] .participant-role')?.textContent === "snapshot-two");
+			return { before: ${JSON.stringify(initial.color)}, header: document.querySelector('#thread-participants [data-participant-id="${b.body.session.id}"]').dataset.color,
+				message: window.__rosterMessage.dataset.color, same: window.__rosterMessage === document.querySelector('#thread-messages [data-id="${posted.body.message.id}"]') };
+		`);
+		expect(recolored.same).toBe(true); expect(recolored.header).toBe(recolored.message); expect(recolored.header).not.toBe(recolored.before);
+		// An unknown member's role event starts a roster read without reconnecting. Hold both reads
+		// so the newer role and state/wake/live events must be replayed over old snapshots.
+		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV", role: "snapshot-role", state: "running", activity: { activity: "stale activity", at: t.clock.now() }, wake };
+		roster = [...roster, added];
+		hold = true;
+		await postNotice(t.runtime, { thread: id, body: "unread during draft" });
+		expect((await t.client.get<{ threads: Array<{ threadId: string; unreadCount: number }> }>("/inbox?view=threads")).body.threads.find((thread) => thread.threadId === id)?.unreadCount).toBe(1);
+		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId: added.id, role: "first role" });
+		await first;
+		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId: added.id, role: "newest role" });
+		await second;
+		await publish(t.runtime, { kind: "session.state", sessionId: b.body.session.id, state: "stopped", url: b.body.session.url, threadIds: [id] });
+		await publish(t.runtime, { kind: "session.wake", sessionId: added.id, wake: null });
+		await publish(t.runtime, { kind: "session.live", sessionId: added.id, live: null });
+		// A marker event sent last proves every prior frame was processed before release.
+		await evaluatePage(`const marker = document.createElement("span"); marker.id = "roster-event-marker"; marker.dataset.userColor = "true"; document.body.append(marker); return true;`);
+		await publish(t.runtime, { kind: "settings.ui", userColor: "purple" });
+		await evaluatePage(`await until(() => document.getElementById("roster-event-marker").dataset.color === "purple"); return true;`);
+		release();
+		const joined = await evaluatePage<{ role: string; newWorking: boolean; oldWorking: boolean; wake: boolean; activity: boolean; draft: string; focus: boolean; selection: number[]; head: boolean }>(`
+			await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "newest role");
+			const reply = document.getElementById("reply-body"); const chip = document.querySelector('#thread-working [data-testid="working-session"][data-session="${added.id}"]');
+			return { role: document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role').textContent,
+				newWorking: Boolean(chip), oldWorking: Boolean(document.querySelector('#thread-working [data-testid="working-session"][data-session="${b.body.session.id}"]')),
+				wake: Boolean(document.querySelector('#thread-working [data-testid="scheduled-session"][data-session="${added.id}"]')), activity: Boolean(chip?.querySelector('[data-testid="working-activity"]')),
+				draft: reply.value, focus: document.activeElement === reply, selection: [reply.selectionStart, reply.selectionEnd], head: window.__rosterHead === window.__pana.state.draft.after };
+		`);
+		expect(joined).toEqual({ role: "newest role", newWorking: true, oldWorking: false, wake: false, activity: false, draft: "draft for the old head", focus: true, selection: [3, 7], head: true });
+		expect((await t.client.get<{ threads: Array<{ threadId: string; unreadCount: number }> }>("/inbox?view=threads")).body.threads.find((thread) => thread.threadId === id)?.unreadCount).toBe(1);
+	});
+
+
+	it("finds a new member whose role arrives during the initial thread read", async () => {
+		let participants: Array<{ id: string; kind: string; url: string; role?: string }> = [];
+		let captured!: () => void;
+		const wasCaptured = new Promise<void>((resolve) => { captured = resolve; });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		releaseHeld = release;
+		let reads = 0;
+		t = await startTestPanad({ handlers: {
+			"threads.read": async (ctx: RequestContext) => {
+				reads++;
+				const body = await readThread(ctx.runtime, ctx.caller, ctx.params.id!);
+				captured(); await gate;
+				return { status: 200, body };
+			},
+			"threads.participants": async () => ({ status: 200, body: { participants } }),
+		} as Handlers });
+		const notice = await postNotice(t.runtime, { body: "Initial read with live join" });
+		const id = notice.thread.id;
+		participants = notice.thread.participants;
+		const added = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "session", url: "pana://test.example/sessions/01ARZ3NDEKTSV4RRFFQ69G5FAV", role: "snapshot role" };
+		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
+		await evaluatePage(`await until(() => window.__pana?.state.domain); location.hash = "#/threads/${id}"; return true;`);
+		await wasCaptured;
+		participants = [...participants, added];
+		await evaluatePage(`const marker = document.createElement("span"); marker.id = "initial-event-marker"; marker.dataset.userColor = "true"; document.body.append(marker); return true;`);
+		await publish(t.runtime, { kind: "thread.role", threadId: id, participantId: added.id, role: "newest role" });
+		await publish(t.runtime, { kind: "settings.ui", userColor: "purple" });
+		await evaluatePage(`await until(() => document.getElementById("initial-event-marker").dataset.color === "purple"); return true;`);
+		await postNotice(t.runtime, { thread: id, body: "unread while the initial read is held" });
+		release();
+		await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${added.id}"] .participant-role')?.textContent === "newest role"); return true;`);
+		expect(reads).toBe(1);
+		expect((await t.client.get<{ unreadTotal: number }>("/inbox?view=threads")).body.unreadTotal).toBe(1);
+	});
+
 });
