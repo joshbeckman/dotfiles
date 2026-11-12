@@ -632,13 +632,13 @@ it("ART-06 a linked objective file stays a download and is never read as a build
 	await start({ script: [{ text: "I lead this." }] });
 	const draft = await t!.client.post<{ objective: { id: string } }>("/objectives", { goal: "Retire the boiler" });
 	const fileId = await upload("report.html", "<h1>report</h1>");
-	const linked = await t!.client.post(`/objectives/${draft.body.objective.id}/artifacts`, { file: fileId });
+	const linked = await t!.client.post(`/objectives/${draft.body.objective.id}/links`, { file: fileId });
 	expect(linked.status, JSON.stringify(linked.body)).toBe(201);
 
-	const view = await t!.client.get<{ objective: { artifacts: Array<{ id: string; name: string; url: string }> } }>(
+	const view = await t!.client.get<{ objective: { links: Array<{ id: string; name: string; url: string }> } }>(
 		`/objectives/${draft.body.objective.id}`,
 	);
-	expect(view.body.objective.artifacts).toMatchObject([{ id: fileId, name: "report.html", url: `pana://${TEST_DOMAIN}/files/${fileId}/report.html` }]);
+	expect(view.body.objective.links).toMatchObject([{ id: fileId, name: "report.html", url: `pana://${TEST_DOMAIN}/files/${fileId}/report.html` }]);
 	// An uploaded file linked to an objective records no version: nothing becomes an executable preview.
 	expect(await t!.runtime.db.all("SELECT seq FROM artifact_versions")).toEqual([]);
 	expect(await t!.runtime.db.all("SELECT name FROM artifacts")).toEqual([]);
