@@ -35,8 +35,7 @@ every participant.
 
 When a thread you participate in changes direction or topic, regenerate its subject with
 `pana thread subject THREAD --regenerate` after the new topic is in a posted message. The subject
-model reads posted messages, not an unposted reply. This requires a configured subject model; it
-does not set an exact subject.
+generator reads posted messages, not an unposted reply.
 
 `pana thread search --query TEXT` and `pana thread list` find threads you are not in, and
 `pana thread read` opens any thread or message by URL or ID. Reading never joins a thread and
