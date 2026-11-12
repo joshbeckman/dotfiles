@@ -24,7 +24,7 @@ import {
 import { browserEnv, explainPush, subscribeToPush } from "./push.js";
 import { nextCursor, pagePath, showMore } from "./pages.js";
 import { apiName, clientBody, startClientTelemetry, viewName } from "./perf.js";
-import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
+import { HITS_PER_STORE, fuzzyScore, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
 	bookmarkRow,
@@ -1903,6 +1903,7 @@ async function messageElement(message, { focus }) {
 	article.tabIndex = -1;
 	article.dataset.testid = "message";
 	article.dataset.id = view.id ?? "";
+	if (Number.isSafeInteger(message.seq)) article.dataset.seq = String(message.seq);
 	article.dataset.sender = view.sender;
 	// UX-06: the sender's identity color belongs to this thread, not the session.
 	participantIdentity(article, { url: view.sender, kind: view.senderKind });
@@ -2174,7 +2175,13 @@ async function artifactPublished(event) {
 	const container = $("thread-messages");
 	if (!container.querySelector(`[data-testid="message"][data-id="${CSS.escape(message.id)}"]`)) {
 		const node = await messageElement(message, { focus: false });
-		if (state.section === "threads" && state.thread?.id === threadId && !container.querySelector(`[data-testid="message"][data-id="${CSS.escape(message.id)}"]`)) container.append(node);
+		if (state.section === "threads" && state.thread?.id === threadId && !container.querySelector(`[data-testid="message"][data-id="${CSS.escape(message.id)}"]`)) {
+			const next = [...container.querySelectorAll('[data-testid="message"]')].find((item) => Number(item.dataset.seq) > message.seq);
+			const top = next?.getBoundingClientRect().top;
+			container.querySelector(":scope > .hint")?.remove();
+			container.insertBefore(node, next ?? container.querySelector(':scope > [data-history="later"]'));
+			if (next && top < 0) window.scrollBy(0, next.getBoundingClientRect().top - top);
+		}
 	}
 }
 
@@ -4704,16 +4711,32 @@ function onPaletteInput() {
 	palette.timer = setTimeout(() => void paletteSearch(query, search), PALETTE_DEBOUNCE);
 }
 
-/** The search stage asks the three stores at once and draws whatever stays newest. */
+/** Artifact names live per thread. Bound concurrent reads while searching all of them. */
+async function searchArtifactNames(query, search) {
+	const stats = await api("GET", "/stats/artifacts");
+	const matches = [];
+	const threads = Array.isArray(stats.threads) ? stats.threads : [];
+	for (let offset = 0; offset < threads.length; offset += 8) {
+		if (!palette.open || palette.stage !== "search" || search !== palette.search) return [];
+		const pages = await Promise.all(threads.slice(offset, offset + 8).map((thread) => api("GET", `/threads/${encodeURIComponent(thread.threadId)}/artifacts`)));
+		for (const page of pages) for (const artifact of page.artifacts ?? []) {
+			if (fuzzyScore(artifact.name, query) !== null) matches.push(artifact);
+		}
+	}
+	return matches;
+}
+
+/** The search stage asks the stores at once and draws whatever stays newest. */
 async function paletteSearch(query, search) {
 	try {
-		const [threads, sessions, memory] = await Promise.all([
+		const [threads, sessions, memory, artifacts] = await Promise.all([
 			api("GET", pagePath(`/threads?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", `/memory/search?query=${encodeURIComponent(query)}&limit=${HITS_PER_STORE}`),
+			searchArtifactNames(query, search),
 		]);
 		if (!palette.open || palette.stage !== "search" || search !== palette.search) return;
-		renderPaletteHits(paletteHits({ threads, sessions, memory }, query), query);
+		renderPaletteHits(paletteHits({ threads, sessions, memory, artifacts: { artifacts } }, query), query);
 	} catch (error) {
 		if (search !== palette.search) return;
 		$("palette-note").textContent = error?.body?.error?.message ?? error?.message ?? String(error);
