@@ -743,6 +743,30 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 	}
 });
 
+it("ART-19 the word means one thing: the objective's linked files are links, not artifacts", async () => {
+	await start();
+	const objective = await draft("Links, not artifacts");
+	const uploaded = await t!.client.post<{ file: { id: string } }>("/files?name=chart.png", Buffer.from("png"));
+	expect(uploaded.status).toBe(201);
+
+	const linked = await t!.client.post<{ link: { id: string; url: string } }>(`/objectives/${objective.id}/links`, { file: uploaded.body.file.id });
+	expect(linked.status).toBe(201);
+	expect(linked.body.link.id).toBe(uploaded.body.file.id);
+
+	// The read model names it `links`, and an artifact is now only a thread's versioned build.
+	const detail = await t!.client.get<{ objective: { artifacts?: unknown; links: Array<{ id: string }> } }>(`/objectives/${objective.id}`);
+	expect(detail.status).toBe(200);
+	expect(detail.body.objective.artifacts).toBeUndefined();
+	expect(detail.body.objective.links.map((link) => link.id)).toEqual([uploaded.body.file.id]);
+
+	// The old route is gone rather than aliased, so nothing can keep calling it by accident.
+	const old = await t!.client.post(`/objectives/${objective.id}/artifacts`, { file: uploaded.body.file.id });
+	expect(old.status).toBe(404);
+
+	const removed = await t!.client.request("DELETE", `/objectives/${objective.id}/links/${uploaded.body.file.id}`);
+	expect(removed.status).toBe(200);
+});
+
 it("OBJ-38 every objective command runs against panad without a usage error, and every route is in the API table", async () => {
 	await start({
 		script: [
