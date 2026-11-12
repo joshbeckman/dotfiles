@@ -23,8 +23,11 @@ chmod +x "$tmp/bin/gw"
 # `git pr-view` renders a GitHub PR with `gh` itself; `gw` has no markdown viewer.
 cat >"$tmp/bin/gh" <<'EOF2'
 #!/bin/sh
-[ "$1" = pr ] && [ "$2" = view ] || exit 2
-printf '# Full GitHub PR\n'
+case "$1" in
+  extension) [ "$2" = list ] && printf 'gh view-md\tjoshbeckman/gh-view-md\t1\n' ;;
+  view-md) printf '# Full GitHub PR\n' ;;
+  *) exit 2 ;;
+esac
 EOF2
 chmod +x "$tmp/bin/gh"
 
@@ -55,6 +58,20 @@ for operation in pr-url pr-view pr-merged pr-checks; do
 done
 [[ "$(run pr-url https://github.com/example/project/pull/7)" == 'https://github.com/example/project/pull/7' ]]
 [[ "$(run pr-view https://github.com/example/project/pull/7)" == '# Full GitHub PR' ]]
+# Without the `gh view-md` extension, `pr-view` falls back to `gh pr view`.
+casebin="$tmp/gh-no-ext"
+mkdir "$casebin"
+cat >"$casebin/gh" <<'EOF3'
+#!/bin/sh
+case "$1" in
+  extension) exit 0 ;;
+  pr) [ "$2" = view ] && printf '# Plain GitHub PR\n' ;;
+  *) exit 2 ;;
+esac
+EOF3
+chmod +x "$casebin/gh"
+out="$(cd "$tmp/repo" && PATH="$casebin:$tmp/bin:$root/bin:$PATH" git pr-view https://github.com/example/project/pull/7)"
+[[ "$out" == '# Plain GitHub PR' ]] || { printf 'pr-view fell back to: %s\n' "$out" >&2; exit 1; }
 [[ "$(run pr-merged https://github.com/example/project/pull/7)" == '2026-01-02T03:04:05Z' ]]
 expect_line '| Check | Status | Result |' pr-checks https://github.com/example/project/pull/7 --required
 
