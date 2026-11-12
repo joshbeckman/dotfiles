@@ -592,7 +592,8 @@ the objective a thread (`objectives.thread_id`); a drafting objective has none.
 
 Out of the first slice, deliberately: persistent artifact state (a checklist tick is not stored),
 pana data injected into an artifact, a `postMessage` bridge, in-place editing of an artifact, and
-artifact activity in unread counts, push, or wakes.
+artifact activity in unread counts, push, or wakes. An artifact in this slice is a preview:
+whatever a reader does inside one is transient, and a reload returns the version as published.
 
 - [ ] **ART-01** An artifact belongs to one thread and its name is unique there: `artifacts(id, thread_id, name, created_by, created_at)`. A version is an immutable snapshot: `artifact_versions(id, artifact_id, seq, entry, note, created_by, created_at)` plus one row per file naming a `files` id. A version stores whole originals; the `files` table has no content hash, so two versions carry two copies of an unchanged file. Nothing rewrites or deletes a version, and a version's manifest never changes.
 - [ ] **ART-02** A publish sends a manifest of files already uploaded through `POST /files`, so FIL-01 through FIL-07 apply unchanged and panad never reads a client path. The server checks the manifest alone: every path relative and free of `..`, no duplicate path, every file id existing, an entry path present in the manifest, at most `artifacts.maxFiles` files, and each recorded size within `files.maxBytes`. The CLI refuses a symlink or an absolute path before uploading anything; a server that receives the bytes cannot know how the client collected them. A published version may leave unreferenced uploads behind, and that is accepted: uploads are not staged and a rejected publish deletes nothing.
