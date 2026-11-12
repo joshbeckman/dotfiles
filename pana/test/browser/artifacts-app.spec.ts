@@ -619,10 +619,16 @@ describeBrowser("artifact pane", () => {
 		// cannot hear about it, so there is no affordance to measure yet.
 		const kinds = await streamKinds();
 		expect(kinds).toContain("artifact.published");
+		// The probe publishes a different artifact in this thread, not the open pane.
+		const otherOffered = await evaluatePage<boolean>(`return !document.getElementById("artifact-new-version").hidden;`);
+		expect(otherOffered).toBe(false);
 
 		const before = await evaluatePage<{ seq: number; path: string | null; messages: number; draft: string; scroll: number }>(`
 			${HELPERS}
 			const box = document.getElementById("reply-body");
+			window.__readingFrame = document.querySelector("[data-testid=artifact-frame]");
+			window.__readingFrameLoads = 0;
+			window.__readingFrame.addEventListener("load", () => window.__readingFrameLoads++);
 			box.value = "Keep this draft";
 			box.dispatchEvent(new Event("input", { bubbles: true }));
 			scrollTo(0, Math.round(document.documentElement.scrollHeight / 3));
@@ -646,6 +652,8 @@ describeBrowser("artifact pane", () => {
 			seq: number;
 			path: string | null;
 			offered: boolean;
+			sameFrame: boolean;
+			frameLoads: number;
 		}>(`
 			${HELPERS}
 			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length > ${before.messages}, 20000);
@@ -660,6 +668,8 @@ describeBrowser("artifact pane", () => {
 				seq: seqOf(document.querySelector("[data-testid=artifact-version]")),
 				path: framePath(),
 				offered: visible(offered),
+				sameFrame: window.__readingFrame === document.querySelector("[data-testid=artifact-frame]"),
+				frameLoads: window.__readingFrameLoads,
 			};
 		`);
 		// The open thread appends the published message without a reload.
@@ -669,6 +679,8 @@ describeBrowser("artifact pane", () => {
 		// and the draft and the scroll are theirs.
 		expect(after.seq).toBe(before.seq);
 		expect(after.path).toBe(before.path);
+		expect(after.sameFrame).toBe(true);
+		expect(after.frameLoads).toBe(0);
 		expect(after.draft).toBe("Keep this draft");
 		expect(Math.abs(after.scroll - before.scroll)).toBeLessThanOrEqual(8);
 		// The pane offers the new version for the reader to choose.
