@@ -262,6 +262,40 @@ describe("SUB subjects", () => {
 		expect(await searchThreads(panad.runtime, "First model subject")).toEqual([]);
 	});
 
+	it("SUB-04 regeneration permits participating sessions and the user, but rejects other sessions before calling the model", async () => {
+		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [
+			{ text: "Member's subject" }, { text: "User's subject" },
+		] });
+		const panad = t;
+		const seeded = await seed(panad, "Initial topic");
+		const member = panad.runtime.newId();
+		const outsider = panad.runtime.newId();
+		await panad.runtime.db.write(async (tx) => {
+			for (const id of [member, outsider]) {
+				await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, panad.runtime.url({ kind: "session", id }), panad.clock.now());
+				await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'idle', 0, ?, ?)", id, panad.clock.now(), panad.clock.now());
+			}
+			await tx.run("INSERT INTO thread_participants (thread_id, participant_id, joined_at) VALUES (?, ?, ?)", seeded.threadId, member, panad.clock.now());
+			await tx.run("DELETE FROM thread_participants WHERE thread_id = ? AND participant_id = ?", seeded.threadId, TEST_USER);
+		});
+
+		const denied = await panad.client.post(`/threads/${seeded.threadId}/subject`, { regenerate: true }, { caller: outsider });
+		expect(denied.status).toBe(403);
+		expect(panad.model.calls()).toBe(0);
+		expect(await currentSubject(panad, seeded.threadId)).toBe("Initial topic");
+		expect(await subjectHistory(panad.runtime, seeded.threadId)).toHaveLength(1);
+
+		const allowed = await panad.client.post<{ subject: string }>(`/threads/${seeded.threadId}/subject?regenerate=true`, undefined, { caller: member });
+		expect(allowed.status).toBe(200);
+		expect(allowed.body.subject).toBe("Member's subject");
+		const user = await panad.client.post<{ subject: string }>(`/threads/${seeded.threadId}/subject`, { regenerate: true });
+		expect(user.status).toBe(200);
+		expect(user.body.subject).toBe("User's subject");
+		expect((await subjectHistory(panad.runtime, seeded.threadId)).map((entry) => entry.subject)).toEqual([
+			"Initial topic", "Member's subject", "User's subject",
+		]);
+	});
+
 	it("regeneration reads the conversation in order with revisions, never redacted or superseded text", async () => {
 		t = await startTestPanad({ config: { subjectModel: "faux/faux-1" }, script: [{ text: "Current topic" }] });
 		const panad = t;

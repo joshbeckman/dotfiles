@@ -848,6 +848,9 @@ describe("system prompt", () => {
 		await runTurn();
 
 		const pana = promptSections(await contextOf(t!, first.conversationId)).get("pana")!;
+		// Regeneration is available for a participating session when the topic changes.
+		expect(pana).toContain("When a thread you participate in changes direction or topic");
+		expect(pana).toContain("pana thread subject THREAD --regenerate");
 		// Discovery: the commands that find a thread the session is not a participant of.
 		expect(pana).toContain("pana thread search");
 		expect(pana).toContain("pana thread list");
