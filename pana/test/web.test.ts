@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
+import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -275,6 +276,32 @@ describe("PWA shell and static assets", () => {
 		// The copied shims stay beside the bundles they were built from.
 		expect(statSync(fileURLToPath(new URL("../web/renderers.js", import.meta.url))).size).toBeGreaterThan(0);
 		expect(statSync(fileURLToPath(new URL("../web/mermaid-renderer.js", import.meta.url))).size).toBeGreaterThan(0);
+	});
+
+	it("WEB-01 a static asset is gzipped for a client that asks, and plain for one that refuses", async () => {
+		t = await startTestPanad();
+		const plain = await t.tcp.get("/render.js");
+		const zipped = await t.tcp.get("/render.js", { headers: { "accept-encoding": "gzip, deflate, br" } });
+		expect(zipped.status).toBe(200);
+		expect(zipped.headers["content-encoding"]).toBe("gzip");
+		// The bytes now depend on the request header, so a cache has to key on it.
+		expect(String(zipped.headers["vary"])).toContain("accept-encoding");
+		expect(zipped.raw.byteLength).toBeLessThan(plain.raw.byteLength);
+		expect(gunzipSync(zipped.raw).equals(plain.raw)).toBe(true);
+		// The shell a browser loads takes the same path.
+		const shell = await t.tcp.get("/", { headers: { "accept-encoding": "gzip" } });
+		expect(shell.headers["content-encoding"]).toBe("gzip");
+		expect(gunzipSync(shell.raw).toString("utf8")).toContain("<!doctype html>");
+		// The diagram bundle is the reason for all of this: 3.4 MB down to about a third on a phone.
+		const bundle = await t.tcp.get("/mermaid-vendor.js", { headers: { "accept-encoding": "gzip" } });
+		expect(bundle.headers["content-encoding"]).toBe("gzip");
+		expect(bundle.raw.byteLength * 2).toBeLessThan(3_452_389);
+		// `gzip;q=0` is a refusal, and a client that sends nothing gets bytes it can read.
+		for (const accept of ["gzip;q=0", ""]) {
+			const refused = await t.tcp.get("/render.js", { headers: { "accept-encoding": accept } });
+			expect(refused.headers["content-encoding"]).toBeUndefined();
+			expect(refused.raw.equals(plain.raw)).toBe(true);
+		}
 	});
 
 	it("WEB-10 a choices fence parses to options and reads back as labels in a row", async () => {

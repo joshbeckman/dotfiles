@@ -4,10 +4,10 @@
 import { ApiError } from "../api/errors.ts";
 import type { HandlerResult, Handlers } from "../api/types.ts";
 import { subscribeEvents } from "./events.ts";
-import { loadAsset } from "./static.ts";
+import { acceptsGzip, loadAsset } from "./static.ts";
 
-async function asset(pathname: string): Promise<HandlerResult> {
-	const loaded = await loadAsset(pathname);
+async function asset(pathname: string, acceptEncoding?: string | string[]): Promise<HandlerResult> {
+	const loaded = await loadAsset(pathname, { gzip: acceptsGzip(acceptEncoding) });
 	if (!loaded) throw ApiError.notFound(`no web asset for ${pathname}`);
 	return {
 		status: 200,
@@ -17,9 +17,9 @@ async function asset(pathname: string): Promise<HandlerResult> {
 }
 
 export const handlers: Handlers = {
-	"web.index": () => asset("/"),
+	"web.index": (ctx) => asset("/", ctx.headers["accept-encoding"]),
 
-	"web.static": (ctx) => asset(`/${ctx.params.rest ?? ""}`),
+	"web.static": (ctx) => asset(`/${ctx.params.rest ?? ""}`, ctx.headers["accept-encoding"]),
 
 	"events.stream": (ctx) => ({
 		status: 200,
