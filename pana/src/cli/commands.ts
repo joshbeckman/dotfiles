@@ -506,8 +506,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["thread", "subject"],
 		usage: "pana thread subject THREAD [--regenerate]",
-		summary: "Show a thread's subject",
-		flags: [bool("regenerate", "--regenerate", "Replace the subject with a new one")],
+		summary: "Show or regenerate a thread's subject",
+		flags: [bool("regenerate", "--regenerate", "Generate a new subject from the conversation (user or thread participant)")],
 		positionals: [{ name: "THREAD", param: "id", required: true }],
 		request: (params) => ({
 			method: "POST",

@@ -847,6 +847,8 @@ async function refreshThreadRoles(seedEvent) {
 	syncMessageIdentities($("stale-new"));
 	syncRosterActivity(current, events);
 }
+// Count live changes to the open thread so a slow HTTP response cannot undo a newer event.
+let subjectEventRevision = 0;
 
 // Patch labels only: reopening a thread would disturb reply drafts, focus, and scroll.
 function applyThreadSubject(threadId, subject) {
@@ -878,6 +880,7 @@ function handleEvent(event) {
 	// against panad's clock even when the two machines disagree, as a test's fake clock does.
 	if (Number.isFinite(Number(event.at))) state.clockSkew = Date.now() - Number(event.at);
 	if (event.kind === "thread.subject" && typeof event.threadId === "string" && typeof event.subject === "string") {
+		if (state.thread?.id === event.threadId) subjectEventRevision++;
 		applyThreadSubject(event.threadId, event.subject);
 		return;
 	}
@@ -1897,12 +1900,34 @@ async function regenerateThreadSubject() {
 	const thread = state.thread;
 	if (!thread) return;
 	const button = $("thread-subject-regenerate");
+	const revision = subjectEventRevision;
 	button.disabled = true;
 	button.textContent = "Regenerating…";
 	try {
 		const body = await api("POST", `/threads/${thread.id}/subject`, { regenerate: true });
-		applyThreadSubject(thread.id, body.subject ?? "(no subject)");
-		status("Subject regenerated.");
+		if (state.thread?.id === thread.id) {
+			if (state.thread === thread && revision === subjectEventRevision) {
+				applyThreadSubject(thread.id, body.subject ?? "(no subject)");
+			} else {
+				// An intervening event or thread refresh can be older OR newer than this response.
+				// Read the current subject, and avoid overwriting a later event or thread refresh.
+				const readThread = state.thread;
+				const readRevision = subjectEventRevision;
+				let current;
+				try {
+					current = await api("POST", `/threads/${thread.id}/subject`);
+				} catch {
+					status(body.applied === false
+						? "A newer subject was already applied, but refresh failed. Reopen the thread to check it."
+						: "Subject regenerated, but refresh failed. Reopen the thread to check it.", true);
+					return;
+				}
+				if (state.thread === readThread && readRevision === subjectEventRevision) {
+					applyThreadSubject(thread.id, current.subject ?? "(no subject)");
+				}
+			}
+		}
+		status(body.applied === false ? "A newer subject was already applied." : "Subject regenerated.");
 	} catch (error) {
 		// The route names the cause. The usual one is a config.json with no subjectModel, which is
 		// the user's to fix, so say how rather than echoing a failure.
@@ -2173,6 +2198,8 @@ function messageAction(menu, view, action, label, run) {
 
 /** BKM-04: save this message, or take the mark off, and swap the menu label in place. */
 async function setBookmark(view, article) {
+	if (article.dataset.bookmarkPending) return;
+	article.dataset.bookmarkPending = "true";
 	const save = !view.bookmarked;
 	try {
 		await api("POST", `/messages/${view.id}/${save ? "bookmark" : "unbookmark"}`, {});
@@ -2182,6 +2209,8 @@ async function setBookmark(view, article) {
 		status(save ? "Bookmarked." : "Bookmark removed.");
 	} catch (error) {
 		fail(error);
+	} finally {
+		delete article.dataset.bookmarkPending;
 	}
 }
 
@@ -4959,6 +4988,13 @@ function runKey(action, { target, form }) {
 			return focusReply();
 		case "archive":
 			return archiveKey();
+		case "bookmark": {
+			const message = selected();
+			if (message?.dataset.testid === "message" && selectables().includes(message)) {
+				message.querySelector("[data-testid=message-bookmark]")?.click();
+			}
+			return;
+		}
 	}
 }
 
@@ -4979,6 +5015,7 @@ function onKeydown(event) {
 	const action = keys.press(event, { inInput, inForm: Boolean(form), apple: APPLE });
 	if (!action) return;
 	event.preventDefault();
+	if (action === "bookmark" && event.repeat) return;
 	if (action !== "pending") runKey(action, { target, form });
 }
 
@@ -5343,8 +5380,8 @@ $("help").addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", onKeydown);
 document.addEventListener("focusin", (event) => {
-	const row = event.target?.closest?.("[data-selectable]");
-	if (row) select(row, { scroll: false });
+	const row = event.target?.closest?.("[data-selectable], #thread-messages [data-testid=message]");
+	if (row && (row.hasAttribute("data-selectable") || selectables().includes(row))) select(row, { scroll: false });
 });
 document.addEventListener("click", (event) => {
 	// A click that is not on a message's actions closes whichever one is open.

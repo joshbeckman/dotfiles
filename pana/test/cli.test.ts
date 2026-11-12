@@ -324,6 +324,10 @@ describe("pana CLI", () => {
 		expect(leaf.code).toBe(0);
 		expect(leaf.stdout).toContain("--after MESSAGE");
 		expect(leaf.stdout).toContain("--cc ADDRS");
+		const subject = await run(["thread", "subject", "--help"], undefined);
+		expect(subject.code).toBe(0);
+		expect(subject.stdout).toContain("--regenerate");
+		expect(subject.stdout).toContain("user or thread participant");
 	});
 
 	it("CLI-07 unknown commands and flags exit 2 with usage", async () => {

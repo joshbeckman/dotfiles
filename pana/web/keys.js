@@ -24,6 +24,7 @@ export const KEYMAP = [
 	{ action: "go:objectives", sequences: [["g", "o"]], description: "Go to Objectives" },
 	// BKM-05: saved messages, appended for the same reason.
 	{ action: "go:bookmarks", sequences: [["g", "b"]], description: "Go to Bookmarks" },
+	{ action: "bookmark", sequences: [["b"]], description: "Toggle the selected message's bookmark" },
 ];
 
 /** Bindings that work inside text inputs. `Mod` is Cmd on macOS and Ctrl elsewhere. */

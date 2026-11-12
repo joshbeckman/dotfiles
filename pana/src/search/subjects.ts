@@ -147,6 +147,8 @@ export async function awaitSubjectJobs(runtime: Runtime): Promise<void> {
 export interface RegeneratedSubject {
 	subject: string;
 	previous: string | null;
+	/** False when a newer successful request already changed the subject. */
+	applied: boolean;
 }
 
 /**
@@ -154,14 +156,21 @@ export interface RegeneratedSubject {
  * model, because the caller asked for the result, and it throws rather than leaving the old subject.
  */
 export async function regenerateSubject(runtime: Runtime, threadId: string): Promise<RegeneratedSubject> {
-	const thread = await runtime.db.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", threadId);
-	if (!thread) throw new SubjectError("no_messages", `thread ${threadId} does not exist`);
-	const subject = await askSubjectModel(runtime, await threadSubjectBody(runtime, threadId));
-	const recorded = await runtime.db.write((tx) =>
-		recordSubject(tx, { threadId, subject, source: "model", id: runtime.newId(), now: runtime.clock.now() }),
-	);
-	await publish(runtime, { kind: "thread.subject", threadId, subject: recorded });
-	return { subject: recorded, previous: thread.subject };
+	let job: SubjectJob | undefined;
+	try {
+		// Reserve the order and read the conversation in the same serialized snapshot. A later
+		// request cannot get an earlier snapshot; the model runs outside the transaction.
+		const body = await runtime.db.write(async (tx) => {
+			const thread = await tx.get("SELECT 1 FROM threads WHERE id = ?", threadId);
+			if (!thread) throw new SubjectError("no_messages", `thread ${threadId} does not exist`);
+			job = beginSubjectJob(runtime, threadId);
+			return threadSubjectBody(tx, threadId);
+		});
+		const subject = await askSubjectModel(runtime, body);
+		return await commitSubjectJob(runtime, threadId, job!, subject);
+	} finally {
+		job?.finish();
+	}
 }
 
 /** Every subject of a thread, oldest first. */
@@ -185,16 +194,89 @@ function jobsFor(runtime: Runtime): Set<Promise<void>> {
 }
 
 async function runSubjectJob(runtime: Runtime, threadId: string): Promise<void> {
-	const subject = await askSubjectModel(runtime, await firstMessageBody(runtime, threadId));
-	const recorded = await runtime.db.write((tx) =>
-		recordSubject(tx, { threadId, subject, source: "model", id: runtime.newId(), now: runtime.clock.now() }),
-	);
-	await publish(runtime, { kind: "thread.subject", threadId, subject: recorded });
+	let job: SubjectJob | undefined;
+	try {
+		const body = await runtime.db.write(async (tx) => {
+			job = beginSubjectJob(runtime, threadId, true);
+			return firstMessageBody(tx, threadId);
+		});
+		const subject = await askSubjectModel(runtime, body);
+		await commitSubjectJob(runtime, threadId, job!, subject);
+	} finally {
+		job?.finish();
+	}
+}
+
+interface SubjectJobState {
+	next: number;
+	applied: number;
+	pending: number;
+	tail: Promise<void>;
+}
+
+interface SubjectJob {
+	state: SubjectJobState;
+	order: number;
+	finish(): void;
+}
+
+// The daemon owns these jobs; a restart ends its model calls, so no old job can survive into a
+// new runtime. Keep state only while jobs overlap, and never serialize the model calls themselves.
+const subjectJobStates = new WeakMap<Runtime, Map<string, SubjectJobState>>();
+
+function beginSubjectJob(runtime: Runtime, threadId: string, initial = false): SubjectJob {
+	let threads = subjectJobStates.get(runtime);
+	if (!threads) {
+		threads = new Map();
+		subjectJobStates.set(runtime, threads);
+	}
+	let state = threads.get(threadId);
+	if (!state) {
+		state = { next: 0, applied: -1, pending: 0, tail: Promise.resolve() };
+		threads.set(threadId, state);
+	}
+	const active = state;
+	// Initial naming is logically older even if creation wakes a session before it is scheduled.
+	const order = initial ? 0 : ++active.next;
+	active.pending++;
+	return {
+		state: active,
+		order,
+		finish: () => {
+			if (--active.pending === 0) threads!.delete(threadId);
+		},
+	};
+}
+
+/** Commit and publish in order of completion, unless a newer job has already succeeded. */
+async function commitSubjectJob(runtime: Runtime, threadId: string, job: SubjectJob, subject: string): Promise<RegeneratedSubject> {
+	const { state, order } = job;
+	const commit = state.tail.then(async () => {
+		const result = await runtime.db.write(async (tx) => {
+			const current = await tx.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", threadId);
+			if (!current) throw new SubjectError("no_messages", `thread ${threadId} does not exist`);
+			// An initial job may start after a regeneration has already finished and its in-memory
+			// state was released. A recorded model subject proves that job is no longer initial.
+			const alreadyNamed = order === 0 && await tx.get("SELECT 1 FROM subjects WHERE thread_id = ? AND source = 'model' LIMIT 1", threadId);
+			if (order < state.applied || alreadyNamed) {
+				if (current.subject === null) throw new SubjectError("no_messages", `thread ${threadId} has no subject`);
+				return { subject: current.subject, previous: null, applied: false };
+			}
+			const recorded = await recordSubject(tx, { threadId, subject, source: "model", id: runtime.newId(), now: runtime.clock.now() });
+			runtime.db.afterCommit(() => { void publish(runtime, { kind: "thread.subject", threadId, subject: recorded }); });
+			return { subject: recorded, previous: current.subject, applied: true };
+		});
+		if (result.applied) state.applied = order;
+		return result;
+	});
+	// A failed commit or notification must not strand the next result in the queue.
+	state.tail = commit.then(() => {}, () => {});
+	return commit;
 }
 
 /** Read current, unredacted message bodies in one snapshot. Keep recent context on long threads. */
-async function threadSubjectBody(runtime: Runtime, threadId: string): Promise<string> {
-	const messages = await runtime.db.all<{ seq: number; sender: string; body: string }>(
+async function threadSubjectBody(tx: SqliteExecutor, threadId: string): Promise<string> {
+	const messages = await tx.all<{ seq: number; sender: string; body: string }>(
 		`SELECT m.seq, p.kind AS sender,
 		 CASE WHEN e.kind = 'message.revised' THEN e.body ELSE m.body END AS body
 		 FROM messages m JOIN participants p ON p.id = m.sender_id
@@ -223,13 +305,13 @@ async function threadSubjectBody(runtime: Runtime, threadId: string): Promise<st
 }
 
 /** The first message of a thread, as its newest revision reads. */
-async function firstMessageBody(runtime: Runtime, threadId: string): Promise<string> {
-	const message = await runtime.db.get<{ id: string; body: string }>(
+async function firstMessageBody(tx: SqliteExecutor, threadId: string): Promise<string> {
+	const message = await tx.get<{ id: string; body: string }>(
 		"SELECT id, body FROM messages WHERE thread_id = ? ORDER BY seq LIMIT 1",
 		threadId,
 	);
 	if (!message) throw new SubjectError("no_messages", `thread ${threadId} has no messages`);
-	const event = await runtime.db.get<{ kind: string; body: string | null }>(
+	const event = await tx.get<{ kind: string; body: string | null }>(
 		"SELECT kind, body FROM message_events WHERE message_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
 		message.id,
 	);
