@@ -682,8 +682,8 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		"pana objective report OBJECTIVE",
 		"pana objective escalate OBJECTIVE",
 		"pana objective regenerate-lead OBJECTIVE --reason TEXT",
-		"pana objective artifact add OBJECTIVE PATH",
-		"pana objective artifact remove OBJECTIVE ID",
+		"pana objective link add OBJECTIVE PATH",
+		"pana objective link remove OBJECTIVE ID",
 		"pana objective limits set OBJECTIVE [--max-daily-usd N]",
 	]) {
 		expect(help, usage).toContain(usage);
@@ -718,14 +718,14 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		"objectives.report",
 		"objectives.escalate",
 		"objectives.regenerateLead",
-		"objectives.artifacts.add",
-		"objectives.artifacts.remove",
+		"objectives.links.add",
+		"objectives.links.remove",
 	]) {
 		expect(names, name).toContain(name);
 	}
 
 	// Every route the package registers has a handler by now: none answers 501 `not_implemented`.
-	// A refusal here (a draft has no thread, an artifact names no file) is a real answer, not a hole.
+	// A refusal here (a draft has no thread, a link names no file) is a real answer, not a hole.
 	const objective = await draft("All routes wired");
 	for (const [method, path] of [
 		["GET", `/objectives/${objective.id}/brief`],
@@ -734,8 +734,8 @@ it("OBJ-38 pana objective --help lists every command, and every WP18 route is re
 		["POST", `/objectives/${objective.id}/report`],
 		["POST", `/objectives/${objective.id}/escalate`],
 		["POST", `/objectives/${objective.id}/regenerate-lead`],
-		["POST", `/objectives/${objective.id}/artifacts`],
-		["DELETE", `/objectives/${objective.id}/artifacts/anything`],
+		["POST", `/objectives/${objective.id}/links`],
+		["DELETE", `/objectives/${objective.id}/links/anything`],
 	] as const) {
 		const res = await t!.client.request(method, path, { body: {} });
 		expect(res.status, `${method} ${path}`).not.toBe(501);
@@ -758,7 +758,7 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 	});
 
 	// Fixtures the commands act on: a launched objective with a thread, a draft to launch, an
-	// active objective to stop and resume, an active one to finish and archive, and an artifact.
+	// active objective to stop and resume, an active one to finish and archive, and a link.
 	const main = await draft("Every command");
 	await t!.client.post(`/objectives/${main.id}/launch`);
 	const toLaunch = await draft("Launch me");
@@ -768,14 +768,14 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 	await t!.client.post(`/objectives/${toFinish.id}/launch`);
 	await settle();
 
-	const source = join(t!.dir, "artifact.txt");
+	const source = join(t!.dir, "link.txt");
 	writeFileSync(source, "hello\n");
 	const uploaded = await t!.client.request<{ file: { id: string } }>("POST", "/files?name=note.txt", {
 		bytes: Buffer.from("already linked\n"),
 		headers: { "content-type": "text/plain" },
 	});
 	expect(uploaded.status).toBe(201);
-	const linked = await t!.client.post<{ artifact: { id: string } }>(`/objectives/${main.id}/artifacts`, { file: uploaded.body.file.id });
+	const linked = await t!.client.post<{ link: { id: string } }>(`/objectives/${main.id}/links`, { file: uploaded.body.file.id });
 	expect(linked.status).toBe(201);
 
 	// One entry per command in `OBJECTIVE_COMMANDS`, in the order the commands need to run.
@@ -802,8 +802,8 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 		"objective report": { id: main.id, body: "Week one: 296 kWh." },
 		"objective escalate": { id: main.id, body: "Is 296 low enough?" },
 		"objective regenerate-lead": { id: main.id, reason: "The lead stopped answering." },
-		"objective artifact add": { id: main.id, path: source },
-		"objective artifact remove": { id: main.id, file: linked.body.artifact.id },
+		"objective link add": { id: main.id, path: source },
+		"objective link remove": { id: main.id, file: linked.body.link.id },
 		// OBJ-41: the limits a user sets, and one the command clears with `default`.
 		"objective limits set": { id: main.id, "max-daily-usd": "5", "max-total-usd": "default" },
 	};
@@ -817,8 +817,8 @@ it("OBJ-38 every objective command runs against panad without a usage error, and
 	}
 	// `stop --all` is the same command's other form (OBJ-07 covers what it stops).
 	expect((await command("objective stop", { all: true })).exitCode).toBe(0);
-	// `artifact add` uploads through `POST /files` in the CLI itself, so it needs the whole command.
-	expect((await runCli(["objective", "artifact", "add", `pana://test.example/objectives/${main.id}`, source])).code).toBe(0);
+	// `link add` uploads through `POST /files` in the CLI itself, so it needs the whole command.
+	expect((await runCli(["objective", "link", "add", `pana://test.example/objectives/${main.id}`, source])).code).toBe(0);
 
 	// Every WP18 route is in the SPEC API table (CONTRIBUTING, "Add a route"), which groups a
 	// row's methods and its shared-prefix siblings, so both the table and the route are matched.

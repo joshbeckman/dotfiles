@@ -398,8 +398,8 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		}),
 	},
 	{
-		path: ["objective", "artifact", "add"],
-		usage: "pana objective artifact add OBJECTIVE PATH",
+		path: ["objective", "link", "add"],
+		usage: "pana objective link add OBJECTIVE PATH",
 		summary: "Upload a file and link it to the objective",
 		flags: [],
 		positionals: [
@@ -412,14 +412,14 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		validate: (params) => (text(params, "path") ? undefined : "give a PATH to upload"),
 		request: (params) => ({
 			method: "POST",
-			path: `/objectives/${objectiveSegment(text(params, "id"))}/artifacts`,
+			path: `/objectives/${objectiveSegment(text(params, "id"))}/links`,
 			body: { file: uploaded(params)?.id },
 		}),
 	},
 	{
-		path: ["objective", "artifact", "remove"],
-		usage: "pana objective artifact remove OBJECTIVE ID",
-		summary: "Unlink an artifact without deleting the file",
+		path: ["objective", "link", "remove"],
+		usage: "pana objective link remove OBJECTIVE ID",
+		summary: "Remove a link without deleting the file",
 		flags: [],
 		positionals: [
 			{ name: "OBJECTIVE", param: "id", required: true },
@@ -427,7 +427,7 @@ export const OBJECTIVE_COMMANDS: readonly CommandSpec[] = [
 		],
 		request: (params) => ({
 			method: "DELETE",
-			path: `/objectives/${objectiveSegment(text(params, "id"))}/artifacts/${encodeURIComponent(text(params, "file") ?? "")}`,
+			path: `/objectives/${objectiveSegment(text(params, "id"))}/links/${encodeURIComponent(text(params, "file") ?? "")}`,
 		}),
 	},
 	{

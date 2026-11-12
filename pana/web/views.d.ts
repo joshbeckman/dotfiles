@@ -222,7 +222,7 @@ export interface ObjectiveReportView {
 	redacted: boolean;
 }
 export function objectiveReport(report: any): ObjectiveReportView | null;
-export interface ObjectiveArtifactView {
+export interface ObjectiveLinkView {
 	id: string;
 	name: string;
 	size: number;
@@ -230,7 +230,7 @@ export interface ObjectiveArtifactView {
 	url: string;
 	addedAt: number;
 }
-export function objectiveArtifact(artifact: any): ObjectiveArtifactView;
+export function objectiveLink(link: any): ObjectiveLinkView;
 export interface ObjectiveDetailView {
 	id: string;
 	url: string;
@@ -264,7 +264,7 @@ export interface ObjectiveDetailView {
 	members: ObjectiveMemberView[];
 	escalations: ObjectiveEscalationView[];
 	report: ObjectiveReportView | null;
-	artifacts: ObjectiveArtifactView[];
+	links: ObjectiveLinkView[];
 	meters: ObjectiveMeterView[];
 	at: number;
 }

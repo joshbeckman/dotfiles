@@ -378,7 +378,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				PRIMARY KEY (objective_id, message_id)
 			);
 
-			-- OBJ-31: an artifact is an uploaded file plus this row; unlinking never deletes the file.
+			-- OBJ-31: a link is an uploaded file plus this row; unlinking never deletes the file.
 			CREATE TABLE IF NOT EXISTS objective_files (
 				objective_id  TEXT NOT NULL REFERENCES objectives(id),
 				file_id       TEXT NOT NULL REFERENCES files(id),

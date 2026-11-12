@@ -21,9 +21,9 @@
 // - `handlers.ts` — HTTP, one line per route.
 // - `cli.ts` — the `pana objective` command table.
 //
-// This package's reports, artifacts, pace, and notices:
+// This package's reports, links, pace, and notices:
 // - `reports.ts` — a report is a message in the objective's thread plus its mark (OBJ-30).
-// - `artifacts.ts` — an artifact is an uploaded file plus a link (OBJ-31).
+// - `links.ts` — a link is an uploaded file plus an objective_files row (OBJ-31).
 // - `pace.ts` — the pace needed against the pace achieved for a `dueAt` (OBJ-08).
 // - `sweep.ts` — the stranded notice (OBJ-06) and the behind notice (OBJ-08) on `runtime.clock`.
 
@@ -136,7 +136,7 @@ export {
 	type ObjectivePaused,
 } from "./limits.ts";
 export { launchObjective } from "./launch.ts";
-export { addArtifact, objectiveArtifacts, removeArtifact, type ObjectiveArtifactView } from "./artifacts.ts";
+export { addLink, objectiveLinks, removeLink, type ObjectiveLinkView } from "./links.ts";
 export {
 	behindPaces,
 	metricPaces,

@@ -1,5 +1,5 @@
 // OBJ-39 in a real browser: the objectives list and the one view a person uses to watch and steer
-// an objective — its state, charter, metrics, report, artifacts, roster, money and runs, wakes,
+// an objective — its state, charter, metrics, report, links, roster, money and runs, wakes,
 // and escalation — and the actions it offers (launch, stop, regenerate the lead, edit the charter).
 // Needs the installed Chrome and chrome-devtools, so it runs with `npm run test:web`, not in CI.
 
@@ -143,7 +143,7 @@ describeBrowser("objectives", () => {
 			percentFree: boolean;
 			metrics: Array<{ name: string; current: string; target: number | null; line: number; targetLine: number; points: number }>;
 			report: string;
-			artifacts: Array<{ title: string; meta: string; href: string | null }>;
+			links: Array<{ title: string; meta: string; href: string | null }>;
 			members: Array<{ state: string; text: string; session: string | null; lead: boolean; class: string; color: string }>;
 			meters: Array<{ id: string; label: string; value: string; bar: number; source: string; sourceLabel: string }>;
 			wakes: string[];
@@ -179,10 +179,10 @@ describeBrowser("objectives", () => {
 					};
 				}),
 				report: document.getElementById("objective-report").textContent,
-				artifacts: [...document.querySelectorAll("#objective-artifacts .item")].map((row) => ({
+				links: [...document.querySelectorAll("#objective-links .item")].map((row) => ({
 					title: row.querySelector(".title").textContent,
 					meta: row.querySelector(".meta").textContent,
-					href: row.querySelector("a[data-testid=objective-artifact-link]")?.getAttribute("href") ?? null,
+					href: row.querySelector("a[data-testid=objective-link-download]")?.getAttribute("href") ?? null,
 				})),
 				members: [...document.querySelectorAll("#objective-members .item")].map((row) => ({
 					state: row.querySelector(".state-badge").textContent,
@@ -235,12 +235,12 @@ describeBrowser("objectives", () => {
 		expect(view.metrics.find((metric) => metric.name === "kwh")!.current).toContain("27.333 kwh");
 		expect(view.atTarget).toBe("1 of 3 at target");
 		expect(view.percentFree).toBe(true);
-		// OBJ-30/OBJ-31: the newest report and the artifact, with its name, size, and file URL.
+		// OBJ-30/OBJ-31: the newest report and the link, with its name, size, and file URL.
 		expect(view.report).toContain("Baseline is 30 kWh a day");
-		expect(view.artifacts).toHaveLength(1);
-		expect(view.artifacts[0]!.title).toBe("baseline.csv");
-		expect(view.artifacts[0]!.meta).toContain("22 B");
-		expect(view.artifacts[0]!.href).toContain("/files/");
+		expect(view.links).toHaveLength(1);
+		expect(view.links[0]!.title).toBe("baseline.csv");
+		expect(view.links[0]!.meta).toContain("22 B");
+		expect(view.links[0]!.href).toContain("/files/");
 		// UX-09/REF-08: the roster, each member's live state beside a link to its session.
 		expect(view.members).toHaveLength(3);
 		expect(view.members.filter((member) => member.lead)).toHaveLength(1);

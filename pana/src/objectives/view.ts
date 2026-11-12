@@ -1,14 +1,14 @@
 // The objective view: one shape for `GET /objectives`, `GET /objectives/:id`, and the CLI.
 //
 // `objectiveView` is what a read shows. Later packages extend the show payload (OBJ-30's newest
-// report, OBJ-31's artifacts, the escalation) by adding a field here in `showObjective`, and their
+// report, OBJ-31's links, the escalation) by adding a field here in `showObjective`, and their
 // own reads (metrics, brief) as their own routes. Nothing else in this package builds a view, so
 // there is one place for those additions.
 
 import { decodeCursor, pageOf, type Page } from "../api/pagination.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { sessionStates } from "../sessions/state.ts";
-import { objectiveArtifacts, type ObjectiveArtifactView } from "./artifacts.ts";
+import { objectiveLinks, type ObjectiveLinkView } from "./links.ts";
 import { escalationView, openEscalations, type EscalationView } from "./escalation.ts";
 import { newestReport, type ObjectiveReportView } from "./reports.ts";
 import { effectiveLimits, leadRunsToday, objectiveCostToday, objectiveCostTotal, objectivePaused, objectiveUserMessagesToday, type ObjectivePaused } from "./limits.ts";
@@ -71,7 +71,7 @@ export interface ObjectiveView {
 	 */
 	report?: ObjectiveReportView | null;
 	/** OBJ-31: the linked files, on `GET /objectives/:id` and `pana objective show` only. */
-	artifacts?: ObjectiveArtifactView[];
+	links?: ObjectiveLinkView[];
 	/** OBJ-33: an open escalation is waiting for the user. */
 	awaitingUser: boolean;
 	/** OBJ-34: each held scope, with the thread it waits on. */
@@ -143,7 +143,7 @@ export function objectiveView(
 
 /**
  * `GET /objectives/:id`: the view with each member's current state, `waiting` included (STA-03),
- * the newest report (OBJ-30), and the linked artifacts (OBJ-31).
+ * the newest report (OBJ-30), and the links (OBJ-31).
  */
 export async function showObjective(runtime: Runtime, id: string): Promise<ObjectiveView> {
 	const row = await loadObjective(runtime.db, id);
@@ -153,7 +153,7 @@ export async function showObjective(runtime: Runtime, id: string): Promise<Objec
 	return {
 		...objectiveView(runtime, row, members, state, states, await objectiveReadings(runtime, row)),
 		report: await newestReport(runtime.db, runtime, row.id),
-		artifacts: await objectiveArtifacts(runtime.db, runtime, row.id),
+		links: await objectiveLinks(runtime.db, runtime, row.id),
 	};
 }
 

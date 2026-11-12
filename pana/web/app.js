@@ -3063,7 +3063,7 @@ async function deleteSchedule(id) {
 
 // ---- Objectives (OBJ-39) ---------------------------------------------------------------------
 // A list of objectives and the one view a person uses to watch and steer one: goal, charter,
-// metrics, the newest report, artifacts, the roster, money and runs, the pending wakes, and the
+// metrics, the newest report, links, the roster, money and runs, the pending wakes, and the
 // escalation. Every action that spends money or retires a session asks first.
 
 const OBJECTIVE_PHASES = ["drafting", "active", "stopped", "done", "archived"];
@@ -3194,7 +3194,7 @@ function renderObjective() {
 	renderObjectiveMetrics();
 	renderObjectiveCharter();
 	renderObjectiveReport();
-	renderObjectiveArtifacts();
+	renderObjectiveLinks();
 	renderObjectiveMembers();
 	renderObjectiveWakes();
 	renderObjectiveEscalation();
@@ -3620,16 +3620,16 @@ function renderObjectiveReport() {
 }
 
 /** OBJ-31: name, size, and a link that fetches the bytes, because a file needs the token. */
-function renderObjectiveArtifacts() {
-	const list = $("objective-artifacts");
+function renderObjectiveLinks() {
+	const list = $("objective-links");
 	list.replaceChildren();
-	const artifacts = objectiveDetail.view.artifacts;
-	if (artifacts.length === 0) return empty(list, "No artifacts. An artifact is a file linked to the objective, uploaded through the same store a message's attachment uses.");
-	for (const artifact of artifacts) {
+	const links = objectiveDetail.view.links;
+	if (links.length === 0) return empty(list, "No links. A link is a file linked to the objective, uploaded through the same store a message's attachment uses.");
+	for (const link of links) {
 		const title = document.createDocumentFragment();
-		title.append(fileLink(artifact.url, artifact.name));
-		const meta = [fileSize(artifact.size), artifact.mediaType ?? undefined].filter(Boolean);
-		list.append(item(title, meta, () => undefined, { testid: "objective-artifact", id: artifact.id }));
+		title.append(fileLink(link.url, link.name));
+		const meta = [fileSize(link.size), link.mediaType ?? undefined].filter(Boolean);
+		list.append(item(title, meta, () => undefined, { testid: "objective-link", id: link.id }));
 	}
 }
 
@@ -3639,7 +3639,7 @@ function fileLink(url, label) {
 	const anchor = document.createElement("a");
 	anchor.href = href ?? "#";
 	anchor.textContent = label;
-	anchor.dataset.testid = "objective-artifact-link";
+	anchor.dataset.testid = "objective-link-download";
 	anchor.addEventListener("click", (event) => {
 		event.preventDefault();
 		event.stopPropagation();

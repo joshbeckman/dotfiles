@@ -1,6 +1,6 @@
-// Artifacts (OBJ-31).
+// Links (OBJ-31).
 //
-// An artifact is a row in `objective_files` pointing at a file `POST /files` already stored. The
+// A link is a row in `objective_files` pointing at a file `POST /files` already stored. The
 // upload path is WP2's, unchanged (FIL-01..FIL-07: the size limit, the media type, and `?w=`
 // derivatives all apply because the bytes are an ordinary file). Linking never copies bytes, and
 // unlinking never deletes them: a report or a thread message may reference the same file, and a
@@ -14,8 +14,8 @@ import type { FileRecord } from "../threads/store.ts";
 import { loadObjective, objectiveId } from "./state.ts";
 
 /** One linked file: what the objective view lists (name, size, and file URL, OBJ-31). */
-export interface ObjectiveArtifactView {
-	/** The file id, which `pana objective artifact remove` takes. */
+export interface ObjectiveLinkView {
+	/** The file id, which `pana objective link remove` takes. */
 	id: string;
 	name: string;
 	size: number;
@@ -28,7 +28,7 @@ export interface ObjectiveArtifactView {
 /** A file id from a bare ULID or a `pana://<domain>/files/<id>/<name>` URL. */
 function fileId(value: unknown, domain: string): string {
 	const text = typeof value === "string" ? value.trim() : "";
-	if (text.length === 0) throw ApiError.badRequest("missing_file", "an artifact needs a file id from POST /files");
+	if (text.length === 0) throw ApiError.badRequest("missing_file", "a link needs a file id from POST /files");
 	if (isUlid(text)) return text;
 	try {
 		const ref = parseRef(text, domain);
@@ -41,15 +41,15 @@ function fileId(value: unknown, domain: string): string {
 }
 
 /**
- * `POST /objectives/:id/artifacts`: link an uploaded file. The CLI uploads through `POST /files`
+ * `POST /objectives/:id/links`: link an uploaded file. The CLI uploads through `POST /files`
  * first and sends the id here, so panad never reads a client path. Linking twice is the same as
  * linking once.
  */
-export async function addArtifact(
+export async function addLink(
 	runtime: Runtime,
 	value: string | null | undefined,
 	input: { file?: unknown },
-): Promise<{ artifact: ObjectiveArtifactView }> {
+): Promise<{ link: ObjectiveLinkView }> {
 	const id = objectiveId(value, runtime.config.domain);
 	const row = await loadObjective(runtime.db, id);
 	const file = fileId(input.file, runtime.config.domain);
@@ -59,15 +59,15 @@ export async function addArtifact(
 	await runtime.db.write(async (tx) => {
 		await tx.run("INSERT OR IGNORE INTO objective_files (objective_id, file_id, created_at) VALUES (?, ?, ?)", row.id, file, now);
 	});
-	return { artifact: await artifactView(runtime, row.id, file) };
+	return { link: await linkView(runtime, row.id, file) };
 }
 
-/** `DELETE /objectives/:id/artifacts/:fileId`: unlink only. The file and its bytes stay. */
-export async function removeArtifact(
+/** `DELETE /objectives/:id/links/:fileId`: unlink only. The file and its bytes stay. */
+export async function removeLink(
 	runtime: Runtime,
 	value: string | null | undefined,
 	fileValue: string | null | undefined,
-): Promise<{ artifact: ObjectiveArtifactView; removed: string }> {
+): Promise<{ link: ObjectiveLinkView; removed: string }> {
 	const id = objectiveId(value, runtime.config.domain);
 	const row = await loadObjective(runtime.db, id);
 	const file = fileId(fileValue, runtime.config.domain);
@@ -76,14 +76,14 @@ export async function removeArtifact(
 		row.id,
 		file,
 	);
-	if (!linked) throw ApiError.notFound(`artifact ${file} on objective ${row.id}`);
-	const artifact = await artifactView(runtime, row.id, file);
+	if (!linked) throw ApiError.notFound(`link ${file} on objective ${row.id}`);
+	const link = await linkView(runtime, row.id, file);
 	await runtime.db.write((tx) => tx.run("DELETE FROM objective_files WHERE objective_id = ? AND file_id = ?", row.id, file));
-	return { artifact, removed: file };
+	return { link, removed: file };
 }
 
-/** Every artifact an objective lists, oldest link first. */
-export async function objectiveArtifacts(tx: SqliteExecutor, runtime: Runtime, objectiveId: string): Promise<ObjectiveArtifactView[]> {
+/** Every link an objective lists, oldest link first. */
+export async function objectiveLinks(tx: SqliteExecutor, runtime: Runtime, objectiveId: string): Promise<ObjectiveLinkView[]> {
 	const rows = await tx.all<FileRecord & { added_at: number }>(
 		`SELECT f.*, of.created_at AS added_at
 		   FROM objective_files of JOIN files f ON f.id = of.file_id
@@ -94,7 +94,7 @@ export async function objectiveArtifacts(tx: SqliteExecutor, runtime: Runtime, o
 	return rows.map((row) => viewOf(runtime, row, row.added_at));
 }
 
-async function artifactView(runtime: Runtime, objectiveId: string, file: string): Promise<ObjectiveArtifactView> {
+async function linkView(runtime: Runtime, objectiveId: string, file: string): Promise<ObjectiveLinkView> {
 	const row = await runtime.db.get<FileRecord & { added_at: number }>(
 		`SELECT f.*, of.created_at AS added_at
 		   FROM objective_files of JOIN files f ON f.id = of.file_id
@@ -102,11 +102,11 @@ async function artifactView(runtime: Runtime, objectiveId: string, file: string)
 		objectiveId,
 		file,
 	);
-	if (!row) throw ApiError.notFound(`artifact ${file} on objective ${objectiveId}`);
+	if (!row) throw ApiError.notFound(`link ${file} on objective ${objectiveId}`);
 	return viewOf(runtime, row, row.added_at);
 }
 
-function viewOf(runtime: Runtime, row: FileRecord, addedAt: number): ObjectiveArtifactView {
+function viewOf(runtime: Runtime, row: FileRecord, addedAt: number): ObjectiveLinkView {
 	return {
 		id: row.id,
 		name: row.name,
