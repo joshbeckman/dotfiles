@@ -99,7 +99,7 @@ export function ulid(): string {
 
 // --- References and URLs -------------------------------------------------------
 
-export type RefKind = "domain" | "user" | "session" | "thread" | "message" | "file" | "schedule" | "memory" | "objective";
+export type RefKind = "domain" | "user" | "session" | "thread" | "message" | "file" | "schedule" | "memory" | "objective" | "artifact";
 
 export interface Ref {
 	kind: RefKind;
@@ -109,6 +109,13 @@ export interface Ref {
 	thread?: string;
 	/** For a file ref, the stored file name. */
 	name?: string;
+	/** For an artifact ref, the version it pins (ART-01's `seq`). Absent means the newest version. */
+	version?: number;
+}
+
+/** An artifact version is a positive whole number: `1`, `2`, `3`, and never `01` or `1.0`. */
+function isSeq(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
 export class RefError extends Error {
@@ -144,6 +151,11 @@ export function formatUrl(ref: Ref, domain: string): string {
 			return `${base}/schedules/${ref.id}`;
 		case "objective":
 			return `${base}/objectives/${ref.id}`;
+		// ART-13: the version is a path segment, so the URL never carries its thread.
+		case "artifact":
+			if (ref.version === undefined) return `${base}/artifacts/${ref.id}`;
+			if (!isSeq(ref.version)) throw new RefError("invalid_ref", "an artifact version is a positive whole number");
+			return `${base}/artifacts/${ref.id}/v/${ref.version}`;
 		case "memory":
 			return `${base}/memory/files/${memorySegments(ref.id).map(encodeMemorySegment).join("/")}`;
 	}
@@ -235,6 +247,15 @@ function parseUrl(url: string, domain?: string): Ref {
 		case "objectives":
 			if (!first) break;
 			return { kind: "objective", id: first };
+		// ART-13: parsed at the collection root, so no thread path makes a suffix ambiguous.
+		case "artifacts": {
+			if (!first) break;
+			if (rest.length === 0) return { kind: "artifact", id: first };
+			if (rest.length !== 2 || rest[0] !== "v") break;
+			const version = /^[1-9][0-9]*$/.test(rest[1]!) ? Number(rest[1]) : NaN;
+			if (!isSeq(version)) break;
+			return { kind: "artifact", id: first, version };
+		}
 	}
 	throw new RefError("invalid_ref", `unrecognized pana:// path: ${parsed.pathname}`);
 }

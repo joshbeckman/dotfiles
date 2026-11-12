@@ -24,7 +24,7 @@ import {
 import { browserEnv, explainPush, subscribeToPush } from "./push.js";
 import { nextCursor, pagePath, showMore } from "./pages.js";
 import { apiName, clientBody, startClientTelemetry, viewName } from "./perf.js";
-import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
+import { HITS_PER_STORE, fuzzyScore, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
 	bookmarkRow,
@@ -742,6 +742,7 @@ function handleEvent(event) {
 		state.domainResolved?.();
 		return;
 	}
+	if (event.kind === "artifact.published") { void artifactPublished(event).catch(fail); return; }
 	// UX-09: who is working changes in the open thread and in the lists, without a reload.
 	if (event.kind === "session.state" && typeof event.sessionId === "string") {
 		applyStateEvent(event);
@@ -1902,6 +1903,7 @@ async function messageElement(message, { focus }) {
 	article.tabIndex = -1;
 	article.dataset.testid = "message";
 	article.dataset.id = view.id ?? "";
+	if (Number.isSafeInteger(message.seq)) article.dataset.seq = String(message.seq);
 	article.dataset.sender = view.sender;
 	// UX-06: the sender's identity color belongs to this thread, not the session.
 	participantIdentity(article, { url: view.sender, kind: view.senderKind });
@@ -2041,6 +2043,148 @@ function parkConfirm() {
 	state.confirm = null;
 }
 
+// ART-12..15: the pane owns its capability and never navigates the app to artifact bytes.
+let artifactRouteVersion = 0;
+let artifactCurrent = null;
+let artifactObjectUrl;
+const artifactPublishedSeq = new Map();
+let threadScrollBeforeArtifact = 0;
+
+function artifactHref(threadId, artifactId, seq) {
+	return `#/threads/${encodeURIComponent(threadId)}/a/${encodeURIComponent(artifactId)}${seq === undefined ? "" : `/v/${seq}`}`;
+}
+
+async function loadArtifactList(threadId) {
+	const { artifacts } = await api("GET", `/threads/${encodeURIComponent(threadId)}/artifacts`);
+	if (state.section !== "threads" || state.thread?.id !== threadId) return;
+	const list = $("artifact-list");
+	list.replaceChildren();
+	list.hidden = !artifacts.length;
+	if (!artifacts.length) return;
+	list.append(document.createTextNode("Artifacts: "));
+	for (const artifact of artifacts) {
+		const link = document.createElement("a");
+		link.href = artifactHref(threadId, artifact.id);
+		link.dataset.testid = "artifact-open";
+		link.textContent = `${artifact.name} v${artifact.newestVersion.seq}`;
+		list.append(link);
+	}
+}
+
+function closeArtifactPane() {
+	artifactRouteVersion++;
+	artifactCurrent = null;
+	$("thread-layout").classList.remove("artifact-active");
+	$("artifact-pane").hidden = true;
+	$("artifact-content").replaceChildren();
+	if (artifactObjectUrl) URL.revokeObjectURL(artifactObjectUrl);
+	artifactObjectUrl = undefined;
+}
+
+async function openArtifactPane(threadId, id, seq) {
+	const generation = ++artifactRouteVersion;
+	const current = () => generation === artifactRouteVersion && state.section === "threads" && state.thread?.id === threadId;
+	const result = await api("GET", `/artifacts/${encodeURIComponent(id)}${seq === undefined ? "" : `?seq=${encodeURIComponent(seq)}`}`);
+	if (!current()) return;
+	if (result.artifact.threadId !== threadId) throw new Error("Artifact belongs to a different thread.");
+	const version = seq === undefined ? result.versions.at(-1) : result.versions.find((v) => String(v.seq) === String(seq));
+	if (!version) throw new Error("Artifact version not found.");
+	artifactCurrent = { id, threadId, seq: version.seq, pinned: seq !== undefined };
+	$("artifact-title").textContent = result.artifact.name;
+	$("artifact-version").textContent = `v${version.seq}`;
+	$("artifact-back").href = `#/threads/${encodeURIComponent(threadId)}`;
+	$("artifact-new-version").hidden = true;
+	const newer = artifactPublishedSeq.get(id);
+	if (newer > version.seq) offerArtifactVersion(newer);
+	const content = $("artifact-content");
+	content.replaceChildren();
+	if (artifactObjectUrl) URL.revokeObjectURL(artifactObjectUrl);
+	artifactObjectUrl = undefined;
+	$("artifact-pane").hidden = false;
+	$("thread-layout").classList.add("artifact-active");
+	const entry = version.entry.toLowerCase();
+	if (entry.endsWith(".html")) {
+		const frame = document.createElement("iframe");
+		frame.dataset.testid = "artifact-frame";
+		frame.title = `${result.artifact.name} v${version.seq}`;
+		frame.setAttribute("sandbox", "allow-scripts");
+		frame.referrerPolicy = "no-referrer";
+		frame.src = version.previewUrl;
+		content.append(frame);
+	} else if (/\.(png|jpe?g|gif|webp|avif)$/i.test(entry)) {
+		const image = document.createElement("img");
+		image.dataset.testid = "artifact-image";
+		image.alt = result.artifact.name;
+		image.referrerPolicy = "no-referrer";
+		image.src = version.previewUrl;
+		content.append(image);
+	} else {
+		const response = await fetch(version.previewUrl, { credentials: "omit", referrerPolicy: "no-referrer" });
+		if (!response.ok) throw new Error(`Artifact bytes: HTTP ${response.status}`);
+		if (!current()) return;
+		if (entry.endsWith(".md")) {
+			const text = await response.text();
+			if (!current()) return;
+			const body = document.createElement("div");
+			body.className = "prose";
+			body.dataset.testid = "artifact-markdown";
+			content.append(body);
+			await ensureVendor();
+			await renderMessage(body, text, { ...window.MailRenderers, domain: state.domain, fetchFile, cache: fileUrls, ensureMermaid });
+		} else {
+			const bytes = await response.arrayBuffer();
+			if (!current()) return;
+			artifactObjectUrl = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+			const link = document.createElement("a");
+			link.className = "artifact-download";
+			link.dataset.testid = "artifact-download";
+			link.href = artifactObjectUrl;
+			link.download = version.entry.split("/").at(-1);
+			link.textContent = `Download ${version.entry}`;
+			content.append(link);
+		}
+	}
+}
+
+$("artifact-new-version").addEventListener("click", () => {
+	const button = $("artifact-new-version");
+	if (artifactCurrent && button.dataset.seq) location.hash = artifactHref(artifactCurrent.threadId, artifactCurrent.id, button.dataset.seq);
+});
+
+function offerArtifactVersion(seq) {
+	const button = $("artifact-new-version");
+	button.dataset.seq = String(seq);
+	button.textContent = `New version v${seq}`;
+	button.hidden = false;
+}
+
+// A publish never redraws the pane or the draft. Append messages without changing draft.after.
+async function artifactPublished(event) {
+	if (state.section !== "threads" || !state.thread || event.threadId !== state.thread.id) return;
+	const threadId = state.thread.id;
+	const seq = Number(event.seq);
+	if (event.artifactId && Number.isSafeInteger(seq) && seq > 0) {
+		const newest = Math.max(seq, artifactPublishedSeq.get(event.artifactId) ?? 0);
+		artifactPublishedSeq.set(event.artifactId, newest);
+		if (artifactCurrent?.id === event.artifactId && newest > artifactCurrent.seq) offerArtifactVersion(newest);
+	}
+	void loadArtifactList(threadId).catch(fail);
+	if (typeof event.messageId !== "string") return;
+	const { message } = await api("GET", `/messages/${encodeURIComponent(event.messageId)}`);
+	if (state.section !== "threads" || state.thread?.id !== threadId || message?.threadId !== threadId) return;
+	const container = $("thread-messages");
+	if (!container.querySelector(`[data-testid="message"][data-id="${CSS.escape(message.id)}"]`)) {
+		const node = await messageElement(message, { focus: false });
+		if (state.section === "threads" && state.thread?.id === threadId && !container.querySelector(`[data-testid="message"][data-id="${CSS.escape(message.id)}"]`)) {
+			const next = [...container.querySelectorAll('[data-testid="message"]')].find((item) => Number(item.dataset.seq) > message.seq);
+			const top = next?.getBoundingClientRect().top;
+			container.querySelector(":scope > .hint")?.remove();
+			container.insertBefore(node, next ?? container.querySelector(':scope > [data-history="later"]'));
+			if (next && top < 0) window.scrollBy(0, next.getBoundingClientRect().top - top);
+		}
+	}
+}
+
 // Invalidate in-flight rendering on navigation or a newer refresh of the same thread.
 let threadRenderVersion = 0;
 const THREAD_PAGE_SIZE = 30;
@@ -2095,6 +2239,7 @@ async function openThread(id, focusMessage) {
 	archiveButton.dataset.archived = String(Boolean(body.archived));
 	archiveButton.textContent = body.archived ? "Unarchive" : "Archive";
 	archiveButton.dataset.testid = body.archived ? "thread-unarchive" : "thread-archive";
+	void loadArtifactList(id).catch(fail);
 	const container = $("thread-messages");
 	container.replaceChildren();
 	// Parse and hydrate only one page, not years of history before the first paint. Keep the
@@ -4566,16 +4711,32 @@ function onPaletteInput() {
 	palette.timer = setTimeout(() => void paletteSearch(query, search), PALETTE_DEBOUNCE);
 }
 
-/** The search stage asks the three stores at once and draws whatever stays newest. */
+/** Artifact names live per thread. Bound concurrent reads while searching all of them. */
+async function searchArtifactNames(query, search) {
+	const stats = await api("GET", "/stats/artifacts");
+	const matches = [];
+	const threads = Array.isArray(stats.threads) ? stats.threads : [];
+	for (let offset = 0; offset < threads.length; offset += 8) {
+		if (!palette.open || palette.stage !== "search" || search !== palette.search) return [];
+		const pages = await Promise.all(threads.slice(offset, offset + 8).map((thread) => api("GET", `/threads/${encodeURIComponent(thread.threadId)}/artifacts`)));
+		for (const page of pages) for (const artifact of page.artifacts ?? []) {
+			if (fuzzyScore(artifact.name, query) !== null) matches.push(artifact);
+		}
+	}
+	return matches;
+}
+
+/** The search stage asks the stores at once and draws whatever stays newest. */
 async function paletteSearch(query, search) {
 	try {
-		const [threads, sessions, memory] = await Promise.all([
+		const [threads, sessions, memory, artifacts] = await Promise.all([
 			api("GET", pagePath(`/threads?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", pagePath(`/sessions?query=${encodeURIComponent(query)}`, undefined, HITS_PER_STORE)),
 			api("GET", `/memory/search?query=${encodeURIComponent(query)}&limit=${HITS_PER_STORE}`),
+			searchArtifactNames(query, search),
 		]);
 		if (!palette.open || palette.stage !== "search" || search !== palette.search) return;
-		renderPaletteHits(paletteHits({ threads, sessions, memory }, query), query);
+		renderPaletteHits(paletteHits({ threads, sessions, memory, artifacts: { artifacts } }, query), query);
 	} catch (error) {
 		if (search !== palette.search) return;
 		$("palette-note").textContent = error?.body?.error?.message ?? error?.message ?? String(error);
@@ -4720,7 +4881,36 @@ async function route() {
 }
 
 async function drawRoute() {
+	const canonicalArtifact = /^#\/artifacts\/([^/]+)(?:\/v\/([1-9]\d*))?$/.exec(location.hash);
+	if (canonicalArtifact) {
+		const requestedHash = location.hash;
+		try {
+			const id = decodeURIComponent(canonicalArtifact[1]);
+			const seq = canonicalArtifact[2];
+			const data = await api("GET", `/artifacts/${encodeURIComponent(id)}${seq ? `?seq=${seq}` : ""}`);
+			if (location.hash === requestedHash) location.replace(artifactHref(data.artifact.threadId, id, seq));
+		} catch (error) { fail(error); }
+		return;
+	}
 	const { section, id, rest, query } = routeFromHash(location.hash);
+	const artifactId = section === "threads" && rest[0] === "a" && rest[1] && (rest.length === 2 || (rest.length === 4 && rest[2] === "v" && /^[1-9]\d*$/.test(rest[3]))) ? rest[1] : undefined;
+	const artifactSeq = artifactId && rest.length === 4 ? rest[3] : undefined;
+	const sameThread = section === "threads" && id && state.section === "threads" && state.thread?.id === id && !$("thread").hidden;
+	if (sameThread && (artifactId || artifactCurrent)) {
+		try {
+			if (artifactId) {
+				const switching = !artifactCurrent && matchMedia("(max-width: 59.999rem)").matches;
+				if (switching) threadScrollBeforeArtifact = window.scrollY;
+				await openArtifactPane(id, artifactId, artifactSeq);
+				if (switching && artifactCurrent) window.scrollTo(0, 0);
+			} else {
+				closeArtifactPane();
+				if (matchMedia("(max-width: 59.999rem)").matches) window.scrollTo(0, threadScrollBeforeArtifact);
+			}
+		} catch (error) { fail(error); }
+		return;
+	}
+	closeArtifactPane();
 	showSection(section);
 	resetScroll();
 	select(null);
@@ -4747,8 +4937,10 @@ async function drawRoute() {
 				$("threads-list").hidden = false;
 				$("thread").hidden = true;
 				if (query.get("query")) $("threads-query").value = query.get("query");
-				if (id) await openThread(id, query.get("message"));
-				else await searchThreads();
+				if (id) {
+					await openThread(id, query.get("message"));
+					if (artifactId) { threadScrollBeforeArtifact = window.scrollY; await openArtifactPane(id, artifactId, artifactSeq); if (matchMedia("(max-width: 59.999rem)").matches) window.scrollTo(0, 0); }
+				} else await searchThreads();
 				break;
 			case "sessions":
 				$("sessions-browse").hidden = false;

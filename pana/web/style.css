@@ -2224,3 +2224,22 @@ kbd {
 .settings-secret-value button { flex: none; }
 #settings-user-color-picker { flex: none; width: 3rem; min-height: 2.75rem; padding: var(--s1); }
 #settings-user-color { flex: 1; min-width: 0; font-family: var(--font-mono); }
+
+/* ART-14: the thread remains mounted while the reader switches views. */
+#thread-layout { min-width: 0; }
+.artifact-list { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.artifact-pane { min-width: 0; border: 1px solid var(--c-border); background: var(--c-bg); }
+.artifact-header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s2); border-bottom: 1px solid var(--c-border); overflow-wrap: anywhere; }
+.artifact-content { min-width: 0; overflow: auto; flex: 1; }
+.artifact-content iframe { display: block; border: 0; width: 100%; height: 100%; min-height: 20rem; }
+.artifact-content img { display: block; max-width: 100%; height: auto; }
+.artifact-content .prose, .artifact-content .artifact-download { padding: var(--s4); }
+@media (min-width: 60rem) {
+ main:has(#thread-layout.artifact-active) { max-width: none; }
+ #thread-layout.artifact-active { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s4); align-items: start; }
+ .artifact-pane { display: flex; flex-direction: column; position: sticky; top: var(--topbar-h); height: calc(100vh - var(--topbar-h) - var(--s4)); }
+}
+@media (max-width: 59.999rem) {
+ #thread-layout.artifact-active #thread { display: none; }
+ #thread-layout.artifact-active .artifact-pane { display: flex; flex-direction: column; height: calc(100vh - var(--topbar-h) - var(--s4)); }
+}

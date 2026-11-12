@@ -16,8 +16,10 @@ export interface Command {
 }
 
 export interface Hit {
-	kind: "thread" | "session" | "memory";
+	kind: "thread" | "session" | "memory" | "artifact";
 	id: string;
+	/** For an artifact hit, the thread whose pane shows it (ART-13). */
+	thread?: string;
 	label: string;
 	meta?: string;
 	at?: number;
@@ -42,8 +44,9 @@ export function matchCommands(commands: Command[], query: string): Command[];
 export function threadHits(body: unknown): Hit[];
 export function sessionHits(body: unknown): Hit[];
 export function memoryHits(body: unknown): Hit[];
+export function artifactHits(body: unknown): Hit[];
 export function paletteHits(
-	bodies: { threads?: unknown; sessions?: unknown; memory?: unknown } | undefined,
+	bodies: { threads?: unknown; sessions?: unknown; memory?: unknown; artifacts?: unknown } | undefined,
 	query: string,
 	limit?: number,
 ): HitGroup[];
