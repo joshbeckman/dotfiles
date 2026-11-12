@@ -60,6 +60,58 @@ afterEach(async () => {
 		expect(list.body.bookmarks).toHaveLength(1);
 	});
 
+	it("UX-08 b toggles the selected or focused message, not input text or another view", async () => {
+		seeded = await seedDomain();
+		const { t, capital } = seeded;
+		const origin = loopbackOrigin(t.panad.tcpPort!);
+		page = await newPage(`${origin}/#${t.panad.webToken}`);
+		const result = await evaluatePage<{ first: string; second: string; afterInput: string; afterRepeat: string }>(`
+			location.hash = "#/threads/${capital.threadId}";
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length >= 2);
+			const messages = [...document.querySelectorAll("#thread-messages [data-testid=message]")];
+			const press = (key, target = document.body, extra = {}) => target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...extra }));
+			const label = (message) => message.querySelector("[data-testid=message-bookmark]").textContent;
+			// Opening selects the latest message. k selects the previous message without moving DOM focus.
+			press("k");
+			press("b");
+			await until(() => label(messages[0]) === "Remove bookmark");
+			const first = label(messages[0]);
+			const second = label(messages[1]);
+			// Typing in the reply must not toggle the selection.
+			const input = document.getElementById("reply-body");
+			input.focus();
+			press("b", input);
+			const afterInput = label(messages[0]);
+			// Native focus on another message changes the target. Repeated keydown does not toggle.
+			messages[1].focus();
+			press("b", messages[1], { repeat: true });
+			const afterRepeat = label(messages[1]);
+			press("b", messages[1]);
+			await until(() => label(messages[1]) === "Remove bookmark");
+			press("b", messages[1]);
+			await until(() => label(messages[1]) === "Bookmark");
+			// The menu and keyboard share the same state.
+			messages[0].focus();
+			press("b", messages[0]);
+			await until(() => label(messages[0]) === "Bookmark");
+			return { first, second, afterInput, afterRepeat };
+		`);
+		expect(result).toEqual({ first: "Remove bookmark", second: "Bookmark", afterInput: "Remove bookmark", afterRepeat: "Bookmark" });
+		expect((await t.client.get<{ bookmarks: unknown[] }>("/bookmarks")).body.bookmarks).toHaveLength(0);
+
+		// The same key on a list cannot act on a hidden thread message; g b still navigates.
+		await evaluatePage(`
+			location.hash = "#/threads";
+			await until(() => !document.getElementById("threads-browse").hidden);
+			const press = (key) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+			press("b");
+			press("g"); press("b");
+			await until(() => location.hash === "#/bookmarks");
+			return true;
+		`);
+		expect((await t.client.get<{ bookmarks: unknown[] }>("/bookmarks")).body.bookmarks).toHaveLength(0);
+	});
+
 	it("BKM-05 the Bookmarks section shows the whole message, opens it in its thread, and removes it in place", async () => {
 		// A reply longer than a list snippet, with a phrase only the end of it carries.
 		const reply = [

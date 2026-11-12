@@ -220,6 +220,9 @@ describe("UX-08 the keymap", () => {
 		expect(press("/")).toBe("search");
 		expect(press("r")).toBe("reply");
 		expect(press("e")).toBe("archive");
+		expect(press("b")).toBe("bookmark");
+		expect(press("g", 10)).toBe("pending");
+		expect(press("b", 20)).toBe("go:bookmarks");
 		expect(press("u")).toBe("back");
 		expect(press("Escape")).toBe("back");
 		expect(press("?")).toBe("help");
@@ -244,7 +247,7 @@ describe("UX-08 the keymap", () => {
 	it("UX-08 inside a text input only Esc acts, and it leaves the input", () => {
 		const keys = createKeyReader();
 		const input = { inInput: true, inForm: true, apple: false };
-		for (const key of ["j", "k", "g", "/", "?", "e", "Enter"]) expect(keys.press({ key }, input)).toBeNull();
+		for (const key of ["j", "k", "g", "/", "?", "e", "b", "Enter"]) expect(keys.press({ key }, input)).toBeNull();
 		expect(keys.press({ key: "Escape" }, input)).toBe("leave-input");
 		expect(isTextInput({ tagName: "TEXTAREA" })).toBe(true);
 		expect(isTextInput({ tagName: "INPUT", type: "search" })).toBe(true);
@@ -258,6 +261,7 @@ describe("UX-08 the keymap", () => {
 		expect(rows.map((row) => row.action)).toEqual([...KEYMAP, ...INPUT_KEYMAP].map((binding) => binding.action));
 		expect(rows.find((row) => row.action === "go:schedules")!.keys).toEqual(["g then h"]);
 		expect(rows.find((row) => row.action === "open")!.keys).toEqual(["Enter", "o"]);
+		expect(rows.find((row) => row.action === "bookmark")!.keys).toEqual(["b"]);
 		expect(rows.find((row) => row.action === "back")!.keys).toEqual(["u", "Esc"]);
 		expect(rows.find((row) => row.action === "submit")!.keys).toEqual(["⌘ Enter"]);
 		expect(helpRows(false).find((row) => row.action === "submit")!.keys).toEqual(["Ctrl Enter"]);
