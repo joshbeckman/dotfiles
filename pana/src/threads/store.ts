@@ -1273,6 +1273,16 @@ export interface NoticeInput {
 	thread?: string;
 }
 
+/** Internal insert/index primitive. Callers own the transaction and every delivery side effect. */
+export async function insertDomainMessage(tx: SqliteExecutor, runtime: Runtime, threadId: string, body: string, now: number) {
+	const sender = await ensureDomain(tx, runtime, now);
+	const messageId = runtime.newId();
+	const seq = (await tx.get<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM messages WHERE thread_id = ?", threadId))!.seq;
+	await tx.run("INSERT INTO messages (id, thread_id, seq, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)", messageId, threadId, seq, sender.id, body, now);
+	await indexMessage(tx, { id: messageId, threadId, body });
+	return { messageId, seq };
+}
+
 /**
  * NTC-01: post as the domain URL `pana://<domain>`. A notice delivers to users only, carries no
  * wake request, and never calls the delivery hook, so it can never wake a session.
@@ -1314,18 +1324,7 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 			}
 		}
 
-		const messageId = runtime.newId();
-		const seq = (await tx.get<{ seq: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM messages WHERE thread_id = ?", threadId))!.seq;
-		await tx.run(
-			"INSERT INTO messages (id, thread_id, seq, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-			messageId,
-			threadId,
-			seq,
-			sender.id,
-			body,
-			now,
-		);
-		await indexMessage(tx, { id: messageId, threadId, body });
+		const { messageId } = await insertDomainMessage(tx, runtime, threadId, body, now);
 		if (existing === undefined) await applyInitialSubject(tx, { threadId, body, id: runtime.newId(), now });
 		for (const recipient of recipients.values()) {
 			// A fallback or explicitly addressed user may not belong to an existing thread.

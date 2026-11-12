@@ -21,6 +21,12 @@ const CLIENT_DURATION_MAX_MS = 600_000;
 // Only these literal patterns can leave the browser. Keep this list in sync with the API
 // route table; unknown routes use a fixed fallback, never a path supplied by a caller.
 const API_PATTERNS = [
+	"POST /threads/:id/artifacts/:name",
+	"GET /threads/:id/artifacts",
+	"GET /artifacts/:id",
+	"GET /a/:version/:capability/*",
+	"GET /a/:version/:capability",
+	"GET /stats/artifacts",
 	"POST /sessions",
 	"GET /sessions",
 	"GET /sessions/:id",

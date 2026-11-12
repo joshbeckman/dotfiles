@@ -1,6 +1,7 @@
 // The request pipeline shared by both listeners: resolve the caller, match the route, run the
 // handler, and render errors as `{"error": {...}}` (API-01, API-03..05).
 
+import { ARTIFACT_HEADERS, isArtifactRequest, redactArtifactPath } from "../artifacts/capability.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ApiError } from "../api/errors.ts";
@@ -63,11 +64,17 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 		// so the shell assets are the one public part of the TCP surface. Everything else,
 		// including unknown paths, keeps API-04's token check.
 		const publicShell = transport === "tcp" && method === "GET" && isStaticAssetPath(url.pathname);
-		caller = await resolveCaller(options, transport, req, publicShell);
+		const artifactPath = isArtifactRequest(method, url.pathname);
+		const missingCapability = artifactPath && /^\/a\/[^/]+(?:\/|$)/.test(url.pathname)
+			&& /^\/a\/[^/]+(?:\/)?$/.test(url.pathname);
+		const artifactRoute = artifactPath && !missingCapability ? matchRoute(method, url.pathname)?.route.name : undefined;
+		const publicArtifact = missingCapability || artifactRoute === "artifacts.bytes" || artifactRoute === "artifacts.entry";
+		caller = await resolveCaller(options, transport, req, publicShell || publicArtifact);
 		// The body is read only once the caller is resolved, and never past the route's limit
 		// (API-06): a refused request buffers none of it. The route is matched here so the limit
 		// is known before a byte is read; the not-found error still comes after the JSON body,
 		// as it did when every body was read first.
+		if (missingCapability || (artifactPath && /^\/a\/[^/]+\/\//.test(url.pathname))) throw ApiError.forbidden("missing artifact capability");
 		const match = matchRoute(method, url.pathname);
 		const rawBody = await readBody(req, options.runtime.config.files.maxBytes, match?.route.name);
 		const body = parseJsonBody(req, rawBody);
@@ -102,9 +109,9 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 		const apiError = toApiError(error);
 		status = apiError.status;
 		// The detail stays here, in panad's own log, and the caller gets the generic body.
-		if (apiError.status === 500) options.onError?.(error, `${method} ${url?.pathname ?? target}`);
+		if (apiError.status === 500) options.onError?.(error, `${method} ${redactArtifactPath(url?.pathname ?? target)}`);
 		if (!res.headersSent) {
-			await send(req, res, { status: apiError.status, body: apiError.toBody() });
+			await send(req, res, { status: apiError.status, body: apiError.toBody(), headers: isArtifactRequest(method, url?.pathname ?? target) ? ARTIFACT_HEADERS : undefined });
 		} else {
 			res.destroy();
 		}
@@ -112,7 +119,7 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 		options.onRequest?.({
 			transport,
 			method,
-			path: url?.pathname ?? target,
+			path: redactArtifactPath(url?.pathname ?? target),
 			route: routeName,
 			caller: caller?.url,
 			status,

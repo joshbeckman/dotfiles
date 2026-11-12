@@ -50,7 +50,7 @@ not preserved when saving JSON.
 ## Validation rules
 
 The file must be a JSON object, not an array or `null`. Optional nested sections
-(`ui`, `budget`, `files`, `http`, `tools`, `scratch`, `objectives`) must be objects when
+(`ui`, `budget`, `files`, `artifacts`, `http`, `tools`, `scratch`, `objectives`) must be objects when
 present. An empty object uses that section's defaults. Omit an optional value to use its
 default; `null` is not a substitute for omission. Numeric values must be finite JSON
 numbers, not quoted strings. Except where an integer is explicitly required below,
@@ -221,3 +221,26 @@ omitted rather than set to `null`.
 `UTC` is an explicit choice in this example; omitting `timezone` uses the system zone.
 See the [behavior specification](../SPEC.md#config-and-state) and
 [Settings implementation](../src/config/handlers.ts) for the persistence/restart contract.
+
+## Artifacts
+
+`artifacts.maxBytes` limits the sum of recorded file sizes in one version. The default is
+5242880 bytes. `artifacts.maxFiles` limits the manifest to 200 files by default.
+`artifacts.capMinutes` gives each authenticated open a fresh preview capability for 60 minutes
+by default. Each key accepts a positive whole number. Changes apply on restart; unknown
+configuration keys remain preserved.
+
+A build uses relative asset references. A root-relative URL leaves its capability prefix.
+Published versions stay immutable; there is no retention key. `pana stats artifacts` reports
+cumulative version bytes by thread and overall. Uploads left unreferenced by a retry or a rejected
+publish are not included in those totals and still occupy storage. A preview of a nested entry
+opens its actual path so relative assets resolve beside it; a request for the capability root still
+serves the entry, but a browser opening that root resolves relative assets from the root.
+
+Artifact responses use `sandbox allow-scripts` without `allow-same-origin`. Code runs in an
+opaque origin in a frame or tab. It cannot read the reader's local storage, cookies, or panad
+API responses, register a service worker, or act with the reader's bearer token. The sandbox
+does not block network requests or prevent an artifact from sending its own bytes elsewhere.
+A no-cors request can reach panad; bearer authentication refuses unauthorized operations.
+Native forms, scripted downloads, popups, and Web Push are not enabled. Interaction is
+transient; reloading restores the published snapshot.

@@ -6,6 +6,7 @@
 // Handlers live in the packages that own them (routes.ts names the owner). A command works as
 // soon as its route does; until then panad answers 501 and the command exits 1.
 
+import { ARTIFACT_COMMANDS } from "../artifacts/cli.ts";
 import { isAbsolute } from "node:path";
 import { request, type ApiResponse, type Endpoint } from "../api/client.ts";
 import { statusToExitCode } from "../api/errors.ts";
@@ -80,6 +81,11 @@ export interface CommandSpec {
 	uploads?: string;
 	/** Text output for a handler's reply, when the generic record rendering reads badly. */
 	formatText?: (value: unknown) => string;
+	/**
+	 * Upload a local build and fill `params.manifest` before the request (ART-02), the way
+	 * `--attach` uploads a message file. The daemon receives only file ids and manifest paths.
+	 */
+	uploadsBuild?(params: CommandParams, upload: (path: string) => Promise<FileAttachment>): Promise<void>;
 	/** A usage problem the tool and the CLI both reject with exit code 2. */
 	validate?(params: CommandParams): string | undefined;
 	request(params: CommandParams): CommandRequest;
@@ -616,6 +622,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 	// commands there and not here.
 	...OBJECTIVE_COMMANDS,
 	...STATS_COMMANDS,
+	...ARTIFACT_COMMANDS,
 	{
 		path: ["worktree", "add"],
 		usage: "pana worktree add REPO [--branch NAME] [--name NAME]",
@@ -885,6 +892,10 @@ export async function invocationFor(
 			if (!io.upload) throw new CommandUsageError("this caller cannot upload files");
 			params.files = [await io.upload(path)];
 		}
+	}
+	if (spec.uploadsBuild) {
+		if (!io.upload) throw new CommandUsageError("this caller cannot upload files");
+		await spec.uploadsBuild(params, io.upload);
 	}
 	return { spec, params };
 }

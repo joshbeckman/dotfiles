@@ -8,6 +8,12 @@
 export type Method = "GET" | "POST" | "DELETE";
 
 export const ROUTES = [
+	{ method: "POST", pattern: "/threads/:id/artifacts/:name", name: "artifacts.publish", wp: "WP21" },
+	{ method: "GET", pattern: "/threads/:id/artifacts", name: "artifacts.list", wp: "WP21" },
+	{ method: "GET", pattern: "/artifacts/:id", name: "artifacts.show", wp: "WP21" },
+	{ method: "GET", pattern: "/a/:version/:capability/*", name: "artifacts.bytes", wp: "WP21" },
+	{ method: "GET", pattern: "/a/:version/:capability", name: "artifacts.entry", wp: "WP21" },
+	{ method: "GET", pattern: "/stats/artifacts", name: "artifacts.stats", wp: "WP21" },
 	{ method: "POST", pattern: "/sessions", name: "sessions.create", wp: "WP3" },
 	{ method: "GET", pattern: "/sessions", name: "sessions.search", wp: "WP3" },
 	{ method: "GET", pattern: "/sessions/:id", name: "sessions.show", wp: "WP3" },

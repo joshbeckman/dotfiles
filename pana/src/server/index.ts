@@ -234,6 +234,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 			const tcpServer = createServer(createApp(appOptions, "tcp"));
 			await listen(tcpServer, (s, done) => s.listen(port, "127.0.0.1", done));
 			tcpPort = (tcpServer.address() as AddressInfo).port;
+			runtime.artifactOrigin = options.tailscaleNames?.[0] ? `https://${options.tailscaleNames[0]}` : loopbackOrigin(tcpPort);
 			cleanup.unshift(() => closeServer(tcpServer));
 		}
 
