@@ -1004,12 +1004,18 @@ it("ART-15 a publish emits one artifact.published event, and a retry emits none"
 		artifactId: first.body.artifact.id,
 		versionId: first.body.version.id,
 		seq: 1,
+		messageId: expect.stringMatching(/^[0-9A-Z]{26}$/),
 		name: "site",
 		url: `pana://${TEST_DOMAIN}/artifacts/${first.body.artifact.id}/v/1`,
 		publishedBy: `pana://${TEST_DOMAIN}/sessions/${session}`,
 	});
 	// Its own kind: not the delivery or notice kind that marks a thread as mail.
 	expect(published[0]!.to).toBeUndefined();
+	// The event names the message it appended, so a client can read that one without reading the
+	// whole thread (which would clear unread deliveries).
+	const appended = await t!.client.get<{ message: { id: string; body: string } }>(`/messages/${published[0]!.messageId}`);
+	expect(appended.status).toBe(200);
+	expect(appended.body.message.body).toContain("published");
 
 	const retried = await publishBuild(threadId, "site", { "index.html": "<h1>one</h1>" }, { caller: session });
 	expect(retried.status).toBe(200);

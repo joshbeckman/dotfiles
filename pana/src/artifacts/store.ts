@@ -132,7 +132,7 @@ export async function publishArtifact(runtime: Runtime, caller: Caller, threadId
 				const b = await tx.get<FileRecord>("SELECT * FROM files WHERE id = ?", next.fileId);
 				if (!a || !b || a.size !== b.size || !fileBytes(runtime, a).equals(fileBytes(runtime, b))) identical = false;
 			}
-			if (identical) return { artifact: artifactView(runtime, artifact), version: view, created: false };
+			if (identical) return { artifact: artifactView(runtime, artifact), version: view, created: false, messageId: null as string | null };
 		}
 		const version: VersionRow = { id: runtime.newId(), artifact_id: artifact.id, seq: (newest?.seq ?? 0) + 1, entry: input.entry, note: input.note, created_by: caller.id, created_at: now };
 		await tx.run("INSERT INTO artifact_versions (id,artifact_id,seq,entry,note,created_by,created_at) VALUES (?,?,?,?,?,?,?)", version.id, artifact.id, version.seq, version.entry, version.note, caller.id, now);
@@ -142,8 +142,8 @@ export async function publishArtifact(runtime: Runtime, caller: Caller, threadId
 			used.add(fileId);
 			await tx.run("INSERT INTO artifact_version_files (version_id,path,file_id) VALUES (?,?,?)", version.id, file.path, fileId);
 		}
-		await insertDomainMessage(tx, runtime, threadId, `${caller.url} published ${JSON.stringify(name).replace(/[\[\]<>`*_]/g, "\\$&")} v${version.seq} at ${new Date(now).toISOString()}: ${artifactUrl(runtime, artifact.id, version.seq)}`, now);
-		return { artifact: artifactView(runtime, artifact), version: await versionView(tx, runtime, version, origin), created: true };
+		const message = await insertDomainMessage(tx, runtime, threadId, `${caller.url} published ${JSON.stringify(name).replace(/[\[\]<>`*_]/g, "\\$&")} v${version.seq} at ${new Date(now).toISOString()}: ${artifactUrl(runtime, artifact.id, version.seq)}`, now);
+		return { artifact: artifactView(runtime, artifact), version: await versionView(tx, runtime, version, origin), created: true, messageId: message.messageId };
 	});
 	// Warning discovery is not manifest validation. Never interpret uploaded bytes as paths.
 	const warnings: string[] = [];
@@ -163,6 +163,7 @@ export async function publishArtifact(runtime: Runtime, caller: Caller, threadId
 			threadId,
 			artifactId: result.artifact.id,
 			versionId: result.version.id,
+			messageId: result.messageId,
 			seq: result.version.seq,
 			name: result.artifact.name,
 			url: artifactUrl(runtime, result.artifact.id, result.version.seq),
