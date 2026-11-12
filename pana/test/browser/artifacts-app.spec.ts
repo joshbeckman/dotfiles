@@ -12,12 +12,11 @@
 // 390 px even when the build itself is 2000 px wide.
 // ART-15 is the live publish: the open thread appends the published message without a reload, the
 // open pane offers **New version** instead of reloading a frame under the reader, and the draft and
-// scroll survive. That test skips until panad emits a publication event of its own kind: without
-// one the app cannot learn of a publish, so there is nothing to assert yet.
+// scroll survive. It requires a publication event of its own kind.
 //
 // What the tests below require of the app, beyond the listed test ids:
 // - `artifact-version`'s text names the sequence it shows, written `v<seq>` (or "version <seq>").
-// - `artifact-download` is a link with a `download` attribute whose `href` is the capability path.
+// - `artifact-download` is a link with a `download` attribute to an octet-stream blob.
 // - `artifact-new-version` is one control, visible only when a newer version exists.
 // - `artifact-back` is the phone pane's single back action, and the bundle of the pane carries
 //   `artifact-version` as its chrome.
@@ -315,18 +314,25 @@ describeBrowser("artifact pane", () => {
 		expect(shot.path.startsWith(`/a/${shotVersion.id}/`)).toBe(true);
 		expect([shot.frame, shot.markdown, shot.download]).toEqual([false, false, false]);
 
-		// Anything else: offered as a download, from its capability path, and rendered as nothing.
-		const logVersion = (await versionsOf(ids.log)).at(-1)!;
+		// Capture the object at creation; the shell CSP intentionally disallows fetching blob URLs.
+		await evaluatePage(`
+			const original = URL.createObjectURL;
+			URL.createObjectURL = function(blob) { window.__downloadBlob = blob; return original.call(URL, blob); };
+			return true;
+		`);
+		// Anything else: fetched from its capability and offered as an inert download.
 		await goto(`#/threads/${threadId}/a/${ids.log}`, `document.querySelector("[data-testid=artifact-download]")`);
-		const log = await evaluatePage<{ tag: string; href: string; download: boolean; path: string; frame: boolean; markdown: boolean; image: boolean; text: string }>(`
+		const log = await evaluatePage<{ tag: string; href: string; download: boolean; type: string; bytes: string; frame: boolean; markdown: boolean; image: boolean; text: string }>(`
 			${HELPERS}
 			const link = document.querySelector("[data-testid=artifact-download]");
 			const parse = (selector) => Boolean(document.querySelector(selector));
+			const blob = window.__downloadBlob;
 			return {
 				tag: link.tagName,
 				href: link.getAttribute("href"),
 				download: link.hasAttribute("download"),
-				path: new URL(link.getAttribute("href"), location.href).pathname,
+				type: blob.type,
+				bytes: await blob.text(),
 				frame: parse("[data-testid=artifact-frame]"),
 				markdown: parse("[data-testid=artifact-markdown]"),
 				image: parse("[data-testid=artifact-image]"),
@@ -335,7 +341,9 @@ describeBrowser("artifact pane", () => {
 		`);
 		expect(log.tag).toBe("A");
 		expect(log.download).toBe(true);
-		expect(log.path.startsWith(`/a/${logVersion.id}/`)).toBe(true);
+		expect(log.href.startsWith("blob:")).toBe(true);
+		expect(log.type).toBe("application/octet-stream");
+		expect(log.bytes).toContain("run log body");
 		expect([log.frame, log.markdown, log.image]).toEqual([false, false, false]);
 		expect(log.text).not.toContain("run log body");
 	});
@@ -412,11 +420,11 @@ describeBrowser("artifact pane", () => {
 			const anchor = [...document.querySelectorAll("#thread-messages a")].find((node) => (node.textContent ?? "").includes(${JSON.stringify(versionUrl)}));
 			return { href: anchor?.getAttribute("href") ?? null, text: anchor?.textContent ?? null };
 		`);
-		expect(linked.href).toBe(`#/threads/${threadId}/a/${ids.build}/v/${first.seq}`);
+		expect(linked.href).toBe(`#/artifacts/${ids.build}/v/${first.seq}`);
 		await evaluatePage(`
 			const anchor = [...document.querySelectorAll("#thread-messages a")].find((node) => (node.textContent ?? "").includes(${JSON.stringify(versionUrl)}));
 			anchor.click();
-			await until(() => document.querySelector("[data-testid=artifact-version]") && document.querySelector("[data-testid=artifact-frame]")?.getAttribute("src"));
+			await until(() => location.hash === ${JSON.stringify(`#/threads/${threadId}/a/${ids.build}/v/${first.seq}`)} && document.querySelector("[data-testid=artifact-version]") && document.querySelector("[data-testid=artifact-frame]")?.getAttribute("src"));
 			return true;
 		`);
 		const fromTimeline = await evaluatePage<{ seq: number; path: string | null }>(`
@@ -425,6 +433,29 @@ describeBrowser("artifact pane", () => {
 		`);
 		expect(fromTimeline.seq).toBe(first.seq);
 		expect(fromTimeline.path!.startsWith(`/a/${first.id}/`)).toBe(true);
+	});
+
+	it("ART-13 the palette finds an artifact by name and opens its thread pane", async () => {
+		await open();
+		const result = await evaluatePage<{ hash: string; title: string }>(`
+			document.getElementById("open-palette").click();
+			await until(() => !document.getElementById("palette").hidden);
+			const commands = document.getElementById("palette-input");
+			commands.value = "search";
+			commands.dispatchEvent(new Event("input", { bubbles: true }));
+			commands.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+			await until(() => document.activeElement?.id === "palette-search-input");
+			const search = document.getElementById("palette-search-input");
+			search.value = "shot";
+			search.dispatchEvent(new Event("input", { bubbles: true }));
+			await until(() => [...document.querySelectorAll('[data-testid="palette-hit"][data-hit-kind="artifact"]')].some(node => node.textContent.includes("shot")));
+			const hit = [...document.querySelectorAll('[data-testid="palette-hit"][data-hit-kind="artifact"]')].find(node => node.textContent.includes("shot"));
+			hit.click();
+			await until(() => location.hash === ${JSON.stringify(`#/threads/${threadId}/a/${ids.shot}`)} && document.querySelector('[data-testid="artifact-image"]'));
+			return { hash: location.hash, title: document.getElementById("artifact-title").textContent };
+		`);
+		expect(result.hash).toBe(`#/threads/${threadId}/a/${ids.shot}`);
+		expect(result.title).toBe("shot");
 	});
 
 	// ---- ART-14 -------------------------------------------------------------------------------
@@ -576,7 +607,7 @@ describeBrowser("artifact pane", () => {
 
 	// ---- ART-15 -------------------------------------------------------------------------------
 
-	it("ART-15 a publish appends the message and offers the reader the new version", async (ctx) => {
+	it("ART-15 a publish appends the message and offers the reader the new version", async () => {
 		await open();
 		await resizePage(1280, 900);
 		await goto(
@@ -587,7 +618,7 @@ describeBrowser("artifact pane", () => {
 		// ART-15 gives a publish an event of its own kind; without one the open thread and pane
 		// cannot hear about it, so there is no affordance to measure yet.
 		const kinds = await streamKinds();
-		if (!kinds.some((kind) => /artifact/.test(kind))) ctx.skip();
+		expect(kinds).toContain("artifact.published");
 
 		const before = await evaluatePage<{ seq: number; path: string | null; messages: number; draft: string; scroll: number }>(`
 			${HELPERS}

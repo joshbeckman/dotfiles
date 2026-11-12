@@ -17,7 +17,7 @@ export const HITS_PER_STORE = 5;
 export const COMMANDS = [
 	{
 		id: "palette:search",
-		label: "Search threads, sessions, and memory",
+		label: "Search threads, sessions, memory, and artifacts",
 		hint: "Enter",
 		keywords: "find query fts everything everywhere",
 	},

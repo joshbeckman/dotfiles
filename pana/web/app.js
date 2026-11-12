@@ -4883,11 +4883,12 @@ async function route() {
 async function drawRoute() {
 	const canonicalArtifact = /^#\/artifacts\/([^/]+)(?:\/v\/([1-9]\d*))?$/.exec(location.hash);
 	if (canonicalArtifact) {
+		const requestedHash = location.hash;
 		try {
 			const id = decodeURIComponent(canonicalArtifact[1]);
 			const seq = canonicalArtifact[2];
 			const data = await api("GET", `/artifacts/${encodeURIComponent(id)}${seq ? `?seq=${seq}` : ""}`);
-			location.replace(artifactHref(data.artifact.threadId, id, seq));
+			if (location.hash === requestedHash) location.replace(artifactHref(data.artifact.threadId, id, seq));
 		} catch (error) { fail(error); }
 		return;
 	}
