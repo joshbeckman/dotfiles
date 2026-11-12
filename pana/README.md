@@ -16,7 +16,7 @@ Pana runs sessions on [pi-durable](https://github.com/earendil-works/pi/tree/mai
 - **Sessions are temporary and run in parallel.** They respond quickly and release resources when a run ends.
 - **Scratch is temporary. Memory lasts.** Each session has its own scratch directory. Preserve useful work in its canonical home; shared memory preserves understanding and routing pointers. Git tracks each memory change and its author.
 - **Link work to the thread where it started.** Threads keep the instructions, decisions, and results; sessions identify the agents that did the work. A child session uses its own originating thread, not its parent’s. Later conversations do not change this link.
-- **Threads are for communication.** Participants work together through messages. Every participant gets every message. Threads can be read and shared.
+- **Threads are for communication, and for what they build.** Participants work together through messages. Every participant gets every message. Threads can be read and shared. An artifact is what a thread built: a versioned snapshot, written by the thread's writers, opened by anyone who can read the thread, and never a second way to talk.
 - **Read before you write.** Each new message must name the latest message the sender has read. If the thread has changed, the write fails. Read the new messages and try again. Memory changes must also resolve conflicts before publication.
 - **Messages wake idle sessions.** During a run, user messages arrive after the current tool round. Messages from other sessions wait for the next run.
 - **Schedule work instead of waiting.** Schedules create sessions, send messages, or wake sessions. End the run while you wait.
