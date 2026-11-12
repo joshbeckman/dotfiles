@@ -25,6 +25,8 @@ afterEach(async () => {
 		const user = notice.thread.participants.find((p) => p.kind === "user")!;
 		page = await newPage(`${loopbackOrigin(t.panad.tcpPort!)}/#${t.panad.webToken}`);
 		await evaluatePage(`location.hash = "#/threads/${id}"; await until(() => document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role')); return true;`);
+		const shotDir = process.env.PANA_ROLE_SHOTS_DIR;
+		if (shotDir) { mkdirSync(shotDir, { recursive: true }); copyFileSync(await screenshot(), join(shotDir, "default.png")); }
 		const cli = async (args: string[]) => {
 			let stdout = "", stderr = "";
 			const code = await main(["--json", ...args], {
@@ -36,6 +38,7 @@ afterEach(async () => {
 		};
 		await cli(["thread", "role", "set", id, "release reviewer"]);
 		expect(await evaluatePage(`await until(() => document.querySelector('#thread-participants [data-participant-id="${user.id}"] .participant-role').textContent === "release reviewer"); return true;`)).toBe(true);
+		if (shotDir) copyFileSync(await screenshot(), join(shotDir, "reviewer.png"));
 		const read = await cli(["thread", "read", id]);
 		expect(read.thread.participants.find((p: { id: string }) => p.id === user.id).role).toBe("release reviewer");
 		await cli(["thread", "role", "clear", id]);
