@@ -615,11 +615,7 @@ function handleEvent(event) {
 	} else {
 		void refreshUnread().catch(() => {});
 	}
-	// Show new mail in the open thread, but only while no reply is drafted: reopening moves the
-	// draft head, and a draft in progress must keep its head so a stale send gets WEB-07's 409.
-	if (state.section === "threads" && event.threadId === state.thread?.id && !$("thread").hidden && !$("reply-body").value.trim()) {
-		void openThread(state.thread.id).catch(fail);
-	}
+	if (event.threadId === state.thread?.id) revealOpenThread();
 }
 
 function handleChunk(chunk) {
@@ -706,6 +702,20 @@ async function resumeApp() {
 	} else {
 		await refreshUnread().catch(() => {});
 	}
+	// WEB-11: the deliveries the paused stream missed would have redrawn the open thread too.
+	revealOpenThread();
+}
+
+/**
+ * WEB-11 and REF-06: new mail belongs in the thread the reader has open, whether a delivery
+ * carried it or the app was away when it arrived. A drafted reply is left alone: reopening moves
+ * the draft head, and a draft in progress must keep the head it was written against so a stale
+ * send gets WEB-07's 409.
+ */
+function revealOpenThread() {
+	if (state.section !== "threads" || !state.thread || $("thread").hidden) return;
+	if ($("reply-body").value.trim()) return;
+	void openThread(state.thread.id).catch(fail);
 }
 
 function appendEntry(entry) {

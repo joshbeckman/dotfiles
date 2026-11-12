@@ -1118,6 +1118,96 @@ describeBrowser("pana in a browser", () => {
 		expect(live.nav).toBe("2 unread messages");
 	});
 
+	it("WEB-11 a resumed app shows the mail that arrived while it was away in the thread it left open", async () => {
+		await start([{ text: "Paris." }]);
+		const seeded = await seedSession("What is the capital of France?");
+		// A stopped session queues mail without waking, so an append below is only a delivery.
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		await open();
+		// Read the thread and stay on it, with the reply box empty.
+		const opened = await evaluatePage<number>(`
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length === 2);
+			return document.querySelectorAll("#thread-messages [data-testid=message]").length;
+		`);
+		expect(opened).toBe(2);
+
+		// The app goes out of sight, the way a phone puts a Home Screen app away, and the stream with it.
+		await evaluatePage(`
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+			document.dispatchEvent(new Event("visibilitychange"));
+			return true;
+		`);
+		const head = (await messages(seeded.thread.id)).at(-1)!.id;
+		const sent = await t!.client.post(`/threads/${seeded.thread.id}/messages`, { after: head, body: "a message while away" }, { caller: seeded.session.id });
+		expect(sent.status).toBe(200);
+
+		// A stream left open would never deliver again, so the open thread stays as it was.
+		const stale = await evaluatePage<string>(`
+			await sleep(500);
+			return document.getElementById("thread-messages").textContent;
+		`);
+		expect(stale).not.toContain("a message while away");
+
+		// Launched from the Home Screen again: no navigation, and the thread shows what it missed.
+		const resumed = await evaluatePage<{ hash: string; count: number; text: string }>(`
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+			document.dispatchEvent(new Event("visibilitychange"));
+			await until(() => document.getElementById("thread-messages").textContent.includes("a message while away"));
+			return {
+				hash: location.hash,
+				count: document.querySelectorAll("#thread-messages [data-testid=message]").length,
+				text: document.getElementById("thread-messages").textContent,
+			};
+		`);
+		expect(resumed.hash).toBe(`#/threads/${seeded.thread.id}`);
+		expect(resumed.count).toBe(3);
+		expect(resumed.text).toContain("a message while away");
+	});
+
+	it("WEB-11 a resumed app leaves a drafted reply's thread head alone", async () => {
+		await start([{ text: "Paris." }]);
+		const seeded = await seedSession("What is the capital of France?");
+		await t!.client.post(`/sessions/${seeded.session.id}/stop`);
+		await open();
+		// A draft says what the reply is written against, and a resume must not move that head.
+		const drafted = await evaluatePage<string>(`
+			location.hash = "#/threads/${seeded.thread.id}";
+			await until(() => !document.getElementById("thread").hidden);
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length === 2);
+			const box = document.getElementById("reply-body");
+			box.value = "half a reply";
+			box.dispatchEvent(new Event("input", { bubbles: true }));
+			return document.getElementById("draft-head").textContent;
+		`);
+		await evaluatePage(`
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+			document.dispatchEvent(new Event("visibilitychange"));
+			return true;
+		`);
+		const head = (await messages(seeded.thread.id)).at(-1)!.id;
+		const sent = await t!.client.post(`/threads/${seeded.thread.id}/messages`, { after: head, body: "a message while away" }, { caller: seeded.session.id });
+		expect(sent.status).toBe(200);
+
+		const resumed = await evaluatePage<{ head: string; body: string; count: number }>(`
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+			document.dispatchEvent(new Event("visibilitychange"));
+			await sleep(500);
+			return {
+				head: document.getElementById("draft-head").textContent,
+				body: document.getElementById("reply-body").value,
+				count: document.querySelectorAll("#thread-messages [data-testid=message]").length,
+			};
+		`);
+		expect(resumed.head).toBe(drafted);
+		expect(resumed.body).toBe("half a reply");
+		expect(resumed.count).toBe(2);
+		// The draft still sends against its own head, so the server answers with WEB-07's 409.
+		const stale = await t!.client.post<{ code?: string }>(`/threads/${seeded.thread.id}/messages`, { after: drafted, body: "half a reply" });
+		expect(stale.status).toBe(409);
+	});
+
 	it("UX-16 the thread header regenerates the subject and keeps the old ones", async () => {
 		// With a subject model set, the button asks it; a notice starts at its first line, no job.
 		await start([{ text: "Lantern maintenance plan" }], undefined, { subjectModel: "faux/faux-1" });
