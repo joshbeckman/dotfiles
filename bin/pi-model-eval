@@ -201,7 +201,7 @@ def parse_options(argv)
     token_limit: 200_000, turn_limit: 20, suite_budget: 2.0, suite_timeout: 1_800.0,
     results: DEFAULT_RESULTS, pi: ENV.fetch("PI_MODEL_EVAL_PI", "pi"), config_dir: nil, config_label: "default",
     discover_extensions: true, discover_skills: true, discover_prompt_templates: true, discover_context_files: true,
-    extensions: [], skills: [], prompt_templates: []
+    extensions: [], skills: [], prompt_templates: [], trial_env: {}, snapshot_variant: nil
   }
   parser = OptionParser.new do |opts|
     opts.banner = "Usage: pi-model-eval COMMAND --models PROVIDER/MODEL:THINKING [options]"
@@ -222,6 +222,12 @@ def parse_options(argv)
     opts.on("--provider-extension PATH", "Alias for --extension") { |value| options[:extensions] << File.expand_path(value) }
     opts.on("--skill PATH", "Add a skill to the configured set (repeatable)") { |value| options[:skills] << File.expand_path(value) }
     opts.on("--prompt-template PATH", "Add a prompt template to the configured set (repeatable)") { |value| options[:prompt_templates] << File.expand_path(value) }
+    opts.on("--snapshot-variant NAME", "Serve fixtures from their snapshot-NAME directory") { |value| options[:snapshot_variant] = value }
+    opts.on("--env KEY=VALUE", "Set an environment variable in every trial (repeatable)") do |value|
+      key, assigned = value.split("=", 2)
+      raise OptionParser::InvalidArgument, "--env needs KEY=VALUE" if key.to_s.empty? || assigned.nil?
+      options[:trial_env][key] = assigned
+    end
     opts.on("--no-extensions", "Disable configured extension discovery") { options[:discover_extensions] = false }
     opts.on("--no-skills", "Disable configured skill discovery") { options[:discover_skills] = false }
     opts.on("--no-prompt-templates", "Disable configured prompt-template discovery") { options[:discover_prompt_templates] = false }
@@ -243,6 +249,14 @@ def plan(options)
   raise EvalError, "suite limits cannot be negative" if options[:suite_budget].negative? || options[:suite_timeout].negative?
   raise EvalError, "only the smoke tier exists in v1" unless options[:tier] == "smoke"
   raise EvalError, "config label may contain only letters, digits, '.', '_', or '-'" unless options[:config_label].match?(/\A[A-Za-z0-9_.-]+\z/)
+  raise EvalError, "snapshot variant may contain only letters, digits, '.', '_', or '-'" if options[:snapshot_variant] && !options[:snapshot_variant].match?(/\A[A-Za-z0-9_.-]+\z/)
+  reserved_env = %w[PATH HOME TMPDIR SNAPSHOT_DIR PI_CODING_AGENT_DIR PI_OFFLINE PI_CACHE_RETENTION
+                    PI_EVAL_ROOT PI_EVAL_ALLOWED_COMMANDS PI_EVAL_ALLOWED_COMMAND_PREFIXES
+                    PI_EVAL_COMMAND_TIMEOUT PI_EVAL_CONFIG_ROOT PI_EVAL_SKILL_ROOTS]
+  options[:trial_env].each_key do |key|
+    raise EvalError, "--env key must match [A-Z][A-Z0-9_]*: #{key}" unless key.match?(/\A[A-Z][A-Z0-9_]*\z/)
+    raise EvalError, "--env key is reserved and cannot be overridden: #{key}" if reserved_env.include?(key)
+  end
   selected_config_dir = options[:config_dir] || ENV["PI_CODING_AGENT_DIR"]
   raise EvalError, "config directory not found: #{selected_config_dir}" if selected_config_dir && !File.directory?(File.expand_path(selected_config_dir))
   explicit_resources = options.values_at(:extensions, :skills, :prompt_templates).flatten
@@ -257,6 +271,7 @@ def plan(options)
     "trial_timeout_seconds" => options[:timeout], "trial_spend_stop_usd" => options[:trial_budget],
     "trial_token_stop" => options[:token_limit], "trial_turn_stop" => options[:turn_limit],
     "suite_spend_stop_usd" => options[:suite_budget], "suite_timeout_seconds" => options[:suite_timeout],
+    "snapshot_variant" => options[:snapshot_variant], "trial_env" => options[:trial_env],
     "configuration" => configuration_snapshot(options),
     "maximum_if_every_trial_reaches_cap_usd" => trials.length * options[:trial_budget]
   }
@@ -370,15 +385,26 @@ def run_trial(options, fixture, model, repeat, trial_dir)
   event_file = File.open(events_path, "w")
   stderr_bytes = 0
 
+  # Fixture snapshots live outside the trial workspace so a trial cannot read them directly, and
+  # the stub CLI needs their absolute path.
+  snapshot_dir = File.join(fixture.fetch("path"), ["snapshot", options[:snapshot_variant]].compact.join("-"))
+  command_env = options[:trial_env].dup
+  if File.directory?(snapshot_dir)
+    command_env["SNAPSHOT_DIR"] = snapshot_dir
+  elsif options[:snapshot_variant]
+    raise EvalError, "snapshot variant not found: #{File.basename(snapshot_dir)}"
+  end
   env = {
     "PYTHONDONTWRITEBYTECODE" => "1",
     "PI_EVAL_ROOT" => workspace,
     "PI_EVAL_ALLOWED_COMMANDS" => JSON.generate(fixture.fetch("allowed_commands", [])),
+    "PI_EVAL_ALLOWED_COMMAND_PREFIXES" => JSON.generate(fixture.fetch("allowed_command_prefixes", [])),
+    "PI_EVAL_COMMAND_ENV" => JSON.generate(command_env),
     "PI_EVAL_COMMAND_TIMEOUT" => fixture.fetch("command_timeout_seconds").to_s,
     "PI_EVAL_CONFIG_ROOT" => effective_config_dir(options),
     "PI_EVAL_SKILL_ROOTS" => JSON.generate(options[:skills]),
     "PI_CACHE_RETENTION" => ENV["PI_CACHE_RETENTION"]
-  }.compact.merge(pi_configuration_env(private_config))
+  }.compact.merge(command_env).merge(pi_configuration_env(private_config))
   prompt = File.read(File.join(fixture.fetch("path"), "prompt.md"))
   system_prompt = "You are completing one isolated evaluation fixture. Work only inside the current directory. Follow the task exactly and finish with a concise answer."
   config_args = pi_configuration_args(options)

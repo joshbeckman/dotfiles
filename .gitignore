@@ -71,3 +71,5 @@ bin/staticcheck
 
 # Python bytecode from running the tools in bin/.
 __pycache__/
+model-eval/fixtures/*/workspace/.calls.tsv
+model-eval/fixtures/*/workspace/.bash.tsv

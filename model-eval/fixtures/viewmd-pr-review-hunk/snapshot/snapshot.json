@@ -1,0 +1,14 @@
+{
+  "id": "viewmd-pr-review-hunk",
+  "kind": "pull",
+  "source_url": "https://github.com/joshbeckman/dotfiles/pull/272",
+  "captured_at": "2026-11-12T06:36:36Z",
+  "cli_sha256": "8651c3803fab78fc1bfaa1dddd9e093b3344e25e3f6a12a7e1e4718f96ae4f29",
+  "sizes": {
+    "view-md.md": 16475,
+    "view-md-trimmed.md": 8239,
+    "diff.patch": 8307,
+    "pr.json": 7820,
+    "review-comments.json": 6064
+  }
+}

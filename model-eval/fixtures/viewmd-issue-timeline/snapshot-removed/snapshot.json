@@ -1,0 +1,14 @@
+{
+  "id": "viewmd-issue-timeline",
+  "kind": "issue",
+  "source_url": "https://github.com/joshbeckman/dotfiles/issues/224",
+  "captured_at": "2026-11-12T13:03:05Z",
+  "cli_sha256": "95b4b25a8e8b3def9c963bb2f1e1c568a147d4d85420dc5967da430d8e272d0e",
+  "sizes": {
+    "view-md.md": 1608,
+    "view-md-trimmed.md": 1608,
+    "issue.json": 1517,
+    "timeline.json": 16118
+  },
+  "viewmd": "absent"
+}

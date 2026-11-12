@@ -1,0 +1,14 @@
+{
+  "id": "viewmd-pr-diff-light",
+  "kind": "pull",
+  "source_url": "https://github.com/joshbeckman/dotfiles/pull/304",
+  "captured_at": "2026-11-12T06:36:22Z",
+  "cli_sha256": "8651c3803fab78fc1bfaa1dddd9e093b3344e25e3f6a12a7e1e4718f96ae4f29",
+  "sizes": {
+    "view-md.md": 4318,
+    "view-md-trimmed.md": 1781,
+    "diff.patch": 2570,
+    "pr.json": 2168,
+    "review-comments.json": 3
+  }
+}

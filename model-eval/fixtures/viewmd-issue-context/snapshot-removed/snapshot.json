@@ -1,0 +1,13 @@
+{
+  "id": "viewmd-issue-context",
+  "kind": "issue",
+  "source_url": "https://github.com/joshbeckman/dotfiles/issues/287",
+  "captured_at": "2026-11-12T06:36:29Z",
+  "cli_sha256": "8651c3803fab78fc1bfaa1dddd9e093b3344e25e3f6a12a7e1e4718f96ae4f29",
+  "sizes": {
+    "view-md.md": 6212,
+    "view-md-trimmed.md": 6212,
+    "issue.json": 6402
+  },
+  "viewmd": "absent"
+}
