@@ -5,8 +5,10 @@
 // fragment instead (WEB-02). Every API route keeps API-04's token check; `isStaticAssetPath`
 // is the narrow allowlist that `src/server/app.ts` consults before demanding one.
 
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { acceptedEncoding, compressibleContentType, encodedBytes, staticQuality, type Encoding } from "../server/compress.ts";
 
 export const WEB_ROOT = fileURLToPath(new URL("../../web/", import.meta.url));
 
@@ -76,20 +78,97 @@ export interface LoadedAsset {
 	headers?: Record<string, string>;
 }
 
-export async function loadAsset(pathname: string): Promise<LoadedAsset | undefined> {
-	const asset = staticAsset(pathname);
-	if (!asset) return undefined;
-	let bytes: Buffer;
+/**
+ * How long a browser may keep an asset without asking (WEB-13). The shell is not content
+ * addressed, so markup, scripts, and styles revalidate on every load: a `no-cache` answer is
+ * one round trip and no bytes. A font file's name already says which face it is, and an icon
+ * changes when the app does, so those carry a lifetime instead of a round trip.
+ */
+function cacheControl(asset: StaticAsset): string {
+	if (asset.contentType === "font/woff2") return "public, max-age=31536000, immutable";
+	if (asset.contentType.startsWith("image/")) return "public, max-age=86400";
+	return "no-cache";
+}
+
+interface CachedAsset {
+	mtimeMs: number;
+	size: number;
+	bytes: Buffer;
+	/** Strong etag over the file's own bytes: the same file always answers the same validator. */
+	etag: string;
+	/** Compressed variants, so a page load does not recompress a bundle it already sent. */
+	encoded: Map<Encoding, Buffer>;
+}
+
+const cache = new Map<string, CachedAsset>();
+
+async function cached(path: string): Promise<CachedAsset | undefined> {
+	let info;
 	try {
-		bytes = await readFile(`${WEB_ROOT}${asset.file}`);
+		info = await stat(path);
 	} catch {
 		return undefined;
 	}
+	const hit = cache.get(path);
+	if (hit && hit.mtimeMs === info.mtimeMs && hit.size === info.size) return hit;
+	let bytes: Buffer;
+	try {
+		bytes = await readFile(path);
+	} catch {
+		return undefined;
+	}
+	const digest = createHash("sha1").update(bytes).digest("base64url");
+	const entry: CachedAsset = { mtimeMs: info.mtimeMs, size: info.size, bytes, etag: `"${digest}"`, encoded: new Map() };
+	cache.set(path, entry);
+	return entry;
+}
+
+/** Whether an `if-none-match` header names this etag. Weak and strong forms both match. */
+export function etagMatches(header: string | string[] | undefined, etag: string): boolean {
+	if (!header) return false;
+	const list = Array.isArray(header) ? header : [header];
+	for (const value of list) {
+		if (value.trim() === "*") return true;
+		for (const candidate of value.split(",")) {
+			if (candidate.trim().replace(/^W\//, "") === etag) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * One asset, compressed for the caller when it is text (WEB-13). A caller that sends no
+ * `accept-encoding` gets the file as it sits on disk, which is what panad's own tests ask for.
+ */
+export async function loadAsset(pathname: string, acceptEncoding?: string): Promise<LoadedAsset | undefined> {
+	const asset = staticAsset(pathname);
+	if (!asset) return undefined;
+	const file = `${WEB_ROOT}${asset.file}`;
+	const entry = await cached(file);
+	if (!entry) return undefined;
 	const headers: Record<string, string> = {
-		"cache-control": "no-cache",
+		"cache-control": cacheControl(asset),
+		etag: entry.etag,
 		"x-content-type-options": "nosniff",
 		"referrer-policy": "no-referrer",
 	};
+	let bytes: Uint8Array = entry.bytes;
+	if (compressibleContentType(asset.contentType)) {
+		headers.vary = "accept-encoding";
+		const encoding = acceptedEncoding(acceptEncoding);
+		if (encoding) {
+			let body: Uint8Array | undefined = entry.encoded.get(encoding);
+			if (!body) {
+				body = await encodedBytes(entry.bytes, encoding, staticQuality(encoding, entry.bytes.byteLength));
+				// Only a body that came back smaller is worth remembering and announcing.
+				if (body !== entry.bytes) entry.encoded.set(encoding, Buffer.from(body));
+			}
+			if (body !== entry.bytes) {
+				bytes = body;
+				headers["content-encoding"] = encoding;
+			}
+		}
+	}
 	if (asset.contentType.startsWith("text/html")) {
 		// No inline script: every module is a file under `web/`, so the shell can run under a
 		// strict policy. Mermaid writes <style> and style attributes, hence the inline style rule.

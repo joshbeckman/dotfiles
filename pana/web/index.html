@@ -11,6 +11,19 @@
 		<meta name="theme-color" content="#002fa7" />
 		<link rel="stylesheet" href="/fonts.css" />
 		<link rel="stylesheet" href="/style.css" />
+		<!-- The modules the app's entry point imports, named here so the browser fetches them
+		     beside it rather than after it (WEB-13). A slow link feels each round trip, and
+		     discovering the imports by parsing `app.js` first is one the page need not spend. -->
+		<link rel="modulepreload" href="/choices.js" />
+		<link rel="modulepreload" href="/links.js" />
+		<link rel="modulepreload" href="/push.js" />
+		<link rel="modulepreload" href="/pages.js" />
+		<link rel="modulepreload" href="/perf.js" />
+		<link rel="modulepreload" href="/palette.js" />
+		<link rel="modulepreload" href="/keys.js" />
+		<link rel="modulepreload" href="/views.js" />
+		<link rel="modulepreload" href="/render.js" />
+		<link rel="modulepreload" href="/session-palette.js" />
 		<script type="module" src="/app.js"></script>
 	</head>
 	<body>

@@ -7,6 +7,7 @@ import { ApiError } from "../api/errors.ts";
 import { matchRoute, pathExists } from "../api/routes.ts";
 import type { Caller, Handlers, HandlerResult, RequestContext, Transport } from "../api/types.ts";
 import { parseRef, RefError } from "../ids/index.ts";
+import { acceptedEncoding, compressibleContentType, encodedBytes } from "./compress.ts";
 import { isStaticAssetPath } from "../web/static.ts";
 import type { Runtime } from "./runtime.ts";
 
@@ -96,14 +97,14 @@ async function handle(options: AppOptions, transport: Transport, req: IncomingMe
 		};
 		const result = await handler(ctx);
 		status = result.status;
-		await send(res, result);
+		await send(req, res, result);
 	} catch (error) {
 		const apiError = toApiError(error);
 		status = apiError.status;
 		// The detail stays here, in panad's own log, and the caller gets the generic body.
 		if (apiError.status === 500) options.onError?.(error, `${method} ${url?.pathname ?? target}`);
 		if (!res.headersSent) {
-			await send(res, { status: apiError.status, body: apiError.toBody() });
+			await send(req, res, { status: apiError.status, body: apiError.toBody() });
 		} else {
 			res.destroy();
 		}
@@ -255,7 +256,7 @@ function toApiError(error: unknown): ApiError {
 	return new ApiError(500, "internal", INTERNAL_MESSAGE);
 }
 
-async function send(res: ServerResponse, result: HandlerResult): Promise<void> {
+async function send(req: IncomingMessage, res: ServerResponse, result: HandlerResult): Promise<void> {
 	const headers: Record<string, string> = { ...result.headers };
 	if (result.stream) {
 		res.writeHead(result.status, headers);
@@ -270,7 +271,28 @@ async function send(res: ServerResponse, result: HandlerResult): Promise<void> {
 		payload = Buffer.from(JSON.stringify(result.body));
 		headers["content-type"] = "application/json";
 	}
-	headers["content-length"] = String(payload?.byteLength ?? 0);
+	// WEB-13: the text half of the surface is compressed for a caller that asked. An asset the
+	// static handler already compressed keeps its own answer, and a body too small to gain is
+	// left as it is.
+	if (payload && headers["content-encoding"] === undefined && compressibleContentType(headers["content-type"])) {
+		headers.vary ??= "accept-encoding";
+		const encoding = acceptedEncoding(acceptEncoding(req));
+		if (encoding) {
+			const encoded = await encodedBytes(payload, encoding);
+			if (encoded !== payload) {
+				payload = encoded;
+				headers["content-encoding"] = encoding;
+			}
+		}
+	}
+	// A 304 has no body to describe, and a `content-length` there would claim one it never sends.
+	if (result.status !== 304) headers["content-length"] = String(payload?.byteLength ?? 0);
 	res.writeHead(result.status, headers);
 	res.end(payload);
+}
+
+/** The request's `accept-encoding` as one header line. */
+function acceptEncoding(req: IncomingMessage): string | undefined {
+	const value = req.headers["accept-encoding"];
+	return Array.isArray(value) ? value.join(",") : value;
 }

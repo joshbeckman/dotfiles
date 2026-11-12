@@ -607,9 +607,14 @@ function handleEvent(event) {
 	}
 	if (event.kind !== "delivery" && event.kind !== "notice") return;
 	// REF-06: the inbox list and the nav count both follow `/events`, even when another
-	// section is open.
-	void refreshUnread().catch(() => {});
-	if (state.section === "inbox") void loadInbox();
+	// section is open. `loadInbox` refreshes the badge on its way, so the inbox section asks
+	// once instead of twice; only the archived view (REF-07) leaves the badge behind.
+	if (state.section === "inbox") {
+		if ($("inbox-archived")?.checked) void refreshUnread().catch(() => {});
+		reloadInbox();
+	} else {
+		void refreshUnread().catch(() => {});
+	}
 	// Show new mail in the open thread, but only while no reply is drafted: reopening moves the
 	// draft head, and a draft in progress must keep its head so a stale send gets WEB-07's 409.
 	if (state.section === "threads" && event.threadId === state.thread?.id && !$("thread").hidden && !$("reply-body").value.trim()) {
@@ -694,8 +699,13 @@ async function resumeApp() {
 	if (!eventsPaused || !token || document.visibilityState === "hidden") return;
 	eventsPaused = false;
 	startEvents();
-	await refreshUnread().catch(() => {});
-	if (state.section === "inbox") await loadInbox().catch(fail);
+	// Same one-call rule as a live delivery: the list reload carries the badge with it.
+	if (state.section === "inbox") {
+		await loadInbox().catch(fail);
+		if ($("inbox-archived")?.checked) await refreshUnread().catch(() => {});
+	} else {
+		await refreshUnread().catch(() => {});
+	}
 }
 
 function appendEntry(entry) {
@@ -1284,6 +1294,35 @@ function liveToolElement(tool, live) {
 let unreadGeneration = 0;
 let inboxGeneration = 0;
 
+/**
+ * One list load at a time, with at most one trailing reload (WEB-14). Archiving ten threads
+ * asks for the list once per action and once per delivery event, and each answer used to
+ * arrive as its own fetch; over a slow link those stack up in front of the next tap. A request
+ * that lands mid-load is satisfied by the trailing reload rather than by a second request.
+ */
+let inboxReloading = false;
+let inboxReloadAgain = false;
+
+function reloadInbox() {
+	if (inboxReloading) {
+		inboxReloadAgain = true;
+		return;
+	}
+	inboxReloading = true;
+	void (async () => {
+		try {
+			do {
+				inboxReloadAgain = false;
+				await loadInbox();
+			} while (inboxReloadAgain);
+		} catch (error) {
+			fail(error);
+		} finally {
+			inboxReloading = false;
+		}
+	})();
+}
+
 /** REF-06: the nav dot signals unread mail; its label includes the total across every thread. */
 async function refreshUnread(archived = false, cursor) {
 	const generation = archived ? -1 : ++unreadGeneration;
@@ -1386,14 +1425,20 @@ async function archiveThread(threadId, archived, { leave = false } = {}) {
 		await api("POST", `/threads/${threadId}/${archived ? "archive" : "unarchive"}`, {});
 		status(archived ? "Archived." : "Unarchived.");
 		const open = state.section === "threads" && state.thread?.id === threadId && !$("thread").hidden;
-		await refreshUnread().catch(() => {});
+		// `leave` navigates, and the list it lands on reloads itself.
 		if (open && leave) {
 			location.hash = state.lastList;
 			return;
 		}
-		if (open) await openThread(threadId);
-		else if (state.section === "inbox") await loadInbox();
+		if (open) {
+			await refreshUnread().catch(() => {});
+			await openThread(threadId);
+			return;
+		}
+		// The inbox list carries the badge, so archiving in the inbox costs one fetch, not two.
+		if (state.section === "inbox") reloadInbox();
 		else if (state.section === "threads") await searchThreads();
+		else await refreshUnread().catch(() => {});
 	} catch (error) {
 		fail(error);
 	}
