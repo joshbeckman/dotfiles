@@ -2137,6 +2137,11 @@ async function messageElement(message, { focus }) {
 	if (messageLink instanceof HTMLElement) messageLink.dataset.testid = "message-link";
 	header.append(sender, timeEl(view.at), messageLink);
 	if (view.revised) header.append(span("edited", "badge"));
+	// Keep the result beside the message, even when the page status is off screen.
+	const bookmarkIndicator = span(view.bookmarked ? "Bookmarked" : "", "bookmark-indicator");
+	bookmarkIndicator.dataset.testid = "bookmark-indicator";
+	bookmarkIndicator.setAttribute("aria-live", "polite");
+	header.append(bookmarkIndicator);
 
 	// UX-04: edit and redact are small secondary controls, folded into one quiet menu per message
 	// so a thread of messages reads as prose rather than a column of repeated links.
@@ -2227,8 +2232,12 @@ async function setBookmark(view, article) {
 		view.bookmarked = save;
 		const button = article.querySelector("[data-testid=message-bookmark]");
 		if (button) button.textContent = save ? "Remove bookmark" : "Bookmark";
+		const indicator = article.querySelector("[data-testid=bookmark-indicator]");
+		if (indicator) indicator.textContent = save ? "Bookmarked" : "Bookmark removed";
 		status(save ? "Bookmarked." : "Bookmark removed.");
 	} catch (error) {
+		const indicator = article.querySelector("[data-testid=bookmark-indicator]");
+		if (indicator) indicator.textContent = view.bookmarked ? "Bookmarked · update failed" : "Bookmark update failed";
 		fail(error);
 	} finally {
 		delete article.dataset.bookmarkPending;

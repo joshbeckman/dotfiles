@@ -60,6 +60,52 @@ afterEach(async () => {
 		expect(list.body.bookmarks).toHaveLength(1);
 	});
 
+	it("BKM-07 message feedback stays visible for both toggle directions, reload, and failures", async () => {
+		seeded = await seedDomain();
+		const { t, capital } = seeded;
+		const origin = loopbackOrigin(t.panad.tcpPort!);
+		page = await newPage(`${origin}/#${t.panad.webToken}`);
+		const states = await evaluatePage<string[]>(`
+			location.hash = "#/threads/${capital.threadId}";
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length >= 2);
+			const message = document.querySelector("#thread-messages .selected");
+			const indicator = message.querySelector("[data-testid=bookmark-indicator]");
+			const button = message.querySelector("[data-testid=message-bookmark]");
+			const press = () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true, cancelable: true }));
+			const out = [indicator.textContent, indicator.getAttribute("aria-live")];
+			press();
+			await until(() => indicator.textContent === "Bookmarked");
+			out.push(indicator.textContent, button.textContent, String(indicator.getBoundingClientRect().width > 0));
+			press();
+			await until(() => indicator.textContent === "Bookmark removed");
+			out.push(indicator.textContent, button.textContent);
+			// The menu uses the same feedback. A rejected request must not claim a state change.
+			button.click();
+			await until(() => indicator.textContent === "Bookmarked");
+			const realFetch = window.fetch;
+			window.fetch = (url, options) => String(url).endsWith("/unbookmark")
+				? Promise.resolve(new Response(JSON.stringify({ error: { message: "Test failure" } }), { status: 500 }))
+				: realFetch(url, options);
+			try {
+				press();
+				await until(() => indicator.textContent === "Bookmarked · update failed");
+				out.push(indicator.textContent, button.textContent);
+			} finally { window.fetch = realFetch; }
+			return out;
+		`);
+		expect(states).toEqual(["", "polite", "Bookmarked", "Remove bookmark", "true", "Bookmark removed", "Bookmark", "Bookmarked · update failed", "Remove bookmark"]);
+		const reload = await evaluatePage<string[]>(`
+			location.hash = "#/threads";
+			await until(() => !document.getElementById("threads-browse").hidden);
+			location.hash = "#/threads/${capital.threadId}";
+			await until(() => !document.getElementById("thread").hidden && document.querySelectorAll("#thread-messages [data-testid=message]").length >= 2);
+			return [...document.querySelectorAll("#thread-messages [data-testid=bookmark-indicator]")].map((el) => el.textContent);
+		`);
+		expect(reload).toEqual(["", "Bookmarked"]);
+		const list = await t.client.get<{ bookmarks: Array<{ messageId: string }> }>("/bookmarks");
+		expect(list.body.bookmarks.map((row) => row.messageId)).toEqual([capital.messageIds[1]]);
+	});
+
 	it("UX-08 b toggles the selected or focused message, not input text or another view", async () => {
 		seeded = await seedDomain();
 		const { t, capital } = seeded;
