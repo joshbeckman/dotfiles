@@ -312,7 +312,7 @@ export function syncChoices(root, has) {
 
 /** Notes a reader sees where a diagram would have been. Each names its own failure. */
 export const DIAGRAM_NOTES = {
-	unavailable: "Diagram renderer unavailable; source follows.",
+	unavailable: (reason = "") => `Diagram renderer unavailable${reason ? ` (${reason})` : ""}; source follows.`,
 	failed: "Diagram could not be rendered; source follows.",
 	timedOut: (ms) => `Diagram did not finish rendering in ${ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}; source follows.`,
 };
@@ -345,6 +345,13 @@ function within(work, ms) {
 	return Promise.race([work, giveUp]).finally(() => clearTimeout(timer));
 }
 
+/** The failure's own words, bounded: the note sits in the page beside the source, not a log. */
+function failureReason(failure, limit = 160) {
+	const text = typeof failure?.message === "string" ? failure.message.trim() : "";
+	if (text.length <= limit) return text;
+	return `${text.slice(0, limit - 1)}\u2026`;
+}
+
 /** Put `note` before the code block it explains, so the reader sees why this is source. */
 function noteBefore(code, note) {
 	code.parentNode?.insertAdjacentText("beforebegin", note);
@@ -368,7 +375,10 @@ export async function renderDiagrams(
 		mermaid = await ensureMermaid();
 	} catch (failure) {
 		report?.(failure);
-		for (const code of blocks) noteBefore(code, DIAGRAM_NOTES.unavailable);
+		// The reason belongs on screen: a reader on a phone cannot open a console, and "unavailable"
+		// alone cannot tell a blocked download from a bundle this browser will not parse.
+		const reason = failureReason(failure);
+		for (const code of blocks) noteBefore(code, DIAGRAM_NOTES.unavailable(reason));
 		return 0;
 	}
 	// A renderer that will not configure fails every diagram on the page the same way, and this

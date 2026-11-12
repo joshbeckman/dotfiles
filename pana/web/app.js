@@ -3699,13 +3699,27 @@ function ensureMermaid() {
 	if (!mermaidLoading) {
 		mermaidLoading = new Promise((resolve, reject) => {
 			const script = document.createElement("script");
+			// A bundle this browser will not parse reports only as an element error event, which carries
+			// no message. The window listener catches the script error beside it, so the reason reaches the
+			// note on screen instead of dying in a console a phone reader cannot open.
+			const heard = [];
+			const listen = (event) => {
+				if (heard.length === 0 && typeof event?.message === "string" && event.message) heard.push(event.message);
+			};
+			const stop = () => window.removeEventListener("error", listen, true);
+			const failed = (what) => new Error(heard.length > 0 ? `${what}: ${heard[0]}` : what);
+			window.addEventListener("error", listen, true);
 			script.src = "/mermaid-vendor.js";
 			script.onload = () => {
+				stop();
 				const lib = window.MailMermaid?.mermaid;
 				if (lib) resolve(lib);
-				else reject(new Error("The diagram bundle did not expose mermaid."));
+				else reject(failed("the bundle exposed no mermaid"));
 			};
-			script.onerror = () => reject(new Error("The diagram bundle failed to load."));
+			script.onerror = () => {
+				stop();
+				reject(failed("the bundle did not load"));
+			};
 			document.head.append(script);
 		}).catch((failure) => {
 			document.querySelector('script[src="/mermaid-vendor.js"]')?.remove();

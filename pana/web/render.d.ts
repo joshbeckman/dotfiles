@@ -31,6 +31,6 @@ export function rewriteLinks(root: unknown, domain?: string): unknown;
 export function linkifyTextNodes(root: unknown, domain?: string): unknown;
 export function hydrateFiles(root: unknown, fetchFile: unknown, options?: Record<string, unknown>): Promise<void>;
 export function renderDiagrams(root: unknown, options?: RenderOptions): Promise<number>;
-export const DIAGRAM_NOTES: { unavailable: string; failed: string; timedOut: (ms: number) => string };
+export const DIAGRAM_NOTES: { unavailable: (reason?: string) => string; failed: string; timedOut: (ms: number) => string };
 export const DIAGRAM_TIMEOUT_MS: number;
 export function renderMessage(target: unknown, text: string, options: RenderOptions): Promise<unknown>;

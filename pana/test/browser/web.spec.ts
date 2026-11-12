@@ -518,12 +518,45 @@ describeBrowser("pana in a browser", () => {
 		// serializes its renders, so one hang also held every diagram below it.
 		expect(failures.notes.hung).toContain("Diagram did not finish rendering in 200ms; source follows.");
 		expect(failures.notes.unconfigured).toContain("Diagram could not be rendered; source follows.");
-		expect(failures.notes.unloadable).toContain("Diagram renderer unavailable; source follows.");
+		// The reason rides on the note: a reader on a phone has no console to open.
+		expect(failures.notes.unloadable).toContain("Diagram renderer unavailable (bundle missing); source follows.");
 		expect(failures.stillCode).toEqual({ hung: true, unconfigured: true, unloadable: true });
 		// Each one named itself in the log; a silent failure is what let this go unexplained.
 		expect(failures.errors).toContain("the render did not finish in 200ms");
 		expect(failures.errors).toContain("init refused");
 		expect(failures.errors).toContain("bundle missing");
+	});
+
+	it("WEB-04 a diagram bundle that will not load names its reason on screen", async () => {
+		await start([{ text: "Ready when you are." }]);
+		const markdown = ["Here it is.", "", "```mermaid", "graph TD; A-->B;", "```"].join("\n");
+		const notice = await postNotice(t!.runtime, { body: markdown });
+		const origin = loopbackOrigin(t!.panad.tcpPort!);
+		// Arm the page before its own code runs. Pointing the bundle at nothing is the failure a
+		// phone reported, and the note has to carry why instead of only "unavailable".
+		page = await newPage(
+			`${origin}/#${t!.panad.webToken}`,
+			`
+			const append = Element.prototype.append;
+			Element.prototype.append = function (...nodes) {
+				for (const node of nodes) {
+					if (node instanceof HTMLScriptElement && String(node.src).endsWith("/mermaid-vendor.js")) node.src = "/mermaid-vendor-gone.js";
+				}
+				return append.apply(this, nodes);
+			};
+		`,
+		);
+
+		const note = await evaluatePage<string>(`
+			location.hash = "#/threads/${notice.thread.id}";
+			await until(() => document.querySelectorAll("#thread-messages [data-testid=message]").length === 1);
+			const body = document.querySelector("#thread-messages [data-testid=message] .body");
+			await until(() => body.textContent.includes("Diagram renderer unavailable"));
+			return body.textContent;
+		`);
+		expect(note).toContain("Diagram renderer unavailable (the bundle did not load); source follows.");
+		// The source stays, so the reader can still read the diagram that would have been.
+		expect(note).toContain("graph TD; A-->B;");
 	});
 
 	it("FIL-06 the composers upload an attachment and append the reference", async () => {
