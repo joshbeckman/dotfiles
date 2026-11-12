@@ -12,10 +12,12 @@ Run `git pr-cli [PR_URL|PR_NUMBER|BRANCH]` in the intended checkout first. It pr
 | Structured hosting discovery | `git pr-host [PR_URL\|PR_NUMBER\|BRANCH]` |
 | PR containing a commit | `git pr-for-commit <SHA>` |
 | Canonical PR URL | `git pr-url [PR_URL\|PR_NUMBER\|BRANCH]` |
-| Full PR and discussion | `git pr-view [PR_URL\|PR_NUMBER\|BRANCH]` |
+| Full PR and discussion, file names but no patch | `git pr-view [PR_URL\|PR_NUMBER\|BRANCH]` |
 | Check state | `git pr-checks [PR_URL\|PR_NUMBER\|BRANCH] [--required]` |
 | Merge timestamp | `git pr-merged [PR_URL\|PR_NUMBER\|BRANCH]` |
 | Native client selection | `git pr-cli [PR_URL\|PR_NUMBER\|BRANCH]` |
+
+`git pr-view` renders the body, the discussion, and the reviews, and lists the changed files without their contents. Read the patch from the checkout you are already in, or with the client's diff command, when the question needs it.
 
 An adapter that cannot bind its client to the verified target reports unsupported capabilities and does not run that client. Historical routing information alone does not grant a read or write capability.
 
