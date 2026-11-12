@@ -699,25 +699,36 @@ function learnDomain(value) {
 	}
 }
 
-// Keep role events that arrive while a thread read is in flight. The response can have been
-// captured before the event, so apply those events to it before drawing the header.
+// Keep role events that arrive while a thread or participant read is in flight. The response
+// can have been captured before the event, so apply those events before drawing the header.
 const pendingRoleReads = new Set();
 let roleConnectionVersion = 0;
-async function readThreadWithRoles(id) {
+async function readThreadWithRoles(id, participantsOnly = false) {
 	const pending = { id, events: [] };
 	pendingRoleReads.add(pending);
 	try {
-		let body;
-		let version;
-		do {
+		const base = `/threads/${encodeURIComponent(id)}`;
+		let version = roleConnectionVersion;
+		const body = await api("GET", participantsOnly ? `${base}/participants` : base);
+		let participants = participantsOnly ? body.participants : body.thread?.participants;
+		// A reconnect during a read can lose events. Read only the roster again: repeating the
+		// thread read could mark a message that arrived during the disconnect as read.
+		while (version !== roleConnectionVersion) {
+			pending.events.length = 0;
 			version = roleConnectionVersion;
-			body = await api("GET", `/threads/${encodeURIComponent(id)}`);
-			// A new stream means events were missed. Re-read the current snapshot rather than
-			// replaying events from before that reconnect over a newer server value.
-			if (version !== roleConnectionVersion) pending.events.length = 0;
-		} while (version !== roleConnectionVersion);
+			const latest = await api("GET", `${base}/participants`);
+			if (participantsOnly) {
+				body.participants = latest.participants;
+				participants = body.participants;
+			} else {
+				for (const person of participants ?? []) {
+					const updated = latest.participants?.find((each) => each?.id === person?.id);
+					if (updated) person.role = updated.role;
+				}
+			}
+		}
 		for (const event of pending.events) {
-			const person = body.thread?.participants?.find((each) => each?.id === event.participantId);
+			const person = participants?.find((each) => each?.id === event.participantId);
 			if (person) person.role = event.role;
 		}
 		return body;
@@ -751,9 +762,9 @@ async function refreshThreadRoles() {
 	if (state.section !== "threads" || !state.thread || $("thread").hidden) return;
 	const current = state.thread;
 	const version = ++roleRefreshVersion;
-	const body = await readThreadWithRoles(current.id);
+	const body = await readThreadWithRoles(current.id, true);
 	if (version !== roleRefreshVersion || state.thread !== current || state.section !== "threads") return;
-	for (const person of body.thread?.participants ?? []) {
+	for (const person of body.participants ?? []) {
 		if (typeof person?.id === "string") applyThreadRole({ threadId: current.id, participantId: person.id, role: person.role }, false);
 	}
 }
