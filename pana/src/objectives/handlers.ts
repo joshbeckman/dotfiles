@@ -10,7 +10,7 @@ import { parseLimit } from "../api/pagination.ts";
 import { sessionRuntime } from "../sessions/index.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
-import { addArtifact, removeArtifact } from "./artifacts.ts";
+import { addLink, removeLink } from "./links.ts";
 import { leadBriefing } from "./brief.ts";
 import { charterLog, optionalCharterSection, setCharter } from "./charter.ts";
 import { escalateObjective } from "./escalation.ts";
@@ -137,14 +137,14 @@ export const handlers: Handlers = {
 	},
 
 	// OBJ-31: the CLI uploads through `POST /files` and links the id; the refreshed view comes back
-	// so a PWA action can render the artifact list without a second read.
-	"objectives.artifacts.add": async (ctx): Promise<HandlerResult> => {
-		const added = await addArtifact(ctx.runtime, ctx.params.id, { file: objectBody(ctx.body).file });
+	// so a PWA action can render the link list without a second read.
+	"objectives.links.add": async (ctx): Promise<HandlerResult> => {
+		const added = await addLink(ctx.runtime, ctx.params.id, { file: objectBody(ctx.body).file });
 		return { status: 201, body: { ...added, objective: await showObjective(ctx.runtime, objectiveId(ctx.params.id, ctx.runtime.config.domain)) } };
 	},
 
-	"objectives.artifacts.remove": async (ctx): Promise<HandlerResult> => {
-		const removed = await removeArtifact(ctx.runtime, ctx.params.id, ctx.params.fileId);
+	"objectives.links.remove": async (ctx): Promise<HandlerResult> => {
+		const removed = await removeLink(ctx.runtime, ctx.params.id, ctx.params.fileId);
 		return { status: 200, body: { ...removed, objective: await showObjective(ctx.runtime, objectiveId(ctx.params.id, ctx.runtime.config.domain)) } };
 	},
 

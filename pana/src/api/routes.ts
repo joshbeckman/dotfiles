@@ -53,7 +53,7 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/schedules/:id", name: "schedules.update", wp: "WP6" },
 	{ method: "DELETE", pattern: "/schedules/:id", name: "schedules.delete", wp: "WP6" },
 	// WP18: objectives. The whole route surface is registered here so the packages that build on
-	// it (hold, metrics, brief, escalation, reports, artifacts) add only their handler. A route
+	// it (hold, metrics, brief, escalation, reports, links) add only their handler. A route
 	// with no handler answers 501 `not_implemented`; `src/objectives/handlers.ts` says which
 	// foundation routes are live.
 	{ method: "POST", pattern: "/objectives", name: "objectives.create", wp: "WP18" },
@@ -76,8 +76,8 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/objectives/:id/report", name: "objectives.report", wp: "WP18" },
 	{ method: "POST", pattern: "/objectives/:id/escalate", name: "objectives.escalate", wp: "WP18" },
 	{ method: "POST", pattern: "/objectives/:id/regenerate-lead", name: "objectives.regenerateLead", wp: "WP18" },
-	{ method: "POST", pattern: "/objectives/:id/artifacts", name: "objectives.artifacts.add", wp: "WP18" },
-	{ method: "DELETE", pattern: "/objectives/:id/artifacts/:fileId", name: "objectives.artifacts.remove", wp: "WP18" },
+	{ method: "POST", pattern: "/objectives/:id/links", name: "objectives.links.add", wp: "WP18" },
+	{ method: "DELETE", pattern: "/objectives/:id/links/:fileId", name: "objectives.links.remove", wp: "WP18" },
 	// OBJ-41: the user's limits, recorded field by field.
 	{ method: "POST", pattern: "/objectives/:id/limits", name: "objectives.limits.set", wp: "WP18" },
 	{ method: "GET", pattern: "/push/key", name: "push.key", wp: "WP8" },

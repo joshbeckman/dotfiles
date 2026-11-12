@@ -724,14 +724,14 @@ export function objectiveReport(report) {
 }
 
 /** OBJ-31: a linked file, with the name, size, and URL the view lists. */
-export function objectiveArtifact(artifact) {
+export function objectiveLink(link) {
 	return {
-		id: String(artifact?.id ?? ""),
-		name: String(artifact?.name ?? "file"),
-		size: amount(artifact?.size),
-		mediaType: artifact?.mediaType === null || artifact?.mediaType === undefined ? null : String(artifact.mediaType),
-		url: String(artifact?.url ?? ""),
-		addedAt: amount(artifact?.addedAt),
+		id: String(link?.id ?? ""),
+		name: String(link?.name ?? "file"),
+		size: amount(link?.size),
+		mediaType: link?.mediaType === null || link?.mediaType === undefined ? null : String(link.mediaType),
+		url: String(link?.url ?? ""),
+		addedAt: amount(link?.addedAt),
 	};
 }
 
@@ -779,7 +779,7 @@ export function objectiveView(objective) {
 		members: (Array.isArray(objective?.members) ? objective.members : []).map(objectiveMember),
 		escalations: (Array.isArray(objective?.escalations) ? objective.escalations : []).map(objectiveEscalation),
 		report: objectiveReport(objective?.report),
-		artifacts: (Array.isArray(objective?.artifacts) ? objective.artifacts : []).map(objectiveArtifact),
+		links: (Array.isArray(objective?.links) ? objective.links : []).map(objectiveLink),
 		at: amount(objective?.updatedAt ?? objective?.createdAt),
 	};
 	view.meters = objectiveMeters(view);

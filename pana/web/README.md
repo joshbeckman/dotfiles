@@ -99,7 +99,7 @@ it. `#/objectives` lists them — phase, derived state, holding condition, goal,
 runs today — and `#/objectives/<id>` is the screen a person watches and steers one from: the goal,
 the charter (one block per section, each edited with the revision it was read at, so a charter that
 moved answers 409 and keeps the text), one chart per metric with its own target line and a
-"3 of 5 at target" count, the newest report, the artifacts, the roster with each member's live
+"3 of 5 at target" count, the newest report, the links, the roster with each member's live
 state, money and run meters, the pending wakes, and the escalation. Launch, stop, resume, done,
 archive, regenerate the lead (with a reason), and charter edit are actions there; each that spends
 money or retires a session asks first. `done` is the user's confirmation of the lead's claim, so its

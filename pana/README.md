@@ -551,7 +551,7 @@ An objective is stated work with a lifetime: a goal, a charter, one lead session
 - **Lead and members.** A draft has no effects; only the user launches it, which creates the objective's thread and its one lead. The charter holds standing instructions as append-only revisions, and a session may write only `Notes`.
 - **Metrics** carry a unit, a direction, a target (or none, which never finishes), an optional trailing window, and an optional check the scheduler runs with no session awake. Readings are append-only, the first is the baseline, the user sets targets, and a name never changes.
 - **Limits** cap spend, lead runs, messages to the user, and active members per objective. A budget pause reads `idle`, not `stranded`, and an objective with nothing to move it is noticed to the user once. Only the user changes a limit, each change is recorded, and raising a lifetime budget lifts the pause and hands the lead's held mail back, so raising a budget resumes the work it stopped.
-- **Reports** are messages in the objective's thread; **artifacts** are uploaded files linked to it. An objective may have no members: a lone lead measures, reports, and finishes it.
+- **Reports** are messages in the objective's thread; **links** are uploaded files linked to it. An objective may have no members: a lone lead measures, reports, and finishes it.
 
 ```sh
 pana objective create --goal TEXT [--autonomy manual|auto] [--due-at TIME] [--max-daily-usd N]

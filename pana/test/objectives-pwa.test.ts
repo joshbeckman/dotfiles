@@ -122,7 +122,7 @@ it("OBJ-39 the list and the view read real objective responses", async () => {
 		headers: { "content-type": "text/markdown" },
 	});
 	expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(201);
-	const linked = await t!.client.post(`/objectives/${id}/artifacts`, { file: uploaded.body.file.id });
+	const linked = await t!.client.post(`/objectives/${id}/links`, { file: uploaded.body.file.id });
 	expect(linked.status, JSON.stringify(linked.body)).toBe(201);
 	const escalated = await t!.client.post(`/objectives/${id}/escalate`, { body: "Which meter reading do you trust?" });
 	expect(escalated.status, JSON.stringify(escalated.body)).toBe(201);
@@ -146,9 +146,9 @@ it("OBJ-39 the list and the view read real objective responses", async () => {
 	expect(view.members.map((entry) => entry.id).sort()).toEqual([leadId, working].sort());
 	expect(view.members.find((entry) => entry.lead)!.id).toBe(leadId);
 	expect(view.members.find((entry) => entry.id === working)!.state).toBe("running");
-	// OBJ-30/OBJ-31: the newest report and the linked artifact come with the view.
+	// OBJ-30/OBJ-31: the newest report and the link come with the view.
 	expect(view.report).toMatchObject({ sender: t!.runtime.userUrl, body: "Baseline is **30 kWh** a day." });
-	expect(view.artifacts).toEqual([expect.objectContaining({ name: "plan.md", size: 7 })]);
+	expect(view.links).toEqual([expect.objectContaining({ name: "plan.md", size: 7 })]);
 	// OBJ-33: the escalation names its scope and the thread whose answer clears it.
 	expect(view.escalations).toEqual([expect.objectContaining({ scope: "objective", threadUrl: expect.stringContaining("/threads/") })]);
 	// OBJ-20..OBJ-24, OBJ-39: money and runs, with the limits this objective does not set resolved

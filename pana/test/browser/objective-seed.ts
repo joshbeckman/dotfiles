@@ -1,5 +1,5 @@
 // A realistic domain with objectives for the OBJ-39 browser test and screenshots: one active
-// objective with a charter, metrics, a report, an artifact, two members, a pending wake, spend, and
+// objective with a charter, metrics, a report, a link, two members, a pending wake, spend, and
 // an escalation, plus a draft with nothing spent, which is what an objective costs before launch.
 
 import { recordCost } from "../../src/sessions/budget.ts";
@@ -127,7 +127,7 @@ export async function seedObjectives(): Promise<SeededObjectives> {
 		headers: { "content-type": "text/csv" },
 	});
 	if (uploaded.status !== 201) throw new Error(`upload: ${JSON.stringify(uploaded.body)}`);
-	if ((await t.client.post(`/objectives/${active.id}/artifacts`, { file: uploaded.body.file.id })).status !== 201) throw new Error("artifact");
+	if ((await t.client.post(`/objectives/${active.id}/links`, { file: uploaded.body.file.id })).status !== 201) throw new Error("link");
 
 	// OBJ-33: the objective waits for a decision, so the view has an escalation to show.
 	if ((await t.client.post(`/objectives/${active.id}/escalate`, { body: "Which reading should I trust, the meter or the supplier's app?" })).status !== 201) {

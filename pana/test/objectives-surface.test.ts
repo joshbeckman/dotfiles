@@ -1,5 +1,5 @@
 // WP18 surface: the two things an objective accumulates and the two notices that keep it honest.
-// OBJ-30 (reports), OBJ-31 (artifacts), OBJ-06 (the stranded sweep), OBJ-08 (the behind condition
+// OBJ-30 (reports), OBJ-31 (links), OBJ-06 (the stranded sweep), OBJ-08 (the behind condition
 // and its pace arithmetic).
 //
 // The files this package owns are separate from `test/objectives.test.ts` so the packages building
@@ -12,7 +12,7 @@ import { Readable } from "node:stream";
 import { afterEach, expect, it } from "vitest";
 import { runPanaCommand } from "../src/cli/commands.ts";
 import { main, type CliIo } from "../src/cli/index.ts";
-import { metricPaces, paceOf, sweepObjectives, type ObjectiveArtifactView, type ObjectiveReportView, type ObjectiveView } from "../src/objectives/index.ts";
+import { metricPaces, paceOf, sweepObjectives, type ObjectiveLinkView, type ObjectiveReportView, type ObjectiveView } from "../src/objectives/index.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
 import { startTestPanad, TEST_USER, type TestPanad, type TestPanadOptions } from "./harness/index.ts";
 
@@ -195,7 +195,7 @@ it("OBJ-30 a report is a message in the objective's thread plus its mark, and th
 
 // --- OBJ-31 -------------------------------------------------------------------
 
-it("OBJ-31 an artifact is an uploaded file plus a link, and unlinking never deletes the file", async () => {
+it("OBJ-31 a link is an uploaded file plus an objective_files row, and unlinking never deletes the file", async () => {
 	await start();
 	const objective = await draft("Publish the audit");
 	const url = `pana://test.example/objectives/${objective.id}`;
@@ -203,43 +203,43 @@ it("OBJ-31 an artifact is an uploaded file plus a link, and unlinking never dele
 	const bytes = "day,kwh\n1,412\n";
 	writeFileSync(source, bytes);
 
-	// `pana objective artifact add PATH` uploads through POST /files, then links the id.
-	const added = await runCli(["objective", "artifact", "add", url, source]);
+	// `pana objective link add PATH` uploads through POST /files, then links the id.
+	const added = await runCli(["objective", "link", "add", url, source]);
 	expect(added.code, added.stderr).toBe(0);
-	const artifact = (JSON.parse(added.stdout) as { artifact: ObjectiveArtifactView }).artifact;
+	const link = (JSON.parse(added.stdout) as { link: ObjectiveLinkView }).link;
 	// FIL-04: a type comes from the bytes, so a CSV is an opaque attachment.
-	expect(artifact).toMatchObject({ name: "audit.csv", mediaType: "application/octet-stream", size: Buffer.byteLength(bytes) });
-	expect(artifact.url).toBe(`pana://test.example/files/${artifact.id}/audit.csv`);
+	expect(link).toMatchObject({ name: "audit.csv", mediaType: "application/octet-stream", size: Buffer.byteLength(bytes) });
+	expect(link.url).toBe(`pana://test.example/files/${link.id}/audit.csv`);
 	// FIL-01..FIL-07 unchanged: the bytes are an ordinary uploaded file.
-	const file = await t!.runtime.db.get<{ name: string; path: string; size: number }>("SELECT name, path, size FROM files WHERE id = ?", artifact.id);
-	expect(file).toEqual({ name: "audit.csv", path: join("files", artifact.id, "audit.csv"), size: Buffer.byteLength(bytes) });
-	expect(existsSync(join(t!.runtime.paths.files, artifact.id, "audit.csv"))).toBe(true);
+	const file = await t!.runtime.db.get<{ name: string; path: string; size: number }>("SELECT name, path, size FROM files WHERE id = ?", link.id);
+	expect(file).toEqual({ name: "audit.csv", path: join("files", link.id, "audit.csv"), size: Buffer.byteLength(bytes) });
+	expect(existsSync(join(t!.runtime.paths.files, link.id, "audit.csv"))).toBe(true);
 
-	// GET /objectives/:id lists artifacts with name, size, and file URL.
+	// GET /objectives/:id lists links with name, size, and file URL.
 	const shown = await view(objective.id);
-	expect(shown.artifacts).toEqual([artifact]);
+	expect(shown.links).toEqual([link]);
 	// A second link to the same file is the same link.
-	const again = await t!.client.post(`/objectives/${objective.id}/artifacts`, { file: artifact.id });
+	const again = await t!.client.post(`/objectives/${objective.id}/links`, { file: link.id });
 	expect(again.status).toBe(201);
-	expect((await view(objective.id)).artifacts).toHaveLength(1);
+	expect((await view(objective.id)).links).toHaveLength(1);
 
 	// An unknown file is a 404, by id or by URL.
-	const unknown = await t!.client.post(`/objectives/${objective.id}/artifacts`, { file: t!.runtime.newId() });
+	const unknown = await t!.client.post(`/objectives/${objective.id}/links`, { file: t!.runtime.newId() });
 	expect(unknown.status).toBe(404);
-	const nothing = await t!.client.post(`/objectives/${objective.id}/artifacts`, {});
+	const nothing = await t!.client.post(`/objectives/${objective.id}/links`, {});
 	expect(nothing.status).toBe(400);
 
-	// `artifact remove ID` unlinks without deleting the file or its bytes.
-	const removed = await runCli(["objective", "artifact", "remove", url, artifact.id]);
+	// `link remove ID` unlinks without deleting the file or its bytes.
+	const removed = await runCli(["objective", "link", "remove", url, link.id]);
 	expect(removed.code, removed.stderr).toBe(0);
-	expect(JSON.parse(removed.stdout)).toMatchObject({ removed: artifact.id, objective: { artifacts: [] } });
-	expect((await view(objective.id)).artifacts).toEqual([]);
+	expect(JSON.parse(removed.stdout)).toMatchObject({ link, removed: link.id, objective: { links: [] } });
+	expect((await view(objective.id)).links).toEqual([]);
 	expect(await count("SELECT count(*) AS n FROM objective_files WHERE objective_id = ?", objective.id)).toBe(0);
-	expect(await count("SELECT count(*) AS n FROM files WHERE id = ?", artifact.id)).toBe(1);
-	expect(existsSync(join(t!.runtime.paths.files, artifact.id, "audit.csv"))).toBe(true);
+	expect(await count("SELECT count(*) AS n FROM files WHERE id = ?", link.id)).toBe(1);
+	expect(existsSync(join(t!.runtime.paths.files, link.id, "audit.csv"))).toBe(true);
 
-	// Removing an artifact that is not linked is 404, not a silent success.
-	expect((await command("objective artifact remove", { id: objective.id, file: artifact.id })).exitCode).toBe(4);
+	// Removing a link that is not linked is 404, not a silent success.
+	expect((await command("objective link remove", { id: objective.id, file: link.id })).exitCode).toBe(4);
 });
 
 // --- OBJ-06 -------------------------------------------------------------------
