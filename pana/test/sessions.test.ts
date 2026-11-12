@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { InboxDoc, LiveDoc, defineExtension, defineTool, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
-import { Type } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import { realpathSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -84,7 +84,7 @@ function gates() {
 			defineTool({
 				name: "gate",
 				description: "Wait for the test.",
-				parameters: Type.Object({}),
+				parameters: obj({}),
 				execute: async (_args, _api, context) => {
 					await hold(context.abortSignal);
 					return { output: [{ type: "text", text: "gate open" }] };
@@ -93,7 +93,7 @@ function gates() {
 			defineTool({
 				name: "gate_end",
 				description: "Wait for the test, then end the run.",
-				parameters: Type.Object({}),
+				parameters: obj({}),
 				execute: async (_args, _api, context) => {
 					await hold(context.abortSignal);
 					return { output: [{ type: "text", text: "done" }], control: { terminate: true } };

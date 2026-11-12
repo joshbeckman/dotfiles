@@ -1,6 +1,6 @@
 // One SQLite transaction for a pana write and the pi-durable commits it causes (DB-01, DB-04).
 //
-// pi-durable 1.4.0 commits each batch with its own `db.transaction()`, and the Node adapter
+// pi-durable commits each batch with its own `db.transaction()`, and the Node adapter
 // queues every other operation until that transaction ends. Sharing the adapter is therefore
 // not enough: a pana transaction that called `conversation.submit()` inside it would wait on
 // itself forever, and pi-durable exposes no way to add host SQL to its own commit.
@@ -111,6 +111,11 @@ export class PanaDatabase implements SqliteDatabase {
 		return group ? group.tx.run(sql, ...params) : this.#inner.run(sql, ...params);
 	}
 
+	async runCounted(sql: string, ...params: SqliteValue[]): Promise<number> {
+		const group = this.#check(sql);
+		return group ? group.tx.runCounted(sql, ...params) : this.#inner.runCounted(sql, ...params);
+	}
+
 	async get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined> {
 		const group = this.#check(sql);
 		return group ? group.tx.get<T>(sql, ...params) : this.#inner.get<T>(sql, ...params);
@@ -165,6 +170,7 @@ export class PanaDatabase implements SqliteDatabase {
 		return {
 			exec: async (sql) => (check(), tx.exec(sql)),
 			run: async (sql, ...params) => (check(), tx.run(sql, ...params)),
+			runCounted: async (sql, ...params) => (check(), tx.runCounted(sql, ...params)),
 			get: async (sql, ...params) => (check(), tx.get(sql, ...params)),
 			all: async (sql, ...params) => (check(), tx.all(sql, ...params)),
 		};

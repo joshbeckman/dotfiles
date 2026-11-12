@@ -124,7 +124,7 @@ export async function startPanad(options: StartOptions = {}): Promise<Panad> {
 				settings,
 				now: () => clock.now(),
 				setTimer: clock.setTimer,
-				onReport: (error, info) => report(error, `pi-durable ${info.type}`),
+				onReport: ({ error, kind }) => report(error, `pi-durable ${kind}`),
 			},
 			BACKGROUND_CONTEXT,
 		);

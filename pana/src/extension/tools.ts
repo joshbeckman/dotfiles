@@ -1,8 +1,8 @@
 // The six pana tools (TOL-01..TOL-04). Each one wraps the command of the same name: same
 // arguments, same API route, same exit code, with the calling session as `Pana-Caller`.
 
-import type { JsonValue } from "@earendil-works/chord";
-import { Type, type TSchema } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { arr, num, obj, opt, str, unknown, type Schema } from "@earendil-works/pi-schema";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { Runtime } from "../server/runtime.ts";
 import {
@@ -15,9 +15,9 @@ import {
 } from "../cli/commands.ts";
 
 /** The value a tool gives programs: the CLI exit code, plus the response body when there is one. */
-const resultSchema = Type.Object({
-	exitCode: Type.Number(),
-	body: Type.Optional(Type.Unknown()),
+const resultSchema = obj({
+	exitCode: num(),
+	body: opt(unknown()),
 });
 
 type ToolResultValue = {
@@ -45,7 +45,7 @@ async function sessionFor(runtime: Runtime, conversationId: number): Promise<str
 	return row.id;
 }
 
-function tool(getRuntime: () => Runtime, name: PanaToolName, description: string, parameters: TSchema) {
+function tool(getRuntime: () => Runtime, name: PanaToolName, description: string, parameters: Schema) {
 	const command = commandForTool(name);
 	return defineTool({
 		name,
@@ -70,13 +70,13 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 			getRuntime,
 			"pana_reply",
 			"Post a message to a thread. `after` must be the newest message you have read in that thread; if the thread moved, the reply is rejected with exit code 3.",
-			Type.Object({
-				thread: Type.String({ description: "Thread URL or ULID" }),
-				after: Type.String({ description: "The newest message you read in this thread, as a URL or ULID" }),
-				body: Type.String({ description: "Markdown message body" }),
-				cc: Type.Optional(Type.Array(Type.String(), { description: "Participants to add" })),
-				choice: Type.Optional(
-					Type.Array(Type.String(), {
+			obj({
+				thread: str({ description: "Thread URL or ULID" }),
+				after: str({ description: "The newest message you read in this thread, as a URL or ULID" }),
+				body: str({ description: "Markdown message body" }),
+				cc: opt(arr(str(), { description: "Participants to add" })),
+				choice: opt(
+					arr(str(), {
 						description:
 							"Reply options as LABEL, LABEL => reply, or QUESTION => LABEL => reply. Use ^ for the preceding question. Selections compose quoted question/answer pairs in the draft, never send. At most 8. Use them when the answer set is small and closed; the user can always answer in their own words instead.",
 					}),
@@ -87,20 +87,20 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 			getRuntime,
 			"pana_thread_read",
 			"Read a thread, or one message of it.",
-			Type.Object({
-				thread: Type.Optional(Type.String({ description: "Thread URL or ULID" })),
-				message: Type.Optional(Type.String({ description: "Message URL or ULID; reads just that message" })),
+			obj({
+				thread: opt(str({ description: "Thread URL or ULID" })),
+				message: opt(str({ description: "Message URL or ULID; reads just that message" })),
 			}),
 		),
 		tool(
 			getRuntime,
 			"pana_thread_create",
 			"Start a new thread with one or more participants.",
-			Type.Object({
-				to: Type.Array(Type.String(), { description: "Participants: usernames, session ULIDs, or pana:// URLs" }),
-				body: Type.String({ description: "Markdown message body" }),
-				choice: Type.Optional(
-					Type.Array(Type.String(), {
+			obj({
+				to: arr(str(), { description: "Participants: usernames, session ULIDs, or pana:// URLs" }),
+				body: str({ description: "Markdown message body" }),
+				choice: opt(
+					arr(str(), {
 						description:
 							"Reply options as LABEL, LABEL => reply, or QUESTION => LABEL => reply. Use ^ for the preceding question. Selections compose quoted question/answer pairs in the draft, never send. At most 8. Use them when the answer set is small and closed; the user can always answer in their own words instead.",
 					}),
@@ -111,36 +111,36 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 			getRuntime,
 			"pana_session_create",
 			"Create a child session with its own thread.",
-			Type.Object({
-				prompt: Type.String({ description: "The first message to the new session" }),
-				model: Type.Optional(Type.String({ description: "provider/modelId override" })),
-				thinking: Type.Optional(Type.String({ description: "Thinking level" })),
-				cwd: Type.Optional(Type.String({ description: "Working directory" })),
-				profile: Type.Optional(Type.String({ description: "Profile name" })),
-				to: Type.Optional(Type.Array(Type.String(), { description: "Extra participants on the new thread" })),
+			obj({
+				prompt: str({ description: "The first message to the new session" }),
+				model: opt(str({ description: "provider/modelId override" })),
+				thinking: opt(str({ description: "Thinking level" })),
+				cwd: opt(str({ description: "Working directory" })),
+				profile: opt(str({ description: "Profile name" })),
+				to: opt(arr(str(), { description: "Extra participants on the new thread" })),
 			}),
 		),
 		tool(
 			getRuntime,
 			"pana_memory_search",
 			"Search the domain memory (case-insensitive) and get path, line, and text for each match.",
-			Type.Object({ query: Type.String({ description: "Text to search for" }) }),
+			obj({ query: str({ description: "Text to search for" }) }),
 		),
 		tool(
 			getRuntime,
 			"pana_memory_commit",
 			"Commit your memory worktree to `main`. Exit 3 means a conflict: the commit stays on your writer branch. Rebase onto main, fix the files, continue the rebase, then commit again.",
-			Type.Object({ message: Type.String({ description: "Commit message" }) }),
+			obj({ message: str({ description: "Commit message" }) }),
 		),
 		tool(
 			getRuntime,
 			"pana_schedule_wake",
 			"Wake yourself later with a note. Use it to wait for anything outside your run (CI, a review, a deploy, another session) instead of sleeping or polling in bash, then end your run. Nothing is posted when the wakeup run ends, so say in the note where to reply.",
-			Type.Object({
-				in: Type.Optional(Type.String({ description: "Wake after this long: 90s, 10m, 2h, or 1d. Omit unused selectors; do not pass empty strings." })),
-				at: Type.Optional(Type.String({ description: "Wake at this ISO time, instead of in. Omit unused selectors; do not pass empty strings." })),
-				note: Type.String({ description: "What to check when you wake, and the thread to reply in" }),
-				subject: Type.Optional(Type.String({ description: "Optional schedule label; generated from the note when omitted" })),
+			obj({
+				in: opt(str({ description: "Wake after this long: 90s, 10m, 2h, or 1d. Omit unused selectors; do not pass empty strings." })),
+				at: opt(str({ description: "Wake at this ISO time, instead of in. Omit unused selectors; do not pass empty strings." })),
+				note: str({ description: "What to check when you wake, and the thread to reply in" }),
+				subject: opt(str({ description: "Optional schedule label; generated from the note when omitted" })),
 			}),
 		),
 	];

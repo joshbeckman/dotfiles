@@ -15,6 +15,7 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import {
 	LiveDoc,
+	type CommitObservation,
 	type CommitPublication,
 	type ConversationId,
 	type EntryId,
@@ -89,7 +90,7 @@ export class SessionRuntime {
 	readonly #report: Report;
 	#queue: Promise<void> = Promise.resolve();
 	#closed = false;
-	#unsubscribe: (() => void) | undefined;
+	#commits: CommitObservation | undefined;
 	#rollover: (() => void) | undefined;
 	/** The message whose thread `rejectArchived` last passed. */
 	#checkedMessage: string | undefined;
@@ -103,7 +104,10 @@ export class SessionRuntime {
 
 	start(): void {
 		configureDelivery(this.runtime, this.hooks());
-		this.#unsubscribe = this.runtime.harness.subscribeCommits((publication) => this.#onCommit(publication));
+		this.#commits = this.runtime.harness.observeCommits({
+			advance: (publication) => this.#onCommit(publication),
+			end: () => {},
+		});
 	}
 
 	/**
@@ -131,7 +135,7 @@ export class SessionRuntime {
 
 	async close(): Promise<void> {
 		this.#closed = true;
-		this.#unsubscribe?.();
+		this.#commits?.detach();
 		this.#live.close();
 		this.#rollover?.();
 		this.#rollover = undefined;
@@ -397,10 +401,13 @@ export class SessionRuntime {
 				const list = settled.get(value.conversationId) ?? [];
 				list.push(value);
 				settled.set(value.conversationId, list);
-			} else if (change.type === "document" && change.record.kind === USAGE_DOC_KIND && change.conversationId !== undefined && change.value) {
-				usage.set(change.conversationId, change.value as UsageState);
-			} else if (change.type === "document" && change.record.kind === LIVE_DOC_KIND && change.conversationId !== undefined) {
-				live.set(change.conversationId, change.value as LiveState | null);
+			} else if (change.type === "document" && change.conversationId !== undefined) {
+				if (change.record.kind === USAGE_DOC_KIND && change.kind === "change" && change.value) {
+					usage.set(change.conversationId, change.value as UsageState);
+				} else if (change.record.kind === LIVE_DOC_KIND) {
+					// A retired live document means no run is in progress to show.
+					live.set(change.conversationId, change.kind === "change" ? (change.value as LiveState | null) : null);
+				}
 			}
 		}
 		for (const [conversationId, inputs] of settled) {

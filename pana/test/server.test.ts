@@ -267,7 +267,15 @@ describe("panad", () => {
 		expect(exit.signal).toBe("SIGKILL");
 		expect(existsSync(join(dir, "crashed"))).toBe(true);
 
-		const t = await start({ stateDir: dir, script: [{ text: "recovered from the crash" }] });
+		// A request cut off by the crash is a failed attempt under `settings.retry`: the next start
+		// retries it after the backoff. Keep the policy on (the harness turns it off by default) and
+		// let the fake clock reach the retry.
+		const t = await start({
+			stateDir: dir,
+			script: [{ text: "recovered from the crash" }],
+			settings: { retry: { maxRetries: 3 } },
+		});
+		await t.clock.advance(2_000);
 		await t.runtime.harness.waitForIdle(ctx);
 		expect(await waitForText(t, "recovered from the crash")).toBe(true);
 
