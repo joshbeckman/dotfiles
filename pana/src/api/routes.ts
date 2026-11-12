@@ -5,7 +5,7 @@
 // Patterns use `:param` for one segment and a trailing `*` for the rest of the path, captured
 // as `params.rest`. Add routes at the end of a group; never rename a handler.
 
-export type Method = "GET" | "POST" | "DELETE";
+export type Method = "GET" | "POST" | "PUT" | "DELETE";
 
 export const ROUTES = [
 	{ method: "POST", pattern: "/threads/:id/artifacts/:name", name: "artifacts.publish", wp: "WP21" },

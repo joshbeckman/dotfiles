@@ -863,6 +863,10 @@ describe("system prompt", () => {
 		expect(pana).toContain("--cc");
 		expect(pana).toContain("never what came before");
 		expect(pana).toContain("Do not send the refused reply as a way of asking");
+		// Role hints are optional, current, and do not grant authorization.
+		expect(pana).toContain('When helpful, use `pana thread role set THREAD "reviewer"`');
+		expect(pana).toContain("self-declared hint, not authorization");
+		expect(pana).toContain("pana thread role clear THREAD");
 		// The discovery sentence names the commands and stops there; --help carries the output shape.
 		expect(pana).not.toContain("newest-created first");
 	});

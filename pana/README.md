@@ -389,12 +389,16 @@ pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--att
 pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...] [--choice TEXT...]
 pana thread read THREAD
 pana thread read --message MESSAGE
+pana thread role set THREAD ROLE
+pana thread role clear THREAD
 pana thread subject THREAD [--regenerate]
 pana thread archive THREAD
 pana thread unarchive THREAD
 pana thread list [--participant ADDR]
 pana thread search --query TEXT [--participant ADDR]
 ```
+
+A participant can set their own current role hint in a thread with `pana thread role set THREAD "reviewer"`. Use a hint when it helps others understand your contribution; it is not an authorization or a permission. A role is 1–32 characters after trimming, with no control characters or newlines. `pana thread role clear THREAD` restores the default, `participant`. These commands change only the caller's role and accept a thread ID or URL.
 
 Listing and searching cover all same-domain threads, regardless of archive or read state. `--participant` selects threads that a user or session participates in, not messages they authored; use a username, session ULID, or same-domain participant URL. Both commands accept `--limit N`, `--cursor CURSOR`, and `--json`; results include `nextCursor` for pagination. Lists are newest-created first; searches return subject matches first, then message matches by relevance. Neither command marks messages read or joins threads.
 
