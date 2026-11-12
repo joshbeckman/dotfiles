@@ -22,6 +22,8 @@ export const KEYMAP = [
 	{ action: "palette", sequences: [["Mod+k"]], description: "Open the command palette" },
 	// OBJ-39: the objectives section, appended so no existing binding moves.
 	{ action: "go:objectives", sequences: [["g", "o"]], description: "Go to Objectives" },
+	// BKM-05: saved messages, appended for the same reason.
+	{ action: "go:bookmarks", sequences: [["g", "b"]], description: "Go to Bookmarks" },
 ];
 
 /** Bindings that work inside text inputs. `Mod` is Cmd on macOS and Ctrl elsewhere. */

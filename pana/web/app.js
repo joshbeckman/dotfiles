@@ -27,6 +27,7 @@ import { apiName, clientBody, startClientTelemetry, viewName } from "./perf.js";
 import { HITS_PER_STORE, hitHash, matchCommands, paletteCommands, paletteHits } from "./palette.js";
 import { createKeyReader, helpRows, isApplePlatform, isSubmitChord, isTextInput, moveSelection, sequenceLabel } from "./keys.js";
 import {
+	bookmarkRow,
 	buildLabel,
 	buildSyncLabel,
 	configFromText,
@@ -1613,6 +1614,115 @@ async function archiveThread(threadId, archived, { leave = false } = {}) {
 	}
 }
 
+// ---- Bookmarks (BKM-05) --------------------------------------------------------------------
+
+let bookmarksRequest = 0;
+
+/**
+ * The messages the user saved, newest save first, one page at a time (SCALE-03). Each row opens
+ * its message in its thread, which is the same link the message header copies.
+ */
+async function loadBookmarks(cursor) {
+	const request = ++bookmarksRequest;
+	const list = $("bookmarks-list");
+	if (!cursor) list.replaceChildren();
+	let body;
+	try {
+		body = await api("GET", pagePath("/bookmarks", cursor));
+	} catch (error) {
+		if (request === bookmarksRequest) throw error;
+		return;
+	}
+	// A page that answers after a newer load was started does not draw under it.
+	if (request !== bookmarksRequest) return;
+	const rows = asList(body, ["bookmarks"]);
+	if (rows.length === 0 && !cursor) return empty(list, "No bookmarks yet. Save a message from its ⋯ menu.");
+	for (const raw of rows) list.append(await bookmarkItem(bookmarkRow(raw)));
+	showMore(list, nextCursor(body), (next) => loadBookmarks(next).catch(fail));
+}
+
+/**
+ * BKM-05: one saved message, whole. A bookmark is worth saving for what it says, so the card
+ * carries the rendered body rather than a snippet; the header still says whose it is, when it was
+ * sent, when it was saved, and links to its place in the thread.
+ */
+async function bookmarkItem(row) {
+	learnDomain(row.threadUrl);
+	const place = `#/threads/${row.threadId}?message=${row.messageId}`;
+	const article = document.createElement("article");
+	article.className = "message bookmark";
+	article.tabIndex = 0;
+	article.dataset.selectable = "";
+	article.dataset.testid = "bookmark-item";
+	article.dataset.id = row.messageId;
+	article.dataset.thread = row.threadId;
+	// UX-06: the message's own identity color, the way it reads in its thread.
+	participantIdentity(article, row.sender, [], row.threadId);
+
+	const header = document.createElement("header");
+	const subject = document.createElement("a");
+	subject.className = "bookmark-subject";
+	subject.href = `#/threads/${row.threadId}`;
+	subject.textContent = row.subject;
+	const sender = span(row.sender.kind === "user" ? "You" : refLabel(row.sender.url), "sender");
+	participantIdentity(sender, row.sender, [], row.threadId);
+	const saved = span("Saved ", "bookmark-saved");
+	saved.append(timeEl(row.bookmarkedAt, { label: "bookmarked" }));
+	const actions = span("", "bookmark-actions");
+	const open = document.createElement("a");
+	open.className = "link-button";
+	open.href = place;
+	open.dataset.testid = "bookmark-open";
+	open.textContent = "Open in thread";
+	actions.append(open, rowAction("bookmark-remove", "Remove", () => void removeBookmark(row)));
+	header.append(subject, sender, timeEl(row.at, { label: "sent" }), saved, actions);
+	article.append(header);
+
+	const body = document.createElement("div");
+	body.className = "body prose";
+	body.dataset.testid = "bookmark-body";
+	article.append(body);
+	if (row.redacted) {
+		body.textContent = row.display ?? "[redacted]";
+	} else {
+		const { marked, DOMPurify } = window.MailRenderers ?? {};
+		await renderMessage(body, row.body, {
+			marked,
+			DOMPurify,
+			domain: state.domain,
+			fetchFile,
+			cache: fileUrls,
+			ensureMermaid,
+			idPrefix: `bookmark-${row.messageId}`,
+			dark: matchMedia("(prefers-color-scheme: dark)").matches,
+			onPick: pickChoice,
+		});
+		syncChoices(body, draftHas);
+	}
+
+	article.addEventListener("click", (event) => {
+		// A link or an action does its own thing; anywhere else opens the message in its thread.
+		if (event.target?.closest?.("a, button, [role='button']")) return;
+		location.hash = place;
+	});
+	return article;
+}
+
+/** BKM-05: take one message out of the list in place, without reloading the page. */
+async function removeBookmark(row) {
+	try {
+		await api("POST", `/messages/${row.messageId}/unbookmark`, {});
+		const list = $("bookmarks-list");
+		list?.querySelector(`[data-id="${row.messageId}"]`)?.remove();
+		if (list && list.querySelectorAll("[data-testid=bookmark-item]").length === 0) {
+			empty(list, "No bookmarks yet. Save a message from its ⋯ menu.");
+		}
+		status("Bookmark removed.");
+	} catch (error) {
+		fail(error);
+	}
+}
+
 /**
  * UX-16: ask the subject model for a new subject and swap it in without reloading the thread. The
  * route keeps the old subject in the thread's history (SUB-04) and answers with the new one.
@@ -1820,23 +1930,15 @@ async function messageElement(message, { focus }) {
 	menu.append(summary);
 	const actions = document.createElement("span");
 	actions.className = "message-actions";
-	for (const [action, label] of [
-		["edit", "Edit"],
-		["redact", "Redact"],
-	]) {
-		const button = document.createElement("button");
-		button.type = "button";
-		button.className = "link-button";
-		button.dataset.action = action;
-		button.dataset.id = view.id ?? "";
-		button.dataset.testid = `message-${action}`;
-		button.textContent = label;
-		button.addEventListener("click", () => {
-			menu.open = false;
-			startConfirm(action, view, article);
-		});
-		actions.append(button);
-	}
+	// BKM-04: saving comes first, because it is the one action here that is undone from the same
+	// place, and its label carries the state.
+	actions.append(
+		messageAction(menu, view, "bookmark", view.bookmarked ? "Remove bookmark" : "Bookmark", () => {
+			void setBookmark(view, article);
+		}),
+		messageAction(menu, view, "edit", "Edit", () => startConfirm("edit", view, article)),
+		messageAction(menu, view, "redact", "Redact", () => startConfirm("redact", view, article)),
+	);
 	menu.append(actions);
 	// One menu at a time, and Escape closes it instead of leaving the thread. Closing the others
 	// on the click keeps a single menu open even though the summary's own toggle lands later.
@@ -1876,6 +1978,36 @@ async function messageElement(message, { focus }) {
 
 	if (focus) article.classList.add("focus");
 	return article;
+}
+
+/** One entry of a message's action menu: it closes the menu, then runs (UX-04). */
+function messageAction(menu, view, action, label, run) {
+	const button = document.createElement("button");
+	button.type = "button";
+	button.className = "link-button";
+	button.dataset.action = action;
+	button.dataset.id = view.id ?? "";
+	button.dataset.testid = `message-${action}`;
+	button.textContent = label;
+	button.addEventListener("click", () => {
+		menu.open = false;
+		run();
+	});
+	return button;
+}
+
+/** BKM-04: save this message, or take the mark off, and swap the menu label in place. */
+async function setBookmark(view, article) {
+	const save = !view.bookmarked;
+	try {
+		await api("POST", `/messages/${view.id}/${save ? "bookmark" : "unbookmark"}`, {});
+		view.bookmarked = save;
+		const button = article.querySelector("[data-testid=message-bookmark]");
+		if (button) button.textContent = save ? "Remove bookmark" : "Bookmark";
+		status(save ? "Bookmarked." : "Bookmark removed.");
+	} catch (error) {
+		fail(error);
+	}
 }
 
 /** Close any message's action menu except the one named; a click elsewhere or Escape does this. */
@@ -4062,6 +4194,8 @@ function selectables() {
 	switch (state.section) {
 		case "inbox":
 			return visible("#inbox-list [data-selectable]");
+		case "bookmarks":
+			return visible("#bookmarks-list [data-selectable]");
 		case "threads":
 			return $("thread").hidden ? visible("#threads-list [data-selectable]") : visible("#thread-messages [data-testid=message]");
 		case "sessions":
@@ -4601,6 +4735,9 @@ async function drawRoute() {
 		switch (section) {
 			case "inbox":
 				await loadInbox();
+				break;
+			case "bookmarks":
+				await loadBookmarks();
 				break;
 			case "compose":
 				$("compose-to").focus();

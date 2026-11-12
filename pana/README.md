@@ -155,6 +155,7 @@ To try pana from this checkout without installing the service, run `pana/scripts
 | Message | One entry in a thread. | `pana://<domain>/threads/<ulid>?message=<ulid>` |
 | File | An attachment stored on disk. | `pana://<domain>/files/<ulid>/<name>` |
 | Inbox | A participant's messages, with read state. | |
+| Bookmark | A message the user saved for later. Per user; it follows the message, not the thread. | |
 | Memory | A git repo of Markdown files shared by the domain. | |
 | Schedule | A stored future session or message. | `pana://<domain>/schedules/<ulid>` |
 
@@ -399,6 +400,16 @@ Listing and searching cover all same-domain threads, regardless of archive or re
 
 Archiving only organizes a participant's inbox. It does not hide threads from discovery or stop delivery; a new delivered message unarchives the thread for its recipient.
 
+### Bookmarks
+
+```sh
+pana bookmark add MESSAGE
+pana bookmark remove MESSAGE
+pana bookmark list [--limit N] [--cursor CURSOR]
+```
+
+A bookmark belongs to the user, not to the thread: it lists even when the thread is archived, and saving the same message twice keeps its first time. `pana bookmark list` pages newest save first, and each row carries the message's URL, which is its place in its thread.
+
 ## Memory
 
 - Memory is a bare git repo at `~/.local/state/pana/memory.git`, outside any public repo.
@@ -577,6 +588,7 @@ The PWA has these sections:
 
 - **Inbox.** One row per thread the user is in, latest activity first: subject, the other participants, the newest message's snippet and time, and the unread count. Open the thread, draft, and reply. Archive a thread, or switch to the archived ones and unarchive it.
 - **Threads.** New starts a session and its thread. Browse and search all same-domain threads, independent of personal archive/read state. A participant filter narrows results by thread membership. Archive or unarchive from an open thread you participate in, not from the browse list. Edit or redact a message, with a warning.
+- **Bookmarks.** The messages the user saved, newest save first, each shown whole: subject, sender, message time, save time, and the full rendered body. Each card opens its message where it sits in its thread; Remove takes the mark off in place. The ⋯ menu on every message saves it, and its label says which way the mark goes. Only the user has bookmarks.
 - **Sessions.** Live and past sessions. A session opens at its newest entry, with its header (`pana://` URL, state, model, directory, cost, and controls) pinned while the transcript scrolls. It shows the transcript's newest 30 entries, with **Load older entries** — and, once one page is loaded, **Load all older entries** — for the rest (thinking, tool calls and results, usage), plus model, cost, lineage, and state. Assistant text and thinking render as Markdown, and each entry has a Raw toggle for its exact source. While a session runs, its view streams the answer in progress and each running tool call with its arguments, output, and elapsed time. Stop, compact, archive, reload.
 - **Memory.** Browse, search, and edit. Edits commit as the user.
 - **Schedules.** Create, edit, and delete.
@@ -591,7 +603,7 @@ The user keeps their chosen hex color across threads (blue by default), and doma
 
 While a session works, it shows just above the reply box in its own color with a pulsing dot and what it is doing, such as "running bash · 3m", and the thread's inbox and thread-list rows carry a small working mark. Both follow `/events` live, and `GET /threads/:id` carries the state of each session participant, so an opened thread is right before any event arrives.
 
-The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `s`, `m`, or `h` changes section (Inbox, Threads, Sessions, Memory, Schedules), `g c` starts a new thread, `/` searches, `r` replies, `e` archives an open thread you participate in or a selected inbox thread (and returns to the list when it archives the thread you are reading), `u` or `Esc` goes back, and `?` lists every key. Cmd+K (Ctrl+K off macOS) opens the command palette: every one of those actions in one fuzzy-matched list, plus a Search command that asks threads, sessions, and memory at once and jumps straight to the hit. A magnifier in the top bar opens it on a phone, where there is no Cmd. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
+The keyboard works everywhere outside a text box: `j` and `k` move through rows and messages, `Enter` or `o` opens, `g` then `i`, `t`, `b`, `s`, `m`, or `h` changes section (Inbox, Threads, Bookmarks, Sessions, Memory, Schedules), `g c` starts a new thread, `/` searches, `r` replies, `e` archives an open thread you participate in or a selected inbox thread (and returns to the list when it archives the thread you are reading), `u` or `Esc` goes back, and `?` lists every key. Cmd+K (Ctrl+K off macOS) opens the command palette: every one of those actions in one fuzzy-matched list, plus a Search command that asks threads, sessions, and memory at once and jumps straight to the hit. A magnifier in the top bar opens it on a phone, where there is no Cmd. In a text box, Cmd+Enter (Ctrl+Enter off macOS) submits the form and `Esc` leaves the box.
 
 `panad` writes its launch URL, with the web token in the fragment, to `~/.local/state/pana/launch-url` (mode 0600) when it starts, and prints the loopback URL without it. Treat that file as private: anyone who has the URL can act as the user. The app stores the token and shows an **Authorize this app** panel when a window has none.
 

@@ -38,7 +38,28 @@ export function inboxThreadRow(thread) {
 }
 
 /**
- * UX-09: `running` and `waiting` are the states that mean a session is working. `waiting` is not
+ * BKM-05: one row of `GET /bookmarks`. Its link is the message's place in its thread, which the
+ * thread route already opens at that message (UX-05).
+ */
+export function bookmarkRow(bookmark) {
+	return {
+		messageId: bookmark.messageId,
+		messageUrl: bookmark.messageUrl,
+		threadId: bookmark.threadId,
+		threadUrl: bookmark.threadUrl,
+		subject: bookmark.subject ?? "(no subject)",
+		sender: person(bookmark.sender ?? {}),
+		snippet: String(bookmark.snippet ?? ""),
+		// BKM-05: the PWA shows the whole message, so the body comes with the row.
+		body: String(bookmark.body ?? ""),
+		display: bookmark.display === undefined ? undefined : String(bookmark.display),
+		redacted: Boolean(bookmark.redacted),
+		at: bookmark.createdAt,
+		bookmarkedAt: bookmark.bookmarkedAt,
+	};
+}
+
+/** UX-09: `running` and `waiting` are the states that mean a session is working. `waiting` is not
  * stored; a sleeping run reports it (STA-03).
  */
 export function isWorking(state) {
@@ -255,6 +276,7 @@ export function messageView(message) {
 		body: message.body ?? "",
 		revised: Boolean(message.revised),
 		redacted: Boolean(message.redacted),
+		bookmarked: Boolean(message.bookmarked),
 	};
 }
 

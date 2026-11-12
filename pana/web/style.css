@@ -932,6 +932,26 @@ a.button.quiet:hover,
 	display: inline-flex;
 	gap: var(--s3);
 }
+/* BKM-05: a saved message shows its whole body, so the list is cards rather than rows. The
+   header names the thread and the sender, and its controls sit at the right end. */
+#bookmarks-list {
+	border-top: none;
+	gap: var(--s3);
+	padding-top: var(--s3);
+}
+.bookmark > header .bookmark-subject {
+	color: var(--c-text);
+	font-weight: 600;
+	text-decoration: none;
+}
+.bookmark > header .bookmark-subject:hover {
+	text-decoration: underline;
+}
+.bookmark-actions {
+	display: inline-flex;
+	gap: var(--s3);
+	margin-left: auto;
+}
 /* UX-04: edit and redact are rare, so one quiet control at the right of the header holds them.
    The menu unfolds inside the message, so the actions stay with the message they act on (UX-07). */
 .message-menu {
@@ -1692,8 +1712,9 @@ kbd {
 		letter-spacing: 0.01em;
 		padding-inline: 0.15rem;
 	}
-	/* MOB-04: six sections, one row. A narrower phone scrolls the menu rather than clipping a
-	   section or wrapping it to a second line. */
+	/* MOB-04: seven sections, one row of full-size labels. They do not all fit a 390 px phone, so
+	   the menu scrolls horizontally rather than shrinking a label or wrapping the row; the section
+	   the app is on is scrolled into sight. */
 	#nav::-webkit-scrollbar {
 		display: none;
 	}

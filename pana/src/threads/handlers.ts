@@ -5,7 +5,7 @@ import type { HandlerResult, Handlers, RequestContext } from "../api/types.ts";
 import { attachmentDisposition, INLINE_MEDIA_TYPES, inlineDisposition, loadFile, sniffMediaType, uploadFile } from "./files.ts";
 import { parseWidth, resizedImage } from "./resize.ts";
 import { parseLimit } from "../api/pagination.ts";
-import { archiveThread, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
+import { archiveThread, bookmarkMessage, bookmarks, BOOKMARK_LIMIT, createThread, INBOX_LIMIT, inbox, inboxThreads, readMessage, readThread, redactMessage, respond, reviseMessage } from "./store.ts";
 
 /** FIL-07: a file's bytes never change for one id and width, so a browser may keep them. */
 export const FILES_CACHE_CONTROL = "private, max-age=604800";
@@ -115,6 +115,26 @@ export const handlers: Handlers = {
 	"messages.redact": async (ctx): Promise<HandlerResult> => ({
 		status: 200,
 		body: await redactMessage(ctx.runtime, ctx.caller, ctx.params.id!),
+	}),
+
+	// BKM-01: the user saves a message, or takes the mark off again.
+	"messages.bookmark": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await bookmarkMessage(ctx.runtime, ctx.caller, ctx.params.id!, true),
+	}),
+
+	"messages.unbookmark": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await bookmarkMessage(ctx.runtime, ctx.caller, ctx.params.id!, false),
+	}),
+
+	// BKM-02: the caller's saved messages, newest save first.
+	"bookmarks.list": async (ctx): Promise<HandlerResult> => ({
+		status: 200,
+		body: await bookmarks(ctx.runtime, ctx.caller, {
+			limit: parseLimit(ctx.query.get("limit"), BOOKMARK_LIMIT),
+			cursor: ctx.query.get("cursor"),
+		}),
 	}),
 
 	"inbox.list": async (ctx): Promise<HandlerResult> => {

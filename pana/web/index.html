@@ -32,6 +32,7 @@
 			<nav id="nav" aria-label="Sections">
 				<a data-section="inbox" href="#/inbox">Inbox<span id="nav-inbox-count" data-testid="nav-unread" role="img" aria-label="No unread messages" hidden></span></a>
 				<a data-section="threads" href="#/threads">Threads</a>
+				<a data-section="bookmarks" href="#/bookmarks">Bookmarks</a>
 				<a data-section="sessions" href="#/sessions">Sessions</a>
 				<a data-section="memory" href="#/memory">Memory</a>
 				<a data-section="schedules" href="#/schedules">Schedules</a>
@@ -204,6 +205,14 @@
 						</div>
 					</form>
 				</div>
+			</section>
+
+			<section class="view" id="view-bookmarks" data-testid="bookmarks" hidden>
+				<header class="view-header">
+					<h2>Bookmarks</h2>
+				</header>
+				<p class="hint">Messages you saved, newest save first.</p>
+				<div id="bookmarks-list" data-testid="bookmarks-list" class="list" role="list"></div>
 			</section>
 
 			<section class="view" id="view-sessions" data-testid="sessions" hidden>

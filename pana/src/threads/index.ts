@@ -18,6 +18,9 @@ export {
 export {
 	addressList,
 	archiveThread,
+	bookmarkMessage,
+	bookmarks,
+	BOOKMARK_LIMIT,
 	createThread,
 	createThreadIn,
 	currentMessage,
@@ -36,6 +39,8 @@ export {
 	reviseMessage,
 	type CreateThreadInput,
 	type ArchiveState,
+	type BookmarkOptions,
+	type BookmarkView,
 	type FileRecord,
 	type InboxDelivery,
 	type InboxRecipient,

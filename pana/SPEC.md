@@ -91,6 +91,8 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 | GET | `/messages/:id` | read one message |
 | POST | `/messages/:id/read` | mark read |
 | POST | `/messages/:id/revisions`, `/redact` | edit, redact |
+| POST | `/messages/:id/bookmark`, `/unbookmark` | save a message for the caller (the user only), or unsave it |
+| GET | `/bookmarks` | the caller's saved messages, newest save first |
 | POST | `/files` | upload |
 | GET | `/files/:id/:name` | download |
 | GET, POST | `/memory/worktree`, `/memory/search`, `/memory/commit`, `/memory/log`, `/memory/files/*` | memory |
@@ -443,7 +445,7 @@ Each package was built against contracts and fakes. These items prove the packag
 - [x] **MOB-01** At a 390 px phone viewport, no view scrolls sideways or clips text: inbox, thread, threads, compose, sessions, session, memory, and schedules. Wide content scrolls only inside its own block, such as a code block. `test/browser/mobile.spec.ts` emulates the phone and measures every element.
 - [x] **MOB-02** Long unbroken text (a pasted URL, a model ID, a path, a `pana://` URL, a message ID) wraps inside its row instead of widening the page.
 - [x] **MOB-03** On a phone, a view header puts Back and the title on one row. A list's controls take their own row below; a thread's and a session's fold into a menu on the title row instead (MOB-08). The session title is the session's short label, as everywhere else, and the full ID stays in its `pana://` URL.
-- [x] **MOB-04** On a phone the section menu is one row of six labels at 0.72rem, fitting a 390 px phone; seven labels wrapped to a second row holding one word. Settings, the app's own configuration, is a gear beside the palette in the top bar's tools instead of a seventh word, and marks its page the way the menu marks a section. A narrower phone scrolls the menu rather than clipping a section, and the section it is on is scrolled into sight. `--topbar-h` matches the bar's real height, so a phone's sticky headers clear it.
+- [x] **MOB-04** On a phone the section menu is one row of labels at 0.72rem that scrolls horizontally when the labels do not fit, rather than shrinking a label, clipping a section, or wrapping the row to a second line. The section the app is on is scrolled into sight. Settings, the app's own configuration, is a gear beside the palette in the top bar's tools instead of a section word, and marks its page the way the menu marks a section. `--topbar-h` matches the bar's real height, so a phone's sticky headers clear it.
 - [x] **MOB-05** On a phone a session's details stay legible without the pinned header paying for them: the state and the short facts share the pinned strip, wrapping when the facts do not fit one line, while the working directory and the `pana://` URL take their own rows in a details line below it, where they scroll with the transcript. An empty list of scheduled wakes is hidden rather than spending two lines above the transcript.
 - [x] **MOB-06** On a phone a transcript entry spends its width on text: the entry and the code blocks inside it take 8 px of side padding on each side.
 - [x] **MOB-07** An open thread's header is pinned the way a session's is: its subject, participants, and controls stay in view below the nav, at every width, while the messages scroll. A subject long enough to wrap is clamped to two lines, with the whole one on hover. Something a link scrolls to clears the pinned header: the app measures the header onto the view as `--sticky-h`, and a message's and a transcript entry's `scroll-margin-top` add it, so neither a linked message nor a linked entry lands under it.
@@ -622,3 +624,19 @@ whatever a reader does inside one is transient, and a reload returns the version
 - [ ] **ART-19** The word means one thing: `objective_files` and its surfaces are renamed to link (`POST`/`DELETE /objectives/:id/links`, `pana objective link add|remove`, the PWA list), and no code or SPEC item calls anything but a thread's versioned build an artifact.
 - [ ] **ART-20** The published message is authored by the domain participant, never by the publishing session: a session-authored row can be mistaken for a post that session already made and suppress its own automatic final reply (`src/sessions/reply.ts:79-81`). The publisher is named in the body and in the version row, and a stopped session's read access is what lets it retry its stale reply.
 - [ ] **ART-21** Cumulative storage is stated, not hidden: `GET /stats/artifacts` reports per thread and overall byte totals for artifact versions, and `pana stats artifacts` prints them. Withdrawing a published version and bounding lifetime storage are not in this slice, so the numbers are how a user sees the cost they are accepting.
+
+---
+
+## WP22: Bookmarks
+
+A message a reader wants to find again had nowhere to go but search. A message already has a
+canonical link to its place in its thread (REF-08, `#/threads/<thread>?message=<message>`), so this
+package adds the record, the two surfaces that write and read it, and the command that does the
+same from a terminal. A bookmark is per user: a session has no bookmark list.
+
+- [x] **BKM-01** `POST /messages/:id/bookmark` and `/unbookmark` save and unsave one message for the caller in `message_bookmarks (message_id, participant_id, created_at)`, whose primary key is the message and the reader. Only the user may write one: a session gets 403 `forbidden`. Saving twice keeps the first time, so the list's order is when the reader first saved the message, and an unknown message is 404. The answer is the message, with `bookmarked` present when the reader has it.
+- [x] **BKM-02** `GET /bookmarks` lists the caller's saved messages, newest save first, one page at a time (`limit`, `cursor`, `nextCursor`) over `(created_at, message_id)`. Each row carries the message's URL, its thread and the thread's subject, the sender, the message time, the current body (`body`; a redacted message carries `[redacted]` as `display` instead), one line of it for a terminal list (`snippet`), and `bookmarkedAt`. A bookmark is a message, not a delivery: it lists from an archived thread, for the user's own message, and from a thread the user only read by reference.
+- [x] **BKM-03** `GET /threads/:id` and `GET /messages/:id` carry `bookmarked` on each message the caller saved, from one indexed lookup beside the read times, and never on another reader's message.
+- [x] **BKM-04** The message menu has a bookmark action (UX-04) whose label carries the state, `Bookmark` or `Remove bookmark`, and saving or removing swaps the label in place and reports it. The message view maps the server's mark to `bookmarked`, so a cold load shows the right label.
+- [x] **BKM-05** The PWA has a Bookmarks section (`#/bookmarks`, `g b`, and the command palette): one card per saved message showing its subject, sender, message time, save time, and whole rendered body, whose click opens the thread at that message, and a Remove control that takes the row off the list in place and shows the empty hint when none remain. The route is in `SECTIONS` and measured under its own name.
+- [x] **BKM-06** `pana bookmark add MESSAGE`, `pana bookmark remove MESSAGE`, and `pana bookmark list [--limit N] [--cursor CURSOR]` call those routes, are listed in `README.md` and in `pana --help`, and follow CLI-06 and CLI-08.

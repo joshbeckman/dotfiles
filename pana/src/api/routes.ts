@@ -28,6 +28,10 @@ export const ROUTES = [
 	{ method: "POST", pattern: "/messages/:id/read", name: "messages.markRead", wp: "WP2" },
 	{ method: "POST", pattern: "/messages/:id/revisions", name: "messages.revise", wp: "WP2" },
 	{ method: "POST", pattern: "/messages/:id/redact", name: "messages.redact", wp: "WP2" },
+	// WP22: the user's saved messages.
+	{ method: "POST", pattern: "/messages/:id/bookmark", name: "messages.bookmark", wp: "WP22" },
+	{ method: "POST", pattern: "/messages/:id/unbookmark", name: "messages.unbookmark", wp: "WP22" },
+	{ method: "GET", pattern: "/bookmarks", name: "bookmarks.list", wp: "WP22" },
 	{ method: "POST", pattern: "/files", name: "files.upload", wp: "WP2" },
 	{ method: "GET", pattern: "/files/:id/*", name: "files.download", wp: "WP2" },
 	{ method: "GET", pattern: "/memory/worktree", name: "memory.worktree", wp: "WP5" },

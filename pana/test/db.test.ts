@@ -43,6 +43,8 @@ const PANA_TABLES = [
 	"check_authors",
 	// Migration 17: the one thread a schedule speaks in, and what it last said (SCH-22).
 	"schedule_notices",
+	// Migration 18: the user's saved messages (BKM-01).
+	"message_bookmarks",
 ];
 
 const opened: TestPanad[] = [];

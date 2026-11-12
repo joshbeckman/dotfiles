@@ -569,6 +569,23 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 18,
+		name: "message bookmarks",
+		// BKM-01: a message one reader saved for later. Per participant, like `thread_archives`, so
+		// the list is that reader's own; a message row is never deleted, so no cascade is needed. The
+		// index carries the list's own order, newest bookmark first, and its cursor.
+		sql: `
+			CREATE TABLE IF NOT EXISTS message_bookmarks (
+				message_id     TEXT NOT NULL REFERENCES messages(id),
+				participant_id TEXT NOT NULL REFERENCES participants(id),
+				created_at     INTEGER NOT NULL,
+				PRIMARY KEY (message_id, participant_id)
+			);
+			CREATE INDEX IF NOT EXISTS message_bookmarks_participant
+				ON message_bookmarks(participant_id, created_at DESC, message_id);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */
