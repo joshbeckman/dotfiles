@@ -737,6 +737,153 @@ export default function (pi) {
   }
 }
 
+// --- MCP destinations -------------------------------------------------------
+// Both MCP extensions put a credential on a request to a destination, so both are
+// loaded in a child: they use TypeScript that Node only compiles in transform mode,
+// and their destinations are read from the environment at extension start.
+
+const DESTINATION_DRIVER = `
+import { registerHooks } from "node:module";
+import { readFileSync } from "node:fs";
+
+const STUB = ${JSON.stringify("export const Type = { Object: (p, o) => ({ type: 'object', properties: p, ...o })," +
+  " String: () => ({ type: 'string' }), Optional: (s) => s, Boolean: () => ({ type: 'boolean' })," +
+  " Literal: (v) => ({ const: v }), Union: (s) => ({ anyOf: s }), Number: () => ({ type: 'number' })," +
+  " Array: () => ({ type: 'array' }) };")};
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === "typebox") return { url: "data:text/javascript," + encodeURIComponent(STUB), shortCircuit: true };
+    return next(specifier, context);
+  },
+});
+
+const [mode, extensionPath] = process.argv.slice(2);
+const extension = (await import(extensionPath)).default;
+const tools = {};
+const api = { registerTool: (tool) => { tools[tool.name] = tool; }, registerCommand: () => {}, on: () => {} };
+
+if (mode === "status") {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), authorization: options.headers && options.headers.authorization, redirect: options.redirect });
+    if (process.env.STUB_REDIRECT) return new Response("", { status: 302, headers: { location: "http://collector.test/mcp" } });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "fine" }] } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  extension(api);
+  let error = "";
+  try { await tools.josh_status_get_status.execute("call-1", {}, undefined, () => {}); } catch (thrown) { error = thrown.message; }
+  process.stdout.write(JSON.stringify({ requests, error }));
+} else {
+  // The stub server records its environment and exits. Telling a dead child
+  // something raises EPIPE on its stdin, which is the extension's normal path.
+  process.on("uncaughtException", (error) => { if (error.code !== "EPIPE") throw error; });
+  extension(api);
+  let error = "";
+  try { await tools.shopify_dev_learn_shopify_api.execute("call-1", { api: "admin" }, undefined, () => {}); } catch (thrown) { error = thrown.message; }
+  let env = ""; let args = "";
+  try { env = readFileSync(process.env.CHILD_ENV_FILE, "utf8"); args = readFileSync(process.env.CHILD_ARGS_FILE, "utf8"); } catch {}
+  process.stdout.write(JSON.stringify({ env, args, error }));
+}
+`;
+
+{
+  const dir = mkdtempSync(join(tmpdir(), "pi-destinations-"));
+  const driver = join(dir, "destinations.mjs");
+  writeFileSync(driver, DESTINATION_DRIVER);
+  const extension = (name) => pathToFileURL(join(EXTENSIONS, name, "index.ts")).href;
+  const drive = (mode, env) => JSON.parse(
+    execFileSync(process.execPath, ["--experimental-transform-types", driver, mode, extension(mode === "status" ? "josh-status-mcp" : "shopify-dev-mcp")], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "ignore"],
+    }),
+  );
+
+  // josh-status-mcp attaches a long-lived Authorization header, so an environment
+  // value must not be able to pick the host it goes to.
+  const offMachine = drive("status", {
+    PI_JOSH_STATUS_MCP_URL: "http://collector.test/mcp",
+    PI_JOSH_STATUS_MCP_TOKEN: "test-token",
+  });
+  check(
+    "a non-loopback override never receives the request",
+    offMachine.requests.length > 0 && offMachine.requests.every((request) => request.url.startsWith("https://joshbeckman--")),
+    offMachine.requests.map((request) => request.url).join(", "),
+  );
+  check(
+    "the token only goes to the pinned origin",
+    offMachine.requests.every((request) => request.authorization === "Bearer test-token"),
+    JSON.stringify(offMachine.requests[0]?.authorization),
+  );
+  check(
+    "a redirect is not a destination the client will follow",
+    offMachine.requests.length > 0 && offMachine.requests.every((request) => request.redirect === "manual"),
+    JSON.stringify(offMachine.requests[0]?.redirect),
+  );
+
+  const onMachine = drive("status", {
+    PI_JOSH_STATUS_MCP_URL: "http://127.0.0.1:9/mcp",
+    PI_JOSH_STATUS_MCP_TOKEN: "test-token",
+  });
+  check(
+    "loopback may stand in for the endpoint",
+    onMachine.requests.length > 0 && onMachine.requests.every((request) => request.url === "http://127.0.0.1:9/mcp"),
+    onMachine.requests.map((request) => request.url).join(", "),
+  );
+
+  const redirected = drive("status", { PI_JOSH_STATUS_MCP_TOKEN: "test-token", STUB_REDIRECT: "1" });
+  check("a redirect is reported rather than followed", redirected.error.includes("refused to follow a redirect"), redirected.error);
+}
+
+{
+  // shopify-dev-mcp runs third-party code from npm, so the child gets an allowlist
+  // of the environment rather than a copy of this process's.
+  const dir = mkdtempSync(join(tmpdir(), "shopify-mcp-fake-"));
+  const argsFile = join(dir, "child-args.txt");
+  const envFile = join(dir, "child-env.txt");
+  writeFileSync(
+    join(dir, "pnpx"),
+    "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\nenv > " + envFile + "\nsleep 1\nexit 0\n",
+    { mode: 0o755 },
+  );
+  const driver = join(dir, "destinations.mjs");
+  writeFileSync(driver, DESTINATION_DRIVER);
+  const output = JSON.parse(
+    execFileSync(
+      process.execPath,
+      ["--experimental-transform-types", driver, "shopify", pathToFileURL(join(EXTENSIONS, "shopify-dev-mcp/index.ts")).href],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH ?? ""}`,
+          OPENAI_API_KEY: "sk-test",
+          CERAMIC_API_KEY: "ceramic-test",
+          PERSONAL_MCP_WRITE_TOKEN: "write-test",
+          CHILD_ARGS_FILE: argsFile,
+          CHILD_ENV_FILE: envFile,
+        },
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ),
+  );
+  check(
+    "the MCP child sees no provider keys",
+    output.env.length > 0 && !/^(OPENAI_API_KEY|CERAMIC_API_KEY|PERSONAL_MCP_WRITE_TOKEN)=/m.test(output.env),
+    output.env.split("\n").filter((line) => /KEY|TOKEN|SECRET|PASSWORD/.test(line)).join(", ") || "nothing passed",
+  );
+  check(
+    "the child gets the environment it needs to start",
+    /^PATH=/m.test(output.env) && /^HOME=/m.test(output.env),
+    output.env.split("\n").slice(0, 5).join(", "),
+  );
+  check(
+    "the package is pinned rather than latest",
+    output.args.includes("@shopify/dev-mcp@1.18.0") && !output.args.includes("latest"),
+    JSON.stringify(output.args),
+  );
+}
+
 // --- result -----------------------------------------------------------------
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

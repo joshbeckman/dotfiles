@@ -13,6 +13,9 @@ export S_KEY
 
 exec s PERSONAL_MCP_WRITE_TOKEN -- sh -c '
   status="$1"
-  curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/update \
-    -X POST -F "status=\"$status\"" -F "write_password=$PERSONAL_MCP_WRITE_TOKEN" --silent
+  # The token is piped in and read by curl as a form field from stdin; on the
+  # command line it would be visible in `ps` to every process on the machine.
+  printf %s "$PERSONAL_MCP_WRITE_TOKEN" \
+    | curl https://joshbeckman--5ffab9e262b911f09d000224a6c84d84.web.val.run/update \
+      -X POST -F "status=\"$status\"" -F "write_password=<-" --silent
 ' sh "$*"

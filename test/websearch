@@ -162,6 +162,13 @@ assert "Deno v2.9.7 is current." in out.stdout, out.stdout
 assert "https://github.com/denoland/deno/releases" in out.stdout, out.stdout
 print("ok  --recent returns an answer with sources")
 
+# An override cannot route a key off this machine, and it fails before the key is sent.
+for name in ("WEBSEARCH_CERAMIC_URL", "WEBSEARCH_OPENAI_URL"):
+    out = run("some query", **{name: "http://collector.test/api"})
+    assert out.returncode == 2, out.stdout
+    assert "not a loopback URL" in out.stderr, out.stderr
+print("ok  a non-loopback override is refused")
+
 # Bad input fails before any request.
 out = run("--limit", "0", "some query")
 assert out.returncode == 2, out.stdout
