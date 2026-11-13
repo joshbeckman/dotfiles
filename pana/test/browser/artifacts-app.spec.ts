@@ -22,11 +22,12 @@
 //   `artifact-version` as its chrome.
 // Needs the installed Chrome and chrome-devtools, so it runs with `npm run test:web`, not `npm test`.
 
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loopbackOrigin } from "../../src/web/static.ts";
 import { startTestPanad, TEST_DOMAIN, type TestPanad } from "../harness/index.ts";
-import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, resizePage } from "./cli.ts";
+import { chromeDevtoolsAvailable, closePage, emulateViewport, evaluatePage, newPage, resizePage, screenshot } from "./cli.ts";
 
 const describeBrowser = chromeDevtoolsAvailable() ? describe : describe.skip;
 
@@ -184,6 +185,102 @@ async function goto(hash: string, ready: string, timeout = 15_000): Promise<void
 // ---- ART-12 ---------------------------------------------------------------------------------
 
 describeBrowser("artifact pane", () => {
+	it("keeps the artifact menu and a fitting roster in the sticky header at wide and phone widths", async () => {
+		const sessions = Array.from({ length: 20 }, () => t.runtime.newId());
+		await t.runtime.db.write(async (tx) => {
+			for (const id of sessions) {
+				const url = t.runtime.url({ kind: "session", id });
+				await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, url, t.clock.now());
+				await tx.run("INSERT INTO sessions (id, state, depth, created_at, updated_at) VALUES (?, 'stopped', 0, ?, ?)", id, t.clock.now(), t.clock.now());
+			}
+		});
+		const created = await t.client.post<{ thread: { id: string }; message: { id: string } }>("/threads", {
+			to: sessions, subject: "A full header", body: "A thread with many participants.",
+		});
+		expect(created.status).toBe(201);
+		const id = created.body.thread.id;
+		let head = created.body.message.id;
+		for (let i = 0; i < 12; i++) {
+			const reply = await t.client.post<{ message: { id: string } }>(`/threads/${id}/messages`, { after: head, body: `A long thread ${i}.\n\nMore text for scrolling.` });
+			expect(reply.status).toBe(200); head = reply.body.message.id;
+		}
+		const fileId = await upload("index.html", BUILD("header"));
+		const result = await t.client.post(`/threads/${id}/artifacts/header-test`, { entry: "index.html", files: [{ path: "index.html", fileId }] });
+		expect(result.status).toBe(201);
+		await open();
+		await resizePage(1280, 900);
+		await goto(`#/threads/${id}`, `document.querySelector('[data-testid=artifact-open]') && document.querySelectorAll('#thread-participants .person').length === 21`);
+		const wide = await evaluatePage<{ visible: number; more: number; label: string; gap: number; sticky: boolean }>(`
+			await until(() => !document.getElementById('thread-participant-overflow').hidden);
+			const items = document.getElementById('thread-participant-items');
+			const menu = document.getElementById('thread-participant-overflow');
+			const artifact = document.getElementById('artifact-list');
+			return { visible: items.children.length, more: document.getElementById('thread-participant-more').children.length,
+				label: artifact.querySelector('summary').textContent, gap: artifact.getBoundingClientRect().left - document.getElementById('thread-participants').getBoundingClientRect().right,
+				sticky: Boolean(document.querySelector('[data-testid=thread-sticky]').contains(artifact)) };
+		`);
+		expect(wide.visible).toBeGreaterThan(1);
+		expect(wide.more).toBe(21 - wide.visible);
+		expect(wide.label).toBe("Artifacts 1");
+		expect(wide.gap).toBeLessThan(25);
+		expect(wide.sticky).toBe(true);
+		const shots = process.env.PANA_HEADER_SHOTS_DIR;
+		if (shots) { mkdirSync(shots, { recursive: true }); copyFileSync(await screenshot(), join(shots, "header-wide.png")); }
+		await resizePage(390, 844);
+		const phone = await evaluatePage<{ visible: number; more: number; noOverflow: boolean; menuInView: boolean; label: string; closed: boolean; focus: boolean; stickyTop: number }>(`
+			await until(() => document.getElementById('thread-participant-items').children.length < ${wide.visible});
+			window.scrollTo(0, document.body.scrollHeight);
+			const menu = document.getElementById('thread-participant-overflow');
+			const summary = menu.querySelector('summary'); summary.click();
+			await until(() => menu.open);
+			const popup = document.getElementById('thread-participant-more').getBoundingClientRect();
+			const result = { visible: document.getElementById('thread-participant-items').children.length,
+				more: document.getElementById('thread-participant-more').children.length,
+				noOverflow: document.documentElement.scrollWidth <= innerWidth,
+				menuInView: popup.left >= 0 && popup.right <= innerWidth,
+				label: summary.getAttribute('aria-label'), stickyTop: document.querySelector('[data-testid=thread-sticky]').getBoundingClientRect().top };
+			summary.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
+			result.closed = !menu.open; result.focus = document.activeElement === summary;
+			return result;
+		`);
+		expect(phone.visible + phone.more).toBe(21);
+		expect(phone.noOverflow).toBe(true);
+		expect(phone.menuInView).toBe(true);
+		expect(phone.label).toBe(`${phone.more} more participants`);
+		expect(phone.closed).toBe(true);
+		expect(phone.focus).toBe(true);
+		expect(phone.stickyTop).toBeGreaterThanOrEqual(0);
+		expect(phone.stickyTop).toBeLessThan(120);
+		const artifactMenu = await evaluatePage<{ inView: boolean; names: string[] }>(`
+			const menu = document.getElementById('artifact-list'); menu.querySelector('summary').click();
+			await until(() => menu.open);
+			const box = document.getElementById('artifact-list-items').getBoundingClientRect();
+			return { inView: box.left >= 0 && box.right <= innerWidth, names: [...menu.querySelectorAll('[data-testid=artifact-open]')].map(a => a.textContent) };
+		`);
+		expect(artifactMenu.inView).toBe(true);
+		expect(artifactMenu.names).toEqual(["header-test v1"]);
+		if (shots) copyFileSync(await screenshot(), join(shots, "header-phone.png"));
+		await resizePage(1280, 900);
+		expect(await evaluatePage<number>(`await until(() => document.getElementById('thread-participant-items').children.length >= ${wide.visible}); return document.getElementById('thread-participant-items').children.length;`)).toBe(wide.visible);
+
+		// A long artifact name beside a short roster must not push the menu off the left edge.
+		const small = await t.client.post<{ thread: { id: string } }>("/threads", { body: "A small roster." });
+		expect(small.status).toBe(201);
+		const longName = "An unusually long artifact name that should fit inside the phone viewport";
+		const smallPublish = await t.client.post(`/threads/${small.body.thread.id}/artifacts/${encodeURIComponent(longName)}`, { entry: "index.html", files: [{ path: "index.html", fileId }] });
+		expect(smallPublish.status).toBe(201);
+		await resizePage(390, 844);
+		await goto(`#/threads/${small.body.thread.id}`, `document.querySelector('[data-testid=artifact-open]')`);
+		const edge = await evaluatePage<{ left: number; right: number; width: number }>(`
+			const menu = document.getElementById('artifact-list'); menu.querySelector('summary').click();
+			await until(() => menu.open && document.getElementById('artifact-list-items').style.translate !== '');
+			const box = document.getElementById('artifact-list-items').getBoundingClientRect();
+			return { left: box.left, right: box.right, width: innerWidth };
+		`);
+		expect(edge.left).toBeGreaterThanOrEqual(0);
+		expect(edge.right).toBeLessThanOrEqual(edge.width);
+	});
+
 	it("ART-12 the entry picks the view: sandboxed page, Markdown, image, or download", async () => {
 		const newest = (await versionsOf(ids.build)).at(-1)!;
 		await open();

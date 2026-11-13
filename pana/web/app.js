@@ -813,7 +813,11 @@ function renderThreadParticipants(thread) {
 	const active = document.activeElement;
 	const focusedId = active instanceof HTMLElement && container.contains(active) ? active.closest(".person")?.dataset.participantId : undefined;
 	let replacement;
-	container.replaceChildren();
+	const items = $("thread-participant-items");
+	items.replaceChildren();
+	$("thread-participant-more").replaceChildren();
+	$("thread-participant-overflow").open = false;
+	$("thread-participant-overflow").hidden = true;
 	for (const participant of thread?.participants ?? []) {
 		const person = typeof participant === "object" ? participant : { url: participant };
 		const node = personLink(person, thread.participants, thread.id);
@@ -823,12 +827,89 @@ function renderThreadParticipants(thread) {
 		role.title = "Self-declared role";
 		node.append(role);
 		renderParticipantRole(node, person.role);
-		container.append(node);
+		items.append(node);
 		if (focusedId && person.id === focusedId) replacement = node.querySelector("a");
 	}
 	// Do not move focus from a draft or another control. Only restore a participant link that
 	// was focused before the synchronous redraw and still belongs to the refreshed roster.
 	replacement?.focus({ preventScroll: true });
+	queueThreadRosterLayout();
+}
+
+// Keep the roster in one line and move only the people that do not fit into the menu. The
+// actual nodes move, so identity colors, roles, and links stay the same in either location.
+let rosterLayoutFrame;
+function queueThreadRosterLayout() {
+	cancelAnimationFrame(rosterLayoutFrame);
+	rosterLayoutFrame = requestAnimationFrame(layoutThreadRoster);
+}
+function layoutThreadRoster() {
+	const row = $("thread-meta"), items = $("thread-participant-items"), more = $("thread-participant-more");
+	if (!row.clientWidth) return;
+	const menu = $("thread-participant-overflow"), summary = menu.querySelector("summary");
+	const focused = document.activeElement;
+	const all = [...items.children, ...more.children];
+	// Measure with the same styles used by the visible roster, then reserve the artifact button.
+	for (const person of all) items.append(person);
+	const widths = all.map((person) => person.getBoundingClientRect().width);
+	const itemGap = parseFloat(getComputedStyle(items).columnGap) || 0;
+	const rowGap = parseFloat(getComputedStyle(row).columnGap) || 0;
+	const artifact = $("artifact-list");
+	const available = row.clientWidth - (artifact.hidden ? 0 : artifact.getBoundingClientRect().width + rowGap);
+	const menuGap = parseFloat(getComputedStyle($("thread-participants")).columnGap) || 0;
+	let count = all.length;
+	let width = widths.reduce((sum, each) => sum + each, 0);
+	menu.hidden = false;
+	while (count >= 0) {
+		const hidden = all.length - count;
+		summary.textContent = `+${hidden}`;
+		const total = width + Math.max(0, count - 1) * itemGap
+			+ (hidden ? summary.getBoundingClientRect().width + menuGap : 0);
+		if (total <= available || count === 0) break;
+		width -= widths[count - 1];
+		count--;
+	}
+	for (const person of all.slice(count)) more.append(person);
+	const hidden = all.length - count;
+	menu.hidden = !hidden;
+	summary.textContent = `+${hidden}`;
+	summary.setAttribute("aria-label", `${hidden} more ${hidden === 1 ? "participant" : "participants"}`);
+	if (!hidden) menu.open = false;
+	for (const open of row.querySelectorAll(".thread-list-menu[open]")) placeThreadListPopup(open);
+	// Moving a focused link between containers must not send keyboard focus to the page body.
+	if (focused instanceof HTMLElement && all.some((person) => person.contains(focused))) {
+		if (more.contains(focused)) menu.open = true;
+		focused.focus({ preventScroll: true });
+	} else if (focused === summary && !hidden) items.querySelector("a")?.focus({ preventScroll: true });
+}
+new ResizeObserver(queueThreadRosterLayout).observe($("thread-meta"));
+
+defineThreadListMenus();
+function placeThreadListPopup(menu) {
+	const popup = menu.querySelector(".thread-list-popup");
+	popup.style.translate = "";
+	const box = popup.getBoundingClientRect();
+	const shift = box.left < 8 ? 8 - box.left : box.right > innerWidth - 8 ? innerWidth - 8 - box.right : 0;
+	popup.style.translate = `${shift}px`;
+}
+function defineThreadListMenus() {
+	for (const menu of document.querySelectorAll(".thread-list-menu")) {
+		menu.addEventListener("toggle", () => { if (menu.open) placeThreadListPopup(menu); });
+	}
+	$("thread-meta").addEventListener("keydown", (event) => {
+		if (event.key !== "Escape") return;
+		const menu = event.target.closest(".thread-list-menu[open]");
+		if (!menu) return;
+		event.preventDefault();
+		event.stopPropagation();
+		menu.open = false;
+		menu.querySelector("summary").focus();
+	});
+	document.addEventListener("click", (event) => {
+		for (const menu of document.querySelectorAll(".thread-list-menu[open]")) {
+			if (!menu.contains(event.target) || event.target.closest(".thread-list-popup a")) menu.open = false;
+		}
+	});
 }
 
 function renderParticipantRole(node, role) {
@@ -847,9 +928,10 @@ function applyThreadRole(event) {
 		return;
 	}
 	person.role = event.role;
-	for (const node of $("thread-participants").children) {
+	for (const node of $("thread-participants").querySelectorAll(".person")) {
 		if (node.dataset.participantId === event.participantId) renderParticipantRole(node, event.role);
 	}
+	queueThreadRosterLayout();
 }
 
 // A stream may miss events while disconnected. Refresh the roster, not the draft or messages.
@@ -2286,21 +2368,28 @@ function artifactHref(threadId, artifactId, seq) {
 	return `#/threads/${encodeURIComponent(threadId)}/a/${encodeURIComponent(artifactId)}${seq === undefined ? "" : `/v/${seq}`}`;
 }
 
+let artifactListRequest = 0;
 async function loadArtifactList(threadId) {
+	const request = ++artifactListRequest;
 	const { artifacts } = await api("GET", `/threads/${encodeURIComponent(threadId)}/artifacts`);
-	if (state.section !== "threads" || state.thread?.id !== threadId) return;
-	const list = $("artifact-list");
-	list.replaceChildren();
+	if (request !== artifactListRequest || state.section !== "threads" || state.thread?.id !== threadId) return;
+	const list = $("artifact-list"), items = $("artifact-list-items");
+	const focusedHref = items.contains(document.activeElement) ? document.activeElement.getAttribute("href") : null;
+	let replacement;
+	items.replaceChildren();
 	list.hidden = !artifacts.length;
-	if (!artifacts.length) return;
-	list.append(document.createTextNode("Artifacts: "));
+	$("artifact-list-summary").textContent = `Artifacts ${artifacts.length}`;
 	for (const artifact of artifacts) {
 		const link = document.createElement("a");
 		link.href = artifactHref(threadId, artifact.id);
 		link.dataset.testid = "artifact-open";
 		link.textContent = `${artifact.name} v${artifact.newestVersion.seq}`;
-		list.append(link);
+		items.append(link);
+		if (focusedHref === link.getAttribute("href")) replacement = link;
 	}
+	if (!artifacts.length) list.open = false;
+	replacement?.focus({ preventScroll: true });
+	queueThreadRosterLayout();
 }
 
 function closeArtifactPane() {
@@ -2449,6 +2538,11 @@ async function openThread(id, focusMessage) {
 	renderThreadSubject(thread?.subject ?? "(no subject)");
 	const threadUrl = $("thread-url");
 	threadUrl.replaceChildren(copyLink(thread?.url ?? `pana://${state.domain}/threads/${id}`, "thread"));
+	// Do not show the previous thread's artifacts while this thread's list is loading.
+	$("artifact-list").hidden = true;
+	$("artifact-list").open = false;
+	$("artifact-list-items").replaceChildren();
+	$("artifact-list-items").style.translate = "";
 	// REF-08 and UX-06: participants are colored links to their own views.
 	renderThreadParticipants(thread);
 	// Apply the snapshot and any events received while it was in flight.
