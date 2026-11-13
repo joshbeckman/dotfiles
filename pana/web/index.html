@@ -160,14 +160,23 @@
 								</div>
 							</details>
 						</header>
-						<p class="meta-line">
-							<span id="thread-participants" data-testid="thread-participants" class="people"></span>
-						</p>
+						<div id="thread-meta" class="meta-line thread-meta">
+							<div id="thread-participants" data-testid="thread-participants" class="thread-people">
+								<div id="thread-participant-items" class="people"></div>
+								<details id="thread-participant-overflow" class="thread-list-menu" hidden>
+									<summary data-testid="participant-overflow"></summary>
+									<div id="thread-participant-more" class="thread-list-popup"></div>
+								</details>
+							</div>
+							<details id="artifact-list" data-testid="artifact-list" class="thread-list-menu" hidden>
+								<summary id="artifact-list-summary" data-testid="artifact-list-summary"></summary>
+								<div id="artifact-list-items" class="thread-list-popup"></div>
+							</details>
+						</div>
 					</div>
 					<p class="meta-line view-details">
 						<span id="thread-url" data-testid="thread-url" class="hint"></span>
 					</p>
-					<div id="artifact-list" data-testid="artifact-list" class="artifact-list" hidden></div>
 					<div id="thread-messages" data-testid="messages" class="messages"></div>
 
 					<div id="stale" data-testid="stale" class="notice" hidden>
