@@ -8,6 +8,9 @@
 # update, and we want a week: a release that gets yanked or hotfixed in its first
 # days never becomes a PR here. Security updates ignore cooldown entirely, so a
 # CVE still arrives at once.
+#
+# Groups are declared twice, once per update type, because `applies-to` takes a
+# single value. `applies-to` absent means version updates.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -30,12 +33,27 @@ updates:
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
     groups:
+      security-earendil:
+        applies-to: security-updates
+        patterns:
+          - "@earendil-works/*"
+      security-toolchain:
+        applies-to: security-updates
+        patterns:
+          - "@types/node"
+          - typescript
+          - vitest
+          - vite
+          - "@vitest/*"
+      security-runtime:
+        applies-to: security-updates
+        patterns:
+          - croner
+          - web-push
       earendil:
-        applies-to: [version-updates, security-updates]
         patterns:
           - "@earendil-works/*"
       toolchain:
-        applies-to: [version-updates, security-updates]
         patterns:
           - "@types/node"
           - typescript
@@ -43,7 +61,6 @@ updates:
           - vite
           - "@vitest/*"
       runtime:
-        applies-to: [version-updates, security-updates]
         patterns:
           - croner
           - web-push
