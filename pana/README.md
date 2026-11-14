@@ -237,7 +237,7 @@ Sections that change every run, such as the current time, stay out of the prompt
 
 ### Tools
 
-Every pana tool wraps one CLI command with the same arguments, output, and exit codes. A session can use either. The tools are `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake`.
+Every pana tool wraps one CLI command with the same arguments, output, and exit codes. A session can use either. The tools are `pana_reply`, `pana_thread_read`, `pana_thread_create`, `pana_session_create`, `pana_thread_role`, `pana_memory_search`, `pana_memory_commit`, and `pana_schedule_wake`.
 
 ### Attribution
 

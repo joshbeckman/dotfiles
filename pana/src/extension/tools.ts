@@ -1,5 +1,5 @@
-// The six pana tools (TOL-01..TOL-04). Each one wraps the command of the same name: same
-// arguments, same API route, same exit code, with the calling session as `Pana-Caller`.
+// The pana tools (TOL-01..TOL-04). Each one wraps the command of the same name: same arguments,
+// same API route, same exit code, with the calling session as `Pana-Caller`.
 
 import type { JsonValue } from "@earendil-works/chord/json";
 import { arr, num, obj, opt, str, unknown, type Schema } from "@earendil-works/pi-schema";
@@ -11,6 +11,7 @@ import {
 	runPanaCommand,
 	type CommandOutcome,
 	type CommandParams,
+	type PanaCommandName,
 	type PanaToolName,
 } from "../cli/commands.ts";
 
@@ -45,7 +46,17 @@ async function sessionFor(runtime: Runtime, conversationId: number): Promise<str
 	return row.id;
 }
 
-function tool(getRuntime: () => Runtime, name: PanaToolName, description: string, parameters: Schema) {
+/**
+ * `pick` names the command a tool should run when one tool covers two commands, as
+ * `pana_thread_role` does: a role sets, no role clears.
+ */
+function tool(
+	getRuntime: () => Runtime,
+	name: PanaToolName,
+	description: string,
+	parameters: Schema,
+	pick?: (params: CommandParams) => PanaCommandName,
+) {
 	const command = commandForTool(name);
 	return defineTool({
 		name,
@@ -55,7 +66,8 @@ function tool(getRuntime: () => Runtime, name: PanaToolName, description: string
 		async execute(args, api) {
 			const runtime = getRuntime();
 			const caller = await sessionFor(runtime, api.conversationId);
-			const outcome = await runPanaCommand(commandName(command), args as unknown as CommandParams, {
+			const params = args as unknown as CommandParams;
+			const outcome = await runPanaCommand(pick ? pick(params) : commandName(command), params, {
 				endpoint: { socketPath: runtime.paths.socket },
 				caller,
 			});
@@ -121,6 +133,16 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				to: opt(arr(str(), { description: "Extra participants on the new thread" })),
 				subject: opt(str({ description: "Thread subject; defaults to the first line of the prompt" })),
 			}),
+		),
+		tool(
+			getRuntime,
+			"pana_thread_role",
+			"Say what you contribute to a thread, such as reviewer, builder, tester, or the corner of the work you own, so the other participants see it beside your URL. A thread with several sessions works better when each one says what it is doing, and a change of work means a change of role. Omit `role` to go back to plain participant.",
+			obj({
+				thread: str({ description: "Thread URL or ULID" }),
+				role: opt(str({ description: "Your role, 1 to 32 characters. Omit it to clear your role." })),
+			}),
+			(params) => (typeof params.role === "string" && params.role.trim() !== "" ? "thread role set" : "thread role clear"),
 		),
 		tool(
 			getRuntime,

@@ -25,6 +25,7 @@ const PANA_TOOLS = [
 	"pana_thread_read",
 	"pana_thread_create",
 	"pana_session_create",
+	"pana_thread_role",
 	"pana_memory_search",
 	"pana_memory_commit",
 	"pana_schedule_wake",
@@ -869,9 +870,9 @@ describe("system prompt", () => {
 		expect(pana).toContain("never what came before");
 		expect(pana).toContain("Do not send the refused reply as a way of asking");
 		// Role hints are optional, current, and do not grant authorization.
-		expect(pana).toContain('When helpful, use `pana thread role set THREAD "reviewer"`');
+		expect(pana).toContain("call `pana_thread_role`");
 		expect(pana).toContain("self-declared hint, not authorization");
-		expect(pana).toContain("pana thread role clear THREAD");
+		expect(pana).toContain("omit the role to go back to `participant`");
 		// The discovery sentence names the commands and stops there; --help carries the output shape.
 		expect(pana).not.toContain("newest-created first");
 	});
@@ -981,6 +982,19 @@ describe("pana tools", () => {
 				args: { prompt: "check the build", model: "faux/faux-1", thinking: "high" },
 				cli: ["session", "create", "--prompt", "check the build", "--model", "faux/faux-1", "--thinking", "high"],
 				route: "sessions.create",
+			},
+			{
+				// One tool covers both commands: a role sets, no role clears.
+				tool: "pana_thread_role",
+				args: { thread: "01THREAD0000000000000000AA", role: "reviewer" },
+				cli: ["thread", "role", "set", "01THREAD0000000000000000AA", "reviewer"],
+				route: "threads.role",
+			},
+			{
+				tool: "pana_thread_role",
+				args: { thread: "01THREAD0000000000000000AA" },
+				cli: ["thread", "role", "clear", "01THREAD0000000000000000AA"],
+				route: "threads.role",
 			},
 			{
 				tool: "pana_memory_search",

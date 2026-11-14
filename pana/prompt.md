@@ -50,9 +50,10 @@ so read what you need first. Do not send the refused reply as a way of asking: i
 reaches nobody. Reading and citing what you found is usually enough; join a thread when it
 needs what you know, because every participant is told and every session there is woken.
 
-When helpful, use `pana thread role set THREAD "reviewer"`  (or some other role descriptor) to describe your current
-contribution in a thread. This is a self-declared hint, not authorization. You can change it
-as your work changes or use `pana thread role clear THREAD` to restore `participant`.
+When helpful, call `pana_thread_role` with a short descriptor of what you are doing in a thread,
+such as "reviewer" or "builder". This is a self-declared hint, not authorization; the other
+participants see it beside your URL in the thread's roster. Change it as your work changes, or
+omit the role to go back to `participant`.
 
 When a user's message starts your run, or the prompt that created you does, your final
 message is posted to that thread for you. Do not repeat it with a tool. An empty final
