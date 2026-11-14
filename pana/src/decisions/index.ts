@@ -1,7 +1,10 @@
 // The decision model (DEC-01, DEC-02): a System One model that reads one state and answers typed
 // questions with calibrated probabilities instead of generating text. Fireworks serves one as
-// `accounts/fireworks/models/rune`; the native protocol is `POST <baseUrl>/systemone` with a
-// `state` and a map of questions, and a `noul` question answers the probability of yes.
+// `accounts/fireworks/models/rune`; the native protocol is `POST <baseUrl>/v1/systemone` with a
+// `state` and a map of questions, and a `noul` question answers the probability of yes. A
+// provider's base URL stops at its API root (`https://api.fireworks.ai/inference`), so the
+// version segment belongs to the path and not to the base URL: `/inference/systemone` is a 404,
+// `/inference/v1/systemone` answers.
 //
 // Nothing in pana asks a decision model to write prose. `decide` returns probabilities keyed by
 // question name, and a caller acts on them; see `gate.ts` for the wake gate, the one caller today.
@@ -54,6 +57,9 @@ export class DecisionError extends Error {
 /** The one deadline. A wake is worth waiting a moment for, and never longer than this. */
 export const DECISION_TIMEOUT_MS = 2_000;
 
+/** The native System One protocol's path under a provider's API root (DEC-02). */
+export const SYSTEM_ONE_PATH = "/v1/systemone";
+
 const transports = new WeakMap<Runtime, DecisionTransport>();
 
 /** Replace the sender for this panad. Tests use it to answer without the network. */
@@ -92,7 +98,7 @@ function transportFor(runtime: Runtime): DecisionTransport {
 		}
 		const baseUrl = (auth?.auth.baseUrl ?? provider.baseUrl ?? "").replace(/\/+$/u, "");
 		if (!baseUrl) throw new DecisionError("decision_failed", `provider ${request.providerId} has no base URL`);
-		const response = await fetch(`${baseUrl}/systemone`, {
+		const response = await fetch(`${baseUrl}${SYSTEM_ONE_PATH}`, {
 			method: "POST",
 			headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
 			body: JSON.stringify({ model: request.modelId, state: request.state, questions: request.questions }),

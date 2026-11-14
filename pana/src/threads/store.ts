@@ -702,6 +702,7 @@ async function gateResponse(
 			attachments,
 		}),
 		recipients,
+		messageId,
 	);
 }
 

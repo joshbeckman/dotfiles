@@ -15,7 +15,8 @@
 // one. The result is recorded on the delivery (`delivery_wake_decisions`) and the caller logs one
 // line per recipient, so a retry reuses the answer instead of asking again.
 
-import { decide, type DecisionQuestions } from "./index.ts";
+import { decide, DecisionError, type DecisionQuestions } from "./index.ts";
+import { logGateDecision } from "./log.ts";
 import type { Runtime } from "../server/runtime.ts";
 
 /** The question's name in the request and the answer map. */
@@ -50,19 +51,32 @@ export type WakeGatePlan = ReadonlyMap<string, GateDecision>;
 /**
  * Decide whether each recipient of one delivery needs action. Returns `undefined` when the gate is
  * off or cannot answer, which means every recipient wakes as it does today.
+ *
+ * A failure is logged, not swallowed silently: a wrong endpoint or a missing key otherwise looks
+ * exactly like a gate that keeps answering "wake", and nobody sees it. `messageId` is only there
+ * to make that line findable.
  */
 export async function planWakeGate(
 	runtime: Runtime,
 	text: string,
 	recipients: readonly string[],
+	messageId?: string,
 ): Promise<WakeGatePlan | undefined> {
 	if (!runtime.config.decisionModel || recipients.length === 0) return undefined;
 	let probability: number;
 	try {
 		const answers = await decide(runtime, text, { [WAKE_QUESTION]: QUESTION });
 		probability = answers[WAKE_QUESTION]!;
-	} catch {
+	} catch (error) {
 		// DEC-06: fail open. The failure is the absence of a plan, and the caller wakes normally.
+		// DEC-08: one line says so, because a gate that cannot answer leaves no other trace.
+		const reason = error instanceof DecisionError ? `${error.code}: ${error.message}` : String((error as Error).message ?? error);
+		logGateDecision(runtime, {
+			event: "wake.gate",
+			...(messageId === undefined ? {} : { messageId }),
+			decision: "failed",
+			error: reason,
+		});
 		return undefined;
 	}
 	const wake = probability >= WAKE_GATE_THRESHOLD;

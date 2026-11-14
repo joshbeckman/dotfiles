@@ -15,9 +15,12 @@ export interface GateLogEntry {
 	event: "wake.gate" | "wake.delivered_after_skip";
 	messageId?: string;
 	deliveryId?: string;
-	recipientId: string;
-	probability: number;
-	decision?: "wake" | "skip";
+	recipientId?: string;
+	/** Absent on a `failed` line, which has no answer to record. */
+	probability?: number;
+	decision?: "wake" | "skip" | "failed";
+	/** Why the gate could not answer, on a `failed` line. */
+	error?: string;
 }
 
 const logs = new WeakMap<Runtime, RotatingLog>();

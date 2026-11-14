@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join as joinPath } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseConfig } from "../src/config/index.ts";
-import { DECISION_TIMEOUT_MS, decide, setDecisionTransport, type DecisionRequest } from "../src/decisions/index.ts";
+import { DECISION_TIMEOUT_MS, SYSTEM_ONE_PATH, decide, setDecisionTransport, type DecisionRequest } from "../src/decisions/index.ts";
 import { WAKE_GATE_THRESHOLD, WAKE_QUESTION } from "../src/decisions/gate.ts";
 import { sweepWakes } from "../src/db/outbox.ts";
 import { sessionRuntime } from "../src/sessions/index.ts";
@@ -107,7 +107,8 @@ async function stateOf(sessionId: string): Promise<string> {
 	return (await t!.runtime.db.get<{ state: string }>("SELECT state FROM sessions WHERE id = ?", sessionId))!.state;
 }
 
-function gateLines(): Array<{ event: string; probability: number; decision?: string }> {
+/** Every gate line in the state directory, oldest first; a missing file is no lines yet. */
+function gateLines(): Array<{ event: string; messageId?: string; probability?: number; decision?: string; error?: string }> {
 	try {
 		return readFileSync(joinPath(t!.dir, "decisions.log"), "utf8")
 			.split("\n")
@@ -116,6 +117,14 @@ function gateLines(): Array<{ event: string; probability: number; decision?: str
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * The gate lines for one message. A session's own end-of-run answer is a message from a session
+ * too, so the thread carries other decisions beside the one a test posted.
+ */
+function gateLinesFor(messageId: string) {
+	return gateLines().filter((line) => line.event === "wake.gate" && line.messageId === messageId);
 }
 
 describe("DEC-01 decisionModel configuration", () => {
@@ -147,7 +156,7 @@ describe("DEC-01 decisionModel configuration", () => {
 });
 
 describe("DEC-02 the decision client", () => {
-	it("DEC-02 decide posts to the provider's systemone endpoint with the model, state, and noul questions", async () => {
+	it("DEC-02 decide posts to <baseUrl>/v1/systemone with the model, state, and noul questions", async () => {
 		const runtime = {
 			config: { decisionModel: "fireworks/accounts/fireworks/models/rune" },
 			models: {
@@ -166,7 +175,10 @@ describe("DEC-02 the decision client", () => {
 
 		expect(answers).toEqual({ q: 0.42 });
 		expect(sent).toHaveLength(1);
-		expect(sent[0]!.url).toBe("https://api.fireworks.ai/inference/systemone");
+		// The provider base URL stops at the API root, and the native protocol lives under /v1:
+		// `/inference/systemone` is a 404 on the live API, `/inference/v1/systemone` answers.
+		expect(sent[0]!.url).toBe("https://api.fireworks.ai/inference/v1/systemone");
+		expect(sent[0]!.url).toBe(`https://api.fireworks.ai/inference${SYSTEM_ONE_PATH}`);
 		expect(sent[0]!.init.headers).toMatchObject({ authorization: "Bearer fk-auth" });
 		expect(JSON.parse(String(sent[0]!.init.body))).toMatchObject({
 			model: "accounts/fireworks/models/rune",
@@ -235,7 +247,7 @@ describe("DEC-04 the probability threshold", () => {
 		const inbox = await t!.client.get<{ unreadTotal: number }>("/inbox", { caller: a.session.id });
 		expect(inbox.body.unreadTotal).toBe(1);
 		// DEC-08: one line per decision, with the probability.
-		const lines = gateLines().filter((line) => line.event === "wake.gate");
+		const lines = gateLinesFor(sent.body.message.id);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toMatchObject({ probability: WAKE_GATE_THRESHOLD / 2, decision: "skip" });
 	});
@@ -253,9 +265,7 @@ describe("DEC-04 the probability threshold", () => {
 
 		const row = await delivery(sent.body.message.id, a.session.id);
 		expect(row?.wake_submission_id).not.toBeNull();
-		expect(gateLines().filter((line) => line.event === "wake.gate")).toEqual([
-			expect.objectContaining({ probability: 0.9, decision: "wake" }),
-		]);
+		expect(gateLinesFor(sent.body.message.id)).toEqual([expect.objectContaining({ probability: 0.9, decision: "wake" })]);
 	});
 });
 
@@ -323,6 +333,10 @@ describe("DEC-06 fail open", () => {
 
 		expect(calls).toBe(1);
 		expect((await delivery(sent.body.message.id, a.session.id))?.wake_submission_id).not.toBeNull();
+		// DEC-08: a gate that cannot answer leaves a line, so a broken key or endpoint is visible.
+		expect(gateLinesFor(sent.body.message.id)).toEqual([
+			expect.objectContaining({ decision: "failed", error: expect.stringContaining("provider error") }),
+		]);
 	});
 
 	it("DEC-06 a timeout wakes as before", async () => {
