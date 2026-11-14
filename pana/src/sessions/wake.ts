@@ -73,12 +73,47 @@ async function attachmentPaths(db: SqliteExecutor, runtime: Runtime, body: strin
 	return paths;
 }
 
+/**
+ * Who is in the thread, named only when that is news: in the thread's first message, and in any
+ * message that added a participant (a `--cc` join, THR-08). Repeating it on every message would
+ * spend a line per delivery on a fact the session already read.
+ */
+async function threadRoster(db: SqliteExecutor, row: MessageRow, recipientId: string): Promise<string | undefined> {
+	if (row.seq !== 1) {
+		const joined = await db.get(
+			"SELECT 1 FROM thread_participants WHERE thread_id = ? AND joined_message_id = ? LIMIT 1",
+			row.thread_id,
+			row.id,
+		);
+		if (!joined) return undefined;
+	}
+	const people = await db.all<{ id: string; url: string; role: string }>(
+		`SELECT p.id, p.url, COALESCE(r.role, 'participant') AS role
+		   FROM thread_participants tp
+		   JOIN participants p ON p.id = tp.participant_id
+		   LEFT JOIN thread_participant_roles r ON r.thread_id = tp.thread_id AND r.participant_id = tp.participant_id
+		  WHERE tp.thread_id = ? ORDER BY tp.joined_at, p.id`,
+		row.thread_id,
+	);
+	// A declared role rides along (CLI-09): a peer that says "reviewer" tells the others what it does.
+	return people
+		.map((person) => {
+			const marks = [...(person.role === "participant" ? [] : [person.role]), ...(person.id === recipientId ? ["you"] : [])];
+			return marks.length > 0 ? `${person.url} (${marks.join(", ")})` : person.url;
+		})
+		.join(", ");
+}
+
 function escape(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Render one delivered message as model input (DLV-02). */
-export async function renderMessage(db: SqliteExecutor, runtime: Runtime, wake: Pick<PendingWake, "deliveryId" | "messageId">): Promise<RenderedMessage> {
+export async function renderMessage(
+	db: SqliteExecutor,
+	runtime: Runtime,
+	wake: Pick<PendingWake, "deliveryId" | "messageId" | "recipientId">,
+): Promise<RenderedMessage> {
 	const row = await db.get<MessageRow>(
 		`SELECT m.id, m.thread_id, m.seq, m.body, p.url AS sender_url, p.kind AS sender_kind, t.subject
 		   FROM messages m
@@ -91,14 +126,14 @@ export async function renderMessage(db: SqliteExecutor, runtime: Runtime, wake: 
 	const body = await currentBody(db, row);
 	const threadUrl = runtime.url({ kind: "thread", id: row.thread_id });
 	const messageUrl = runtime.url({ kind: "message", id: row.id, thread: row.thread_id });
-	const lines = [
-		"New message.",
-		`From: ${row.sender_url}`,
-		`Thread: ${threadUrl}`,
+	const lines = ["New message.", `From: ${row.sender_url}`, `Thread: ${threadUrl}`];
+	const roster = await threadRoster(db, row, wake.recipientId);
+	if (roster !== undefined) lines.push(`Participants: ${roster}`);
+	lines.push(
 		`Message: ${messageUrl}`,
 		// A thread's first message is delivered before WP2 records its subject (SUB-01), which is that message's first line.
 		`Subject: ${row.subject ?? (row.seq === 1 ? firstLineSubject(row.body) : "")}`,
-	];
+	);
 	const paths = body === undefined ? [] : await attachmentPaths(db, runtime, body);
 	if (paths.length > 0) {
 		lines.push("Attachments:");

@@ -229,7 +229,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 ### Delivery
 
 - [x] **DLV-01** A message to an idle or failed session submits a pi-durable input with entry kind `pana.message`, and the session becomes `running`.
-- [x] **DLV-02** The model input contains the sender URL, the thread URL, the message URL, the subject, the body, and the local path of each attachment.
+- [x] **DLV-02** The model input contains the sender URL, the thread URL, the message URL, the subject, the body, and the local path of each attachment. On the thread's first message, and on any message that adds a participant, it also names every participant's URL in join order, marks the recipient as (you), and shows a role a participant declared (CLI-09). An ordinary message repeats none of that, so a session reads who else is there without paying for it on every delivery.
 - [x] **DLV-03** Delivery to a session marks the message read for it.
 - [x] **DLV-04** A message from a session to a running session queues as a follow-up and starts the next run.
 - [x] **DLV-05** A message from a user to a running session submits a steer. It reaches the model after the current tool round. If the run ends first, it starts the next run.

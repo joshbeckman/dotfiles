@@ -571,6 +571,66 @@ describe("mail delivery", () => {
 		expect(text).toContain("Subject: look at this");
 		expect(text).toContain(body);
 		expect(text).toContain(join(t!.dir, "files", file.body.file.id, "cat.png"));
+		// The thread is new to the session, so the input names who is in it and which one it is.
+		const roster = text.split("\n").find((line) => line.startsWith("Participants: "))!;
+		expect(roster).toContain(t!.runtime.userUrl);
+		expect(roster).toContain(`${res.session.url} (you)`);
+	});
+
+	it("DLV-02 the participants line appears in the first message and in a message that adds someone, never in ordinary ones", async () => {
+		await start({ script: [{ text: "one" }, { text: "two" }, { text: "three" }, { text: "four" }, { text: "five" }, { text: "six" }] });
+		const textOf = async (id: string) =>
+			String((await entries(id)).filter((entry) => entry.kind === "pana.message").at(-1)!.model![0]!.content);
+		const textOfMessage = async (id: string, messageId: string) =>
+			String(
+				(await entries(id)).find((entry) => entry.kind === "pana.message" && entry.data?.messageId === messageId)!.model![0]!
+					.content,
+			);
+
+		const rosterLine = async (id: string) =>
+			(await textOf(id)).split("\n").find((line) => line.startsWith("Participants: ")) ?? "";
+		const readUpTo = async (id: string, count: number) =>
+			until(async () => (await entries(id)).filter((entry) => entry.kind === "pana.message").length >= count, `${count} messages for ${id}`);
+
+		const first = await create({ prompt: "start here" });
+		await settled(first.session.id);
+		expect(await rosterLine(first.session.id)).toContain(`${first.session.url} (you)`);
+		expect(await rosterLine(first.session.id)).toContain(t!.runtime.userUrl);
+
+		// A plain follow-up repeats nothing the session already read.
+		const note = await respond(first.thread.id, (await messages(first.thread.id)).at(-1)!.id, "just a note");
+		expect(note.status).toBe(200);
+		await readUpTo(first.session.id, 2);
+		await settled(first.session.id);
+		expect(await textOf(first.session.id)).not.toContain("Participants:");
+
+		// A join is news, so the message that adds someone names the thread again, roles included.
+		const other = await create({ prompt: "second chair" });
+		await settled(other.session.id);
+		const role = await t!.client.request("PUT", `/threads/${first.thread.id}/role`, {
+			body: { role: "reviewer" },
+			caller: first.session.id,
+		});
+		expect(role.status).toBe(200);
+		const head = (await messages(first.thread.id)).at(-1)!.id;
+		const joined = await t!.client.post(`/threads/${first.thread.id}/messages`, { after: head, body: "review this", cc: [other.session.url] });
+		expect(joined.status).toBe(200);
+		await readUpTo(first.session.id, 3);
+		await readUpTo(other.session.id, 2);
+		await settled(first.session.id);
+		await settled(other.session.id);
+
+		const joinedMessageId = (joined.body as { message: { id: string } }).message.id;
+		const newcomerText = await textOfMessage(other.session.id, joinedMessageId);
+		const forNewcomer = newcomerText.split("\n").find((line) => line.startsWith("Participants: ")) ?? "";
+		expect(forNewcomer).toContain(`${other.session.url} (you)`);
+		expect(forNewcomer).toContain(`${first.session.url} (reviewer)`);
+		expect(forNewcomer).toContain(t!.runtime.userUrl);
+
+		const originalText = await textOfMessage(first.session.id, joinedMessageId);
+		const forOriginal = originalText.split("\n").find((line) => line.startsWith("Participants: ")) ?? "";
+		expect(forOriginal).toContain(`${first.session.url} (reviewer, you)`);
+		expect(forOriginal).toContain(other.session.url);
 	});
 
 	it("DLV-03 delivery to a session marks the message read for it", async () => {
