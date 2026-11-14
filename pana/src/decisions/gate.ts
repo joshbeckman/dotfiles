@@ -29,13 +29,21 @@ export const WAKE_QUESTION = "delivery_needs_action";
  */
 export const WAKE_GATE_THRESHOLD = 0.15;
 
+/**
+ * The question, in the wording that measured best against a labeled corpus of this domain's
+ * session mail (`pana/docs/wake-gate.md`): seven wordings, two runs each, 103 hand-labeled
+ * deliveries. It asks for a request, question, assignment, blocker, or decision to follow
+ * *wherever* it appears, because an ask buried in a status report was the old wording's miss, and
+ * it answers no only for unrequested reports and courtesy, so an answer the recipient asked for
+ * still wakes it.
+ */
 const QUESTION: DecisionQuestions[string] = {
 	type: "noul",
 	instructions:
-		"Does the receiving session need to act on this message? Answer yes only when the message asks it to do, answer, decide, fix, review, or otherwise produce something. Acknowledgments, agreements, thanks, sign-offs, and messages that only inform the reader for its information need no action, and answer no.",
+		"Does the receiving session need to act on this message? Answer yes when the message contains a request, question, assignment, blocker, or decision the recipient must follow, wherever it appears in the message. Answer no for answers or reports the recipient did not ask for, and for acknowledgments, agreements, thanks, and sign-offs.",
 	criteria: {
-		true: "The message asks the recipient to do something, asks it a question it must answer, or reports something it must respond to or decide.",
-		false: "The message is an acknowledgment, agreement, thanks, sign-off, status note, or other information that needs nothing from the recipient.",
+		true: "The message contains a request, question, assignment, blocker, or decision the recipient must follow, wherever it appears.",
+		false: "The message is an unrequested report or courtesy: thanks, agreement, a sign-off, or status nobody asked for.",
 	},
 };
 
