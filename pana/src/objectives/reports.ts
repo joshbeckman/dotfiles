@@ -13,7 +13,7 @@ import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
-import { announce } from "../threads/announce.ts";
+import { announce, type AnnouncedDelivery } from "../threads/announce.ts";
 import { currentMessage, respondIn, type MessageView, type ThreadView } from "../threads/store.ts";
 import { loadObjective, objectiveId } from "./state.ts";
 
@@ -60,7 +60,7 @@ export async function reportObjective(
 		});
 	}
 
-	const recipients: string[] = [];
+	const recipients: AnnouncedDelivery[] = [];
 	const now = runtime.clock.now();
 	const result = await runtime.db.atomically(async (tx) => {
 		const posted = await respondIn(tx, runtime, caller, threadId, { body: input.body }, recipients);

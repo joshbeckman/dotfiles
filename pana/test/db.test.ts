@@ -53,6 +53,8 @@ const PANA_TABLES = [
 	"session_batches",
 	// Migration 22: the wake gate's answer per delivery (DEC-09).
 	"delivery_wake_decisions",
+	// Migration 23: the push gate's answer per delivery (PSH-10).
+	"delivery_push_decisions",
 ];
 
 const opened: TestPanad[] = [];

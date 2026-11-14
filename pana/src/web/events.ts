@@ -105,6 +105,34 @@ export function subscriberCount(runtime: Runtime): number {
 }
 
 /**
+ * Stream an event to every open window it is visible to, and return the enriched event (it carries
+ * `at`). The fan-out is unconditional: a window is the cheapest way to tell the user something, and
+ * the push gate never touches it.
+ */
+export function streamEvent(runtime: Runtime, event: WebEvent): WebEvent {
+	const enriched: WebEvent = { ...event, at: event.at ?? runtime.clock.now() };
+	for (const subscriber of hub(runtime)) {
+		if (visibleTo(subscriber.caller, enriched)) subscriber.send(enriched);
+	}
+	return enriched;
+}
+
+/**
+ * Push one event to the user's devices when it is a delivery or notice addressed to them
+ * (PSH-03). A caller that has already streamed the event calls this itself, which is what lets the
+ * push gate stand between the two (PSH-06).
+ */
+export async function pushEvent(
+	runtime: Runtime,
+	event: WebEvent,
+	onPushError: (error: unknown) => void = () => {},
+): Promise<SendSummary | undefined> {
+	if (event.to !== runtime.userUrl) return undefined;
+	if (event.kind !== "delivery" && event.kind !== "notice") return undefined;
+	return pushToParticipant(runtime, runtime.config.user, messageFor(event), (error) => onPushError(error));
+}
+
+/**
  * Stream an event to every open window it is visible to, and push it when it is a delivery or
  * notice addressed to the user (PSH-03). Callers may ignore the promise; awaiting it makes push
  * delivery observable in tests.
@@ -114,12 +142,5 @@ export async function publish(
 	event: WebEvent,
 	onPushError: (error: unknown) => void = () => {},
 ): Promise<SendSummary | undefined> {
-	const at = event.at ?? runtime.clock.now();
-	const enriched: WebEvent = { ...event, at };
-	for (const subscriber of hub(runtime)) {
-		if (visibleTo(subscriber.caller, enriched)) subscriber.send(enriched);
-	}
-	if (event.to !== runtime.userUrl) return undefined;
-	if (event.kind !== "delivery" && event.kind !== "notice") return undefined;
-	return pushToParticipant(runtime, runtime.config.user, messageFor(enriched), (error) => onPushError(error));
+	return pushEvent(runtime, streamEvent(runtime, event), onPushError);
 }
