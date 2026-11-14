@@ -12,12 +12,14 @@
 //   rendered delivery the wake gate reads, and silence below `PUSH_GATE_THRESHOLD`. A skipped push
 //   is silence and nothing else. The inbox entry and its unread state are already committed.
 //
-// Never gated: a message from the user, an objective escalation (a domain delivery, the one notice
-// that holds work until he answers), and a delivery that already has an answer recorded, so a
-// retried delivery neither asks twice nor buzzes twice. Positional mail from the domain (scheduled
-// wake and check notices) is gated: 104 of them arrived in the measured three weeks, none was read
-// within the hour, and the question scores every one of them below the threshold
-// (`docs/push-gate.md`).
+// Never gated: a message from the user, a domain delivery (an objective escalation, which holds work
+// until he answers), a delivery that already has an answer recorded (so a retry neither asks twice
+// nor buzzes twice), and every notice. A notice is not chatter: `postNotice` carries a session's
+// failed run, a session stopped for blowing its budget, the daily budget stop that halts every run
+// until tomorrow, and objective metric-check failures. Six notice texts arrived in the measured
+// window and the question scored all six low, but they read as reports because they are, and a
+// pooled score over six samples cannot be the reason a budget stop arrives quietly. `docs/push-gate.md`
+// records what evidence would close that question.
 
 import { planPushGate, type PushGatePlan } from "../decisions/push.ts";
 import { logGateDecision } from "../decisions/log.ts";
@@ -138,14 +140,17 @@ async function decidePush(
 }
 
 /**
- * Which kinds of mail the gate may skip. The user's own mail never reaches him as a delivery, and a
- * domain `delivery` is an objective escalation (OBJ-33), whose whole purpose is to reach him while
- * it holds the work. Everything else is ordinary mail.
+ * Which mail the gate may skip: a session's message to the user, and nothing else.
+ *
+ * Not a notice, because a notice carries a failed run, a budget stop, or a metric-check failure,
+ * and none of those may arrive silently (PSH-08). Not a domain `delivery`, because that is an
+ * objective escalation (OBJ-33), whose whole purpose is to reach him while it holds the work. Not
+ * the user's own mail, which never reaches him as a delivery in the first place.
  */
 function gateable(runtime: Runtime, kind: "delivery" | "notice", result: ThreadResult): boolean {
 	if (!runtime.config.decisionModel) return false;
-	if (result.message.sender.kind === "user") return false;
-	if (kind === "delivery" && result.message.sender.kind === "domain") return false;
+	if (kind === "notice") return false;
+	if (result.message.sender.kind !== "session") return false;
 	return true;
 }
 

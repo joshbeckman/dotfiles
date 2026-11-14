@@ -225,20 +225,21 @@ describe("PSH-08 what the gate never touches", () => {
 		expect(asked.calls).toBe(0);
 	});
 
-	it("PSH-08 a domain notice is gated on the measured evidence", async () => {
+	it("PSH-08 a notice always pushes and asks nothing", async () => {
 		await start({ decisionModel: "faux/rune" });
 		await subscribe();
 		const sent = pushes();
-		const asked = answer(PUSH_GATE_THRESHOLD / 2);
+		const asked = answer(0);
 		sent.length = 0;
 
-		const notice = await postNotice(t!.runtime, { body: "Scheduled wake pana://beacon.joshbeckman.org/schedules/x check failed" });
-		await t!.clock.settle();
-		await sessionRuntime(t!.runtime).idle();
+		// `postNotice` carries a failed run, a budget stop, and a metric-check failure: none of
+		// those may arrive silently, whatever the decision model would answer.
+		const notice = await postNotice(t!.runtime, { body: "Session pana://beacon.joshbeckman.org/sessions/x failed (budget). Send it a message to try again." });
+		await until(() => sent.length > 0, "the notice push");
 
-		expect(asked.calls).toBeGreaterThan(0);
-		expect(sent).toEqual([]);
-		expect(pushLines(notice.message.id)[0]).toMatchObject({ decision: "skip" });
+		expect(sent).toHaveLength(1);
+		expect(asked.calls).toBe(0);
+		expect(pushLines(notice.message.id)).toEqual([]);
 	});
 
 	it("PSH-08 a retried delivery reuses the recorded answer instead of asking again", async () => {

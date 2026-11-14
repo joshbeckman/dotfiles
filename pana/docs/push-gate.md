@@ -32,11 +32,12 @@ the body. The frame is not decoration; it measurably changed the wake gate's ans
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | all | 816 | 4.5 min | 15.5 h | 46% | 57% | 67% | 8% |
 | from a session | 810 | 4.2 min | 12 h | 47% | 57% | 67% | 8% |
-| from the domain | 6 | 2.5 days | 3.0 days | 0% | 0% | 0% | 0% |
+| a domain notice | 6 | 2.5 days | 3.0 days | 0% | 0% | 0% | 0% |
 
 That is the cost of the status quo: for 33% of what pana pushes, Josh does not look for an hour;
-for 8% he never looks at all. The domain's notices are the clearest case: 104 arrived, not one was
-read within the hour, and the median was 2.9 days.
+for 8% he never looks at all. The domain rows are notices, not session mail: 104 arrived, not one
+was read within the hour, and the median was 2.9 days. They still push (see the open question
+below).
 
 ## Why read time cannot be the label
 
@@ -155,14 +156,19 @@ instrument; unset `decisionModel`.
 - **No time of day.** The state carries no timestamp, so a message delivered at 03:00 is judged as
   if Josh were awake. Notices that arrive overnight are the largest single block of misses waiting
   to happen; the audit cron looks for exactly that (a kept push he read hours later).
+- **An objective escalation has no measured example.** It is a domain *delivery*, so the sender
+  rule keeps its push whatever the question says. That rule is a judgement, not a measurement.
 - **Presence is invisible to the gate.** The best predictor in the data is not the text at all: it
   is whether he already had a window open. Skipping pushes for an open window was rejected because
   a suspended iOS app keeps a dead SSE connection that looks open, and that failure mode is Josh
   missing everything.
-- **The domain's notices are gated on one shape.** All 6 unique domain texts scored below 0.15,
-  which is why notices lost their unconditional push. An objective escalation is a domain
-  *delivery* and is never gated, so no measured example covers it: docs, sample sizes, and a
-  corpus with no escalation in it are what this rests on.
+- **Whether notices may ever be gated is open.** The 6 unique notice texts all scored below 0.15,
+  and their latency says nobody looked for hours. That is not enough to silence them: `postNotice`
+  carries a session's failed run, a session stopped for its budget, the daily budget stop that
+  halts every run until tomorrow, and objective metric-check failures. They read as reports because
+  they are reports, and a pooled score over six samples cannot justify a budget stop arriving
+  quietly. They push today. Closing this needs the notice shapes collected separately and labeled
+  by whether they would be wanted at 03:00, not one pooled threshold over all of them.
 
 ## Re-running it
 
