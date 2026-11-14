@@ -638,6 +638,20 @@ export const MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX IF NOT EXISTS session_batches_batch ON session_batches(batch);
 		`,
 	},
+	{
+		version: 22,
+		name: "delivery wake decisions",
+		// DEC-09: the wake gate's answer belongs to one delivery id, so a retry reuses it rather
+		// than asking the decision model again. A table rather than a `deliveries` column, because
+		// migrations rerun and `ALTER TABLE ADD COLUMN` cannot be applied twice (DB-03).
+		sql: `
+			CREATE TABLE IF NOT EXISTS delivery_wake_decisions (
+				delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),
+				probability REAL NOT NULL,
+				decided_at  INTEGER NOT NULL
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

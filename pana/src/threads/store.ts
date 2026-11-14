@@ -13,6 +13,8 @@ import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import { decodeCursor, pageOf } from "../api/pagination.ts";
+import { planWakeGate, type WakeGatePlan } from "../decisions/gate.ts";
+import { logGateDecision } from "../decisions/log.ts";
 import { wakeRequestId } from "../db/outbox.ts";
 import { isUlid, parseRef, RefError } from "../ids/index.ts";
 import {
@@ -31,6 +33,7 @@ import { nextWakes, type NextWake } from "../schedules/live.ts";
 import { announce } from "./announce.ts";
 import { summarizeChoices } from "./choices.ts";
 import { deliveryHooks } from "./delivery.ts";
+import { attachmentPaths, deliveryText } from "./render.ts";
 import { lastChanges, moveUnread, noteRead, noteUnread, unreadTotal as unreadTotalFor } from "./unread.ts";
 
 export type ParticipantKind = "user" | "session" | "domain";
@@ -449,6 +452,14 @@ export async function currentMessage(tx: SqliteExecutor, messageId: string): Pro
 
 // --- Append and deliver --------------------------------------------------------
 
+/** One gated delivery, collected for the caller to log after the transaction commits (DEC-08). */
+export interface GateDelivery {
+	deliveryId: string;
+	recipientId: string;
+	probability: number;
+	wake: boolean;
+}
+
 interface AppendOptions {
 	messageId: string;
 	threadId: string;
@@ -457,6 +468,10 @@ interface AppendOptions {
 	now: number;
 	/** Collects the URL of every recipient, for `announce` after the transaction commits. */
 	recipients?: string[];
+	/** DEC-04: the wake gate's answer per recipient. Missing means every wakeable session wakes. */
+	gate?: WakeGatePlan;
+	/** Collects each gated delivery, so the caller logs one line per decision after COMMIT. */
+	decisions?: GateDelivery[];
 }
 
 /**
@@ -492,8 +507,9 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 	const hooks = deliveryHooks(runtime);
 	for (const recipient of recipients) {
 		const deliveryId = runtime.newId();
+		const decided = recipient.kind === "session" ? options.gate?.get(recipient.id) : undefined;
 		const requestId =
-			recipient.kind === "session" && recipient.conversation_id !== null && wakeable(recipient.state)
+			recipient.kind === "session" && recipient.conversation_id !== null && wakeable(recipient.state, decided)
 				? wakeRequestId(deliveryId)
 				: null;
 		await tx.run(
@@ -505,6 +521,16 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 			options.now,
 			requestId,
 		);
+		if (decided) {
+			// DEC-09: the answer belongs to this delivery id, so a retry reuses it instead of asking again.
+			await tx.run(
+				"INSERT INTO delivery_wake_decisions (delivery_id, probability, decided_at) VALUES (?, ?, ?)",
+				deliveryId,
+				decided.probability,
+				options.now,
+			);
+			options.decisions?.push({ deliveryId, recipientId: recipient.id, ...decided });
+		}
 		// REF-06: a new delivery is unread, in whichever bucket the thread is in now; the
 		// unarchive below moves it if this thread was archived.
 		await noteUnread(tx, recipient.id, options.threadId);
@@ -532,9 +558,12 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 
 /**
  * A stopped or archived session queues mail but does not wake (DLV-06). Everything else wakes,
- * as long as it has a pi-durable conversation to submit to.
+ * as long as it has a pi-durable conversation to submit to and the wake gate did not answer "no
+ * action" (DEC-04). A delivery the gate skipped keeps the same end state as mail to a stopped
+ * session: queued, unread, and unwoken, so `deliverHeld` hands it over on a real wake or resume.
  */
-function wakeable(state: string | null): boolean {
+function wakeable(state: string | null, decided?: { wake: boolean }): boolean {
+	if (decided && !decided.wake) return false;
 	return state !== null && state !== "stopped" && state !== "archived";
 }
 
@@ -604,9 +633,76 @@ export async function createThreadIn(
 export async function respond(runtime: Runtime, caller: Caller, threadId: string, input: RespondInput): Promise<ThreadResult> {
 	const after = messageRefId(runtime, input.after);
 	const recipients: string[] = [];
-	const result = await runtime.db.atomically((tx) => respondIn(tx, runtime, caller, threadId, { ...input, after }, recipients));
+	// DEC-03, DEC-07: the gate asks the decision model outside the transaction, before the message
+	// exists. The message ID is chosen here so the gate judges the same URL the wake will render.
+	const messageId = runtime.newId();
+	const gate = await gateResponse(runtime, caller, threadId, input, messageId);
+	const decisions: GateDelivery[] = [];
+	const result = await runtime.db.atomically((tx) =>
+		respondIn(tx, runtime, caller, threadId, { ...input, after }, recipients, { messageId, gate, decisions }),
+	);
+	// DEC-08: one line per decision, after the message and its deliveries committed.
+	for (const decision of decisions) {
+		logGateDecision(runtime, {
+			event: "wake.gate",
+			messageId,
+			deliveryId: decision.deliveryId,
+			recipientId: decision.recipientId,
+			probability: decision.probability,
+			decision: decision.wake ? "wake" : "skip",
+		});
+	}
 	announce(runtime, "delivery", result, recipients);
 	return result;
+}
+
+/**
+ * The wake gate's input for one response (DEC-03): the rendered delivery and the wakeable session
+ * recipients known before the append. Returns `undefined` to wake everyone.
+ *
+ * It reads outside the transaction on purpose: the decision is a network call, and a write
+ * transaction must never wait on one. A recipient added by `--cc` inside the transaction is not in
+ * the plan, so it wakes as it always has. A message from the user or the domain is never gated, and
+ * neither is a delivery to an objective's lead.
+ */
+async function gateResponse(
+	runtime: Runtime,
+	caller: Caller,
+	threadId: string,
+	input: RespondInput,
+	messageId: string,
+): Promise<WakeGatePlan | undefined> {
+	if (!runtime.config.decisionModel || caller.kind !== "session") return undefined;
+	if (typeof input.body !== "string" || input.body.trim().length === 0) return undefined;
+	const thread = await runtime.db.get<{ subject: string | null }>("SELECT subject FROM threads WHERE id = ?", threadId);
+	if (!thread) return undefined;
+	const rows = await runtime.db.all<{ id: string; state: string | null; conversation_id: number | null }>(
+		`SELECT tp.participant_id AS id, s.state AS state, s.conversation_id AS conversation_id
+		   FROM thread_participants tp
+		   JOIN sessions s ON s.id = tp.participant_id
+		  WHERE tp.thread_id = ? AND tp.participant_id <> ?
+		    -- DEC-05: an objective lead's wake carries its briefing (OBJ-32), so it is never gated.
+		    AND NOT EXISTS (SELECT 1 FROM objectives o WHERE o.lead_id = s.id)`,
+		threadId,
+		caller.id,
+	);
+	const recipients = rows
+		.filter((row) => row.conversation_id !== null && row.state !== null && row.state !== "stopped" && row.state !== "archived")
+		.map((row) => row.id);
+	if (recipients.length === 0) return undefined;
+	const attachments = await attachmentPaths(runtime.db, runtime, input.body);
+	return planWakeGate(
+		runtime,
+		deliveryText({
+			senderUrl: caller.url,
+			threadUrl: runtime.url({ kind: "thread", id: threadId }),
+			messageUrl: runtime.url({ kind: "message", id: messageId, thread: threadId }),
+			subject: thread.subject,
+			body: input.body,
+			attachments,
+		}),
+		recipients,
+	);
 }
 
 /**
@@ -623,6 +719,7 @@ export async function respondIn(
 	threadId: string,
 	input: RespondInput,
 	recipients: string[] = [],
+	extra: { messageId?: string; gate?: WakeGatePlan; decisions?: GateDelivery[] } = {},
 ): Promise<ThreadResult> {
 	const afterId = input.after === undefined || input.after === null || input.after === "" ? undefined : messageRefId(runtime, input.after);
 	const body = messageBody(input.body);
@@ -658,7 +755,7 @@ export async function respondIn(
 		}
 	}
 
-	const messageId = runtime.newId();
+	const messageId = extra.messageId ?? runtime.newId();
 	for (const raw of cc) {
 		const added = await participantFor(tx, runtime, now, raw);
 		await tx.run(
@@ -670,7 +767,11 @@ export async function respondIn(
 		);
 	}
 
-	const message = await appendMessage(tx, runtime, { messageId, threadId, sender, body, now, recipients });
+	const message = await appendMessage(tx, runtime, {
+		messageId, threadId, sender, body, now, recipients,
+		...(extra.gate ? { gate: extra.gate } : {}),
+		...(extra.decisions ? { decisions: extra.decisions } : {}),
+	});
 	return { thread: await threadView(tx, runtime, threadId), message };
 }
 

@@ -361,6 +361,11 @@ export async function main(_argv: string[], options: StartOptions = {}): Promise
 	} else if (!hasModel(models, config.defaultModel)) {
 		console.error(`panad: defaultModel ${config.defaultModel} is not available from the registered providers`);
 	}
+	// DEC-01: the decision model is optional and its provider may not list the model, so only a
+	// missing provider is worth a line; the wake gate fails open either way.
+	if (config.decisionModel !== undefined && !models.getProvider(config.decisionModel.split("/")[0] ?? "")) {
+		console.error(`panad: decisionModel ${config.decisionModel} names no registered provider; the wake gate stays off`);
+	}
 	// WEB-01: open this URL to authorize a window. The token sits in the fragment, so it is
 	// never sent to the server or written to an access log; it goes to a 0600 file instead of
 	// stderr, which launchd and journald keep in a durable log that other users can read.

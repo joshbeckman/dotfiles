@@ -8,11 +8,11 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { ConversationId } from "@earendil-works/pi-durable";
-import { isAbsolute, join } from "node:path";
 import type { PendingWake, WakeSubmitter } from "../db/outbox.ts";
 import { leadRunInput } from "../objectives/brief.ts";
 import { firstLineSubject } from "../search/subjects.ts";
 import type { Runtime } from "../server/runtime.ts";
+import { attachmentPaths, deliveryText, threadRoster } from "../threads/render.ts";
 import { setSessionState } from "./state.ts";
 
 export const MESSAGE_ENTRY_KIND = "pana.message";
@@ -56,58 +56,6 @@ async function currentBody(db: SqliteExecutor, row: MessageRow): Promise<string 
 	return row.body;
 }
 
-/** `pana://<domain>/files/<id>/<name>` references in a body, resolved to their paths on disk. */
-async function attachmentPaths(db: SqliteExecutor, runtime: Runtime, body: string): Promise<string[]> {
-	const prefix = `pana://${runtime.config.domain}/files/`;
-	const paths: string[] = [];
-	const seen = new Set<string>();
-	const pattern = new RegExp(`${escape(prefix)}([0-9A-HJKMNP-TV-Z]{26})/`, "g");
-	for (const match of body.matchAll(pattern)) {
-		const id = match[1]!;
-		if (seen.has(id)) continue;
-		seen.add(id);
-		const file = await db.get<{ path: string }>("SELECT path FROM files WHERE id = ?", id);
-		// WP2 records the path relative to the state directory (FIL-01).
-		if (file) paths.push(isAbsolute(file.path) ? file.path : join(runtime.paths.dir, file.path));
-	}
-	return paths;
-}
-
-/**
- * Who is in the thread, named only when that is news: in the thread's first message, and in any
- * message that added a participant (a `--cc` join, THR-08). Repeating it on every message would
- * spend a line per delivery on a fact the session already read.
- */
-async function threadRoster(db: SqliteExecutor, row: MessageRow, recipientId: string): Promise<string | undefined> {
-	if (row.seq !== 1) {
-		const joined = await db.get(
-			"SELECT 1 FROM thread_participants WHERE thread_id = ? AND joined_message_id = ? LIMIT 1",
-			row.thread_id,
-			row.id,
-		);
-		if (!joined) return undefined;
-	}
-	const people = await db.all<{ id: string; url: string; role: string }>(
-		`SELECT p.id, p.url, COALESCE(r.role, 'participant') AS role
-		   FROM thread_participants tp
-		   JOIN participants p ON p.id = tp.participant_id
-		   LEFT JOIN thread_participant_roles r ON r.thread_id = tp.thread_id AND r.participant_id = tp.participant_id
-		  WHERE tp.thread_id = ? ORDER BY tp.joined_at, p.id`,
-		row.thread_id,
-	);
-	// A declared role rides along (CLI-09): a peer that says "reviewer" tells the others what it does.
-	return people
-		.map((person) => {
-			const marks = [...(person.role === "participant" ? [] : [person.role]), ...(person.id === recipientId ? ["you"] : [])];
-			return marks.length > 0 ? `${person.url} (${marks.join(", ")})` : person.url;
-		})
-		.join(", ");
-}
-
-function escape(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /** Render one delivered message as model input (DLV-02). */
 export async function renderMessage(
 	db: SqliteExecutor,
@@ -124,24 +72,20 @@ export async function renderMessage(
 	);
 	if (!row) throw new Error(`message ${wake.messageId} is missing`);
 	const body = await currentBody(db, row);
-	const threadUrl = runtime.url({ kind: "thread", id: row.thread_id });
-	const messageUrl = runtime.url({ kind: "message", id: row.id, thread: row.thread_id });
-	const lines = ["New message.", `From: ${row.sender_url}`, `Thread: ${threadUrl}`];
-	const roster = await threadRoster(db, row, wake.recipientId);
-	if (roster !== undefined) lines.push(`Participants: ${roster}`);
-	lines.push(
-		`Message: ${messageUrl}`,
-		// A thread's first message is delivered before WP2 records its subject (SUB-01), which is that message's first line.
-		`Subject: ${row.subject ?? (row.seq === 1 ? firstLineSubject(row.body) : "")}`,
-	);
 	const paths = body === undefined ? [] : await attachmentPaths(db, runtime, body);
-	if (paths.length > 0) {
-		lines.push("Attachments:");
-		for (const path of paths) lines.push(`- ${path}`);
-	}
-	lines.push("", body ?? "[redacted]");
 	return {
-		content: lines.join("\n"),
+		content: deliveryText({
+			senderUrl: row.sender_url,
+			threadUrl: runtime.url({ kind: "thread", id: row.thread_id }),
+			// CLI-09: the roster rides along on the thread's first message and on a message that adds
+			// a participant, with each declared role beside its URL.
+			participants: await threadRoster(db, row, wake.recipientId),
+			messageUrl: runtime.url({ kind: "message", id: row.id, thread: row.thread_id }),
+			// A thread's first message is delivered before WP2 records its subject (SUB-01), which is that message's first line.
+			subject: row.subject ?? (row.seq === 1 ? firstLineSubject(row.body) : ""),
+			body: body ?? "[redacted]",
+			attachments: paths,
+		}),
 		senderKind: row.sender_kind,
 		data: {
 			deliveryId: wake.deliveryId,

@@ -112,6 +112,8 @@ export interface Config {
 	user: string;
 	timezone: string;
 	subjectModel?: string;
+	/** DEC-01: a System One model for probability-only questions. Unset turns the wake gate off. */
+	decisionModel?: string;
 	defaultModel?: string;
 	spawnDepth: number;
 	budget: Budget;
@@ -192,7 +194,7 @@ export function parseConfig(raw: unknown): Config {
 			throw new ConfigError(`config.json ${key} must be an object`, 2);
 		}
 	}
-	for (const key of ["timezone", "subjectModel", "defaultModel"]) {
+	for (const key of ["timezone", "subjectModel", "decisionModel", "defaultModel"]) {
 		if (obj[key] !== undefined && (typeof obj[key] !== "string" || !obj[key])) {
 			throw new ConfigError(`config.json ${key} must be a nonempty string`, 2);
 		}
@@ -223,6 +225,7 @@ export function parseConfig(raw: unknown): Config {
 		user: obj.user,
 		timezone: typeof obj.timezone === "string" ? obj.timezone : systemTimezone(),
 		subjectModel: typeof obj.subjectModel === "string" ? obj.subjectModel : undefined,
+		decisionModel: typeof obj.decisionModel === "string" ? obj.decisionModel : undefined,
 		defaultModel: typeof obj.defaultModel === "string" ? obj.defaultModel : undefined,
 		spawnDepth: nonnegative(obj.spawnDepth, "spawnDepth", true) ?? DEFAULTS.spawnDepth,
 		budget: {

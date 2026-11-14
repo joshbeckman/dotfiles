@@ -64,6 +64,7 @@ validation permits fractional numbers.
 | `user` | Required | Nonempty string. The local user's name/address component. Immutable in Settings. |
 | `timezone` | System time zone, falling back to `UTC` | Nonempty time-zone string accepted by `Intl.DateTimeFormat`, such as `America/Chicago` or `UTC`. Used for cron schedules and local-day accounting. |
 | `subjectModel` | Unset | Nonempty model reference string. Enables background thread/schedule naming and subject regeneration. When unset, initial names use the fallback first line. Configuration validation does not check provider availability. |
+| `decisionModel` | Unset | Nonempty model reference string naming a System One model, such as `fireworks/accounts/fireworks/models/rune`. Enables the wake gate, which asks one yes/no probability question before waking a session for a message from another session and skips the wake when an acknowledgment or FYI clearly needs no action. Unset turns the feature off and every wake happens as before. The endpoint is the provider's `/systemone`, and the key comes from panad's environment (for `fireworks`, `FIREWORKS_API_KEY`). Validation checks the string only, not provider availability. A model that cannot answer, times out (about 2 seconds), or is missing means the wake happens as before. |
 | `defaultModel` | Unset | Nonempty model reference string used when creating a session without an explicit or profile model. Typical form: `provider/model-id`. A usable model and its provider credentials must be available; string validation alone does not verify that. |
 | `spawnDepth` | `3` | Nonnegative integer. Caps recursive session creation: a parent at the depth limit cannot create another child. `0` prevents sessions from spawning children. |
 
@@ -197,7 +198,7 @@ troubleshooting guide](worktree-adapters.md) for creation and ownership checks.
 ## Example with defaults made explicit
 
 The following is valid without model configuration; sessions still need an explicit or
-profile model. Optional `subjectModel`, `defaultModel`, and `scratch.maxTotalMB` are
+profile model. Optional `subjectModel`, `decisionModel`, `defaultModel`, and `scratch.maxTotalMB` are
 omitted rather than set to `null`.
 
 ```json
