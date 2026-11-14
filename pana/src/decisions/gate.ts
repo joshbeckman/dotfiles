@@ -31,17 +31,19 @@ export const WAKE_GATE_THRESHOLD = 0.15;
 
 /**
  * The question, in the wording that measured best against a labeled corpus of this domain's
- * session mail (see `pana/docs/wake-gate.md`): it asks for a request, question, assignment, or
- * decision to follow *anywhere* in the message, including inside a status report, because an ask
- * buried mid-paragraph was the old wording's commonest miss. Courtesy still answers no.
+ * session mail (`pana/docs/wake-gate.md`): seven wordings, two runs each, 103 hand-labeled
+ * deliveries. It asks for a request, question, assignment, blocker, or decision to follow
+ * *wherever* it appears, because an ask buried in a status report was the old wording's miss, and
+ * it answers no only for unrequested reports and courtesy, so an answer the recipient asked for
+ * still wakes it.
  */
 const QUESTION: DecisionQuestions[string] = {
 	type: "noul",
 	instructions:
-		"Does the receiving session need to act on this message? Answer yes when it asks the session to do, answer, decide, fix, review, rebase, merge, or produce something; when it assigns work; when it states an interface or decision the session must follow; or when it asks a question. Status reports that request nothing, acknowledgments, agreements, thanks, and sign-offs need no action.",
+		"Does the receiving session need to act on this message? Answer yes when the message contains a request, question, assignment, blocker, or decision the recipient must follow, wherever it appears in the message. Answer no for answers or reports the recipient did not ask for, and for acknowledgments, agreements, thanks, and sign-offs.",
 	criteria: {
-		true: "Somewhere in the message is a request, a question, an assignment, or a decision the recipient must follow, even when the message is mostly a status report.",
-		false: "The message reports status, agrees, thanks, or signs off, and asks the recipient for nothing.",
+		true: "The message contains a request, question, assignment, blocker, or decision the recipient must follow, wherever it appears.",
+		false: "The message is an unrequested report or courtesy: thanks, agreement, a sign-off, or status nobody asked for.",
 	},
 };
 
