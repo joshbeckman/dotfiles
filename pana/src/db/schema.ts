@@ -652,6 +652,21 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 23,
+		name: "delivery push decisions",
+		// PSH-10: the push gate's answer belongs to one delivery id, so a retried delivery reuses it
+		// rather than asking the decision model again, and no second buzz follows the first. A table
+		// rather than a `deliveries` column, because migrations rerun (DB-03).
+		sql: `
+			CREATE TABLE IF NOT EXISTS delivery_push_decisions (
+				delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),
+				probability REAL NOT NULL,
+				push        INTEGER NOT NULL,
+				decided_at  INTEGER NOT NULL
+			);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

@@ -30,7 +30,7 @@ import { sessionStates, workingSessions, type SessionState, type WorkingSession 
 import { liveActivities } from "../sessions/live.ts";
 import { publish } from "../web/events.ts";
 import { nextWakes, type NextWake } from "../schedules/live.ts";
-import { announce } from "./announce.ts";
+import { announce, type AnnouncedDelivery } from "./announce.ts";
 import { summarizeChoices } from "./choices.ts";
 import { deliveryHooks } from "./delivery.ts";
 import { attachmentPaths, deliveryText } from "./render.ts";
@@ -466,8 +466,8 @@ interface AppendOptions {
 	sender: ParticipantRecord;
 	body: string;
 	now: number;
-	/** Collects the URL of every recipient, for `announce` after the transaction commits. */
-	recipients?: string[];
+	/** Collects every delivery and its recipient's URL, for `announce` after the commit (PSH-06). */
+	recipients?: AnnouncedDelivery[];
 	/** DEC-04: the wake gate's answer per recipient. Missing means every wakeable session wakes. */
 	gate?: WakeGatePlan;
 	/** Collects each gated delivery, so the caller logs one line per decision after COMMIT. */
@@ -534,7 +534,7 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 		// REF-06: a new delivery is unread, in whichever bucket the thread is in now; the
 		// unarchive below moves it if this thread was archived.
 		await noteUnread(tx, recipient.id, options.threadId);
-		options.recipients?.push(recipient.url);
+		options.recipients?.push({ deliveryId, url: recipient.url });
 		// REF-04: new mail shows the thread again for the participant who receives it.
 		await setThreadArchived(tx, options.threadId, recipient.id, false, options.now);
 		await hooks.onDelivered(
@@ -570,7 +570,7 @@ function wakeable(state: string | null, decided?: { wake: boolean }): boolean {
 // --- Threads -------------------------------------------------------------------
 
 export async function createThread(runtime: Runtime, caller: Caller, input: CreateThreadInput): Promise<ThreadResult> {
-	const recipients: string[] = [];
+	const recipients: AnnouncedDelivery[] = [];
 	const result = await runtime.db.atomically((tx) => createThreadIn(tx, runtime, caller, input, recipients));
 	announce(runtime, "delivery", result, recipients);
 	// SUB-02: the model job runs in the background, after the create transaction commits.
@@ -589,7 +589,7 @@ export async function createThreadIn(
 	runtime: Runtime,
 	caller: Caller,
 	input: CreateThreadInput,
-	recipients: string[] = [],
+	recipients: AnnouncedDelivery[] = [],
 ): Promise<ThreadResult> {
 	const body = messageBody(input.body);
 	const addresses = addressList(input.to, "recipients");
@@ -632,7 +632,7 @@ export async function createThreadIn(
  */
 export async function respond(runtime: Runtime, caller: Caller, threadId: string, input: RespondInput): Promise<ThreadResult> {
 	const after = messageRefId(runtime, input.after);
-	const recipients: string[] = [];
+	const recipients: AnnouncedDelivery[] = [];
 	// DEC-03, DEC-07: the gate asks the decision model outside the transaction, before the message
 	// exists. The message ID is chosen here so the gate judges the same URL the wake will render.
 	const messageId = runtime.newId();
@@ -719,7 +719,7 @@ export async function respondIn(
 	caller: Caller,
 	threadId: string,
 	input: RespondInput,
-	recipients: string[] = [],
+	recipients: AnnouncedDelivery[] = [],
 	extra: { messageId?: string; gate?: WakeGatePlan; decisions?: GateDelivery[] } = {},
 ): Promise<ThreadResult> {
 	const afterId = input.after === undefined || input.after === null || input.after === "" ? undefined : messageRefId(runtime, input.after);
@@ -1433,7 +1433,7 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 	const body = messageBody(input.body);
 	const addresses = addressList(input.to, "recipients");
 	const now = runtime.clock.now();
-	const delivered: string[] = [];
+	const delivered: AnnouncedDelivery[] = [];
 
 	const result = await runtime.db.atomically(async (tx) => {
 		const sender = await ensureDomain(tx, runtime, now);
@@ -1478,16 +1478,17 @@ export async function postNotice(runtime: Runtime, input: NoticeInput): Promise<
 				now,
 				messageId,
 			);
+			const deliveryId = runtime.newId();
 			await tx.run(
 				"INSERT INTO deliveries (id, message_id, thread_id, recipient_id, created_at) VALUES (?, ?, ?, ?, ?)",
-				runtime.newId(),
+				deliveryId,
 				messageId,
 				threadId,
 				recipient.id,
 				now,
 			);
 			await noteUnread(tx, recipient.id, threadId);
-			delivered.push(recipient.url);
+			delivered.push({ deliveryId, url: recipient.url });
 			// REF-04: a notice is a message too, so it unarchives the thread for its recipient.
 			await setThreadArchived(tx, threadId, recipient.id, false, now);
 		}
@@ -1520,7 +1521,7 @@ export interface ScheduleStatusInput {
 export async function postScheduleStatus(runtime: Runtime, input: ScheduleStatusInput): Promise<ThreadResult> {
 	const body = messageBody(input.body);
 	const now = runtime.clock.now();
-	const delivered: string[] = [];
+	const delivered: AnnouncedDelivery[] = [];
 
 	const result = await runtime.db.atomically(async (tx) => {
 		const sender = await ensureDomain(tx, runtime, now);

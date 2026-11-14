@@ -25,7 +25,7 @@ import type { Runtime } from "../server/runtime.ts";
 import { assertThreadWritable, sessionRuntime } from "../sessions/index.ts";
 import { setSessionState } from "../sessions/state.ts";
 import { ensureScratch } from "../scratch/index.ts";
-import { announce, respondIn, type ThreadResult } from "../threads/index.ts";
+import { announce, respondIn, type AnnouncedDelivery, type ThreadResult } from "../threads/index.ts";
 import { leadBriefing } from "./brief.ts";
 import { leadAgent } from "./launch.ts";
 import { objectBody } from "./schema.ts";
@@ -80,7 +80,7 @@ export async function regenerateLead(runtime: Runtime, caller: Caller, value: st
 	const agent = leadAgent(runtime, before);
 	const leadId = runtime.newId();
 	const cwd = ensureScratch(runtime, leadId);
-	const recipients: string[] = [];
+	const recipients: AnnouncedDelivery[] = [];
 
 	const result: ThreadResult = await runtime.db.atomically(async (tx) => {
 		const objective = await loadObjective(tx, id);

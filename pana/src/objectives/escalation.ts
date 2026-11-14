@@ -18,7 +18,7 @@ import { ApiError } from "../api/errors.ts";
 import type { Caller } from "../api/types.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { parseDuration } from "../schedules/store.ts";
-import { announce, respondIn, type ThreadResult } from "../threads/index.ts";
+import { announce, respondIn, type AnnouncedDelivery, type ThreadResult } from "../threads/index.ts";
 import { charterSections } from "./charter.ts";
 import { objectBody } from "./schema.ts";
 import { loadObjective, objectiveId, objectiveMembers, objectiveRow, personView, recordObjectiveEvent, type ObjectivePersonView } from "./state.ts";
@@ -149,7 +149,7 @@ export async function escalateObjective(
 
 	const timeoutMs = await charterEscalationTimeout(runtime.db, id);
 	const escalationId = runtime.newId();
-	const recipients: string[] = [];
+	const recipients: AnnouncedDelivery[] = [];
 	const result = await runtime.db.atomically(async (tx) => {
 		const current = await loadObjective(tx, id);
 		if (current.thread_id === null) throw new ApiError(409, "not_launched", `objective ${id} has no thread`, { objective: id });

@@ -55,7 +55,7 @@ export {
 	type ThreadResult,
 	type ThreadView,
 } from "./store.ts";
-export { announce } from "./announce.ts";
+export { announce, type AnnouncedDelivery } from "./announce.ts";
 export {
 	choiceProblem,
 	choicesMarkdown,

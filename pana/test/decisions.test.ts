@@ -80,11 +80,20 @@ async function replyAs(threadId: string, sessionId: string, body: string) {
 	return res;
 }
 
+/**
+ * Answer the wake gate with `probability`, and the push gate with 1 so it keeps out of the way. The
+ * counter counts wake questions only: these tests are about the wake gate, and every delivery to
+ * the user now also carries a push question (PSH-06).
+ */
 function answer(probability: number): { calls: number } {
 	const counter = { calls: 0 };
-	setDecisionTransport(t!.runtime, async () => {
-		counter.calls++;
-		return { answers: { [WAKE_QUESTION]: { type: "noul", noul: probability } } };
+	setDecisionTransport(t!.runtime, async (request) => {
+		const answers: Record<string, { type: "noul"; noul: number }> = {};
+		for (const name of Object.keys(request.questions)) {
+			answers[name] = { type: "noul", noul: name === WAKE_QUESTION ? probability : 1 };
+		}
+		if (WAKE_QUESTION in request.questions) counter.calls++;
+		return { answers };
 	});
 	return counter;
 }
@@ -322,8 +331,9 @@ describe("DEC-06 fail open", () => {
 		const b = await session("wait");
 		await addToThread(a, b);
 		let calls = 0;
-		setDecisionTransport(t!.runtime, async () => {
-			calls++;
+		setDecisionTransport(t!.runtime, async (request) => {
+			// Only the wake question counts; the push gate asks about the same delivery (PSH-06).
+			if (WAKE_QUESTION in request.questions) calls++;
 			throw new Error("provider error");
 		});
 

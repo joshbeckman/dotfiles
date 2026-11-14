@@ -11,5 +11,5 @@ export {
 	type LoadedAsset,
 	type StaticAsset,
 } from "./static.ts";
-export { publish, subscriberCount, subscribeEvents, type WebEvent } from "./events.ts";
+export { publish, pushEvent, streamEvent, subscriberCount, subscribeEvents, type WebEvent } from "./events.ts";
 export { handlers } from "./handlers.ts";

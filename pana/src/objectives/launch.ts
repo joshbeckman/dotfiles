@@ -14,7 +14,7 @@ import { scheduleSubject } from "../search/index.ts";
 import { DEFAULT_PROFILE, DEFAULT_THINKING, THINKING_LEVELS, loadProfile, parseModel } from "../sessions/create.ts";
 import type { Runtime } from "../server/runtime.ts";
 import { ensureScratch } from "../scratch/index.ts";
-import { announce } from "../threads/announce.ts";
+import { announce, type AnnouncedDelivery } from "../threads/announce.ts";
 import { createThreadIn } from "../threads/store.ts";
 import { leadBriefing } from "./brief.ts";
 import type { ObjectiveRow } from "./schema.ts";
@@ -55,7 +55,7 @@ export async function launchObjective(runtime: Runtime, caller: Caller, value: s
 	const cwd = ensureScratch(runtime, leadId);
 	const subject = opening.goal.replace(/\s+/g, " ").trim().slice(0, 80);
 
-	const recipients: string[] = [];
+	const recipients: AnnouncedDelivery[] = [];
 	const thread = await runtime.db.atomically(async (tx) => {
 		const objective = await loadObjective(tx, id);
 		if (objective.phase !== "drafting") {
