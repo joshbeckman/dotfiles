@@ -45,7 +45,7 @@ interface CreateBody {
 	session: SessionBody;
 	/** SES-06: every session a count created; `session` is the first. */
 	sessions: SessionBody[];
-	thread: { id: string; url: string; participants: Person[] };
+	thread: { id: string; url: string; subject: string | null; participants: Person[] };
 	message: MessageBody;
 }
 
@@ -237,6 +237,13 @@ describe("session create", () => {
 		await settled(res.session.id);
 		const alice = await t!.client.get<InboxBody>("/inbox?participant=alice");
 		expect(alice.body.deliveries.map((d) => d.body)).toEqual(["ok", "hello"]);
+	});
+
+	it("SES-02 --subject names the new thread, the field the PWA's Compose form sends", async () => {
+		await start({ script: [{ text: "ok" }] });
+		const res = await create({ prompt: "hello", subject: "Compose subject" });
+		expect(res.thread.subject).toBe("Compose subject");
+		await settled(res.session.id);
 	});
 
 	it("SES-03 profile values apply, flags override them, and an unknown profile is a 400", async () => {

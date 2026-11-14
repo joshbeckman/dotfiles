@@ -161,6 +161,14 @@ describe("threads", () => {
 		expect(created.thread.subject).toBe("hello");
 	});
 
+	it("THR-01 thread create without addresses makes a thread whose only participant is the caller", async () => {
+		const t = await start();
+		const created = await createThread(t, []);
+		expect(created.thread.participants.map((p) => p.id)).toEqual([TEST_USER]);
+		expect(created.thread.createdBy.id).toBe(TEST_USER);
+		expect(await count(t, "deliveries")).toBe(0);
+	});
+
 	it("UX-06 participant join order stays stable for same-timestamp joins of older sessions and agrees with inbox", async () => {
 		const t = await start();
 		const older = await seedSession(t);
