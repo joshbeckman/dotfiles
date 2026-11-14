@@ -434,6 +434,10 @@ form {
 	gap: var(--s1);
 	min-width: 0;
 }
+/* SES-06: the compose count is a number, so it keeps a short box. */
+#compose-count {
+	width: 6rem;
+}
 .field-row {
 	display: flex;
 	flex-wrap: wrap;

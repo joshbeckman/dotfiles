@@ -2053,18 +2053,24 @@ async function submitCompose(event) {
 	const body = $("compose-body").value;
 	if (!body.trim()) return status("Write a message first.", true);
 	const subject = $("compose-subject").value.trim();
+	// SES-06: a count above 1 starts that many sessions in the one thread.
+	const count = Number($("compose-count").value || 1);
+	if (!Number.isInteger(count) || count < 1 || count > 10) return status("Sessions must be a whole number from 1 to 10.", true);
 	try {
 		const created = await api("POST", "/sessions", {
 			prompt: body,
 			...(to.length > 0 ? { to } : {}),
 			...(subject ? { subject } : {}),
+			...(count > 1 ? { count } : {}),
 		});
 		const threadId = created?.thread?.id;
 		const sessionId = created?.session?.id;
+		const started = created?.sessions?.length ?? 1;
 		$("compose-to").value = "";
 		$("compose-subject").value = "";
+		$("compose-count").value = "1";
 		$("compose-body").value = "";
-		status("Started a session.");
+		status(started > 1 ? `Started ${started} sessions.` : "Started a session.");
 		location.hash = threadId ? `#/threads/${threadId}` : sessionId ? `#/sessions/${sessionId}` : "#/threads";
 	} catch (error) {
 		fail(error);

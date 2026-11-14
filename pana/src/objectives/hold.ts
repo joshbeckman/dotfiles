@@ -391,7 +391,7 @@ async function noticeForCondition(tx: SqliteExecutor, runtime: Runtime, row: Obj
  * that creates members; the roster bound and the per-run cap answer 402; a paused objective
  * refuses the create for the same reason it refuses a run.
  */
-export async function memberCreateGate(db: SqliteExecutor, runtime: Runtime, objectiveId: string, parentId: string): Promise<{ run: string | null }> {
+export async function memberCreateGate(db: SqliteExecutor, runtime: Runtime, objectiveId: string, parentId: string, count = 1): Promise<{ run: string | null }> {
 	const row = await objectiveRow(db, objectiveId);
 	if (!row) throw ApiError.notFound(`objective ${objectiveId}`);
 	if (row.lead_id !== parentId) {
@@ -404,7 +404,8 @@ export async function memberCreateGate(db: SqliteExecutor, runtime: Runtime, obj
 	}
 	if (row.max_active_members !== null) {
 		const active = await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM sessions WHERE objective_id = ? AND state NOT IN ('stopped', 'archived')", row.id);
-		if ((active?.n ?? 0) + 1 > row.max_active_members) {
+		// SES-06: a create of N sessions asks the roster and the per-run cap for N members.
+		if ((active?.n ?? 0) + count > row.max_active_members) {
 			throw new ApiError(402, "objective_roster_full", `objective ${row.id} already has ${active?.n ?? 0} active members; its limit is ${row.max_active_members}`, {
 				objective: row.id,
 				members: active?.n ?? 0,
@@ -420,7 +421,7 @@ export async function memberCreateGate(db: SqliteExecutor, runtime: Runtime, obj
 		parentId,
 		run ?? "none",
 	);
-	if ((made?.n ?? 0) >= limit) {
+	if ((made?.n ?? 0) + count > limit) {
 		await refuseMemberCreate(runtime, row, parentId, run, limit);
 		throw new ApiError(402, "objective_members_per_run", `objective ${row.id} allows ${limit} member creates in one lead run`, {
 			objective: row.id,

@@ -313,6 +313,9 @@ describe("PWA shell and static assets", () => {
 			expect(html).toContain(`href="${section.route}"`);
 		}
 		expect(html).toContain('id="compose-form"');
+		// SES-06: the New thread screen asks how many sessions to start, in the shell and in the form.
+		expect(html).toContain('id="compose-count"');
+		expect(html).toMatch(/id="compose-count"[^>]*type="number"[^>]*min="1"[^>]*max="10"/);
 		expect(html).toContain('id="reply-form"');
 		expect(html).toContain('id="memory-search"');
 		expect(html).toContain('data-testid="memory-editor"');

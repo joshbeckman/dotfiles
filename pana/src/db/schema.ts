@@ -623,6 +623,21 @@ export const MIGRATIONS: readonly Migration[] = [
 			);
 		`,
 	},
+	{
+		version: 21,
+		name: "session batches",
+		// SES-06: sessions one create started share a batch id, so the thread holds their answers
+		// without mailing them to each other. A table rather than a `sessions` column, because a
+		// column added with ALTER TABLE cannot be added twice and migrations rerun (DB-03).
+		sql: `
+			CREATE TABLE IF NOT EXISTS session_batches (
+				session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+				batch      TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS session_batches_batch ON session_batches(batch);
+		`,
+	},
 ];
 
 /** The highest migration number the code knows how to apply. */

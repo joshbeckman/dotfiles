@@ -213,6 +213,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 - [x] **SES-03** Profile values apply, and flags override them. An unknown profile returns 400.
 - [x] **SES-04** `cwd: "worktree"` creates a session-owned git worktree using the same creation implementation as GUARD-03, from the repo named by `--cwd`. Ordinary repositories use `<state>/worktrees/<ulid>/<repo-name>`; configured adapters use their managed location.
 - [x] **SES-05** A session created by a session records `parent`. Its depth is the parent's plus one.
+- [x] **SES-06** `--count N` (the `count` field on `POST /sessions`) starts N sessions, 1 to 10, in the one thread, each with its own conversation and its own scratch or worktree, and the response carries all of them in `sessions` with the first in `session`. The first message wakes each of them and each answers, and their answers are delivered to each other like any participant's. RPL-02 would otherwise drop an answer that arrived behind a sibling's answer, and RPL-06 stops the session from ever answering that sibling, so an answer that was only passed over by siblings of its own create still posts, at the head. The sessions of one create are recorded in `session_batches`; a create of one records nothing. A count outside 1 to 10 is a 400, and the command refuses it as a usage error. The PWA's New thread screen sends it from a Sessions number box.
 
 ### States
 

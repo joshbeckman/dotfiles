@@ -117,6 +117,7 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				thinking: opt(str({ description: "Thinking level" })),
 				cwd: opt(str({ description: "Working directory" })),
 				profile: opt(str({ description: "Profile name" })),
+				count: opt(str({ description: "Start this many sessions in the one thread, 1 to 10" })),
 				to: opt(arr(str(), { description: "Extra participants on the new thread" })),
 				subject: opt(str({ description: "Thread subject; defaults to the first line of the prompt" })),
 			}),

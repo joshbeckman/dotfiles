@@ -24,6 +24,9 @@ import type { SessionRow } from "./runtime.ts";
 import { setSessionState } from "./state.ts";
 import { addWorktree } from "../worktrees/index.ts";
 import { ensureScratch } from "../scratch/index.ts";
+import { MAX_SESSION_COUNT } from "./limits.ts";
+
+export { MAX_SESSION_COUNT };
 
 export const THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const DEFAULT_PROFILE = "default";
@@ -50,6 +53,21 @@ export interface CreateSessionInput {
 	to?: unknown;
 	/** The thread subject; the PWA's Compose form sends it. Default: the prompt's first line. */
 	subject?: unknown;
+	/** How many sessions to start in the one thread (SES-06). Default 1. */
+	count?: unknown;
+}
+
+/** The session count a create asks for: a whole number from 1 to `MAX_SESSION_COUNT`. */
+function sessionCount(value: unknown): number {
+	if (value === undefined || value === null || value === "") return 1;
+	const count = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : Number.NaN;
+	if (!Number.isInteger(count) || count < 1) {
+		throw ApiError.badRequest("invalid_count", `count must be a whole number of sessions, 1 or more`, { count: String(value) });
+	}
+	if (count > MAX_SESSION_COUNT) {
+		throw ApiError.badRequest("invalid_count", `count must be at most ${MAX_SESSION_COUNT}`, { count, max: MAX_SESSION_COUNT });
+	}
+	return count;
 }
 
 function optionalString(value: unknown, field: string): string | undefined {
@@ -175,7 +193,10 @@ function directory(path: string, field: string): string {
 }
 
 export interface CreatedSession extends ThreadResult {
+	/** The first session the create made; kept for callers that start one. */
 	session: SessionRow;
+	/** Every session the create made, in order, `session` first (SES-06). */
+	sessions: SessionRow[];
 }
 
 /** Without a flag or profile value, sessions think, so the transcript has reasoning to show. */
@@ -185,6 +206,7 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	let prompt = messageBody(input.prompt);
 	const to = addressList(input.to, "recipients");
 	const subject = optionalString(input.subject, "subject");
+	const count = sessionCount(input.count);
 	const profileName = optionalString(input.profile, "profile") ?? DEFAULT_PROFILE;
 	const profile = loadProfile(runtime, profileName);
 
@@ -209,8 +231,9 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 			// OBJ-07: a member of a closed objective accepts no member create.
 			await assertObjectiveOpen(runtime.db, parent.id);
 			// OBJ-13..OBJ-16, OBJ-20, OBJ-21: only the lead creates members, within the roster and
-			// per-run caps, and never for a paused objective.
-			objectiveRun = (await memberCreateGate(runtime.db, runtime, parent.objective_id, parent.id)).run;
+			// per-run caps, and never for a paused objective. A create of N sessions asks the gate
+			// for N members, so a batch cannot slip past either cap.
+			objectiveRun = (await memberCreateGate(runtime.db, runtime, parent.objective_id, parent.id, count)).run;
 			// OBJ-15: a session created for an objective carries the objective URL in its prompt.
 			prompt = `Objective: ${objectiveUrl(runtime, parent.objective_id)}\n\n${prompt}`;
 		}
@@ -234,73 +257,93 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 		prompt = `${prompt}\n\n---\n\n${await memberBriefing(runtime, parent.objective_id)}`;
 	}
 
-	const id = runtime.newId();
 	const cwdFlag = optionalString(input.cwd, "cwd");
-	let cwd: string | undefined;
-	if (profile.cwd === WORKTREE) {
-		if (cwdFlag === undefined) throw ApiError.badRequest("missing_cwd", `profile ${profileName} makes a worktree: pass --cwd REPO`);
-		cwd = (await addWorktree(runtime, id, { repo: directory(cwdFlag, "cwd") })).path;
-	} else {
-		const dir = cwdFlag ?? profile.cwd;
-		// SCR-02: with neither a flag nor a profile, the session starts in its own scratch, which
-		// the sweep cleans up; HOME collected every session's stray files. panad's own working
-		// directory belongs to whoever started the service.
-		cwd = dir === undefined ? ensureScratch(runtime, id) : directory(dir, "cwd");
+	if (profile.cwd === WORKTREE && cwdFlag === undefined) {
+		throw ApiError.badRequest("missing_cwd", `profile ${profileName} makes a worktree: pass --cwd REPO`);
 	}
-
+	const modelRef = `${model.provider}/${model.modelId}`;
 	const now = runtime.clock.now();
-	const url = runtime.url({ kind: "session", id });
+	const ids = Array.from({ length: count }, () => runtime.newId());
+	// SES-06: sessions started together share a batch id, so an answer that arrives behind a
+	// sibling's answer still posts (see reply.ts). A create of one records no batch.
+	const batch = count > 1 ? runtime.newId() : null;
+	// Directories before the write: a worktree is a git process, not work for the transaction.
+	const dirs = new Map<string, string | undefined>();
+	for (const id of ids) dirs.set(id, await sessionCwd(runtime, id, profile, cwdFlag));
 	await runtime.db.atomically(async (tx) => {
-		const conversation = await runtime.harness.createConversation(
-			{
-				ownership: { kind: "ownerless" },
-				agent: {
-					model,
-					...(thinking === undefined ? {} : { thinkingLevel: thinking }),
-					...(chosen.extensions ? { extensions: chosen.extensions } : {}),
-					...(chosen.tools ? { tools: chosen.tools } : {}),
-					...(profile.instructions === undefined ? {} : { instructions: profile.instructions }),
-					...(cwd === undefined ? {} : { cwd }),
+		// SES-06: N sessions share the prompt, model, profile and thread; each keeps its own
+		// conversation, scratch or worktree, and row.
+		for (const id of ids) {
+			const cwd = dirs.get(id);
+			const url = runtime.url({ kind: "session", id });
+			const conversation = await runtime.harness.createConversation(
+				{
+					ownership: { kind: "ownerless" },
+					agent: {
+						model,
+						...(thinking === undefined ? {} : { thinkingLevel: thinking }),
+						...(chosen.extensions ? { extensions: chosen.extensions } : {}),
+						...(chosen.tools ? { tools: chosen.tools } : {}),
+						...(profile.instructions === undefined ? {} : { instructions: profile.instructions }),
+						...(cwd === undefined ? {} : { cwd }),
+					},
 				},
-			},
-			ctx,
-		);
-		await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, url, now);
-		// `idle` until the first message's wake sets `running`, in the thread's transaction (STA-01).
-		await tx.run(
-			`INSERT INTO sessions (id, conversation_id, state, parent, depth, model, thinking, profile, cwd, objective_id, created_at, updated_at)
-			 VALUES (?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id,
-			conversation.id,
-			parent?.id ?? null,
-			parent ? parent.depth + 1 : 0,
-			`${model.provider}/${model.modelId}`,
-			thinking ?? null,
-			profileName,
-			cwd ?? null,
-			// OBJ-15: inherited from the parent at create time, the way `depth` is.
-			parent?.objective_id ?? null,
-			now,
-			now,
-		);
-		if (parent?.objective_id != null) {
-			await recordObjectiveEvent(tx, runtime, {
-				objectiveId: parent.objective_id,
-				kind: "member.created",
-				actorId: caller.id,
-				detail: { session: parent.id, member: id, run: objectiveRun },
-			});
+				ctx,
+			);
+			await tx.run("INSERT INTO participants (id, kind, url, created_at) VALUES (?, 'session', ?, ?)", id, url, now);
+			// `idle` until the first message's wake sets `running`, in the thread's transaction (STA-01).
+			await tx.run(
+				`INSERT INTO sessions (id, conversation_id, state, parent, depth, model, thinking, profile, cwd, objective_id, created_at, updated_at)
+				 VALUES (?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id,
+				conversation.id,
+				parent?.id ?? null,
+				parent ? parent.depth + 1 : 0,
+				modelRef,
+				thinking ?? null,
+				profileName,
+				cwd ?? null,
+				// OBJ-15: inherited from the parent at create time, the way `depth` is.
+				parent?.objective_id ?? null,
+				now,
+				now,
+			);
+			// SES-06: the batch row is how a sibling's answer is recognised as one.
+			if (batch !== null) await tx.run("INSERT INTO session_batches (session_id, batch, created_at) VALUES (?, ?, ?)", id, batch, now);
+			if (parent?.objective_id != null) {
+				await recordObjectiveEvent(tx, runtime, {
+					objectiveId: parent.objective_id,
+					kind: "member.created",
+					actorId: caller.id,
+					detail: { session: parent.id, member: id, run: objectiveRun },
+				});
+			}
 		}
 	});
 
 	let thread: ThreadResult;
 	try {
-		thread = await createThread(runtime, caller, { to: [id, ...to], body: prompt, subject });
+		// SES-06: one thread holds every session the create made, so the first message wakes them all
+		// and each answers from its own conversation.
+		thread = await createThread(runtime, caller, { to: [...ids, ...to], body: prompt, subject });
 	} catch (error) {
 		// UX-09: the failed create is seen by a window through the same helper as every other state.
-		await runtime.db.write((tx) => setSessionState(tx, runtime, { sessionId: id, state: "archived" }));
+		await runtime.db.write(async (tx) => {
+			for (const id of ids) await setSessionState(tx, runtime, { sessionId: id, state: "archived" });
+		});
 		throw error;
 	}
-	const session = await runtime.db.get<SessionRow>("SELECT * FROM sessions WHERE id = ?", id);
-	return { session: session!, ...thread };
+	const rows: SessionRow[] = [];
+	for (const id of ids) rows.push((await runtime.db.get<SessionRow>("SELECT * FROM sessions WHERE id = ?", id))!);
+	return { session: rows[0]!, sessions: rows, ...thread };
+}
+
+/** The directory a session starts in: its own worktree, the given directory, or its scratch (SES-04, SCR-02). */
+async function sessionCwd(runtime: Runtime, id: string, profile: Profile, cwdFlag: string | undefined): Promise<string | undefined> {
+	if (profile.cwd === WORKTREE) return (await addWorktree(runtime, id, { repo: directory(cwdFlag!, "cwd") })).path;
+	const dir = cwdFlag ?? profile.cwd;
+	// SCR-02: with neither a flag nor a profile, the session starts in its own scratch, which the
+	// sweep cleans up; HOME collected every session's stray files. panad's own working directory
+	// belongs to whoever started the service.
+	return dir === undefined ? ensureScratch(runtime, id) : directory(dir, "cwd");
 }

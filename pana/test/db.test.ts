@@ -49,6 +49,8 @@ const PANA_TABLES = [
 	"schedule_notices",
 	// Migration 18: the user's saved messages (BKM-01).
 	"message_bookmarks",
+	// Migration 21: the sessions one create started together (SES-06).
+	"session_batches",
 ];
 
 const opened: TestPanad[] = [];

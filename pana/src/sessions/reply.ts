@@ -41,6 +41,7 @@ interface DeliveryRow {
 	message_id: string;
 	thread_id: string;
 	seq: number;
+	sender_id: string;
 	sender_url: string;
 	wake_submission_id: number | null;
 }
@@ -61,7 +62,7 @@ export async function autoReply(runtime: Runtime, answer: AssistantMessage, api:
 	if (starterId === undefined) return;
 
 	const starter = await db.get<DeliveryRow & { sender_kind: string }>(
-		`SELECT d.id, d.message_id, d.thread_id, m.seq, d.wake_submission_id, '' AS sender_url, p.kind AS sender_kind
+		`SELECT d.id, d.message_id, d.thread_id, m.seq, m.sender_id, d.wake_submission_id, '' AS sender_url, p.kind AS sender_kind
 		   FROM deliveries d JOIN messages m ON m.id = d.message_id JOIN participants p ON p.id = m.sender_id
 		  WHERE d.recipient_id = ? AND d.wake_submission_id = ?`,
 		session.id,
@@ -85,7 +86,7 @@ export async function autoReply(runtime: Runtime, answer: AssistantMessage, api:
 
 	// RPL-02: walk the session's newer deliveries in this thread, newest first, to the newest placed one.
 	const deliveries = await db.all<DeliveryRow>(
-		`SELECT d.id, d.message_id, d.thread_id, m.seq, d.wake_submission_id, p.url AS sender_url
+		`SELECT d.id, d.message_id, d.thread_id, m.seq, m.sender_id, d.wake_submission_id, p.url AS sender_url
 		   FROM deliveries d
 		   JOIN messages m ON m.id = d.message_id
 		   JOIN participants p ON p.id = m.sender_id
@@ -102,19 +103,64 @@ export async function autoReply(runtime: Runtime, answer: AssistantMessage, api:
 	}
 
 	const caller: Caller = { kind: "session", id: session.id, url: runtime.url({ kind: "session", id: session.id }) };
+	// SES-06: every session of one create answers the same prompt, so each of their answers is a
+	// fresh top-level answer, not a reply to a question the thread moved past. They are delivered
+	// to each other like any participants, which means a sibling's answer usually arrives unseen
+	// while the others work; RPL-06 then keeps that sibling from ever being answered, so dropping
+	// this answer would drop the only answer the session will write. Post it at the head instead.
+	const peer = unseen.length > 0 && (await peerAnswers(runtime, session.id, unseen));
+	// Messages the session never receives, such as notices, do not move its head, so an answer with
+	// no unseen mail posts at the newest message.
+	const newestId = async () =>
+		(await db.get<{ id: string }>("SELECT id FROM messages WHERE thread_id = ? ORDER BY seq DESC LIMIT 1", threadId))!.id;
 	if (unseen.length === 0) {
-		// Messages the session never receives, such as notices, do not move its head.
-		const newest = await db.get<{ id: string }>("SELECT id FROM messages WHERE thread_id = ? ORDER BY seq DESC LIMIT 1", threadId);
 		try {
-			await respond(runtime, caller, threadId, { after: newest!.id, body: text });
+			await respond(runtime, caller, threadId, { after: await newestId(), body: text });
 			return;
 		} catch (error) {
 			// Only a stale head means the thread moved; a 409 for an archived participant does not.
-			if (!(error instanceof ApiError) || error.status !== 409 || !("newer" in error.details)) throw error;
+			if (!isStaleHead(error)) throw error;
 			// The thread moved between the check and the append: fall through and say so.
+		}
+	} else if (peer) {
+		// A sibling's answer landing while this one was written is not a reason to drop it, and two
+		// sessions can post at once, so retry at the head a few times before giving up.
+		for (let attempt = 0; attempt < POST_ATTEMPTS; attempt++) {
+			try {
+				await respond(runtime, caller, threadId, { after: await newestId(), body: text });
+				return;
+			} catch (error) {
+				if (!isStaleHead(error)) throw error;
+			}
 		}
 	}
 	await noteNotPosted(runtime, session.id, threadId, unseen, api, context);
+}
+
+/** How many times a peer answer retries the head when another session posts first. */
+const POST_ATTEMPTS = 4;
+
+/** THR-07's stale head: the thread moved to a message the caller had not read. */
+function isStaleHead(error: unknown): boolean {
+	return error instanceof ApiError && error.status === 409 && "newer" in error.details;
+}
+
+/**
+ * SES-06: true when every unseen message came from a session that this one was created with. The
+ * sessions of one create share a `session_batches` row; that is how a batch knows its own.
+ */
+async function peerAnswers(runtime: Runtime, sessionId: string, unseen: DeliveryRow[]): Promise<boolean> {
+	const mine = await runtime.db.get<{ batch: string }>("SELECT batch FROM session_batches WHERE session_id = ?", sessionId);
+	if (!mine) return false;
+	for (const row of unseen) {
+		const peer = await runtime.db.get(
+			"SELECT 1 FROM session_batches WHERE session_id = ? AND batch = ?",
+			row.sender_id,
+			mine.batch,
+		);
+		if (!peer) return false;
+	}
+	return true;
 }
 
 /** RPL-03: tell the next run its reply was not posted, and which messages it has not read. */

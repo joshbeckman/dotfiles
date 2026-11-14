@@ -43,6 +43,8 @@ interface MessageBody {
 
 interface CreateBody {
 	session: SessionBody;
+	/** SES-06: every session a count created; `session` is the first. */
+	sessions: SessionBody[];
 	thread: { id: string; url: string; subject: string | null; participants: Person[] };
 	message: MessageBody;
 }
@@ -332,6 +334,58 @@ describe("session create", () => {
 		expect(search.body.sessions.map((s) => s.id)).toEqual([child.session.id]);
 		await settled(child.session.id);
 		await settled(parent.session.id);
+	});
+
+	it("SES-06 count starts N sessions in the one thread, each with its own conversation, and all of them answer there", async () => {
+		// The script is one queue shared by every session, so its order between sessions is the
+		// machine's business: every turn is a real answer, and each session's first run takes one.
+		// The runs their answers wake in the others read a sibling and post nothing (RPL-06).
+		await start({ script: Array.from({ length: 12 }, (_, index) => ({ text: `answer ${index + 1}` })) });
+		const res = await create({ prompt: "compare these", count: 3 });
+
+		expect(res.sessions).toHaveLength(3);
+		expect(res.session.id).toBe(res.sessions[0]!.id);
+		expect(new Set(res.sessions.map((s) => s.conversationId)).size).toBe(3);
+		expect(res.thread.participants.map((p) => p.id).sort()).toEqual([...res.sessions.map((s) => s.id), TEST_USER].sort());
+
+		for (const session of res.sessions) await settled(session.id);
+		// Each session posts under the head as it stops, so let the last append land.
+		await until(async () => (await messages(res.thread.id)).length >= 4, "the prompt and three answers");
+		const thread = await messages(res.thread.id);
+		expect(thread[0]!.body).toBe("compare these");
+		expect(new Set(thread.slice(1).map((m) => m.sender.id))).toEqual(new Set(res.sessions.map((s) => s.id)));
+		// One answer each: a sibling's answer wakes the others, and RPL-06 keeps them quiet.
+		expect(thread).toHaveLength(4);
+
+		// SES-06: the siblings are ordinary participants, so each of them sees the others' answers.
+		for (const session of res.sessions) {
+			const deliveries = await t!.runtime.db.all("SELECT id FROM deliveries WHERE recipient_id = ?", session.id);
+			expect(deliveries.length).toBeGreaterThan(1);
+		}
+
+		// Everything the single-session create did still happens once per session.
+		const profile = await show(res.sessions[1]!.id);
+		expect(profile.model).toBe("faux/faux-1");
+		expect(profile.cwd).not.toBe(res.sessions[0]!.cwd);
+	});
+
+	it("SES-06 count defaults to one and refuses a count outside 1 to 10", async () => {
+		await start({ script: [{ text: "ok" }, { text: "ok" }] });
+		const one = await create({ prompt: "alone" });
+		expect(one.sessions).toHaveLength(1);
+		await settled(one.session.id);
+
+		const implicit = await create({ prompt: "alone", count: 1 });
+		expect(implicit.sessions).toHaveLength(1);
+		await settled(implicit.session.id);
+
+		for (const count of [0, 11, 2.5, "three"]) {
+			const refused = await t!.client.post<{ error: { code: string } }>("/sessions", { prompt: "crowd", count });
+			expect(refused.status, `count ${count}`).toBe(400);
+			expect(refused.body.error.code).toBe("invalid_count");
+		}
+		const sessions = await t!.runtime.db.all("SELECT id FROM sessions");
+		expect(sessions).toHaveLength(2);
 	});
 });
 

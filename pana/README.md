@@ -325,7 +325,7 @@ To post to another thread, or mid-run, a session uses the `pana_reply` tool or `
 ### Commands
 
 ```sh
-pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS] [--subject TEXT]
+pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--count N] [--to ADDRS]
 pana session show SESSION
 pana session search [--query TEXT] [--state STATE] [--parent SESSION]
 pana session stop SESSION
@@ -336,7 +336,7 @@ pana session inbox SESSION
 pana session inbox read SESSION MESSAGE
 ```
 
-`--to` on `session create` adds participants to the new thread. `--subject` names the thread; without it the subject is the first line of the prompt.
+`--to` on `session create` adds participants to the new thread. `--subject` names the thread; without it the subject is the first line of the prompt. `--count N` starts N sessions, up to 10, in that one thread: each answers the same prompt from its own conversation and its own scratch or worktree, and each answer posts even though a sibling's answer arrived while it worked. The PWA's New thread screen has a Sessions box for the same count.
 
 ### Profiles
 

@@ -18,6 +18,7 @@ import { CommandUsageError, parseArgv, resolveFlags, resolvePositionals, type Fl
 
 export { CommandUsageError, UsageError } from "./args.ts";
 import { OBJECTIVE_COMMANDS } from "../objectives/cli.ts";
+import { MAX_SESSION_COUNT } from "../sessions/limits.ts";
 import { STATS_COMMANDS } from "../stats/cli.ts";
 import { readBody, readStdinSync, uploadAttachments, type ApiCall, type FileAttachment } from "./body.ts";
 import { renderText } from "./output.ts";
@@ -302,8 +303,20 @@ const SESSION_CREATE_FLAGS = [
 	string("thinking", "--thinking LEVEL", "Thinking level, overriding the profile"),
 	string("cwd", "--cwd DIR", "Working directory for the session"),
 	string("profile", "--profile NAME", "Profile to apply"),
+	string("count", "--count N", `Start N sessions in the one thread (1 to ${MAX_SESSION_COUNT})`),
 	list("to", "--to ADDRS", "Add participants to the new thread"),
 ] as const;
+
+/** SES-06: the count is a whole number the server would accept, refused here as a usage error. */
+function validateSessionCount(params: CommandParams): string | undefined {
+	const raw = text(params, "count");
+	if (raw === undefined) return undefined;
+	const count = Number(raw.trim());
+	if (!/^\d+$/.test(raw.trim()) || !Number.isInteger(count) || count < 1 || count > MAX_SESSION_COUNT) {
+		return `--count must be a whole number from 1 to ${MAX_SESSION_COUNT}`;
+	}
+	return undefined;
+}
 
 /**
  * The subject the PWA's Compose form sends (SUB-01). Only `session create` takes it: the three
@@ -331,11 +344,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["session", "create"],
 		tool: "pana_session_create",
-		usage: "pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS] [--subject TEXT]",
+		usage: "pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--count N] [--to ADDRS] [--subject TEXT]",
 		summary: "Create a session and a thread between you and it",
 		flags: [...SESSION_CREATE_FLAGS, SESSION_SUBJECT_FLAG],
 		positionals: [],
-		validate: (params) => emptyRecipients(params) ?? emptySubject(params),
+		validate: (params) => validateSessionCount(params) ?? emptyRecipients(params) ?? emptySubject(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/sessions",
@@ -345,6 +358,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				thinking: text(params, "thinking"),
 				cwd: text(params, "cwd"),
 				profile: text(params, "profile"),
+				count: text(params, "count"),
 				to: optionalItems(params, "to"),
 				subject: text(params, "subject"),
 			}),
