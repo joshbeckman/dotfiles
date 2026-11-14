@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Exercise bin/pins against stubbed git and curl.
+
+The point of this file is that a pin only moves when someone asks: `check` names
+what is behind and fails, `update` rewrites the lockfiles in place and touches
+nothing else, and a released architecture upstream no longer publishes is an error
+rather than a silent row drop.
+"""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = Path(os.environ.get('PINS_UNDER_TEST', ROOT / 'bin/pins'))
+PIN = 'a' * 40
+HEAD = 'b' * 40
+TAG = 'v9.9.9'
+SUMS = 'S' * 64  # what the stubbed releases publish
+
+FAKE_COMMAND = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ['COMMAND_LOG'], 'a') as f:
+    f.write(json.dumps({'command': name, 'args': args}) + '\\n')
+if name == 'git':
+    # Only `git ls-remote <url> HEAD` matters here, and every plugin is behind.
+    if os.environ.get('FAKE_GIT_FAIL'):
+        print('fatal: could not read from remote repository', file=sys.stderr)
+        sys.exit(128)
+    print('%s\\tHEAD' % os.environ['FAKE_HEAD'])
+elif name == 'curl':
+    url = args[-1]
+    if '/releases/latest' in url:
+        print(json.dumps({'tag_name': os.environ['FAKE_TAG']}))
+    elif url.endswith('/SHA256SUMS'):
+        print('%s  s-%s-aarch64-apple-darwin.tar.gz' % (os.environ['FAKE_SUMS'], os.environ['FAKE_TAG']))
+        print('%s  s-%s-x86_64-unknown-linux-musl.tar.gz' % (os.environ['FAKE_SUMS'], os.environ['FAKE_TAG']))
+    elif url.endswith('.sha256sum'):
+        archive = url.rsplit('/', 1)[-1][:-len('.sha256sum')]
+        print('%s  %s' % (os.environ['FAKE_SUMS'], archive))
+    else:
+        sys.exit(22)
+'''
+
+
+class PinsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='dotfiles-pins-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.repo = self.root / 'dotfiles'
+        self.bin = self.root / 'bin'
+        self.repo.mkdir()
+        self.bin.mkdir()
+        self.script = self.repo / 'bin' / 'pins'
+        self.script.parent.mkdir()
+        shutil.copyfile(SOURCE, self.script)
+        self.script.chmod(0o700)
+        self.executable(self.bin / 'git', FAKE_COMMAND)
+        self.executable(self.bin / 'curl', FAKE_COMMAND)
+        self.log = self.root / 'commands.jsonl'
+        # A pin the release metadata agrees with: the newest tag and its digest.
+        (self.repo / 'plugins.lock').write_text(
+            '# fixture pins\n'
+            '%s  https://github.com/example/plugin.git\n' % PIN)
+        (self.repo / 'tools.lock').write_text(
+            '# fixture tools\n'
+            's  v0.0.1  aarch64-apple-darwin  %s\n' % ('0' * 64) +
+            's  v0.0.1  x86_64-unknown-linux-musl  %s\n' % ('1' * 64) +
+            'deno  v0.0.2  aarch64-apple-darwin  %s\n' % ('2' * 64))
+        self.env = {'PATH': os.pathsep.join([str(self.bin), '/usr/bin', '/bin']),
+                    'COMMAND_LOG': str(self.log),
+                    'FAKE_HEAD': HEAD, 'FAKE_TAG': TAG, 'FAKE_SUMS': SUMS}
+
+    def executable(self, path, body):
+        path.write_text(body)
+        path.chmod(0o700)
+
+    def run_pins(self, *args):
+        return subprocess.run([str(self.script)] + list(args), env=self.env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_check_names_every_pin_that_is_behind(self):
+        result = self.run_pins('check')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('plugin: pinned %s, upstream %s' % (PIN[:10], HEAD[:10]), result.stdout)
+        self.assertIn('s: pinned v0.0.1, latest %s' % TAG, result.stdout)
+        self.assertIn('deno: pinned v0.0.2, latest %s' % TAG, result.stdout)
+        self.assertIn('run bin/pins update', result.stderr)
+
+    def test_check_is_quiet_and_successful_when_every_pin_matches(self):
+        (self.repo / 'plugins.lock').write_text(
+            '%s  https://github.com/example/plugin.git\n' % HEAD)
+        (self.repo / 'tools.lock').write_text(
+            's  %s  aarch64-apple-darwin  %s\n' % (TAG, SUMS) +
+            'deno  %s  x86_64-unknown-linux-gnu  %s\n' % (TAG, SUMS))
+        result = self.run_pins('check')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('every pin matches upstream', result.stdout)
+
+    def test_update_moves_the_pins_and_keeps_the_file_layout(self):
+        result = self.run_pins('update')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('plugin: %s -> %s' % (PIN[:10], HEAD[:10]), result.stdout)
+        self.assertIn('s (aarch64-apple-darwin): v0.0.1 -> %s' % TAG, result.stdout)
+        self.assertEqual(
+            (self.repo / 'plugins.lock').read_text(),
+            '# fixture pins\n%s  https://github.com/example/plugin.git\n' % HEAD)
+        self.assertEqual((self.repo / 'tools.lock').read_text().splitlines(), [
+            '# fixture tools',
+            's  %s  aarch64-apple-darwin  %s' % (TAG, SUMS),
+            's  %s  x86_64-unknown-linux-musl  %s' % (TAG, SUMS),
+            'deno  %s  aarch64-apple-darwin  %s' % (TAG, SUMS),
+        ])
+
+    def test_update_is_a_no_op_when_the_pins_are_current(self):
+        (self.repo / 'plugins.lock').write_text(
+            '%s  https://github.com/example/plugin.git\n' % HEAD)
+        (self.repo / 'tools.lock').write_text(
+            's  %s  aarch64-apple-darwin  %s\n' % (TAG, SUMS))
+        before = (self.repo / 'tools.lock').read_text()
+        result = self.run_pins('update')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('every pin already matches upstream', result.stdout)
+        self.assertEqual((self.repo / 'tools.lock').read_text(), before)
+
+    def test_a_wrong_digest_for_the_pinned_version_is_corrected(self):
+        # A mangled digest is not a version move, but it blocks every install on that
+        # architecture, so update repairs it against the release it names.
+        (self.repo / 'tools.lock').write_text(
+            's  %s  aarch64-apple-darwin  %s\n' % (TAG, '0' * 64))
+        result = self.run_pins('update')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('s (aarch64-apple-darwin): digest set to what %s publishes' % TAG,
+                      result.stdout)
+        self.assertEqual((self.repo / 'tools.lock').read_text(),
+                         's  %s  aarch64-apple-darwin  %s\n' % (TAG, SUMS))
+
+    def test_an_architecture_upstream_stopped_publishing_is_an_error(self):
+        # Dropping the row silently would leave setup unable to pin that machine.
+        (self.repo / 'tools.lock').write_text(
+            's  v0.0.1  riscv64-unknown-linux-gnu  %s\n' % ('3' * 64))
+        result = self.run_pins('update')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('riscv64-unknown-linux-gnu.tar.gz is not in the published SHA256SUMS',
+                      result.stderr)
+        self.assertIn('v0.0.1', (self.repo / 'tools.lock').read_text())
+
+    def test_a_failing_upstream_lookup_is_an_error_not_a_guess(self):
+        # An unreachable repository must not read as "already pinned".
+        result = self.run_pins('check', **{})
+        self.assertEqual(result.returncode, 1)
+        failed = subprocess.run([str(self.script), 'check'], capture_output=True, text=True,
+                                env={**self.env, 'FAKE_GIT_FAIL': '1'}, timeout=60)
+        self.assertEqual(failed.returncode, 1, failed.stdout)
+        self.assertIn('pins: git ls-remote', failed.stderr)
+        self.assertNotIn('every pin matches upstream', failed.stdout)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

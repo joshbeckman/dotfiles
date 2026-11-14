@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# dotfiles-refresh: run ./setup unattended and report only when it breaks.
+# dotfiles-refresh: run ./setup unattended and report when it breaks, or when a
+# plugin checkout moves to a new pinned commit.
 #
 # Scheduled every two hours by Library/LaunchAgents/org.joshbeckman.dotfiles-refresh.plist.
 # Kept as a script rather than a long ProgramArguments so the failure path can be
@@ -92,6 +93,33 @@ set -e
 
 if [ "$status" -eq 0 ]; then
   printf '%s  ok\n' "$(date -u +%FT%TZ)" >> "$LOG"
+  # A plugin checkout only moves when its pin in plugins.lock moves, which is a
+  # reviewed commit rather than upstream HEAD. It is new code in every shell and
+  # editor all the same, so it is named in a notification instead of only in the
+  # log: setup prints one "plugin changed:" line per moved checkout.
+  this_run="$(tail -n +"$run_start" "$LOG" 2>/dev/null || true)"
+  changed="$(printf '%s\n' "$this_run" | sed -n 's/^[[:space:]]*=*[[:space:]]*plugin changed: //p' || true)"
+  if [ -n "$changed" ]; then
+    printf '%s  plugin commits changed:\n%s\n' "$(date -u +%FT%TZ)" "$changed" >> "$LOG"
+    message="$(printf '%s\n' "$changed" | awk 'BEGIN { ORS = "" } { printf "%s%s", sep, $0; sep = "; " }')"
+    "$NOTIFIER" --from dotfiles-refresh --execute "open '$LOG'" \
+      "dotfiles plugin commits changed" "$message" || true
+  fi
+  # A lockdown nobody re-pins is a stale lockdown. The check costs one round trip
+  # per plugin, so it runs at most once a day, and it only speaks when a pin is
+  # behind: forgetting to re-pin should arrive as a message, not as silence. Moving
+  # the pins is left to bin/pins update, because that diff is the review.
+  if [ -x "$DOTFILES/bin/pins" ]; then
+    today="$(date -u +%F)"
+    if [ "$(cat "$STATE/pins-checked" 2>/dev/null || true)" != "$today" ]; then
+      printf '%s\n' "$today" > "$STATE/pins-checked"
+      behind="$("$DOTFILES/bin/pins" check 2>&1)" || {
+        printf '%s  pins behind upstream:\n%s\n' "$(date -u +%FT%TZ)" "$behind" >> "$LOG"
+        "$NOTIFIER" --from dotfiles-refresh --execute "open '$LOG'" \
+          "dotfiles pins are behind (bin/pins update)" "$behind" || true
+      }
+    fi
+  fi
   exit 0
 fi
 

@@ -10,6 +10,7 @@ that setup runs.
 """
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,7 @@ class RefreshTest(unittest.TestCase):
         shutil.copyfile(SOURCE, self.script)
         self.script.chmod(0o700)
         self.setup_log = self.root / 'setup.log'
+        self.pins_log = self.root / 'pins.log'
         self.notify_log = self.root / 'notify.log'
         self.stub_setup(0)
         # notify-josh is resolved from $HOME/bin, which the script puts first on the
@@ -54,9 +56,14 @@ class RefreshTest(unittest.TestCase):
         path.write_text(body)
         path.chmod(0o700)
 
-    def stub_setup(self, status):
+    def stub_setup(self, status, output=''):
+        # setup's stdout is what the refresh logs and reads back, so extra lines go
+        # there; the setup log only proves the stub ran.
+        lines = ''.join('printf "%%s\\n" %s\n' % shlex.quote(line)
+                        for line in output.splitlines())
         self.executable(self.dotfiles / 'setup',
-                        '#!/bin/sh\nprintf "setup ran\\n" >> "$SETUP_LOG"\nexit %d\n' % status)
+                        '#!/bin/sh\nprintf "setup ran\\n" >> "$SETUP_LOG"\n%sexit %d\n'
+                        % (lines, status))
 
     def run_refresh(self, **environment):
         return subprocess.run([str(self.script)], env={**self.env, **environment},
@@ -108,6 +115,56 @@ class RefreshTest(unittest.TestCase):
         result = self.run_refresh()
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn('dotfiles refresh failed', self.notify_log.read_text())
+
+    def test_moved_plugin_commits_are_reported_without_failing(self):
+        # setup prints one "plugin changed:" line per checkout that moves to a new
+        # pinned commit. The run still succeeds, but the notification names the
+        # commits so new plugin code is not activated quietly.
+        self.stub_setup(0, output='  ======  plugin changed: vim-repeat aaa -> bbb\n'
+                                 '  ======  plugin changed: ale ccc -> ddd\n')
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        notified = self.notify_log.read_text()
+        self.assertIn('dotfiles plugin commits changed', notified)
+        self.assertIn('vim-repeat aaa -> bbb; ale ccc -> ddd', notified)
+        self.assertIn('vim-repeat aaa -> bbb', (self.state() / 'refresh.log').read_text())
+
+    def test_an_unchanged_run_notifies_nothing(self):
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.notify_log.exists())
+
+    def stub_pins(self, status, output=''):
+        """The daily pin check, resolved from $DOTFILES_DIR/bin."""
+        (self.dotfiles / 'bin').mkdir(exist_ok=True)
+        self.executable(self.dotfiles / 'bin' / 'pins',
+                        '#!/bin/sh\nprintf "pins ran\\n" >> "%s"\nprintf "%%s\\n" "%s"\nexit %d\n'
+                        % (self.pins_log, output, status))
+
+    def test_pins_behind_upstream_is_reported_without_failing(self):
+        # A lockdown nobody re-pins goes stale; the refresh is what notices, and only
+        # once a day, so the message is a reminder rather than a failure.
+        self.stub_pins(1, output='vim-repeat: pinned aaa, upstream bbb')
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        notified = self.notify_log.read_text()
+        self.assertIn('dotfiles pins are behind', notified)
+        self.assertIn('vim-repeat: pinned aaa, upstream bbb', notified)
+        self.assertEqual(self.pins_log.read_text(), 'pins ran\n')
+        self.assertTrue((self.state() / 'pins-checked').is_file())
+
+    def test_the_pin_check_runs_at_most_once_a_day(self):
+        self.stub_pins(1)
+        self.assertEqual(self.run_refresh().returncode, 0)
+        self.notify_log.unlink()
+        self.assertEqual(self.run_refresh().returncode, 0)
+        self.assertFalse(self.notify_log.exists(), 'the pin check ran twice in one day')
+
+    def test_current_pins_notify_nothing(self):
+        self.stub_pins(0, output='every pin matches upstream')
+        result = self.run_refresh()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.notify_log.exists())
 
 
 if __name__ == '__main__':
