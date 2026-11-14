@@ -325,7 +325,7 @@ To post to another thread, or mid-run, a session uses the `pana_reply` tool or `
 ### Commands
 
 ```sh
-pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS]
+pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS] [--subject TEXT]
 pana session show SESSION
 pana session search [--query TEXT] [--state STATE] [--parent SESSION]
 pana session stop SESSION
@@ -336,7 +336,7 @@ pana session inbox SESSION
 pana session inbox read SESSION MESSAGE
 ```
 
-`--to` on `session create` adds participants to the new thread.
+`--to` on `session create` adds participants to the new thread. `--subject` names the thread; without it the subject is the first line of the prompt.
 
 ### Profiles
 
@@ -355,6 +355,7 @@ The `default` profile applies when `--profile` is absent. With no `--cwd` and no
 ### Rules
 
 - A thread has a participant set. Every message goes to every participant. `--cc` adds participants.
+- A thread needs no recipients. `thread create` without `--to` starts a thread whose only participant is the creator, and it reaches no one else until a message in it carries `--cc`. An empty `--to` is a usage error, not a way to say the same thing.
 - Sessions may read any same-domain thread or message by reference, even when they are not participants. Reading does not join the thread, subscribe to future messages, or change anyone else's read state. Responding still requires participation, and another session's inbox remains private.
 - Threads are append-only. `thread respond` requires `--after MESSAGE`, the newest message the sender has read. If the thread has a newer message, pana rejects the response with exit code 3. The sender reads the new messages, revises, and retries.
 - Edits and deletes are appended as `message.revised` and `message.redacted` events. Readers show the latest revision. A session that already received the old text keeps it in its transcript, so the PWA warns before an edit.
@@ -385,7 +386,7 @@ The added session participates from that message on: it receives that message an
 ### Commands
 
 ```sh
-pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...] [--choice TEXT...]
+pana thread create [--to ADDRS] (--body TEXT | --body-file PATH | --body -) [--attach PATH...] [--choice TEXT...]
 pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...] [--choice TEXT...]
 pana thread read THREAD
 pana thread read --message MESSAGE

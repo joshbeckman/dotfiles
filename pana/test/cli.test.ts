@@ -12,7 +12,7 @@ import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harnes
 
 /** Every command line from README.md's command sections (CLI-06). */
 const README_COMMANDS = [
-	"pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS]",
+	"pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS] [--subject TEXT]",
 	"pana session show SESSION",
 	"pana session search [--query TEXT] [--state STATE] [--parent SESSION]",
 	"pana session stop SESSION",
@@ -21,7 +21,7 @@ const README_COMMANDS = [
 	"pana session archive SESSION",
 	"pana session inbox SESSION",
 	"pana session inbox read SESSION MESSAGE",
-	"pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...]",
+	"pana thread create [--to ADDRS] (--body TEXT | --body-file PATH | --body -) [--attach PATH...]",
 	"pana thread respond --thread THREAD --after MESSAGE [--cc ADDRS] (--body ...) [--attach PATH...]",
 	"pana thread read THREAD",
 	"pana thread read --message MESSAGE",
@@ -278,6 +278,46 @@ describe("pana CLI", () => {
 			{ to: ["someone"], body: "inline body" },
 			{ to: ["someone"], body: "file body" },
 			{ to: ["someone"], body: "stdin body" },
+		]);
+	});
+
+	it("THR-01/SES-02 the CLI needs no --to, rejects an empty --to or --subject, and sends --subject to POST /sessions", async () => {
+		const bodies: unknown[] = [];
+		const t = await start({
+			handlers: {
+				"threads.create": (request) => {
+					bodies.push(request.body);
+					return { status: 201, body: request.body };
+				},
+				"sessions.create": (request) => {
+					bodies.push(request.body);
+					return { status: 201, body: request.body };
+				},
+			},
+		});
+
+		// THR-01: without --to the caller is the thread's only participant.
+		const alone = await run(["thread", "create", "--body", "alone"], t);
+		expect(alone.code).toBe(0);
+
+		const empty = await run(["thread", "create", "--to", "", "--body", "alone"], t);
+		expect(empty.code).toBe(2);
+		expect(empty.stderr).toContain("--to must not be empty");
+		expect((await run(["thread", "create", "--to", " , ", "--body", "alone"], t)).code).toBe(2);
+		expect((await run(["session", "create", "--prompt", "p", "--to", ""], t)).code).toBe(2);
+		expect(
+			(await run(["schedule", "thread", "create", "--at", "2026-10-25T18:26:14Z", "--to", "", "--body", "b"], t)).code,
+		).toBe(2);
+
+		// The PWA's Compose form sends a subject; the CLI flag reaches the same field.
+		expect((await run(["session", "create", "--prompt", "p", "--subject", "A subject"], t)).code).toBe(0);
+		const blank = await run(["session", "create", "--prompt", "p", "--subject", " "], t);
+		expect(blank.code).toBe(2);
+		expect(blank.stderr).toContain("--subject must not be empty");
+
+		expect(bodies).toEqual([
+			{ to: [], body: "alone" },
+			{ prompt: "p", subject: "A subject" },
 		]);
 	});
 
