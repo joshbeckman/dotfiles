@@ -29,13 +29,19 @@ export const WAKE_QUESTION = "delivery_needs_action";
  */
 export const WAKE_GATE_THRESHOLD = 0.15;
 
+/**
+ * The question, in the wording that measured best against a labeled corpus of this domain's
+ * session mail (see `pana/docs/wake-gate.md`): it asks for a request, question, assignment, or
+ * decision to follow *anywhere* in the message, including inside a status report, because an ask
+ * buried mid-paragraph was the old wording's commonest miss. Courtesy still answers no.
+ */
 const QUESTION: DecisionQuestions[string] = {
 	type: "noul",
 	instructions:
-		"Does the receiving session need to act on this message? Answer yes only when the message asks it to do, answer, decide, fix, review, or otherwise produce something. Acknowledgments, agreements, thanks, sign-offs, and messages that only inform the reader for its information need no action, and answer no.",
+		"Does the receiving session need to act on this message? Answer yes when it asks the session to do, answer, decide, fix, review, rebase, merge, or produce something; when it assigns work; when it states an interface or decision the session must follow; or when it asks a question. Status reports that request nothing, acknowledgments, agreements, thanks, and sign-offs need no action.",
 	criteria: {
-		true: "The message asks the recipient to do something, asks it a question it must answer, or reports something it must respond to or decide.",
-		false: "The message is an acknowledgment, agreement, thanks, sign-off, status note, or other information that needs nothing from the recipient.",
+		true: "Somewhere in the message is a request, a question, an assignment, or a decision the recipient must follow, even when the message is mostly a status report.",
+		false: "The message reports status, agrees, thanks, or signs off, and asks the recipient for nothing.",
 	},
 };
 
