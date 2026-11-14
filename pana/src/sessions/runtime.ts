@@ -26,6 +26,7 @@ import {
 	type UsageState,
 } from "@earendil-works/pi-durable";
 import { ApiError } from "../api/errors.ts";
+import { logGateDecision } from "../decisions/log.ts";
 import { clearForUserMessage } from "../objectives/escalation.ts";
 import { admitRun, recordBudgetHold, recordRunEnded } from "../objectives/hold.ts";
 import { objectivePaused } from "../objectives/limits.ts";
@@ -254,6 +255,23 @@ export class SessionRuntime {
 			if (done === false) {
 				this.#armRollover();
 				break;
+			}
+			// DEC-07, DEC-09: mail the wake gate skipped is handed over here, by the recorded
+			// decision rather than a second question. The line says the skip eventually arrived.
+			if (done === true) {
+				const decided = await db.get<{ probability: number }>(
+					"SELECT probability FROM delivery_wake_decisions WHERE delivery_id = ?",
+					row.id,
+				);
+				if (decided) {
+					logGateDecision(this.runtime, {
+						event: "wake.delivered_after_skip",
+						deliveryId: row.id,
+						messageId: row.message_id,
+						recipientId: row.recipient_id,
+						probability: decided.probability,
+					});
+				}
 			}
 		}
 		return delivered;

@@ -647,3 +647,32 @@ same from a terminal. A bookmark is per user: a session has no bookmark list.
 - [x] **BKM-05** The PWA has a Bookmarks section (`#/bookmarks`, `g b`, and the command palette): one card per saved message showing its subject, sender, message time, save time, and whole rendered body, whose click opens the thread at that message, and a Remove control that takes the row off the list in place and shows the empty hint when none remain. The route is in `SECTIONS` and measured under its own name.
 - [x] **BKM-06** `pana bookmark add MESSAGE`, `pana bookmark remove MESSAGE`, and `pana bookmark list [--limit N] [--cursor CURSOR]` call those routes, are listed in `README.md` and in `pana --help`, and follow CLI-06 and CLI-08.
 - [x] **BKM-07** An inline status beside the message shows `Bookmarked` or `Bookmark removed` after either the shortcut or menu action; a saved message keeps the `Bookmarked` indicator on reload. Failed updates report the failure there without claiming a change.
+
+---
+
+## WP23: Decision model and the wake gate
+
+A System One model reads one state and answers typed questions with calibrated probabilities
+instead of generating text. Fireworks serves one as `accounts/fireworks/models/rune`, billed on
+input only, over `POST <provider>/v1/systemone` with a `state` and a map of questions; a `noul`
+question answers the probability of yes. This package adds the configuration and the one
+client, then uses it to stop an acknowledgment from buying a frontier turn: a wake renders the
+whole message into the run (`src/sessions/wake.ts`), so a "thanks" from another session costs a
+full one.
+
+The gate is an optimization, never a gate on correctness. Pana asks before waking a session for a
+message from another session, skips only a delivery that is very unlikely to need action, and
+wakes normally on any doubt: a missing key, a timeout, an HTTP error, or an answer it cannot parse.
+Skipped mail is not read, not deleted, and not given a delivery row that retention would sweep; it
+sits queued and unread, the end state mail to a stopped session already has (DLV-06), and a real
+wake or a resume hands it over.
+
+- [x] **DEC-01** `decisionModel` is an optional nonempty model reference string shaped like `subjectModel` and `defaultModel`, validated as a string only and never by provider availability. Unset means the feature is off: no decision request is made and every delivery behaves exactly as it does today. `docs/configuration.md` documents the key, and `panad` names a `decisionModel` whose provider is not registered at startup.
+- [x] **DEC-02** `src/decisions` exposes `decide(runtime, state, questions)`. It resolves the provider and model from `decisionModel`, posts `{model, state, questions}` to `<baseUrl>/v1/systemone`, and returns the `noul` probability of each question keyed by name. The base URL and key come from `runtime.models` (pi-ai's auth context over panad's `env`), falling back to `<PROVIDER>_API_KEY` in panad's environment; pana writes no key to disk and adds no dependency. One deadline of about 2 seconds bounds a call, it never runs inside a database transaction or on a write path, and it throws a typed `DecisionError` with `no_decision_model`, `unknown_model`, `decision_failed`, or `decision_timeout`.
+- [x] **DEC-03** Before a message from a session is appended, the wake gate asks one `noul` question over the delivery rendered exactly as the wake renders it. Its instructions say plainly that acknowledgments, agreements, thanks, sign-offs, and FYI-only mail need no action.
+- [x] **DEC-04** A probability below `WAKE_GATE_THRESHOLD` (0.15, a named constant) skips the wake for that delivery; at or above it the delivery wakes as before.
+- [x] **DEC-05** The gate never runs for a message from the user, a schedule wake, an objective lead's run, a notice, or a retried delivery or wake. A recipient added by `--cc` in the append transaction, and a brand-new thread's first message, wake as before.
+- [x] **DEC-06** The gate fails open: a timeout, an HTTP error, a malformed or missing answer, an unset or unknown `decisionModel`, or a missing key means no plan, so the normal wake happens.
+- [x] **DEC-07** Skipped mail keeps the end state of mail to a stopped session (DLV-06): queued, unread, `wake_request_id` and `wake_submission_id` null, no wake submitted, no delivery row created or deleted. `deliverHeld` hands it over later on a real wake or a resume, and marks it read then.
+- [x] **DEC-08** One JSONL line per gate decision lands in `<state>/decisions.log` with the probability and the decision, rotated by `logs.maxBytes` and `logs.keep`, so the threshold can be tuned from real traffic. A gate that cannot answer at all writes one line naming the error instead, because a wrong endpoint or a missing key otherwise looks exactly like a gate that keeps answering "wake". The file carries no message text.
+- [x] **DEC-09** The decision is recorded against the delivery id in `delivery_wake_decisions` (`delivery_id`, `probability`, `decided_at`) in the same transaction as the delivery. A retried wake or delivery reuses that recorded answer and never asks the decision model a second time, and a wake retried under the same request id submits once.
