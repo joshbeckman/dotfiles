@@ -334,12 +334,14 @@ interface HeldDelivery {
 	deliveryId: string;
 	messageId: string;
 	threadId: string;
+	/** The session the delivery waits for; the render marks it in the thread's roster. */
+	recipientId: string;
 }
 
 /** Deliveries that are waiting for a run: unread, with no wake submitted (DLV-03, OBJ-18). */
 export async function heldDeliveries(tx: SqliteExecutor, sessionId: string): Promise<HeldDelivery[]> {
 	return tx.all<HeldDelivery>(
-		`SELECT d.id AS deliveryId, d.message_id AS messageId, d.thread_id AS threadId
+		`SELECT d.id AS deliveryId, d.message_id AS messageId, d.thread_id AS threadId, d.recipient_id AS recipientId
 		   FROM deliveries d
 		   JOIN messages m ON m.id = d.message_id
 		  WHERE d.recipient_id = ? AND d.read_at IS NULL AND d.wake_submission_id IS NULL
