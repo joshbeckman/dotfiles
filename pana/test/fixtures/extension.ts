@@ -46,11 +46,12 @@ const ROUTES: readonly RouteName[] = [
 	"messages.show",
 	"threads.create",
 	"sessions.create",
+	"threads.role",
 	"memory.search",
 	"memory.commit",
 ];
 
-/** A handler set for the seven routes the pana tools call, recording every request. */
+/** A handler set for the routes the pana tools call, recording every request. */
 export function fakeApi(responses: Record<string, { status: number; body: unknown }> = {}): FakeApi {
 	const calls: ApiCall[] = [];
 	const handlers: Handlers = {};

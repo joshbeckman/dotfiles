@@ -62,7 +62,7 @@ export interface CommandRequest {
 export interface CommandSpec {
 	/** The words after `pana`, e.g. `["session", "create"]`. */
 	path: readonly string[];
-	/** The pana tool that wraps this command. Only the six TOL-01 tools have one. */
+	/** The pana tool that wraps this command. Only the TOL-01 tools have one. */
 	tool?: PanaToolName;
 	/** The README's usage line, verbatim. Help prints it and tests compare it. */
 	usage: string;
@@ -99,6 +99,7 @@ export type PanaToolName =
 	| "pana_session_create"
 	| "pana_memory_search"
 	| "pana_memory_commit"
+	| "pana_thread_role"
 	| "pana_schedule_wake";
 
 /** The command names the pana tools wrap. */
@@ -109,6 +110,8 @@ export type PanaCommandName =
 	| "session create"
 	| "memory search"
 	| "memory commit"
+	| "thread role set"
+	| "thread role clear"
 	| "schedule wake";
 
 // --- Parameter helpers ---------------------------------------------------------
@@ -516,16 +519,17 @@ export const COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		path: ["thread", "role", "set"],
+		tool: "pana_thread_role",
 		usage: "pana thread role set THREAD ROLE",
 		summary: "Set your own role hint in a thread (not an authorization)",
 		flags: [],
 		positionals: [
-			{ name: "THREAD", param: "id", required: true },
+			{ name: "THREAD", param: "thread", required: true },
 			{ name: "ROLE", param: "role", required: true },
 		],
 		request: (params) => ({
 			method: "PUT",
-			path: `/threads/${segment(text(params, "id"), "thread")}/role`,
+			path: `/threads/${segment(text(params, "thread"), "thread")}/role`,
 			body: { role: text(params, "role") },
 		}),
 	},
@@ -534,10 +538,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 		usage: "pana thread role clear THREAD",
 		summary: "Clear your own role hint (restore participant)",
 		flags: [],
-		positionals: [{ name: "THREAD", param: "id", required: true }],
+		positionals: [{ name: "THREAD", param: "thread", required: true }],
 		request: (params) => ({
 			method: "PUT",
-			path: `/threads/${segment(text(params, "id"), "thread")}/role`,
+			path: `/threads/${segment(text(params, "thread"), "thread")}/role`,
 			body: { role: null },
 		}),
 	},
@@ -881,7 +885,7 @@ export function commandForTool(tool: PanaToolName): CommandSpec {
 	return spec;
 }
 
-/** The six commands the pana tools wrap, keyed by command name. */
+/** The commands the pana tools wrap, keyed by command name. */
 export const PANA_COMMANDS: Record<PanaCommandName, CommandSpec> = Object.fromEntries(
 	COMMANDS.filter((command) => command.tool !== undefined).map((command) => [commandName(command), command]),
 ) as Record<PanaCommandName, CommandSpec>;
