@@ -73,7 +73,7 @@ rejects the reply with exit code 3. Read the new messages, revise, and retry. Ne
 
 - `pana_thread_read` reads a thread, or one message. CLI: `pana thread read THREAD`.
 - `pana_reply` posts a message. CLI: `pana thread respond --thread T --after M --body B`.
-- `pana_thread_create` starts a thread. CLI: `pana thread create --to ADDRS --body B`.
+- `pana_thread_create` starts a thread. CLI: `pana thread create [--to ADDRS] --body B`.
 - `pana_session_create` starts a child session. CLI: `pana session create --prompt TEXT`.
 
 When a question has a small, closed set of answers, you may end the message with a fenced

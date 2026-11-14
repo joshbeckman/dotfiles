@@ -95,9 +95,9 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 		tool(
 			getRuntime,
 			"pana_thread_create",
-			"Start a new thread with one or more participants.",
+			"Start a new thread. Without `to` the thread's only participant is you.",
 			obj({
-				to: arr(str(), { description: "Participants: usernames, session ULIDs, or pana:// URLs" }),
+				to: opt(arr(str(), { description: "Participants: usernames, session ULIDs, or pana:// URLs; omit for a thread only you are in" })),
 				body: str({ description: "Markdown message body" }),
 				choice: opt(
 					arr(str(), {
@@ -118,6 +118,7 @@ export function createPanaTools(getRuntime: () => Runtime): ToolRegistration[] {
 				cwd: opt(str({ description: "Working directory" })),
 				profile: opt(str({ description: "Profile name" })),
 				to: opt(arr(str(), { description: "Extra participants on the new thread" })),
+				subject: opt(str({ description: "Thread subject; defaults to the first line of the prompt" })),
 			}),
 		),
 		tool(

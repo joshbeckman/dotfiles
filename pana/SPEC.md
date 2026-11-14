@@ -162,7 +162,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 
 ### Threads
 
-- [x] **THR-01** `thread create --to A,B` creates a thread whose participants are the caller, A, and B.
+- [x] **THR-01** `thread create --to A,B` creates a thread whose participants are the caller, A, and B. `--to` is optional: without it the caller is the only participant, and an empty or address-free `--to` exits 2 rather than silently naming no one.
 - [x] **THR-02** Every message goes to every participant except its sender, as one delivery row each.
 - [x] **THR-03** `thread respond` without `--after` exits 2.
 - [x] **THR-04** `thread respond --after M` where M is the thread's newest message appends the message.
@@ -209,7 +209,7 @@ The API is HTTP with JSON bodies. `panad` serves the same routes on two listener
 ### Create
 
 - [x] **SES-01** `session create --prompt P` creates a session, a thread with the caller and the session, and a first message with body P from the caller. It returns all three as JSON.
-- [x] **SES-02** `--to` adds more participants to that thread.
+- [x] **SES-02** `--to` adds more participants to that thread. `--subject S` names the thread, the same field the PWA's Compose form sends; without it the subject is the first line of the prompt (SUB-01). An empty `--to` or a blank `--subject` exits 2.
 - [x] **SES-03** Profile values apply, and flags override them. An unknown profile returns 400.
 - [x] **SES-04** `cwd: "worktree"` creates a session-owned git worktree using the same creation implementation as GUARD-03, from the repo named by `--cwd`. Ordinary repositories use `<state>/worktrees/<ulid>/<repo-name>`; configured adapters use their managed location.
 - [x] **SES-05** A session created by a session records `parent`. Its depth is the parent's plus one.

@@ -305,14 +305,37 @@ const SESSION_CREATE_FLAGS = [
 	list("to", "--to ADDRS", "Add participants to the new thread"),
 ] as const;
 
+/**
+ * The subject the PWA's Compose form sends (SUB-01). Only `session create` takes it: the three
+ * `schedule … create` commands already carry `--subject` as their schedule's label (SCH-15).
+ */
+const SESSION_SUBJECT_FLAG = string("subject", "--subject TEXT", "Thread subject; defaults to the first line of the prompt");
+
+/**
+ * A `--to` written with nothing in it names no one, which is never what a caller meant: they
+ * meant to omit the flag, or mistyped an address (THR-01).
+ */
+function emptyRecipients(params: CommandParams): string | undefined {
+	if (params.to === undefined) return undefined;
+	return items(params, "to").length > 0 ? undefined : "--to must not be empty";
+}
+
+/** A blank `--subject` is a mistake too; omitting the flag asks for the default subject. */
+function emptySubject(params: CommandParams): string | undefined {
+	const subject = text(params, "subject");
+	if (subject === undefined) return undefined;
+	return subject.trim() ? undefined : "--subject must not be empty";
+}
+
 export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["session", "create"],
 		tool: "pana_session_create",
-		usage: "pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS]",
+		usage: "pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS] [--subject TEXT]",
 		summary: "Create a session and a thread between you and it",
-		flags: SESSION_CREATE_FLAGS,
+		flags: [...SESSION_CREATE_FLAGS, SESSION_SUBJECT_FLAG],
 		positionals: [],
+		validate: (params) => emptyRecipients(params) ?? emptySubject(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/sessions",
@@ -323,6 +346,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				cwd: text(params, "cwd"),
 				profile: text(params, "profile"),
 				to: optionalItems(params, "to"),
+				subject: text(params, "subject"),
 			}),
 		}),
 	},
@@ -418,16 +442,16 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ["thread", "create"],
 		tool: "pana_thread_create",
-		usage: "pana thread create --to ADDRS (--body TEXT | --body-file PATH | --body -) [--attach PATH...] [--choice TEXT...]",
+		usage: "pana thread create [--to ADDRS] (--body TEXT | --body-file PATH | --body -) [--attach PATH...] [--choice TEXT...]",
 		summary: "Create a thread with a first message",
 		flags: [
-			list("to", "--to ADDRS", "Participants, comma-separated", { required: true }),
+			list("to", "--to ADDRS", "Participants, comma-separated; omit for a thread only you are in"),
 			...BODY_FLAGS,
 			...CHOICE_FLAGS,
 		],
 		positionals: [],
 		needsBody: true,
-		validate: (params) => choiceProblem(items(params, "choice")),
+		validate: (params) => choiceProblem(items(params, "choice")) ?? emptyRecipients(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/threads",
@@ -682,7 +706,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			...SESSION_CREATE_FLAGS,
 		],
 		positionals: [],
-		validate: (params) => validateSchedule(params),
+		validate: (params) => validateSchedule(params) ?? emptyRecipients(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/schedules",
@@ -716,7 +740,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		],
 		positionals: [],
 		needsBody: true,
-		validate: (params) => validateSchedule(params),
+		validate: (params) => validateSchedule(params) ?? emptyRecipients(params),
 		request: (params) => ({
 			method: "POST",
 			path: "/schedules",
