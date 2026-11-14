@@ -264,8 +264,8 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 	const modelRef = `${model.provider}/${model.modelId}`;
 	const now = runtime.clock.now();
 	const ids = Array.from({ length: count }, () => runtime.newId());
-	// SES-06: sessions started together share a batch id, which keeps them from mailing each other
-	// in their thread. A create of one leaves it NULL.
+	// SES-06: sessions started together share a batch id, so an answer that arrives behind a
+	// sibling's answer still posts (see reply.ts). A create of one records no batch.
 	const batch = count > 1 ? runtime.newId() : null;
 	// Directories before the write: a worktree is a git process, not work for the transaction.
 	const dirs = new Map<string, string | undefined>();
@@ -308,7 +308,7 @@ export async function createSession(runtime: Runtime, caller: Caller, input: Cre
 				now,
 				now,
 			);
-			// SES-06: the batch row is what keeps these siblings out of each other's delivery.
+			// SES-06: the batch row is how a sibling's answer is recognised as one.
 			if (batch !== null) await tx.run("INSERT INTO session_batches (session_id, batch, created_at) VALUES (?, ?, ?)", id, batch, now);
 			if (parent?.objective_id != null) {
 				await recordObjectiveEvent(tx, runtime, {

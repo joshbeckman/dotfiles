@@ -330,7 +330,11 @@ describe("session create", () => {
 	});
 
 	it("SES-06 count starts N sessions in the one thread, each with its own conversation, and all of them answer there", async () => {
-		await start({ script: [{ text: "one" }, { text: "two" }, { text: "three" }] });
+		// Three answers, then empty turns for the runs their own answers wake: the siblings read
+		// each other, and RPL-06 keeps them from answering each other.
+		await start({
+			script: [{ text: "one" }, { text: "two" }, { text: "three" }, ...Array.from({ length: 10 }, () => ({ text: "" }))],
+		});
 		const res = await create({ prompt: "compare these", count: 3 });
 
 		expect(res.sessions).toHaveLength(3);
@@ -344,11 +348,10 @@ describe("session create", () => {
 		expect(new Set(thread.slice(1).map((m) => m.sender.id))).toEqual(new Set(res.sessions.map((s) => s.id)));
 		expect(thread.slice(1).map((m) => m.body).sort()).toEqual(["one", "three", "two"]);
 
-		// SES-06: siblings stay out of each other's mailboxes, so no answer is dropped as stale and
-		// no sibling run is spent on a sibling's reply.
+		// SES-06: the siblings are ordinary participants, so each of them sees the others' answers.
 		for (const session of res.sessions) {
 			const deliveries = await t!.runtime.db.all("SELECT id FROM deliveries WHERE recipient_id = ?", session.id);
-			expect(deliveries).toHaveLength(1);
+			expect(deliveries.length).toBeGreaterThan(1);
 		}
 
 		// Everything the single-session create did still happens once per session.

@@ -477,23 +477,17 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 	);
 	await indexMessage(tx, { id: options.messageId, threadId: options.threadId, body: options.body });
 
-	// SES-06: sessions one create started answer the same prompt side by side; their messages stay
-	// in the thread without being mailed to each other, so the thread holds every answer and none
-	// of them wakes a sibling that is still working.
-	const siblings = await batchSiblings(tx, options.sender);
-	const recipients = (
-		await tx.all<DeliveryRecipientRow>(
-			`SELECT tp.participant_id AS id, p.kind AS kind, p.url AS url,
-			        s.conversation_id AS conversation_id, s.state AS state
-			   FROM thread_participants tp
-			   JOIN participants p ON p.id = tp.participant_id
-			   LEFT JOIN sessions s ON s.id = tp.participant_id
-			  WHERE tp.thread_id = ? AND tp.participant_id <> ?
-			  ORDER BY tp.joined_at, p.id`,
-			options.threadId,
-			options.sender.id,
-		)
-	).filter((recipient) => !siblings.has(recipient.id));
+	const recipients = await tx.all<DeliveryRecipientRow>(
+		`SELECT tp.participant_id AS id, p.kind AS kind, p.url AS url,
+		        s.conversation_id AS conversation_id, s.state AS state
+		   FROM thread_participants tp
+		   JOIN participants p ON p.id = tp.participant_id
+		   LEFT JOIN sessions s ON s.id = tp.participant_id
+		  WHERE tp.thread_id = ? AND tp.participant_id <> ?
+		  ORDER BY tp.joined_at, p.id`,
+		options.threadId,
+		options.sender.id,
+	);
 
 	const hooks = deliveryHooks(runtime);
 	for (const recipient of recipients) {
@@ -534,20 +528,6 @@ async function appendMessage(tx: SqliteExecutor, runtime: Runtime, options: Appe
 	}
 
 	return messageView(tx, runtime, options.messageId, options.sender.id);
-}
-
-/** SES-06: the other sessions one create started with this sender, which it does not mail. */
-async function batchSiblings(tx: SqliteExecutor, sender: ParticipantRecord): Promise<Set<string>> {
-	if (sender.kind !== "session") return new Set();
-	const rows = await tx.all<{ session_id: string }>(
-		`SELECT other.session_id AS session_id
-		   FROM session_batches mine
-		   JOIN session_batches other ON other.batch = mine.batch
-		  WHERE mine.session_id = ? AND other.session_id <> ?`,
-		sender.id,
-		sender.id,
-	);
-	return new Set(rows.map((row) => row.session_id));
 }
 
 /**

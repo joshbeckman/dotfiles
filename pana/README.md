@@ -336,7 +336,7 @@ pana session inbox SESSION
 pana session inbox read SESSION MESSAGE
 ```
 
-`--to` on `session create` adds participants to the new thread. `--count N` starts N sessions, up to 10, in that one thread: each answers the same prompt from its own conversation and its own scratch or worktree. The sessions of one create do not mail each other, so the thread holds their answers and none of them wakes a sibling that is still working. The PWA's New thread screen has a Sessions box for the same count.
+`--to` on `session create` adds participants to the new thread. `--count N` starts N sessions, up to 10, in that one thread: each answers the same prompt from its own conversation and its own scratch or worktree, and each answer posts even though a sibling's answer arrived while it worked. The PWA's New thread screen has a Sessions box for the same count.
 
 ### Profiles
 
