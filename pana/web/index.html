@@ -115,11 +115,15 @@
 						<input id="compose-subject" name="subject" placeholder="optional" />
 					</div>
 					<div class="field">
+						<label for="compose-count">Sessions</label>
+						<input id="compose-count" name="count" type="number" min="1" max="10" step="1" value="1" inputmode="numeric" />
+					</div>
+					<div class="field">
 						<label for="compose-body">Message</label>
 						<textarea id="compose-body" name="body" rows="10" required></textarea>
 					</div>
 					<div class="form-actions">
-						<p class="hint">Starts a session and its thread. Markdown is rendered; attach files here, or from the CLI with <code>--attach</code>.</p>
+						<p class="hint">Starts a session and its thread; a Sessions count above 1 starts that many. Markdown is rendered; attach files here, or from the CLI with <code>--attach</code>.</p>
 						<span class="chord" data-chord></span>
 						<input id="compose-files" data-testid="compose-files" type="file" multiple hidden />
 						<button type="button" id="compose-attach" data-testid="compose-attach" class="quiet" title="Attach a file, drop one on the message, or paste a screenshot">Attach</button>

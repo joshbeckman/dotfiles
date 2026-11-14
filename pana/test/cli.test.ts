@@ -12,7 +12,7 @@ import { startTestPanad, TEST_DOMAIN, TEST_USER, type TestPanad } from "./harnes
 
 /** Every command line from README.md's command sections (CLI-06). */
 const README_COMMANDS = [
-	"pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--to ADDRS]",
+	"pana session create --prompt TEXT [--model M] [--thinking LEVEL] [--cwd DIR] [--profile NAME] [--count N] [--to ADDRS]",
 	"pana session show SESSION",
 	"pana session search [--query TEXT] [--state STATE] [--parent SESSION]",
 	"pana session stop SESSION",
@@ -529,6 +529,24 @@ describe("pana CLI routes", () => {
 		expect(JSON.parse(created.stdout)).toEqual({
 			body: { prompt: "hello", model: undefined, thinking: undefined, cwd: undefined, profile: undefined, to: ["a", "b"] },
 		});
+	});
+
+	it("SES-06 --count is a number flag: it reaches the API as a count and refuses anything but a whole number from 1 to 10", async () => {
+		const t = await start({ handlers: { "sessions.create": (request) => ({ status: 201, body: request.body }) } });
+
+		const three = await run(["--json", "session", "create", "--prompt", "compare", "--count", "3"], t);
+		expect(three.code).toBe(0);
+		expect(JSON.parse(three.stdout)).toMatchObject({ prompt: "compare", count: "3" });
+
+		const one = await run(["--json", "session", "create", "--prompt", "alone", "--count", "1"], t);
+		expect(JSON.parse(one.stdout)).toMatchObject({ count: "1" });
+
+		// A bad count is a usage error, refused before panad is called.
+		for (const value of ["0", "11", "2.5", "three", "-1", ""]) {
+			const refused = await run(["session", "create", "--prompt", "p", "--count", value], t);
+			expect(refused.code, `count ${value}`).toBe(2);
+			expect(refused.stderr).toContain("--count must be a whole number from 1 to 10");
+		}
 	});
 
 	it("schedule create rejects both or neither of --cron and --at", async () => {

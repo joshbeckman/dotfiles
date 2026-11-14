@@ -69,9 +69,11 @@ export const handlers: Handlers = {
 		const body = bodyObject(ctx);
 		const created = await createSession(ctx.runtime, ctx.caller, body);
 		const waiting = waitingConversations(await ctx.runtime.harness.inspect(BG));
+		const sessions = created.sessions.map((row) => sessionView(ctx.runtime, row, waiting));
 		return {
 			status: 201,
-			body: { session: sessionView(ctx.runtime, created.session, waiting), thread: created.thread, message: created.message },
+			// SES-06: `sessions` carries every session a count created; `session` stays the first.
+			body: { session: sessions[0], sessions, thread: created.thread, message: created.message },
 		};
 	},
 
