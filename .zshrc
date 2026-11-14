@@ -160,13 +160,13 @@ setopt interactive_comments
 export PS1='$(fancy_user) $(fancy_dir) $(seasonal_chevrons) '
 . ~/.zsh/git-prompt.sh
 
-# Async git prompt (pattern from https://vault.shopify.io/posts/336282)
-# Runs __git_ps1 in background so prompt never blocks on slow git operations
+# Async git prompt: run __git_ps1 in a background worker that writes the branch
+# to a temp file and signals the prompt, so it never blocks on slow git operations
 ASYNC_GIT_STATUS=""
 ASYNC_GIT_TMP="${TMPDIR:-/tmp}/zsh_git_$$"
 
 _async_git_worker() {
-  # __git_ps1 reads .git/HEAD directly, which in Shopify worktrees
+  # __git_ps1 reads .git/HEAD directly, which in some managed worktrees
   # contains a synthetic `.invalid` ref rather than the real branch.
   # git rev-parse goes through proper ref resolution and returns the
   # actual branch name.
@@ -417,7 +417,6 @@ fi
 
 . $HOME/.shellrc.load
 
-[ -f /opt/dev/dev.sh ] && source /opt/dev/dev.sh
 if [ -e ~/.nix-profile/etc/profile.d/nix.sh ]; then . ~/.nix-profile/etc/profile.d/nix.sh; fi # added by Nix installer
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
@@ -447,11 +446,10 @@ source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 # command itself is not a secret.
 export S_KEY='!security find-generic-password -s s-secrets -w'
 
-[[ -f /opt/dev/sh/chruby/chruby.sh ]] && { type chruby >/dev/null 2>&1 || chruby () { source /opt/dev/sh/chruby/chruby.sh; chruby "$@"; } }
 source ~/.config/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-# cloudplatform: add Shopify clusters to your local kubernetes config
-export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}/Users/joshbeckman/.kube/config:/Users/joshbeckman/.kube/config.shopify.cloudplatform
+# Keep the default kube config in the list when KUBECONFIG is set elsewhere
+export KUBECONFIG=${KUBECONFIG:+$KUBECONFIG:}$HOME/.kube/config
 
 # Added by tec agent. Only present on the work machine, so the block is guarded
 # rather than adding two dead directories to PATH elsewhere.
