@@ -33,14 +33,9 @@ describeBrowser("compose count", () => {
 	it("SES-06 the Sessions box starts that many sessions in the one thread, and refuses a count out of range", async () => {
 		seeded = await seedDomain();
 		const { t } = seeded;
-		// Three answers, then empty turns for the runs that each answer wakes in its siblings: they
-		// read each other's answers, and RPL-06 keeps them from answering each other.
-		t.model.append([
-			{ text: "First answer." },
-			{ text: "Second answer." },
-			{ text: "Third answer." },
-			...Array.from({ length: 6 }, () => ({ text: "" })),
-		]);
+		// The script is one queue shared by every session, so every turn is a real answer: each
+		// session's first run takes one, and the runs the answers wake in the others post nothing.
+		t.model.append(Array.from({ length: 12 }, (_, index) => ({ text: `Answer ${index + 1}.` })));
 		const threads = async () => (await t.runtime.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM threads"))!.n;
 		const before = await threads();
 

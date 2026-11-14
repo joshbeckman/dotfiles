@@ -330,11 +330,10 @@ describe("session create", () => {
 	});
 
 	it("SES-06 count starts N sessions in the one thread, each with its own conversation, and all of them answer there", async () => {
-		// Three answers, then empty turns for the runs their own answers wake: the siblings read
-		// each other, and RPL-06 keeps them from answering each other.
-		await start({
-			script: [{ text: "one" }, { text: "two" }, { text: "three" }, ...Array.from({ length: 10 }, () => ({ text: "" }))],
-		});
+		// The script is one queue shared by every session, so its order between sessions is the
+		// machine's business: every turn is a real answer, and each session's first run takes one.
+		// The runs their answers wake in the others read a sibling and post nothing (RPL-06).
+		await start({ script: Array.from({ length: 12 }, (_, index) => ({ text: `answer ${index + 1}` })) });
 		const res = await create({ prompt: "compare these", count: 3 });
 
 		expect(res.sessions).toHaveLength(3);
@@ -343,10 +342,13 @@ describe("session create", () => {
 		expect(res.thread.participants.map((p) => p.id).sort()).toEqual([...res.sessions.map((s) => s.id), TEST_USER].sort());
 
 		for (const session of res.sessions) await settled(session.id);
+		// Each session posts under the head as it stops, so let the last append land.
+		await until(async () => (await messages(res.thread.id)).length >= 4, "the prompt and three answers");
 		const thread = await messages(res.thread.id);
 		expect(thread[0]!.body).toBe("compare these");
 		expect(new Set(thread.slice(1).map((m) => m.sender.id))).toEqual(new Set(res.sessions.map((s) => s.id)));
-		expect(thread.slice(1).map((m) => m.body).sort()).toEqual(["one", "three", "two"]);
+		// One answer each: a sibling's answer wakes the others, and RPL-06 keeps them quiet.
+		expect(thread).toHaveLength(4);
 
 		// SES-06: the siblings are ordinary participants, so each of them sees the others' answers.
 		for (const session of res.sessions) {
